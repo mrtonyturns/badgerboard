@@ -1,0 +1,10 @@
+# Local Netlify folder
+.netlify
+node_modules/
+dist/
+dist2/
+.env
+.env.local
+.env.*.local
+*.log
+npm-debug.log*

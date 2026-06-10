@@ -1,0 +1,65 @@
+[build]
+  command = "npm run build"
+  publish = "dist2"
+  functions = "netlify/functions"
+
+# Block shared utility modules from being invoked as functions
+# These files are bundled with functions but must never be callable as endpoints.
+[[redirects]]
+  from   = "/.netlify/functions/_*"
+  to     = "/404"
+  status = 404
+  force  = true
+
+# Force bare domain → www so the SSL cert always matches
+[[redirects]]
+  from = "https://badgerboardwi.com/*"
+  to   = "https://www.badgerboardwi.com/:splat"
+  status = 301
+  force  = true
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[functions]
+  node_bundler = "esbuild"
+
+[functions."generate-dossier"]
+  timeout = 60
+
+# Auto-regenerate stale dossiers every Monday at 9am CT (UTC-6 standard / UTC-5 daylight)
+# Using 15:00 UTC to cover CT regardless of DST
+[functions."auto-regenerate-dossiers"]
+  schedule = "0 15 * * 1"
+
+# election-results-poller schedule removed — results are entered manually
+# via the Admin panel (Elections tab). The function file is kept for reference.
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # Clickjacking protection — no iframes allowed
+    X-Frame-Options = "DENY"
+    # Legacy XSS filter (belt-and-suspenders)
+    X-XSS-Protection = "1; mode=block"
+    # Prevent MIME sniffing
+    X-Content-Type-Options = "nosniff"
+    # Only send origin on same-origin requests; strip referrer on cross-origin
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    # HSTS — force HTTPS for 1 year (no preload until both domains have valid certs)
+    Strict-Transport-Security = "max-age=31536000"
+    # Disable sensitive browser features
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), bluetooth=()"
+    # Content Security Policy
+    # tiles.openfreemap.org + worker-src blob: added for MapLibre GL JS turf builder
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://images.squarespace-cdn.com https://*.tile.openstreetmap.org https://cdnjs.cloudflare.com https://www.google.com https://icons.duckduckgo.com https://tiles.openfreemap.org; connect-src 'self' https://*.supabase.co https://api.anthropic.com https://api.stripe.com https://*.tile.openstreetmap.org https://tiles.openfreemap.org https://elections.wi.gov; worker-src blob: 'self'; frame-src https://js.stripe.com https://hooks.stripe.com; object-src 'none'; base-uri 'self'; form-action 'self';"
+
+# API functions — tighten CORS to the production domain only
+[[headers]]
+  for = "/.netlify/functions/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "https://www.badgerboardwi.com"
+    Access-Control-Allow-Methods = "POST, OPTIONS"
+    Access-Control-Allow-Headers = "Content-Type, Authorization"

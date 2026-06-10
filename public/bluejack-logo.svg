@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">
+  <rect width="40" height="40" rx="8" fill="#B91C1C"/>
+  <!-- 5-pointed star -->
+  <polygon
+    points="20,7 22.9,16.2 32.6,16.2 24.9,21.8 27.8,31 20,25.4 12.2,31 15.1,21.8 7.4,16.2 17.1,16.2"
+    fill="white"
+  />
+</svg>
