@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Megaphone, Mail, CalendarDays, QrCode, Check, Loader2, AlertCircle,
-  Sparkles, Lock, Download, RefreshCw, ArrowRight,
+  Sparkles, Lock, RefreshCw, ArrowRight, ExternalLink,
 } from 'lucide-react'
-import QRCode from 'qrcode'
 import { useAuth } from '../contexts/AuthContext'
 import {
   MARKETING_TIER, BILLING_PERIODS,
@@ -18,9 +17,9 @@ const SSO_API        = '/.netlify/functions/dayframer-sso'
 // ─── Tool definitions (Phase 2 sub-navigation) ────────────────────────────────
 
 const TOOLS = [
-  { key: 'email',  label: 'Email Campaigns', icon: Mail,         embedded: true  },
-  { key: 'social', label: 'Social Planner',  icon: CalendarDays, embedded: true  },
-  { key: 'qr',     label: 'QR Codes',        icon: QrCode,       embedded: false },
+  { key: 'email',  label: 'Email Campaigns', icon: Mail         },
+  { key: 'social', label: 'Social Planner',  icon: CalendarDays },
+  { key: 'qr',     label: 'QR Codes',        icon: QrCode       },
 ]
 
 // ─── Gated pricing display (shown when Marketing Tier not purchased) ──────────
@@ -307,139 +306,33 @@ function EmbeddedTool({ section }) {
   }
 
   return (
-    <iframe
-      src={url}
-      title={section}
-      className="w-full rounded-xl border border-gray-200 bg-white"
-      style={{ height: 'calc(100dvh - 240px)', minHeight: 480 }}
-      allow="clipboard-write"
-    />
-  )
-}
-
-// ─── QR Code Generator (native, in-app) ───────────────────────────────────────
-
-const QR_SIZES = [
-  { key: 256,  label: 'Small'  },
-  { key: 512,  label: 'Medium' },
-  { key: 1024, label: 'Large'  },
-]
-
-function QrGenerator() {
-  const [text,    setText]    = useState('')
-  const [size,    setSize]    = useState(512)
-  const [dark,    setDark]    = useState('#1e3a5f')
-  const [dataUrl, setDataUrl] = useState(null)
-  const [error,   setError]   = useState(null)
-  const debounceRef = useRef(null)
-
-  useEffect(() => {
-    clearTimeout(debounceRef.current)
-    if (!text.trim()) { setDataUrl(null); setError(null); return }
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const url = await QRCode.toDataURL(text.trim(), {
-          width: size,
-          margin: 2,
-          color: { dark, light: '#ffffff' },
-          errorCorrectionLevel: 'M',
-        })
-        setDataUrl(url)
-        setError(null)
-      } catch {
-        setError('Could not generate a QR code for that content.')
-        setDataUrl(null)
-      }
-    }, 250)
-    return () => clearTimeout(debounceRef.current)
-  }, [text, size, dark])
-
-  const download = () => {
-    if (!dataUrl) return
-    const a = document.createElement('a')
-    a.href = dataUrl
-    a.download = 'badgerboard-qr.png'
-    a.click()
-  }
-
-  return (
-    <div className="grid lg:grid-cols-2 gap-6">
-      {/* Controls */}
-      <div className="rounded-xl border border-gray-200 bg-white p-6">
-        <label className="block text-sm font-medium text-gray-700 mb-2">
-          Link or text to encode
-        </label>
-        <textarea
-          value={text}
-          onChange={e => setText(e.target.value)}
-          placeholder="https://your-campaign-site.com/donate"
-          rows={3}
-          className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-200 resize-none"
-        />
-
-        <div className="mt-5">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Download size</label>
-          <div className="flex items-center rounded-lg border border-gray-200 p-0.5 bg-gray-50 text-sm w-fit">
-            {QR_SIZES.map(s => (
-              <button
-                key={s.key}
-                onClick={() => setSize(s.key)}
-                className={`px-4 py-1.5 rounded-md font-medium transition-all ${
-                  size === s.key
-                    ? 'bg-white text-gray-900 shadow-sm border border-gray-200'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-          <p className="text-xs text-gray-400 mt-1.5">{size} × {size}px PNG</p>
-        </div>
-
-        <div className="mt-5">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Color</label>
-          <div className="flex items-center gap-3">
-            <input
-              type="color"
-              value={dark}
-              onChange={e => setDark(e.target.value)}
-              className="w-9 h-9 rounded-lg border border-gray-200 cursor-pointer p-0.5"
-            />
-            <span className="text-sm text-gray-500 font-mono">{dark}</span>
-          </div>
-        </div>
-
-        {error && (
-          <p className="mt-4 text-sm text-red-600 flex items-center gap-2">
-            <AlertCircle className="w-4 h-4" /> {error}
-          </p>
-        )}
+    <div>
+      {/* Toolbar — escape hatch in case the tool refuses to render embedded */}
+      <div className="flex items-center justify-end gap-2 mb-2">
+        <button
+          onClick={loadSso}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-800 px-2.5 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+          title="Reload the tool"
+        >
+          <RefreshCw className="w-3.5 h-3.5" /> Reload
+        </button>
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-800 px-2.5 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+          title="Open in a new tab"
+        >
+          <ExternalLink className="w-3.5 h-3.5" /> Open in new tab
+        </a>
       </div>
-
-      {/* Preview */}
-      <div className="rounded-xl border border-gray-200 bg-white p-6 flex flex-col items-center justify-center min-h-[320px]">
-        {dataUrl ? (
-          <>
-            <img
-              src={dataUrl}
-              alt="Generated QR code"
-              className="w-56 h-56 rounded-lg border border-gray-100"
-            />
-            <button
-              onClick={download}
-              className="mt-6 inline-flex items-center gap-2 bg-gray-900 hover:bg-gray-700 text-white text-sm font-semibold px-5 py-2.5 rounded-lg transition-colors"
-            >
-              <Download className="w-4 h-4" /> Download PNG
-            </button>
-          </>
-        ) : (
-          <div className="text-center text-gray-300">
-            <QrCode className="w-16 h-16 mx-auto mb-3" />
-            <p className="text-sm text-gray-400">Enter a link to generate your QR code</p>
-          </div>
-        )}
-      </div>
+      <iframe
+        src={url}
+        title={section}
+        className="w-full rounded-xl border border-gray-200 bg-white"
+        style={{ height: 'calc(100dvh - 270px)', minHeight: 480 }}
+        allow="clipboard-write"
+      />
     </div>
   )
 }
@@ -481,7 +374,7 @@ function MarketingTools() {
 
       {tool === 'email'  && <EmbeddedTool section="email"  />}
       {tool === 'social' && <EmbeddedTool section="social" />}
-      {tool === 'qr'     && <QrGenerator />}
+      {tool === 'qr'     && <EmbeddedTool section="qr"     />}
     </div>
   )
 }

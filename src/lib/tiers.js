@@ -442,6 +442,11 @@ export const BULK_CREDIT_PACKS = [
 //   marketing_billing:      'monthly' | 'quarterly' | 'semiannual' | 'annual'
 //   dayframer_location_id:  GHL subaccount ID once the workspace is provisioned
 
+// Gating switch — OFF for the initial rollout phase: every signed-in user can
+// use the Marketing tab. Flip to true (and set MARKETING_GATING_ENABLED=true
+// in Netlify env vars for the server-side check) to require the paid tier.
+export const MARKETING_GATING_ENABLED = false
+
 export const MARKETING_TIER = {
   key:          'marketing',
   name:         'Marketing Tier',
@@ -459,6 +464,7 @@ export const MARKETING_TIER = {
 
 export function hasMarketingAccess(user) {
   if (!user) return false
+  if (!MARKETING_GATING_ENABLED) return true
   if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return true
   return user?.user_metadata?.marketing_tier === 'active'
 }

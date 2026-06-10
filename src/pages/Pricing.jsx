@@ -12,7 +12,7 @@ import {
   ACTION_MONTHLY_PRICES,
   BILLING_PERIODS,
   CREDIT_PACKS, BULK_CREDIT_PACKS,
-  MARKETING_TIER, hasMarketingAccess,
+  MARKETING_TIER, MARKETING_GATING_ENABLED, hasMarketingAccess,
   effectiveMonthlyRate, periodTotal, annualSavings,
   actionEffectiveRate,
   getUserPlan, getUserBracket, getUserPlanType,
@@ -295,6 +295,7 @@ const FAQS = [
   {
     q: 'What is the Marketing Tier?',
     a: 'The Marketing Tier is a standalone add-on that unlocks the Marketing tab — an email campaign builder, a social planner for scheduling posts, and a QR code generator. It works with any plan (including the free Scout plan) and is billed separately, so cancelling it never affects your main subscription.',
+    marketing: true,  // hidden while MARKETING_GATING_ENABLED is false
   },
   {
     q: 'What happens to my data if I cancel?',
@@ -928,7 +929,8 @@ export default function Pricing() {
         </>
       )}
 
-      {/* ── Common: Marketing Tier add-on ─────────────────────────────────────── */}
+      {/* ── Common: Marketing Tier add-on (hidden while gating is off) ────────── */}
+      {MARKETING_GATING_ENABLED && (
       <section className="mt-16 pt-10 border-t border-gray-200">
         <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
           <div className="p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center gap-8">
@@ -980,6 +982,7 @@ export default function Pricing() {
           </div>
         </div>
       </section>
+      )}
 
       {/* ── Common: FAQ ───────────────────────────────────────────────────────── */}
       <section className="mt-16 pt-10 border-t border-gray-200">
@@ -993,7 +996,7 @@ export default function Pricing() {
           </p>
         </div>
         <div className="max-w-2xl">
-          {FAQS.map(f => <FAQItem key={f.q} {...f} />)}
+          {FAQS.filter(f => !f.marketing || MARKETING_GATING_ENABLED).map(f => <FAQItem key={f.q} {...f} />)}
         </div>
       </section>
 

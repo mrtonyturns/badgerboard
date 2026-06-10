@@ -23,10 +23,9 @@ const CHANGELOG = [
     version: 'v1.16.0',
     date: 'June 10, 2026',
     changes: [
-      'New Marketing tab: email campaigns, social planner, and QR code generator in one place',
-      'Marketing Tier add-on: works with any plan, billed separately — see Plans & Pricing',
-      'One-click marketing workspace creation from your account details',
-      'QR code generator with custom colors and print-ready download sizes',
+      'New Marketing tab: Email Campaigns, Social Planner, and QR Code Generator in one place',
+      'One-click marketing workspace creation from your account details — open to all users',
+      'Your marketing account is connected automatically with your Badger Board email',
       'Door Knocking section hidden from navigation (replaced by Marketing)',
     ],
   },
