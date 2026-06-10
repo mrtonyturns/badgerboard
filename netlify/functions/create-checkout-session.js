@@ -115,6 +115,8 @@ const STRIPE_PRICES = {
   STRIPE_PRICE_BULK_CREDITS_BULK50:   'price_1TYxFtHGi9vK03buga4Mpsh4',
   STRIPE_PRICE_BULK_CREDITS_BULK100:  'price_1TYxFuHGi9vK03bucTgzM6Ju',
   STRIPE_PRICE_BULK_CREDITS_BULK250:  'price_1TYxFuHGi9vK03bu9i7e0TJ1',
+  // Marketing Tier add-on (subscription) — created by stripe-setup.mjs.
+  // Until then, set STRIPE_PRICE_MARKETING_{M,Q,S,A} in Netlify env vars.
 }
 
 const SUPABASE_URL  = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
@@ -301,6 +303,50 @@ export const handler = async (event) => {
       return { statusCode: 200, body: JSON.stringify({ url: session.url }) }
     } catch (err) {
       console.error('Stripe bulk credits checkout error:', err.message)
+      return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
+    }
+  }
+
+  // ── Marketing Tier add-on (subscription) ─────────────────────────────────────
+  if (product === 'marketing') {
+    const billing = sanitize(body.billing) || 'monthly'
+    if (!VALID_BILLING.includes(billing)) {
+      return { statusCode: 400, body: JSON.stringify({ error: `billing must be one of: ${VALID_BILLING.join(', ')}` }) }
+    }
+    const envKey  = `STRIPE_PRICE_MARKETING_${BILLING_SUFFIX[billing]}`
+    const priceId = STRIPE_PRICES[envKey] || process.env[envKey]
+    if (!priceId) {
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: `Price not configured. Run stripe-setup.mjs and add ${envKey} to your Netlify environment variables.` }),
+      }
+    }
+    try {
+      const session = await stripe.checkout.sessions.create({
+        mode:                 'subscription',
+        payment_method_types: ['card'],
+        line_items:           [{ price: priceId, quantity: 1 }],
+        client_reference_id:  userId || undefined,
+        customer_email:       email  || undefined,
+        metadata:             { product: 'marketing', billing, supabase_user_id: userId },
+        subscription_data: {
+          metadata: { product: 'marketing', billing, supabase_user_id: userId },
+        },
+        success_url: `${siteUrl}/marketing?marketing=success`,
+        cancel_url:  `${siteUrl}/marketing?marketing=cancelled`,
+        allow_promotion_codes: true,
+        custom_text: {
+          submit: {
+            message: 'You\'ll be charged immediately. Cancel anytime from your account settings.',
+          },
+        },
+        phone_number_collection: { enabled: false },
+        billing_address_collection: 'auto',
+      })
+      console.log(`Marketing Tier checkout created (${billing}) for user ${userId}`)
+      return { statusCode: 200, body: JSON.stringify({ url: session.url }) }
+    } catch (err) {
+      console.error('Stripe marketing checkout error:', err.message)
       return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
     }
   }

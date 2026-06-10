@@ -15,6 +15,7 @@ const Stripe = require('stripe')
 // Accounts permanently pinned to agency plan — Stripe events cannot downgrade these.
 const { ADMIN_EMAILS } = require('./_config')
 const { sendEmail, getNotificationPrefs } = require('./_email')
+const { provisionSubaccount } = require('./_dayframer')
 
 // New plan keys
 const CANDIDATE_PLANS = ['c_monitor', 'c_active', 'c_campaign']
@@ -295,6 +296,34 @@ async function findSupabaseUserByEmail(email) {
   return json?.users?.[0] || null
 }
 
+// ── Marketing Tier helpers ────────────────────────────────────────────────────
+
+// Sets marketing_tier ('active' | 'inactive') in user_metadata without touching
+// the main plan. extraFields merged in last (e.g. marketing_billing, sub ID).
+async function updateMarketingTier(supabaseUserId, status, extraFields = {}) {
+  const existingUser = await getSupabaseUser(supabaseUserId)
+  const existingMeta = existingUser?.user_metadata ?? {}
+  const metadata = { ...existingMeta, marketing_tier: status, ...extraFields }
+
+  const res = await fetch(
+    `${process.env.SUPABASE_URL}/auth/v1/admin/users/${supabaseUserId}`,
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey:         process.env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization:  `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      body: JSON.stringify({ user_metadata: metadata }),
+    }
+  )
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Supabase marketing_tier update failed (${res.status}): ${text}`)
+  }
+  return res.json()
+}
+
 // ── Credit helpers ────────────────────────────────────────────────────────────
 
 function getCreditsForPack(product, pack) {
@@ -384,6 +413,51 @@ exports.handler = async (event) => {
         // Skip non-subscription events
         if (session.mode !== 'subscription') break
 
+        // ── Marketing Tier add-on activated (separate from the main plan) ──
+        if (session.metadata?.product === 'marketing') {
+          if (!supabaseUserId) {
+            console.warn('checkout.session.completed (marketing): missing user ID in metadata')
+            break
+          }
+          console.log(`Activating Marketing Tier for user ${supabaseUserId}`)
+          await updateMarketingTier(supabaseUserId, 'active', {
+            marketing_billing: session.metadata.billing || 'monthly',
+            stripe_marketing_subscription_id: session.subscription,
+          })
+
+          // Future-proofing: auto-provision the DayFramer subaccount right
+          // after purchase so access is immediate. Falls back gracefully —
+          // the user can still provision from the Marketing tab's Create
+          // button if agency credentials aren't configured yet.
+          try {
+            const user = await getSupabaseUser(supabaseUserId)
+            if (user) {
+              const { locationId, existing } = await provisionSubaccount(user)
+              console.log(`DayFramer subaccount ${existing ? 'reused' : 'auto-provisioned'}: ${locationId}`)
+            }
+          } catch (e) {
+            console.warn('[marketing] auto-provision skipped:', e.message)
+          }
+
+          // Marketing Tier activated email
+          try {
+            const user = await getSupabaseUser(supabaseUserId)
+            const prefs = await getNotificationPrefs(supabaseUserId)
+            if (user?.email && prefs.payment_receipt) {
+              await sendEmail({
+                to: user.email,
+                subject: 'Marketing Tier activated — welcome!',
+                title: 'Marketing Tier activated',
+                preheader: 'Email campaigns, social planning, and QR codes are now unlocked.',
+                body: `<p>Your <strong>Marketing Tier</strong> is now active. Head to the Marketing tab to set up your workspace and start your first campaign.</p>`,
+                ctaText: 'Open Marketing',
+                ctaUrl: 'https://www.badgerboardwi.com/marketing',
+              })
+            }
+          } catch (e) { console.error('[email] marketing activated email failed:', e.message) }
+          break
+        }
+
         const { plan, bracket, billing } = session.metadata ?? {}
 
         if (!plan || !supabaseUserId) {
@@ -435,6 +509,15 @@ exports.handler = async (event) => {
 
         if (!supabaseUserId) {
           console.warn('customer.subscription.updated: no supabase_user_id in metadata')
+          break
+        }
+
+        // Marketing Tier add-on — keep it active, never touch the main plan
+        if (sub.metadata?.product === 'marketing') {
+          console.log(`Marketing subscription updated for user ${supabaseUserId}`)
+          await updateMarketingTier(supabaseUserId, 'active', {
+            stripe_marketing_subscription_id: sub.id,
+          })
           break
         }
 
@@ -494,6 +577,30 @@ exports.handler = async (event) => {
 
         if (!supabaseUserId) {
           console.warn('customer.subscription.deleted: no supabase_user_id in metadata')
+          break
+        }
+
+        // Marketing Tier cancelled — deactivate the add-on only; the main
+        // plan subscription is unaffected.
+        if (sub.metadata?.product === 'marketing') {
+          console.log(`Marketing Tier cancelled for user ${supabaseUserId}`)
+          await updateMarketingTier(supabaseUserId, 'inactive', {
+            stripe_marketing_subscription_id: null,
+          })
+          try {
+            const user = await getSupabaseUser(supabaseUserId)
+            const prefs = await getNotificationPrefs(supabaseUserId)
+            if (user?.email && prefs.plan_changed) {
+              await sendEmail({
+                to: user.email,
+                subject: 'Your Marketing Tier has ended',
+                title: 'Marketing Tier cancelled',
+                body: `<p>Your Marketing Tier subscription has been cancelled. Your main Badger Board plan is not affected.</p><p>You can re-activate anytime to restore access to email campaigns, the social planner, and QR codes.</p>`,
+                ctaText: 'View Marketing',
+                ctaUrl: 'https://www.badgerboardwi.com/marketing',
+              })
+            }
+          } catch (e) { console.error('[email] marketing cancelled email failed:', e.message) }
           break
         }
 

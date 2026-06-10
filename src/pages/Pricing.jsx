@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Check, ChevronDown, ChevronUp,
-  ArrowLeft, AlertCircle, Loader2,
+  ArrowLeft, AlertCircle, Loader2, Megaphone,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import {
@@ -12,6 +12,7 @@ import {
   ACTION_MONTHLY_PRICES,
   BILLING_PERIODS,
   CREDIT_PACKS, BULK_CREDIT_PACKS,
+  MARKETING_TIER, hasMarketingAccess,
   effectiveMonthlyRate, periodTotal, annualSavings,
   actionEffectiveRate,
   getUserPlan, getUserBracket, getUserPlanType,
@@ -292,6 +293,10 @@ const FAQS = [
     a: 'Bulk credits enable the Bulk Profiler — a tool that generates profiles for a CSV list of candidates at once. Each run consumes bulk credits. Your monthly pool (1–4 profiles per candidate depending on tier) is separate and cannot be used for bulk runs.',
   },
   {
+    q: 'What is the Marketing Tier?',
+    a: 'The Marketing Tier is a standalone add-on that unlocks the Marketing tab — an email campaign builder, a social planner for scheduling posts, and a QR code generator. It works with any plan (including the free Scout plan) and is billed separately, so cancelling it never affects your main subscription.',
+  },
+  {
     q: 'What happens to my data if I cancel?',
     a: 'Your profiles and candidate data stay accessible for 90 days after cancellation. You can export everything as PDF before access ends.',
   },
@@ -375,8 +380,10 @@ export default function Pricing() {
       const currentPlan = user?.user_metadata?.plan
       const hasActiveSub = currentPlan && currentPlan !== 'scout' && user?.user_metadata?.stripe_subscription_id
 
-      // Credits always use checkout (payment, not subscription)
+      // Credits and the Marketing add-on always use checkout — they are
+      // separate purchases, never an update to the main plan subscription
       const isCredits = payload.product === 'credits' || payload.product === 'bulk_credits'
+        || payload.product === 'marketing'
 
       if (hasActiveSub && !isCredits) {
         // Update existing subscription — no redirect needed
@@ -920,6 +927,59 @@ export default function Pricing() {
           />
         </>
       )}
+
+      {/* ── Common: Marketing Tier add-on ─────────────────────────────────────── */}
+      <section className="mt-16 pt-10 border-t border-gray-200">
+        <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
+          <div className="p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center gap-8">
+            <div className="flex-1">
+              <div className="flex items-center gap-2.5 mb-3">
+                <div className="w-9 h-9 bg-brand-red/10 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <Megaphone className="w-4.5 h-4.5 text-brand-red" style={{ width: 18, height: 18 }} />
+                </div>
+                <h2 className="text-lg font-semibold text-gray-900">{MARKETING_TIER.name}</h2>
+                <span className="text-xs font-medium text-white bg-brand-red px-2 py-0.5 rounded-full">Add-on</span>
+              </div>
+              <p className="text-sm text-gray-500 mb-4 max-w-xl">{MARKETING_TIER.description}</p>
+              <ul className="grid sm:grid-cols-2 gap-x-6 gap-y-2">
+                {MARKETING_TIER.features.map((f, i) => (
+                  <li key={i} className="flex items-start gap-2.5">
+                    <Check className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
+                    <span className="text-sm text-gray-600">{f}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="flex flex-col items-start lg:items-end gap-3 flex-shrink-0">
+              <div className="flex items-baseline gap-1">
+                <span className="text-3xl font-bold text-gray-900 tracking-tight">
+                  ${effectiveMonthlyRate(MARKETING_TIER.monthlyPrice, billing)}
+                </span>
+                <span className="text-sm text-gray-400">/mo</span>
+              </div>
+              {billing !== 'monthly' && (
+                <p className="text-xs text-gray-400 -mt-2">
+                  ${periodTotal(MARKETING_TIER.monthlyPrice, billing)} billed {bp.label.toLowerCase()} · {bp.badge}
+                </p>
+              )}
+              <button
+                onClick={() => {
+                  if (user && hasMarketingAccess(user)) { navigate('/marketing'); return }
+                  checkout({ product: 'marketing', billing }, 'marketing')
+                }}
+                disabled={!!checkoutLoading}
+                className="bg-gray-900 hover:bg-gray-700 text-white font-semibold px-6 py-2.5 rounded-lg text-sm transition-colors"
+              >
+                {checkoutLoading === 'marketing'
+                  ? 'Redirecting…'
+                  : user && hasMarketingAccess(user) ? 'Open Marketing' : 'Add Marketing Tier'}
+              </button>
+              <p className="text-xs text-gray-400">Works with any plan, including Scout</p>
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* ── Common: FAQ ───────────────────────────────────────────────────────── */}
       <section className="mt-16 pt-10 border-t border-gray-200">

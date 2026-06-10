@@ -5,6 +5,7 @@ import {
   FileText, Settings, LogOut, Menu, X, ChevronRight, Bell,
   User, CreditCard, Shield, ChevronDown, Tag, DoorOpen, UserCheck,
   ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink,
+  Megaphone,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import BluejackLogo from './BluejackLogo'
@@ -14,10 +15,21 @@ import AnnouncementBanner from './AnnouncementBanner'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.15.2'
+const APP_VERSION = 'v1.16.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.16.0',
+    date: 'June 10, 2026',
+    changes: [
+      'New Marketing tab: email campaigns, social planner, and QR code generator in one place',
+      'Marketing Tier add-on: works with any plan, billed separately — see Plans & Pricing',
+      'One-click marketing workspace creation from your account details',
+      'QR code generator with custom colors and print-ready download sizes',
+      'Door Knocking section hidden from navigation (replaced by Marketing)',
+    ],
+  },
   {
     version: 'v1.15.2',
     date: 'May 18, 2026',
@@ -132,7 +144,10 @@ const navItems = [
   { to: '/voter-lists', icon: UserCheck,       label: 'Voter Lists'   },
   { to: '/profiler',    icon: FileText,        label: 'Profiler'      },
   { to: '/compare',     icon: Scale,           label: 'Compare'       },
-  { to: '/door-knocking', icon: DoorOpen,      label: 'Door Knocking', badge: 'Beta', adminOnly: true },
+  { to: '/marketing',   icon: Megaphone,       label: 'Marketing',     badge: 'New' },
+  // Door Knocking replaced by the Marketing tab — kept (route + page intact) but
+  // hidden from nav for now. Remove `hidden` to bring it back.
+  { to: '/door-knocking', icon: DoorOpen,      label: 'Door Knocking', badge: 'Beta', adminOnly: true, hidden: true },
 ]
 
 // ─── NavItem ─────────────────────────────────────────────────────────────────
@@ -204,6 +219,9 @@ function ChangelogPopover({ onClose }) {
 // Also module-level. Receives everything it needs via props.
 const Sidebar = React.memo(function Sidebar({ isAdmin, onNavigate, onSignOut, tierConfig }) {
   const [showChangelog, setShowChangelog] = useState(false)
+  // Field Ops items (currently just hidden Door Knocking) — header only renders
+  // when at least one item is visible
+  const fieldOpsItems = navItems.slice(9).filter(item => !item.hidden && (!item.adminOnly || isAdmin))
   return (
     <div className="flex flex-col h-full bg-brand-navy">
       {/* Badger Board logo */}
@@ -226,10 +244,18 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, onNavigate, onSignOut, ti
         {navItems.slice(4, 8).map(item => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
-        <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">Field Ops</p>
-        {navItems.slice(8).filter(item => !item.adminOnly || isAdmin).map(item => (
+        <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">Marketing</p>
+        {navItems.slice(8, 9).map(item => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
+        {fieldOpsItems.length > 0 && (
+          <>
+            <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">Field Ops</p>
+            {fieldOpsItems.map(item => (
+              <NavItem key={item.to} item={item} onNavigate={onNavigate} />
+            ))}
+          </>
+        )}
       </nav>
 
       {/* Bottom section */}

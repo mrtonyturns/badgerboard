@@ -40,6 +40,11 @@ const ACTION_PLAN_NAMES = {
   a_campaign: 'Badger Board Campaign (Action)',
 }
 
+// Marketing Tier add-on — unlocks the Marketing tab (email campaigns, social
+// planner, QR codes). Keep monthlyPrice in sync with MARKETING_TIER in
+// src/lib/tiers.js.
+const MARKETING_TIER = { key: 'marketing', name: 'Badger Board Marketing Tier', monthlyPrice: 99 }
+
 const BRACKET_LABELS = {
   b1:   '1 Active Candidate',
   b2_5: '2–5 Active Candidates',
@@ -227,6 +232,30 @@ async function run() {
       }
     }
     console.log()
+  }
+
+  // ── Marketing Tier add-on ────────────────────────────────────────────────────
+  console.log('\n── Marketing Tier ───────────────────────────────────────')
+  process.stdout.write(`  ${MARKETING_TIER.name}: `)
+  try {
+    const product = await getOrCreateProduct(MARKETING_TIER.name, { plan_key: MARKETING_TIER.key, plan_type: 'addon' })
+    process.stdout.write(' | ')
+    for (const billing of BILLING) {
+      const cents    = periodAmountCents(MARKETING_TIER.monthlyPrice, billing.key)
+      const nickname = `${MARKETING_TIER.key} — ${billing.label}`
+      try {
+        const price = await getOrCreatePrice(product.id, cents, billing, nickname, {
+          plan_key: MARKETING_TIER.key, billing: billing.key, plan_type: 'addon',
+        })
+        const envKey    = `STRIPE_PRICE_MARKETING_${billing.suffix}`
+        envVars[envKey] = price.id
+      } catch (err) {
+        process.stdout.write(`ERR(${billing.suffix})`)
+      }
+    }
+    console.log()
+  } catch (err) {
+    console.log(` ERROR: ${err.message}`)
   }
 
   // ── Output ───────────────────────────────────────────────────────────────────

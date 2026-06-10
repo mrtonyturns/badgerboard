@@ -432,6 +432,41 @@ export const BULK_CREDIT_PACKS = [
   { key: 'bulk250', qty: 250, price: 599, perCredit: 2.40, savingsPct: 40   },
 ]
 
+// ─── Marketing Tier (add-on subscription) ─────────────────────────────────────
+// Standalone add-on that unlocks the Marketing tab — DayFramer-powered email
+// campaigns, social planner, and QR code generator. Billed separately from the
+// main plan so any plan (including Scout) can purchase it.
+//
+// Stored in Supabase user_metadata:
+//   marketing_tier:         'active' | 'inactive'
+//   marketing_billing:      'monthly' | 'quarterly' | 'semiannual' | 'annual'
+//   dayframer_location_id:  GHL subaccount ID once the workspace is provisioned
+
+export const MARKETING_TIER = {
+  key:          'marketing',
+  name:         'Marketing Tier',
+  price:        '$99 / mo',
+  monthlyPrice: 99,
+  description:  'Run email campaigns, plan social content, and generate QR codes — all without leaving Badger Board.',
+  features: [
+    'Email campaign builder & sends',
+    'Social Planner — schedule posts across platforms',
+    'QR code generator for signs, mailers & lit drops',
+    'Dedicated marketing workspace, created from your account',
+    'No separate login — everything inside Badger Board',
+  ],
+}
+
+export function hasMarketingAccess(user) {
+  if (!user) return false
+  if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return true
+  return user?.user_metadata?.marketing_tier === 'active'
+}
+
+export function getDayframerLocationId(user) {
+  return user?.user_metadata?.dayframer_location_id || null
+}
+
 // ─── Scout lite profile — free sections ──────────────────────────────────────
 // Sections that are visible on Scout's lite profile (1x/month).
 // Everything else is blurred with an upgrade gate.
