@@ -3,6 +3,10 @@
   publish = "dist2"
   functions = "netlify/functions"
 
+[build.environment]
+  NODE_VERSION = "22"
+  NPM_FLAGS = "--legacy-peer-deps"
+
 # Block shared utility modules from being invoked as functions
 # These files are bundled with functions but must never be callable as endpoints.
 [[redirects]]
