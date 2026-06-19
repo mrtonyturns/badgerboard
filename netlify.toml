@@ -15,10 +15,11 @@
   status = 404
   force  = true
 
-# Force bare domain → www so the SSL cert always matches
+# www → bare canonical redirect (SSL cert is on badgerboardwi.com)
+# To re-enable www, add it as a domain alias in Netlify and update this rule
 [[redirects]]
-  from = "https://badgerboardwi.com/*"
-  to   = "https://www.badgerboardwi.com/:splat"
+  from = "https://www.badgerboardwi.com/*"
+  to   = "https://badgerboardwi.com/:splat"
   status = 301
   force  = true
 
@@ -64,6 +65,6 @@
 [[headers]]
   for = "/.netlify/functions/*"
   [headers.values]
-    Access-Control-Allow-Origin = "https://www.badgerboardwi.com"
+    Access-Control-Allow-Origin = "https://badgerboardwi.com"
     Access-Control-Allow-Methods = "POST, OPTIONS"
     Access-Control-Allow-Headers = "Content-Type, Authorization"
