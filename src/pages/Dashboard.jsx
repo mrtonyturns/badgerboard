@@ -87,40 +87,50 @@ export default function Dashboard() {
 
   const fetchDashboardData = async () => {
     setLoading(true)
-    const [officesRes, electionsRes, candidatesRes, dossiersRes, prospectsRes] = await Promise.all([
-      supabase.from('offices').select('id', { count: 'exact', head: true }),
-      supabase.from('elections').select('*').order('election_date').limit(8),
-      supabase.from('candidates').select('id, party, status', { count: 'exact' }),
-      supabase.from('dossiers').select('id', { count: 'exact', head: true }),
-      supabase.from('prospecting_lists').select('id', { count: 'exact', head: true }),
-    ])
+    try {
+      const [electionsRes, candidatesRes, dossiersRes, prospectsRes] = await Promise.all([
+        supabase.from('elections').select('*').order('election_date').limit(8),
+        supabase.from('candidates').select('id, party, status', { count: 'exact' }),
+        supabase.from('dossiers').select('id', { count: 'exact', head: true }),
+        supabase.from('prospecting_lists').select('id', { count: 'exact', head: true }),
+      ])
 
-    const candidates = candidatesRes.data || []
-    const partyBreakdown = candidates.reduce((acc, c) => {
-      acc[c.party] = (acc[c.party] || 0) + 1
-      return acc
-    }, {})
+      // offices table may not exist yet — query separately so it can't break the page
+      let officesCount = 0
+      try {
+        const officesRes = await supabase.from('offices').select('id', { count: 'exact', head: true })
+        officesCount = officesRes.count || 0
+      } catch { /* table not yet created */ }
 
-    setStats({
-      offices:      officesRes.count || 0,
-      candidates:   candidatesRes.count || 0,
-      dossiers:     dossiersRes.count || 0,
-      prospects:    prospectsRes.count || 0,
-      republicans:  partyBreakdown['Republican'] || 0,
-      democrats:    partyBreakdown['Democrat'] || 0,
-    })
+      const candidates = candidatesRes.data || []
+      const partyBreakdown = candidates.reduce((acc, c) => {
+        acc[c.party] = (acc[c.party] || 0) + 1
+        return acc
+      }, {})
 
-    setElections(electionsRes.data || [])
+      setStats({
+        offices:      officesCount,
+        candidates:   candidatesRes.count || 0,
+        dossiers:     dossiersRes.count || 0,
+        prospects:    prospectsRes.count || 0,
+        republicans:  partyBreakdown['Republican'] || 0,
+        democrats:    partyBreakdown['Democrat'] || 0,
+      })
 
-    // Recent candidates
-    const recentCandidates = await supabase
-      .from('candidates')
-      .select('id, name, party, status, created_at, office:offices(name, district_name)')
-      .order('created_at', { ascending: false })
-      .limit(6)
-    setRecent(recentCandidates.data || [])
+      setElections(electionsRes.data || [])
 
-    setLoading(false)
+      // Recent candidates — omit the offices join since that table may not exist yet
+      const recentCandidates = await supabase
+        .from('candidates')
+        .select('id, name, party, status, created_at')
+        .order('created_at', { ascending: false })
+        .limit(6)
+      setRecent(recentCandidates.data || [])
+    } catch (err) {
+      console.error('[Dashboard] fetchDashboardData error:', err)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const partyBadge = (party) => {

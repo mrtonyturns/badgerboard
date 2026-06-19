@@ -1,11 +1,13 @@
-// ─── Badger Board Service Worker v1.0 ────────────────────────────────────────
+// ─── Badger Board Service Worker v2.0 ────────────────────────────────────────
 // Strategy:
-//   • App shell (JS/CSS/HTML) → Cache-First (stale-while-revalidate on update)
+//   • App shell (JS/CSS/HTML) → Network-First (always fresh from Netlify CDN)
 //   • GeoJSON district files  → Cache-First (geographic data rarely changes)
 //   • Supabase REST API calls → Network-First with graceful offline response
 //   • All other fetch         → Network-First with cache fallback
+//
+// v2.0: Bumped to clear v1 stale caches that caused white-screen on deploy
 
-const CACHE_NAME    = 'badgerboard-v1'
+const CACHE_NAME    = 'badgerboard-v2'
 const GEODATA_CACHE = 'badgerboard-geodata-v1'
 
 // Assets to pre-cache on install (app shell)
@@ -77,19 +79,22 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // 3. App JS/CSS/images → Stale-While-Revalidate
+  // 3. App JS/CSS/images → Network-First (content-hashed filenames → always safe to cache after fetch)
   if (
     url.hostname === self.location.hostname &&
     (url.pathname.endsWith('.js') || url.pathname.endsWith('.css') || url.pathname.endsWith('.svg'))
   ) {
     event.respondWith(
       caches.open(CACHE_NAME).then(async cache => {
-        const cached = await cache.match(event.request)
-        const fetchPromise = fetch(event.request).then(resp => {
+        try {
+          const resp = await fetch(event.request)
           if (resp.ok) cache.put(event.request, resp.clone())
           return resp
-        }).catch(() => cached || new Response('', { status: 503 }))
-        return cached || fetchPromise
+        } catch {
+          // Offline fallback: serve from cache if available
+          const cached = await cache.match(event.request)
+          return cached || new Response('', { status: 503 })
+        }
       })
     )
     return
