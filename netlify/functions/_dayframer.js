@@ -164,13 +164,19 @@ async function provisionSubaccount(user) {
   const companyId = await getCompanyId()
 
   const name = meta.business || meta.display_name || user.email
+  // GHL Create Sub-Account schema: the contact's first/last name + email go in
+  // a nested `prospectInfo` object — they are NOT valid top-level properties
+  // (top-level firstName/lastName returns 422 "property ... should not exist").
+  // Verified against the live POST /locations/ endpoint.
   const payload = {
     name,
     companyId,
-    ...(meta.first_name && { firstName: meta.first_name }),
-    ...(meta.last_name  && { lastName:  meta.last_name }),
-    email: user.email,
     ...(meta.phone && { phone: meta.phone }),
+    prospectInfo: {
+      ...(meta.first_name && { firstName: meta.first_name }),
+      ...(meta.last_name  && { lastName:  meta.last_name }),
+      email: user.email,
+    },
     settings: { allowDuplicateContact: false },
   }
 
