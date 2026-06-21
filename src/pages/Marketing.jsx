@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Megaphone, Mail, CalendarDays, QrCode, Check, Loader2, AlertCircle,
@@ -256,16 +256,26 @@ function WorkspaceSetup({ onCreated }) {
 // ─── Embedded DayFramer tool (Email Campaigns / Social Planner) ───────────────
 // Fetches a short-lived SSO URL so the tool loads signed-in — no second login.
 
+// How long to wait for the iframe to load before assuming the embed was blocked
+// (e.g. by the provider's frame headers) and showing the fallback.
+const EMBED_LOAD_TIMEOUT_MS = 6000
+
 function EmbeddedTool({ section }) {
   const { session } = useAuth()
   const [url,     setUrl]     = useState(null)
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState(null)
+  // 'pending' until the iframe load event fires; 'loaded' on success;
+  // 'blocked' if it never loads (framing refused). Drives whether we surface a
+  // fallback — we don't show the new-tab option unless the embed actually fails.
+  const [frameState, setFrameState] = useState('pending')
+  const loadTimer = useRef(null)
 
   const loadSso = useCallback(async () => {
     setLoading(true)
     setError(null)
     setUrl(null)
+    setFrameState('pending')
     try {
       const res = await fetch(`${SSO_API}?section=${section}`, {
         headers: { Authorization: `Bearer ${session?.access_token}` },
@@ -281,11 +291,22 @@ function EmbeddedTool({ section }) {
 
   useEffect(() => { loadSso() }, [loadSso])
 
+  // Once we have a URL, start a watchdog: if the iframe doesn't fire onLoad
+  // within the timeout, assume framing was blocked and reveal the fallback.
+  useEffect(() => {
+    if (!url) return
+    clearTimeout(loadTimer.current)
+    loadTimer.current = setTimeout(() => {
+      setFrameState(s => (s === 'pending' ? 'blocked' : s))
+    }, EMBED_LOAD_TIMEOUT_MS)
+    return () => clearTimeout(loadTimer.current)
+  }, [url])
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-gray-400">
         <Loader2 className="w-6 h-6 animate-spin mb-3" />
-        <p className="text-sm">Signing you in…</p>
+        <p className="text-sm">Loading…</p>
       </div>
     )
   }
@@ -306,31 +327,38 @@ function EmbeddedTool({ section }) {
   }
 
   return (
-    <div>
-      {/* Toolbar — escape hatch in case the tool refuses to render embedded */}
-      <div className="flex items-center justify-end gap-2 mb-2">
-        <button
-          onClick={loadSso}
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-800 px-2.5 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
-          title="Reload the tool"
-        >
-          <RefreshCw className="w-3.5 h-3.5" /> Reload
-        </button>
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-800 px-2.5 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
-          title="Open in a new tab"
-        >
-          <ExternalLink className="w-3.5 h-3.5" /> Open in new tab
-        </a>
-      </div>
+    <div className="relative">
+      {/* Fallback bar — only shown if the embed appears blocked. Kept generic:
+          no provider name; just an action to open the tool in its own tab. */}
+      {frameState === 'blocked' && (
+        <div className="flex items-center justify-between gap-3 mb-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
+          <span className="text-xs text-amber-800">
+            Taking a moment to load. You can open it in a new tab instead.
+          </span>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <button
+              onClick={loadSso}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-800 hover:text-amber-900 px-2 py-1 rounded hover:bg-amber-100 transition-colors"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Retry
+            </button>
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-800 hover:text-amber-900 px-2 py-1 rounded hover:bg-amber-100 transition-colors"
+            >
+              <ExternalLink className="w-3.5 h-3.5" /> Open in new tab
+            </a>
+          </div>
+        </div>
+      )}
       <iframe
         src={url}
         title={section}
+        onLoad={() => { clearTimeout(loadTimer.current); setFrameState('loaded') }}
         className="w-full rounded-xl border border-gray-200 bg-white"
-        style={{ height: 'calc(100dvh - 270px)', minHeight: 480 }}
+        style={{ height: `calc(100dvh - ${frameState === 'blocked' ? 318 : 230}px)`, minHeight: 480 }}
         allow="clipboard-write"
       />
     </div>
