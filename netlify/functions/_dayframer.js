@@ -28,6 +28,22 @@ const GHL_VERSION = '2021-07-28'
 const SUPABASE_URL  = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
 
+// Consumer/free email providers whose domain is NOT a business website.
+const FREE_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'yahoo.com', 'ymail.com', 'hotmail.com',
+  'outlook.com', 'live.com', 'msn.com', 'aol.com', 'icloud.com', 'me.com',
+  'mac.com', 'proton.me', 'protonmail.com', 'gmx.com', 'mail.com', 'zoho.com',
+  'yandex.com', 'comcast.net', 'sbcglobal.net', 'verizon.net', 'att.net',
+])
+
+// Returns https://<domain> for a business email, or null for free/invalid ones.
+function deriveWebsite(email) {
+  const domain = String(email || '').split('@')[1]?.toLowerCase().trim()
+  if (!domain || !domain.includes('.')) return null
+  if (FREE_EMAIL_DOMAINS.has(domain)) return null
+  return `https://${domain}`
+}
+
 function ghlHeaders() {
   return {
     Authorization:  `Bearer ${process.env.GHL_AGENCY_API_KEY}`,
@@ -163,15 +179,34 @@ async function provisionSubaccount(user) {
 
   const companyId = await getCompanyId()
 
-  const name = meta.business || meta.display_name || user.email
+  // Subaccount name: prefer the company/organization name. When the user didn't
+  // enter one (it's optional at signup), fall back to "{First Last}'s Campaign"
+  // so the workspace still reads like a business — never a bare personal name
+  // and never a raw email address.
+  const fullName = [meta.first_name, meta.last_name].filter(Boolean).join(' ').trim()
+  const name = meta.business
+    || (fullName ? `${fullName}'s Campaign` : null)
+    || (meta.display_name ? `${meta.display_name}'s Campaign` : null)
+    || 'My Campaign'
+
+  // Derive a website from the email domain, skipping free/consumer providers
+  // (Badger Board doesn't capture a website field). e.g. tony@bluejackgroup.com
+  // → https://bluejackgroup.com
+  const website = deriveWebsite(user.email)
+
   // GHL Create Sub-Account schema: the contact's first/last name + email go in
   // a nested `prospectInfo` object — they are NOT valid top-level properties
   // (top-level firstName/lastName returns 422 "property ... should not exist").
-  // Verified against the live POST /locations/ endpoint.
+  // Verified against the live POST /locations/ endpoint. Only name + companyId
+  // are required; everything below is optional.
   const payload = {
     name,
     companyId,
+    // Badger Board is Wisconsin-focused — default subaccounts to Central time
+    // so scheduled posts/emails land sensibly. Users can change it in DayFramer.
+    timezone: 'America/Chicago',
     ...(meta.phone && { phone: meta.phone }),
+    ...(website && { website }),
     prospectInfo: {
       ...(meta.first_name && { firstName: meta.first_name }),
       ...(meta.last_name  && { lastName:  meta.last_name }),
