@@ -20,9 +20,11 @@ const crypto = require('crypto')
 const { getUserFromRequest, hasMarketingAccess } = require('./_dayframer')
 
 const TOKEN_TTL_SECONDS = 5 * 60
-const DEFAULT_APP_URL   = 'https://app.gohighlevel.com'
+// White-label app domain — users never see the underlying provider. Overridable
+// via DAYFRAMER_APP_URL. (Internal code uses the DayFramer name only.)
+const DEFAULT_APP_URL   = 'https://account.dayframer.com'
 
-// Section → path inside the GHL location app (Marketing menu)
+// Section → path inside the DayFramer location app (Marketing menu)
 const SECTION_PATHS = {
   email:  'marketing/emails/campaigns',
   social: 'marketing/social-planner',
@@ -57,19 +59,29 @@ exports.handler = async (event) => {
   }
 
   const appUrl  = (process.env.DAYFRAMER_APP_URL || DEFAULT_APP_URL).replace(/\/$/, '')
-  let url       = `${appUrl}/v2/location/${locationId}/${path}`
   let expiresAt = null
 
+  // Build query params. Collect them so multiple flags compose correctly.
+  const params = new URLSearchParams()
+
+  // Best-effort "main area only" — ask the white-label app to hide its own nav
+  // chrome. Honored only if DayFramer exposes an embed view; harmless otherwise.
+  // The reliable chrome-less result requires a DayFramer-side embed mode
+  // (see DAYFRAMER_EMBED_REQUIREMENTS.md).
+  params.set('embed', 'true')
+
   // Signed, short-lived token: userId.locationId.expiry + HMAC signature.
-  // Only attached once the white-label side is configured to validate it.
+  // Only validated once the white-label side is configured for it.
   const secret = process.env.DAYFRAMER_SSO_SECRET
   if (secret) {
     expiresAt = Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS
     const claims    = `${user.id}.${locationId}.${expiresAt}`
     const signature = crypto.createHmac('sha256', secret).update(claims).digest('base64url')
     const token     = `${Buffer.from(claims).toString('base64url')}.${signature}`
-    url = `${url}?bb_sso=${token}`
+    params.set('bb_sso', token)
   }
+
+  const url = `${appUrl}/v2/location/${locationId}/${path}?${params.toString()}`
 
   return { statusCode: 200, headers, body: JSON.stringify({ url, expiresAt }) }
 }
