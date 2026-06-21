@@ -47,18 +47,18 @@ discussion about whether to add them to signup/settings.
 |---|---|---|
 | `logoUrl` | new upload, or Badger Board brand asset | Maybe — makes the workspace look polished out of the box |
 
-### Social profiles — NOT captured
+### Social profiles — NOT applicable
 `social{}` accepts: `facebookUrl`, `instagram`, `twitter`, `linkedIn`,
 `youtube`, `pinterest`, `googlePlus`, `foursquare`, `yelp`, `blogRss`,
 `googlePlacesId`.
-| Could come from | Worth adding? |
+| Decision | Reasoning |
 |---|---|
-| new "your social links" step at signup, or the candidate's existing social links already stored on Candidate records | **Strong candidate** — the Social Planner is one of the three tools; pre-filling the user's handles would make it immediately useful |
+| **Do NOT send** | The only social links Badger Board stores live on **candidate** records (the politicians being researched) — that is research data about other people, not the account holder's own social presence. It would be wrong to push it into the user's DayFramer workspace. We do not capture the account holder's own socials, so there's nothing correct to send. |
 
 ### Other accepted fields
-| GHL field | Notes |
+| GHL field | Status |
 |---|---|
-| `snapshotId` | Apply a GHL snapshot (pre-built funnels/templates/automations) at creation. **Strong candidate** — a Badger Board campaign-marketing snapshot would give every new workspace ready-made email/social templates. No user data needed; it's an agency asset. |
+| `snapshotId` | **IMPLEMENTED** — set via `DAYFRAMER_SNAPSHOT_ID` env var (an agency asset, not user data). Every new sub-account gets the snapshot's pre-built funnels/email/social templates. Unset → field is simply omitted, no effect. |
 | `settings.allowDuplicateOpportunity`, `allowFacebookNameMerge`, `disableContactTimezone`, `contactUniqueIdentifiers` | Behavior toggles; defaults are fine |
 
 ---

@@ -194,6 +194,12 @@ async function provisionSubaccount(user) {
   // → https://bluejackgroup.com
   const website = deriveWebsite(user.email)
 
+  // Optional GHL snapshot — an agency asset (NOT user data). When set, every
+  // new sub-account is provisioned with the snapshot's pre-built funnels,
+  // email/social templates, and automations, so the workspace is useful out of
+  // the box. Build the snapshot once in DayFramer/GHL and put its ID here.
+  const snapshotId = process.env.DAYFRAMER_SNAPSHOT_ID
+
   // GHL Create Sub-Account schema: the contact's first/last name + email go in
   // a nested `prospectInfo` object — they are NOT valid top-level properties
   // (top-level firstName/lastName returns 422 "property ... should not exist").
@@ -207,6 +213,7 @@ async function provisionSubaccount(user) {
     timezone: 'America/Chicago',
     ...(meta.phone && { phone: meta.phone }),
     ...(website && { website }),
+    ...(snapshotId && { snapshotId }),
     prospectInfo: {
       ...(meta.first_name && { firstName: meta.first_name }),
       ...(meta.last_name  && { lastName:  meta.last_name }),
