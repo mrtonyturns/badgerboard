@@ -100,13 +100,67 @@ header.navbar {
 
 **Important caveats:**
 - Custom CSS in GHL is **global** — it also affects users who log into
-  `account.dayframer.com` directly, not just the Badger Board embed. If anyone
-  uses DayFramer standalone, hiding the nav for everyone is a problem.
-  - **Safer, embed-only option:** if GHL lets you target the framed state, scope
-    the rules so they only apply inside an iframe. GHL doesn't expose a reliable
-    "is-framed" body class, so the practical scoping is to put these tools behind
-    a dedicated sub-account/menu used only by the embed, or accept global hiding
-    if no one uses DayFramer standalone.
+  `account.dayframer.com` directly, not just the Badger Board embed. Since some
+  people DO use DayFramer standalone, the unscoped CSS above would hide their
+  nav too. **Use the scoped version below instead.**
+
+#### Scoped version — hide the nav ONLY inside the Badger Board embed
+
+The Badger Board iframe loads the tools with `?embed=true` in the URL. A tiny
+script tags the page so the hide-CSS applies only there. Standalone DayFramer
+users (no `?embed=true`, not framed) are unaffected.
+
+Put this in the DayFramer agency **Custom JS / custom code** field (Settings →
+Company → Whitelabel). If the white-label only has a single Custom CSS box, try
+pasting the whole block — GHL accepts `<script>` in the custom-code area on most
+agency tiers; verify it runs (you should see the `bb-embed` class appear on
+`<body>` via DevTools when loaded through Badger Board).
+
+```html
+<script>
+(function () {
+  try {
+    var framed  = window.self !== window.top;            // loaded in an iframe
+    var flagged = /[?&]embed=true\b/.test(location.search); // our embed param
+    if (framed && flagged) document.documentElement.classList.add('bb-embed');
+  } catch (e) {
+    // cross-origin access to window.top throws when framed → that itself means
+    // we're embedded, so honor the param alone in that case
+    if (/[?&]embed=true\b/.test(location.search)) {
+      document.documentElement.classList.add('bb-embed');
+    }
+  }
+})();
+</script>
+<style>
+/* Only inside the Badger Board embed: hide GHL's sidebar + top header */
+html.bb-embed #sidebar-v2,
+html.bb-embed .hl_nav-header,
+html.bb-embed .hl_header,
+html.bb-embed .hl_sidebar,
+html.bb-embed .left-sidebar,
+html.bb-embed .sidebar-nav,
+html.bb-embed .topbar,
+html.bb-embed header.navbar {
+  display: none !important;
+}
+html.bb-embed .hl_wrapper,
+html.bb-embed .page-wrapper,
+html.bb-embed .hl_page-content,
+html.bb-embed #app > .container-fluid {
+  margin-left: 0 !important;
+  padding-left: 0 !important;
+  padding-top: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+</style>
+```
+
+If GHL's custom-code box **strips `<script>`** (some tiers do), JS injection
+won't work — fall back to a **dedicated embed sub-account** with its own CSS, or
+ask GHL support for a native chromeless/embed param. Do NOT use the unscoped CSS
+while standalone users exist.
 - GHL restructures its UI periodically. If the banner reappears after a GHL
   update, re-inspect with DevTools (right-click the banner → Inspect) and add
   the new class/ID to the list above.
