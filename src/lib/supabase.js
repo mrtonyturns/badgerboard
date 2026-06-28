@@ -7,10 +7,63 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.error('Missing Supabase environment variables. Please check your .env file.')
 }
 
+// A stable, explicit storage key so the auth session is found on every load
+// regardless of the Supabase SDK version's default-key derivation. Without a
+// fixed key, an SDK upgrade (or differing project-ref hashing) can change the
+// localStorage key and silently "forget" the session, forcing a re-login.
+const AUTH_STORAGE_KEY = 'badgerboard-auth'
+
+// Guard localStorage access — if it's unavailable (private mode, blocked
+// third-party storage in some embedded contexts) fall back to an in-memory
+// store so createClient never throws. Persistence still works in the normal
+// first-party case, which is what fixes the "logged out every session" issue.
+function getAuthStorage() {
+  try {
+    const k = '__bb_ls_probe__'
+    window.localStorage.setItem(k, '1')
+    window.localStorage.removeItem(k)
+    migrateLegacyAuthSession()
+    return window.localStorage
+  } catch {
+    const mem = new Map()
+    return {
+      getItem:    (key) => (mem.has(key) ? mem.get(key) : null),
+      setItem:    (key, val) => { mem.set(key, val) },
+      removeItem: (key) => { mem.delete(key) },
+    }
+  }
+}
+
+// One-time migration: before this change the session lived under Supabase's
+// default key (sb-<project-ref>-auth-token). Copy it to the new explicit key so
+// already-signed-in users are NOT logged out when this ships. Safe to run every
+// load — it no-ops once the new key exists.
+function migrateLegacyAuthSession() {
+  try {
+    if (window.localStorage.getItem(AUTH_STORAGE_KEY)) return
+    const ref = (supabaseUrl || '').match(/https?:\/\/([a-z0-9]+)\./i)?.[1]
+    if (!ref) return
+    const legacyKey = `sb-${ref}-auth-token`
+    const legacy = window.localStorage.getItem(legacyKey)
+    if (legacy) window.localStorage.setItem(AUTH_STORAGE_KEY, legacy)
+  } catch {
+    // non-fatal — worst case is a single re-login
+  }
+}
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    persistSession: true,
+    persistSession:   true,
     autoRefreshToken: true,
+    // Explicit, stable storage so the session is reliably re-read on every load
+    // and survives SDK upgrades. This is the fix for "logged out every session".
+    storageKey:        AUTH_STORAGE_KEY,
+    storage:           typeof window !== 'undefined' ? getAuthStorage() : undefined,
+    // NOTE: flowType is intentionally left at the SDK default (implicit). The
+    // password-recovery landing in AuthContext detects the hash token
+    // (#type=recovery / #access_token); switching to PKCE would move that to a
+    // ?code= query param and break recovery. Do not change without updating
+    // AuthContext's recovery detection + ResetPassword.jsx.
   },
 })
 
