@@ -60,14 +60,61 @@ the app is framed cross-site → fresh login every visit (the "login isn't
 persistent" symptom). Ask GHL support to set the white-label session cookie
 `SameSite=None; Secure`, or confirm it already is.
 
-### 3. Chrome-less view — main area only  *(the clean look)*
-We already append `?embed=true` to the tool URL. GHL's app must honor an embed
-view that hides its sidebar + top bar. Options as the agency owner:
-- Check GHL **white-label / custom CSS** settings — inject CSS that hides the
-  nav chrome when the app is framed (`@media` / a body class on embed).
-- Or confirm GHL honors an embed/chromeless URL param for your tier.
-If neither exists, the tool's own nav shows inside the frame (functional, just
-not as clean).
+### 3. Hide the sidebar + top banner — main area only  *(the clean look)*
+
+Do this with **Custom CSS** in the DayFramer agency settings. As the agency
+owner:
+
+1. In DayFramer, click the **Settings** gear (bottom-left) → **Company** tab.
+2. Scroll to **Whitelabel → Custom CSS** (a code box).
+3. Paste the block below and **Save**. Allow a few minutes to propagate.
+
+```html
+<style>
+/* Hide GHL's own left sidebar and top header so only the working area shows.
+   Covers current + older class names; harmless if a selector isn't present. */
+#sidebar-v2,
+.hl_nav-header,
+.hl_header,
+.hl_sidebar,
+.left-sidebar,
+.sidebar-nav,
+.topbar,
+header.navbar {
+  display: none !important;
+}
+
+/* Reclaim the space the sidebar/header used to take */
+.hl_wrapper,
+.page-wrapper,
+.hl_page-content,
+#app > .container-fluid {
+  margin-left: 0 !important;
+  padding-left: 0 !important;
+  padding-top: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+</style>
+```
+
+**Important caveats:**
+- Custom CSS in GHL is **global** — it also affects users who log into
+  `account.dayframer.com` directly, not just the Badger Board embed. If anyone
+  uses DayFramer standalone, hiding the nav for everyone is a problem.
+  - **Safer, embed-only option:** if GHL lets you target the framed state, scope
+    the rules so they only apply inside an iframe. GHL doesn't expose a reliable
+    "is-framed" body class, so the practical scoping is to put these tools behind
+    a dedicated sub-account/menu used only by the embed, or accept global hiding
+    if no one uses DayFramer standalone.
+- GHL restructures its UI periodically. If the banner reappears after a GHL
+  update, re-inspect with DevTools (right-click the banner → Inspect) and add
+  the new class/ID to the list above.
+- Verify after saving: the sidebar/top bar should be gone; only the tool's
+  content remains.
+
+We already append `?embed=true` to the tool URL in case GHL ever ships a native
+chrome-less param — but today the Custom CSS above is the working method.
 
 ---
 
