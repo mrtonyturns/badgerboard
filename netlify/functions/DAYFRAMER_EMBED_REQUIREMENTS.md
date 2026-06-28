@@ -19,8 +19,27 @@ X-Frame-Options: SAMEORIGIN
 
 This tells every browser "only my own domain may iframe me," so Badger Board
 (`badgerboardwi.com`) gets a blank frame. This header is emitted by
-GoHighLevel's app servers (the domain is fronted by Cloudflare). It must be
-removed/overridden and replaced with a `frame-ancestors` allowlist.
+GoHighLevel's app servers and must be removed/overridden and replaced with a
+`frame-ancestors` allowlist.
+
+### Who controls this header (investigated 2026-06-21)
+`account.dayframer.com` is a **CNAME → `whitelabel.ludicrous.cloud`**, which is
+**GoHighLevel's white-label infrastructure** (fronted by GHL's own Cloudflare —
+`Server: cloudflare`, `CF-RAY`). Implications:
+- The domain is **registered at Namecheap**, but Namecheap only holds the DNS
+  CNAME. It does **not** serve the app or set the response headers.
+- The `X-Frame-Options` header is set by **GHL's servers**, inside **GHL's**
+  Cloudflare zone — **not** ours. So we **cannot** change it from Namecheap or
+  from our own Cloudflare account.
+- Therefore the only supported fix is **GHL agency support** enabling framing
+  for our white-label domain. (A reverse proxy on a domain we DO control could
+  strip the header, but is fragile — see below.)
+
+**STATUS: PINNED 2026-06-21** — researching options externally before deciding
+between (a) GHL support ticket to allow framing, (b) reverse-proxy through our
+own domain, or (c) drop the embed and launch tools in a new tab. Badger Board
+code already supports the embed (loads the moment framing is allowed) and has a
+new-tab fallback, so no code is blocked on this decision.
 
 ---
 
