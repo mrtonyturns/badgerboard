@@ -24,11 +24,17 @@ const TOKEN_TTL_SECONDS = 5 * 60
 // via DAYFRAMER_APP_URL. (Internal code uses the DayFramer name only.)
 const DEFAULT_APP_URL   = 'https://account.dayframer.com'
 
-// Section → path inside the DayFramer location app (Marketing menu)
+// Section → path inside the DayFramer (GHL) location app.
+// Verified 2026-06-21 by copying the live URLs from a logged-in DayFramer
+// session (paths are everything after /v2/location/<id>/):
+//   Email Campaigns → marketing/emails/statistics
+//   Social Planner  → marketing/social-planner
+//   QR Codes        → qr-codes  (top level, NOT under marketing)
+// If GHL restructures routes, re-copy the URLs from DayFramer and update here.
 const SECTION_PATHS = {
-  email:  'marketing/emails/campaigns',
+  email:  'marketing/emails/statistics',
   social: 'marketing/social-planner',
-  qr:     'marketing/qr-codes',
+  qr:     'qr-codes',
 }
 
 exports.handler = async (event) => {
