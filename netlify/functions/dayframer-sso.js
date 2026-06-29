@@ -1,19 +1,21 @@
 // Netlify Function: dayframer-sso
-// Returns the embed URL for a DayFramer (GoHighLevel) tool inside the user's
-// subaccount — Email Campaigns, Social Planner, or the QR Code Generator.
+// Returns the deep-link URL for a DayFramer (GoHighLevel) marketing tool in the
+// user's subaccount — Email Campaigns, Social Planner, or QR Codes. The frontend
+// opens this URL in a NEW TAB (not an iframe — cross-origin iframe embedding of
+// GHL is impossible due to browser third-party-cookie blocking; verified by
+// research, see DAYFRAMER_EMBED_REQUIREMENTS.md).
+//
+// In a first-party tab the session persists and the deep-link resolves. When
+// agency OIDC SSO is configured (Supabase as IdP — see DAYFRAMER_SSO_SETUP.md),
+// a user with no GHL session is bounced through /login/sso and silently signed
+// in via their existing Badger Board (Supabase) session, then returned to this
+// tool URL — one click, no re-login.
 //
 // GET ?section=email|social|qr
 //
-// If DAYFRAMER_SSO_SECRET is configured, the URL carries a short-lived
-// HMAC-signed token (bb_sso) the white-label side can validate to start a
-// session without prompting for login. Without the secret, the plain GHL URL
-// is returned — the user's existing GHL session (created with their Badger
-// Board email when the workspace was provisioned) keeps them signed in.
-//
 // Env vars:
-//   DAYFRAMER_APP_URL    — app base URL (default https://app.gohighlevel.com;
-//                          swap for the white-label domain when ready)
-//   DAYFRAMER_SSO_SECRET — optional shared HMAC secret for token signing
+//   DAYFRAMER_APP_URL    — white-label app base URL (default account.dayframer.com)
+//   DAYFRAMER_SSO_SECRET — optional shared HMAC secret for a signed bb_sso token
 //   plus the Supabase vars used by _dayframer.js
 
 const crypto = require('crypto')
@@ -70,12 +72,6 @@ exports.handler = async (event) => {
   // Build query params. Collect them so multiple flags compose correctly.
   const params = new URLSearchParams()
 
-  // Best-effort "main area only" — ask the white-label app to hide its own nav
-  // chrome. Honored only if DayFramer exposes an embed view; harmless otherwise.
-  // The reliable chrome-less result requires a DayFramer-side embed mode
-  // (see DAYFRAMER_EMBED_REQUIREMENTS.md).
-  params.set('embed', 'true')
-
   // Signed, short-lived token: userId.locationId.expiry + HMAC signature.
   // Only validated once the white-label side is configured for it.
   const secret = process.env.DAYFRAMER_SSO_SECRET
@@ -87,7 +83,8 @@ exports.handler = async (event) => {
     params.set('bb_sso', token)
   }
 
-  const url = `${appUrl}/v2/location/${locationId}/${path}?${params.toString()}`
+  const qs  = params.toString()
+  const url = `${appUrl}/v2/location/${locationId}/${path}${qs ? `?${qs}` : ''}`
 
   return { statusCode: 200, headers, body: JSON.stringify({ url, expiresAt }) }
 }

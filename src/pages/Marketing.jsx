@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Megaphone, Mail, CalendarDays, QrCode, Check, Loader2, AlertCircle,
-  Sparkles, Lock, RefreshCw, ArrowRight, ExternalLink,
+  Sparkles, Lock, ArrowRight, ExternalLink,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import {
@@ -253,156 +253,112 @@ function WorkspaceSetup({ onCreated }) {
   )
 }
 
-// ─── Embedded DayFramer tool (Email Campaigns / Social Planner) ───────────────
-// Fetches a short-lived SSO URL so the tool loads signed-in — no second login.
+// ─── Tool launcher card ───────────────────────────────────────────────────────
+// Cross-origin iframe embedding of the marketing app is impossible (browser
+// third-party-cookie blocking logs the user out on every refresh/navigation —
+// confirmed by research). Instead each tool opens in its own tab, where it is
+// first-party: the session persists and deep-links resolve correctly. With SSO
+// configured (see DAYFRAMER_SSO_SETUP.md) the open is a one-click no-relogin
+// hand-off; without it, the user signs in once and the tab session sticks.
 
-// How long to wait for the iframe to load before assuming the embed was blocked
-// (e.g. by the provider's frame headers) and showing the fallback.
-const EMBED_LOAD_TIMEOUT_MS = 6000
+const TOOL_CARDS = [
+  {
+    key: 'email',
+    label: 'Email Campaigns',
+    icon: Mail,
+    blurb: 'Design, send, and track email campaigns to your contacts.',
+  },
+  {
+    key: 'social',
+    label: 'Social Planner',
+    icon: CalendarDays,
+    blurb: 'Schedule and publish posts across your social channels.',
+  },
+  {
+    key: 'qr',
+    label: 'QR Codes',
+    icon: QrCode,
+    blurb: 'Generate branded QR codes for signs, mailers, and lit drops.',
+  },
+]
 
-function EmbeddedTool({ section }) {
+function ToolLauncher() {
   const { session } = useAuth()
-  const [url,     setUrl]     = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [opening, setOpening] = useState(null)   // section key currently opening
   const [error,   setError]   = useState(null)
-  // 'pending' until the iframe load event fires; 'loaded' on success;
-  // 'blocked' if it never loads (framing refused). Drives whether we surface a
-  // fallback — we don't show the new-tab option unless the embed actually fails.
-  const [frameState, setFrameState] = useState('pending')
-  const loadTimer = useRef(null)
 
-  const loadSso = useCallback(async () => {
-    setLoading(true)
+  // Open the tool in a new tab. We pre-open a blank tab synchronously (inside the
+  // click) so the browser doesn't block the popup, then point it at the signed
+  // tool URL once the SSO endpoint returns. Falls back to closing the tab on error.
+  const openTool = useCallback(async (section) => {
     setError(null)
-    setUrl(null)
-    setFrameState('pending')
+    setOpening(section)
+    const tab = window.open('about:blank', '_blank', 'noopener,noreferrer')
     try {
       const res = await fetch(`${SSO_API}?section=${section}`, {
         headers: { Authorization: `Bearer ${session?.access_token}` },
       })
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error || 'Could not open the tool')
-      setUrl(json.url)
+      if (!res.ok || !json.url) throw new Error(json.error || 'Could not open the tool')
+      if (tab) tab.location.href = json.url
+      else window.location.href = json.url   // popup blocked — navigate current tab
     } catch (err) {
-      setError(err.message || 'Could not open the tool')
+      if (tab) tab.close()
+      setError(err.message || 'Could not open the tool. Please try again.')
     }
-    setLoading(false)
-  }, [section, session?.access_token])
-
-  useEffect(() => { loadSso() }, [loadSso])
-
-  // Once we have a URL, start a watchdog: if the iframe doesn't fire onLoad
-  // within the timeout, assume framing was blocked and reveal the fallback.
-  useEffect(() => {
-    if (!url) return
-    clearTimeout(loadTimer.current)
-    loadTimer.current = setTimeout(() => {
-      setFrameState(s => (s === 'pending' ? 'blocked' : s))
-    }, EMBED_LOAD_TIMEOUT_MS)
-    return () => clearTimeout(loadTimer.current)
-  }, [url])
-
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center py-24 text-gray-400">
-        <Loader2 className="w-6 h-6 animate-spin mb-3" />
-        <p className="text-sm">Loading…</p>
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center py-24">
-        <AlertCircle className="w-6 h-6 text-red-400 mb-3" />
-        <p className="text-sm text-gray-600 mb-4">{error}</p>
-        <button
-          onClick={loadSso}
-          className="inline-flex items-center gap-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg px-4 py-2 hover:bg-gray-50 transition-colors"
-        >
-          <RefreshCw className="w-4 h-4" /> Try again
-        </button>
-      </div>
-    )
-  }
-
-  return (
-    <div className="relative">
-      {/* Fallback bar — only shown if the embed appears blocked. Kept generic:
-          no provider name; just an action to open the tool in its own tab. */}
-      {frameState === 'blocked' && (
-        <div className="flex items-center justify-between gap-3 mb-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
-          <span className="text-xs text-amber-800">
-            Taking a moment to load. You can open it in a new tab instead.
-          </span>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <button
-              onClick={loadSso}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-800 hover:text-amber-900 px-2 py-1 rounded hover:bg-amber-100 transition-colors"
-            >
-              <RefreshCw className="w-3.5 h-3.5" /> Retry
-            </button>
-            <a
-              href={url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-800 hover:text-amber-900 px-2 py-1 rounded hover:bg-amber-100 transition-colors"
-            >
-              <ExternalLink className="w-3.5 h-3.5" /> Open in new tab
-            </a>
-          </div>
-        </div>
-      )}
-      <iframe
-        src={url}
-        title={section}
-        onLoad={() => { clearTimeout(loadTimer.current); setFrameState('loaded') }}
-        className="w-full rounded-xl border border-gray-200 bg-white"
-        style={{ height: `calc(100dvh - ${frameState === 'blocked' ? 318 : 230}px)`, minHeight: 480 }}
-        allow="clipboard-write"
-      />
-    </div>
-  )
-}
-
-// ─── Phase 2 — tool navigation shell ──────────────────────────────────────────
-
-function MarketingTools() {
-  const [tool, setTool] = useState('email')
+    setOpening(null)
+  }, [session?.access_token])
 
   return (
     <div>
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Marketing</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Campaigns, content planning, and QR codes — in one place.</p>
-        </div>
-
-        {/* Tool switcher */}
-        <div className="flex items-center rounded-lg border border-gray-200 p-0.5 bg-gray-50 text-sm flex-shrink-0">
-          {TOOLS.map(t => {
-            const Icon = t.icon
-            return (
-              <button
-                key={t.key}
-                onClick={() => setTool(t.key)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-all ${
-                  tool === t.key
-                    ? 'bg-white text-gray-900 shadow-sm border border-gray-200'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                <span className="hidden sm:inline">{t.label}</span>
-              </button>
-            )
-          })}
-        </div>
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-900">Marketing</h1>
+        <p className="text-sm text-gray-500 mt-0.5">
+          Campaigns, content planning, and QR codes — open a tool to get started.
+        </p>
       </div>
 
-      {tool === 'email'  && <EmbeddedTool section="email"  />}
-      {tool === 'social' && <EmbeddedTool section="social" />}
-      {tool === 'qr'     && <EmbeddedTool section="qr"     />}
+      {error && (
+        <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 mb-6">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-600">✕</button>
+        </div>
+      )}
+
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {TOOL_CARDS.map(card => {
+          const Icon = card.icon
+          const isOpening = opening === card.key
+          return (
+            <button
+              key={card.key}
+              onClick={() => openTool(card.key)}
+              disabled={!!opening}
+              className="group text-left rounded-xl border border-gray-200 bg-white p-5 hover:border-gray-300 hover:shadow-sm transition-all disabled:opacity-60"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="w-10 h-10 rounded-xl bg-brand-red/10 flex items-center justify-center">
+                  <Icon className="w-5 h-5 text-brand-red" />
+                </div>
+                {isOpening
+                  ? <Loader2 className="w-4 h-4 text-gray-400 animate-spin" />
+                  : <ExternalLink className="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors" />}
+              </div>
+              <p className="text-sm font-semibold text-gray-900 mb-1">{card.label}</p>
+              <p className="text-sm text-gray-500 leading-relaxed">{card.blurb}</p>
+              <span className="inline-flex items-center gap-1 mt-3 text-xs font-medium text-brand-red">
+                {isOpening ? 'Opening…' : 'Open'}
+                {!isOpening && <ArrowRight className="w-3.5 h-3.5" />}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      <p className="text-xs text-gray-400 mt-6">
+        Tools open in a new tab and stay signed in for your session.
+      </p>
     </div>
   )
 }
@@ -462,5 +418,5 @@ export default function Marketing() {
     return <WorkspaceSetup onCreated={setCreatedLocationId} />
   }
 
-  return <MarketingTools />
+  return <ToolLauncher />
 }
