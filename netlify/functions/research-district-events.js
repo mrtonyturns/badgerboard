@@ -72,7 +72,7 @@ export const handler = async (event) => {
           model: 'sonar-pro',
           messages: [
             { role: 'system', content: 'You are a Wisconsin community events researcher helping a political campaign find public events to attend. Be specific about dates, times, venues, and organizers. Include well-known annual and recurring events (county fairs, farmers markets, festivals, parades) that fall in the window based on their usual schedule even if the current-year page is sparse — note when a date is approximate. Never invent one-off events.' },
-            { role: 'user', content: `Today is ${today}. Search for upcoming public events happening in the next 60 days in and around these Wisconsin communities: ${area_description || district_name}. Search for things like "${(area_description || '').split(',')[0] || 'Wisconsin'} events calendar 2026", county fair schedules, farmers markets, summer festivals, parades, chamber of commerce calendars, county Republican and Democratic party event pages, and union events for this area. List every event you find (aim for 10-16), including recurring weekly ones (farmers markets) and annual ones whose usual dates fall in the window — mark approximate dates. For each: name, date(s), start time, venue and city, organizer/host, a one-sentence description, and the event website URL if known. These communities are in ${district_name}, near Wausau, Wisconsin.` }
+            { role: 'user', content: `Today is ${today}. Search for upcoming public events happening in the next 60 days in and around these Wisconsin communities: ${area_description || district_name}. Search for things like "${(area_description || '').split(',')[0] || 'Wisconsin'} events calendar 2026", county fair schedules, farmers markets, summer festivals, parades, chamber of commerce calendars, county Republican and Democratic party event pages, and union events for this area. List every event you find (aim for 10-16), including recurring weekly ones (farmers markets) and annual ones whose usual dates fall in the window — mark approximate dates. ONLY include events open to the general public with no invitation, membership, or private registration required — skip private parties, members-only club events, and invite-only gatherings. For each: name, date(s), start time, venue with its STREET ADDRESS and city, organizer/host, a one-sentence description, and the event website URL if known. These communities are in ${district_name}, Wisconsin.` }
           ],
           max_tokens: 2500,
         }),
@@ -110,6 +110,7 @@ Schema — an array "events":
       "date_end": "2026-07-20" or null,
       "time": "9:00 AM" or null,
       "venue": "Venue name",
+      "address": "street address (e.g. 1582 Kronenwetter Dr) or null",
       "city": "City",
       "host": "Organizer" or null,
       "description": "One sentence describing the event and why a campaign would attend.",
@@ -129,7 +130,8 @@ Lean rules — be strict:
 - "likely_*" when strong signals put certainty at 80-99 (labor unions → likely_liberal; rural patriotic/agricultural events in heavily R areas with other signals; progressive advocacy groups → likely_liberal).
 - Everything else is "nonpartisan" (fairs, markets, chamber, civic) with certainty below 80; set score to the AREA's lean context, not the event's.
 - "score": negative = liberal, positive = conservative, drives a marker on a lean bar.
-Only include events with a real date in the next ~60 days. Output ONLY the JSON object.
+Only include events with a real date in the next ~60 days.
+PUBLIC-ONLY RULE: include only events open to the general public. EXCLUDE anything private, invite-only, members-only, or requiring approval to attend (private fundraisers with invitation lists, closed club meetings, school-family-only events). Free-and-open government meetings, fairs, markets, festivals, and ticketed-but-open events all count as public. Output ONLY the JSON object.
 
 RESEARCH:
 ${research}`,

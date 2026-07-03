@@ -52,7 +52,7 @@ export const handler = async (event) => {
     const e = it.event || {}
     if (!e.date_start) continue
     const { start, end } = dt(e.date_start, e.time)
-    const loc = [e.venue, e.city].filter(Boolean).join(', ')
+    const loc = [e.venue, e.address, e.city ? `${e.city}, WI` : null].filter(Boolean).join(', ')
     lines.push('BEGIN:VEVENT')
     lines.push(`UID:${it.id}@badgerboardwi.com`)
     lines.push(`DTSTAMP:${new Date(it.created_at).toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`)

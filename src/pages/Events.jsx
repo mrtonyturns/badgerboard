@@ -170,7 +170,7 @@ export default function Events() {
       `DTSTART:${d}T${pad(h)}${pad(min)}00`,
       `DTEND:${d}T${pad(Math.min(h+2,23))}${pad(min)}00`,
       `SUMMARY:${ev.name}`,
-      `LOCATION:${[ev.venue, ev.city].filter(Boolean).join(', ')}`,
+      `LOCATION:${[ev.venue, ev.address, ev.city ? `${ev.city}, WI` : null].filter(Boolean).join(', ')}`,
       `DESCRIPTION:${(ev.description || '').replace(/\n/g,' ')}`,
       'BEGIN:VALARM','ACTION:DISPLAY',`TRIGGER:-PT${reminderMins}M`,`DESCRIPTION:${ev.name}`,'END:VALARM',
       'END:VEVENT','END:VCALENDAR'].join('\r\n')
@@ -334,7 +334,7 @@ export default function Events() {
                 <div className="p-4">
                   <h3 className="text-[15px] font-extrabold text-gray-900 leading-snug">{ev.name}</h3>
                   <p className="text-xs text-gray-400 font-bold mt-1">
-                    {fmtDate(ev)}{ev.time ? ` · ${ev.time}` : ''} · {[ev.venue, ev.city].filter(Boolean).join(', ')}
+                    {fmtDate(ev)}{ev.time ? ` · ${ev.time}` : ''} · {[ev.venue, ev.address, ev.city].filter(Boolean).join(', ')}
                   </p>
                   <p className="text-[13px] text-gray-600 font-medium leading-relaxed mt-2">{ev.description}</p>
 
