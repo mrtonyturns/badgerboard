@@ -129,7 +129,7 @@ ${research}`,
   const cData = await claudeRes.json()
   let history
   try {
-    const raw = (cData.content?.[0]?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
+    const raw = (cData.content?.find(b => b.type === 'text')?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
     history = JSON.parse(raw)
   } catch {
     return { statusCode: 502, headers, body: JSON.stringify({ error: 'Could not parse research output' }) }
