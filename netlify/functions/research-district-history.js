@@ -93,7 +93,7 @@ export const handler = async (event) => {
     headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: CLAUDE_MODEL,
-      max_tokens: 3000,
+      max_tokens: 8000,
       messages: [{
         role: 'user',
         content: `Convert this research about ${office_label} (${district_name}, Wisconsin) into strict JSON. Schema:

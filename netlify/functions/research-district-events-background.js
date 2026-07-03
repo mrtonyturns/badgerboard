@@ -101,7 +101,7 @@ export const handler = async (event) => {
     headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: CLAUDE_MODEL,
-      max_tokens: 4000,
+      max_tokens: 9000,
       messages: [{
         role: 'user',
         content: `Convert this event research for ${district_name}, Wisconsin into strict JSON. The district's overall voter lean is ${district_lean || 'unknown'}.
@@ -135,7 +135,7 @@ Lean rules — be strict:
 - "likely_*" when strong signals put certainty at 80-99 (labor unions → likely_liberal; rural patriotic/agricultural events in heavily R areas with other signals; progressive advocacy groups → likely_liberal).
 - Everything else is "nonpartisan" (fairs, markets, chamber, civic) with certainty below 80; set score to the AREA's lean context, not the event's.
 - "score": negative = liberal, positive = conservative, drives a marker on a lean bar.
-Only include events with a real date in the next ~60 days.
+Include EVERY event from the research that is public and has a usable date in the next ~60 days — do not drop events merely because a date is approximate (keep them, using the best-estimate date). Recurring weekly events get one entry starting at the next occurrence.
 PUBLIC-ONLY RULE: include only events open to the general public. EXCLUDE anything private, invite-only, members-only, or requiring approval to attend (private fundraisers with invitation lists, closed club meetings, school-family-only events). Free-and-open government meetings, fairs, markets, festivals, and ticketed-but-open events all count as public. Output ONLY the JSON object.
 
 RESEARCH:
