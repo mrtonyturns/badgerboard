@@ -63,7 +63,7 @@ export const handler = async (event) => {
   if (!research && PERPLEXITY_API_KEY) {
     try {
       const ctrl = new AbortController()
-      setTimeout(() => ctrl.abort(), 18000)
+      setTimeout(() => ctrl.abort(), 21000)
       const today = new Date().toISOString().slice(0, 10)
       const pRes = await fetch('https://api.perplexity.ai/chat/completions', {
         method: 'POST', signal: ctrl.signal,
