@@ -69,10 +69,10 @@ export const handler = async (event) => {
         method: 'POST', signal: ctrl.signal,
         headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'sonar',
+          model: 'sonar-pro',
           messages: [
-            { role: 'system', content: 'You are a Wisconsin community events researcher helping a political campaign find public events to attend. Be specific about dates, times, venues, and organizers. Only include real, verifiable upcoming events.' },
-            { role: 'user', content: `Today is ${today}. Search for upcoming public events happening in the next 60 days in and around these Wisconsin communities: ${area_description || district_name}. Search for things like "${(area_description || '').split(',')[0] || 'Wisconsin'} events calendar 2026", county fair schedules, farmers markets, summer festivals, parades, chamber of commerce calendars, county Republican and Democratic party event pages, and union events for this area. List every real event you find (aim for 10-16). For each: exact name, date(s), start time, venue and city, organizer/host, a one-sentence description, and the event website URL if one exists. These communities are in ${district_name}. Only include events you can verify from actual sources.` }
+            { role: 'system', content: 'You are a Wisconsin community events researcher helping a political campaign find public events to attend. Be specific about dates, times, venues, and organizers. Include well-known annual and recurring events (county fairs, farmers markets, festivals, parades) that fall in the window based on their usual schedule even if the current-year page is sparse — note when a date is approximate. Never invent one-off events.' },
+            { role: 'user', content: `Today is ${today}. Search for upcoming public events happening in the next 60 days in and around these Wisconsin communities: ${area_description || district_name}. Search for things like "${(area_description || '').split(',')[0] || 'Wisconsin'} events calendar 2026", county fair schedules, farmers markets, summer festivals, parades, chamber of commerce calendars, county Republican and Democratic party event pages, and union events for this area. List every event you find (aim for 10-16), including recurring weekly ones (farmers markets) and annual ones whose usual dates fall in the window — mark approximate dates. For each: name, date(s), start time, venue and city, organizer/host, a one-sentence description, and the event website URL if known. These communities are in ${district_name}, near Wausau, Wisconsin.` }
           ],
           max_tokens: 2500,
         }),
