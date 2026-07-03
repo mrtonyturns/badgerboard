@@ -33,9 +33,22 @@ export const handler = async (event) => {
     return r.json()
   }
 
-  const feeds = await sb(`calendar_feeds?token=eq.${token}&select=user_id`)
+  const feeds = await sb(`calendar_feeds?token=eq.${token}&select=user_id,fetch_log`)
   const userId = feeds?.[0]?.user_id
   if (!userId) return { statusCode: 404, body: 'Feed not found' }
+
+  // Log this fetch (user-agent identifies the calendar service) so Settings can
+  // VERIFY a connection by confirming the provider actually pulled the feed.
+  try {
+    const ua = event.headers?.['user-agent'] || event.headers?.['User-Agent'] || 'unknown'
+    const log = Array.isArray(feeds[0].fetch_log) ? feeds[0].fetch_log : []
+    log.unshift({ ua: String(ua).slice(0, 160), at: new Date().toISOString() })
+    await fetch(`${SUPABASE_URL}/rest/v1/calendar_feeds?token=eq.${token}`, {
+      method: 'PATCH',
+      headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ fetch_log: log.slice(0, 20) }),
+    })
+  } catch (_) { /* logging is best-effort */ }
 
   const items = await sb(`calendar_feed_items?user_id=eq.${userId}&select=id,event,reminder_minutes,created_at&order=created_at.desc&limit=200`)
 

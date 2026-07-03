@@ -17,6 +17,7 @@ export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) }
 
   const ANTHROPIC_API_KEY    = process.env.ANTHROPIC_API_KEY
+  const CLAUDE_MODEL         = process.env.CLAUDE_RESEARCH_MODEL || 'claude-fable-5'
   const PERPLEXITY_API_KEY   = process.env.PERPLEXITY_API_KEY
   const SUPABASE_URL         = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
   const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -99,7 +100,7 @@ export const handler = async (event) => {
     method: 'POST',
     headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model: CLAUDE_MODEL,
       max_tokens: 4000,
       messages: [{
         role: 'user',

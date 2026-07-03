@@ -76,10 +76,20 @@ const CAL_PROVIDERS = [
 ]
 const REMINDER_OPTIONS = [[15,'15 min'],[30,'30 min'],[60,'1 hour'],[120,'2 hours'],[1440,'1 day']]
 
+// User-agent fingerprints of each provider's feed fetcher — used to VERIFY that
+// the calendar service actually pulled the user's feed before marking connected.
+const PROVIDER_UA = {
+  google:  /google/i,
+  apple:   /calendaragent|dataaccessd|ical|apple|cfnetwork|swiftbird/i,
+  outlook: /microsoft|outlook|office|exchange/i,
+}
+
 function CalendarsSection({ user }) {
   const meta = user?.user_metadata || {}
   const [feedToken, setFeedToken]   = useState(null)
   const [connecting, setConnecting] = useState(null)   // provider key with open instructions
+  const [verifying, setVerifying]   = useState(null)   // provider key being verified
+  const [verifyMsg, setVerifyMsg]   = useState(null)   // { key, ok, text }
   const [copied, setCopied]         = useState(false)
   const [saving, setSaving]         = useState(false)
   const [local, setLocal]           = useState({
@@ -127,6 +137,36 @@ function CalendarsSection({ user }) {
 
   const copy = () => { navigator.clipboard.writeText(feedUrl); setCopied(true); setTimeout(() => setCopied(false), 2000) }
 
+  const verifyConnection = async (key) => {
+    setVerifying(key); setVerifyMsg(null)
+    const startedAt = Date.now() - 10 * 60 * 1000   // accept fetches from the last 10 min (subscribe happens before clicking verify)
+    const matcher = PROVIDER_UA[key]
+    for (let i = 0; i < 20; i++) {
+      const { data } = await supabase.from('calendar_feeds').select('fetch_log').eq('user_id', user.id).maybeSingle()
+      const log = Array.isArray(data?.fetch_log) ? data.fetch_log : []
+      const hit = log.find(f => matcher.test(f.ua || '') && new Date(f.at).getTime() >= startedAt)
+      if (hit) {
+        await toggleConnected(key, true)
+        setVerifying(null)
+        setVerifyMsg({ key, ok: true, text: `Verified — ${CAL_PROVIDERS.find(p => p.key === key).name} fetched your feed ${new Date(hit.at).toLocaleTimeString()}` })
+        return
+      }
+      // any fetch at all (unknown client) after start also counts on later passes
+      if (i > 10) {
+        const anyHit = log.find(f => new Date(f.at).getTime() >= Date.now() - 5 * 60 * 1000)
+        if (anyHit) {
+          await toggleConnected(key, true)
+          setVerifying(null)
+          setVerifyMsg({ key, ok: true, text: 'Verified — your feed was fetched by a calendar client' })
+          return
+        }
+      }
+      await new Promise(r => setTimeout(r, 3000))
+    }
+    setVerifying(null)
+    setVerifyMsg({ key, ok: false, text: "We haven't seen this calendar fetch your feed yet. Double-check you pasted the URL and finished the subscribe step — then verify again. (Some providers take a minute to make their first fetch.)" })
+  }
+
   return (
     <section id="calendars" className="card scroll-mt-8">
       <h2 className="text-base font-bold text-gray-900 mb-1 flex items-center gap-2">
@@ -171,14 +211,23 @@ function CalendarsSection({ user }) {
                     {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />} {copied ? 'Copied' : 'Copy'}
                   </button>
                 </div>
-                <div className="flex items-center gap-2 mt-3">
+                <div className="flex items-center gap-2 mt-3 flex-wrap">
                   {p.key === 'apple' && (
                     <a href={webcalUrl} className="text-xs font-bold bg-brand-navy text-white px-3.5 py-2 rounded-lg">Open in Apple Calendar (webcal)</a>
                   )}
-                  <button onClick={() => toggleConnected(p.key, true)} className="text-xs font-bold bg-brand-red text-white px-3.5 py-2 rounded-lg">
-                    I've subscribed — mark as connected
+                  <button onClick={() => verifyConnection(p.key)} disabled={verifying === p.key}
+                    className="text-xs font-bold bg-brand-red text-white px-3.5 py-2 rounded-lg disabled:opacity-60 flex items-center gap-1.5">
+                    {verifying === p.key ? (<><Loader2 className="w-3.5 h-3.5 animate-spin" /> Watching for {p.name.split(' ')[0]}'s first fetch…</>) : "I've subscribed — verify connection"}
                   </button>
+                  {verifyMsg?.key === p.key && !verifyMsg.ok && (
+                    <button onClick={() => toggleConnected(p.key, true)} className="text-xs font-bold text-gray-400 hover:text-gray-600 underline">
+                      Mark connected anyway
+                    </button>
+                  )}
                 </div>
+                {verifyMsg?.key === p.key && (
+                  <p className={`text-xs font-bold mt-2 ${verifyMsg.ok ? 'text-green-700' : 'text-amber-600'}`}>{verifyMsg.ok ? '✓ ' : '⚠ '}{verifyMsg.text}</p>
+                )}
               </div>
             )}
           </div>
