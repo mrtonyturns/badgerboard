@@ -101,21 +101,27 @@ function CalendarsSection({ user }) {
   const feedUrl   = feedToken ? `https://badgerboardwi.com/.netlify/functions/calendar-feed?token=${feedToken}` : ''
   const webcalUrl = feedUrl.replace(/^https:/, 'webcal:')
 
+  const localRef = useRef(local)
+  useEffect(() => { localRef.current = local }, [local])
   const persist = async (patch) => {
     setSaving(true)
-    const next = { ...local, ...patch }
+    // Merge against the LATEST local state (ref), not the render-time closure —
+    // prevents a rapid second click (e.g. connect → reminder) from reverting the first.
+    const next = { ...localRef.current, ...patch }
+    localRef.current = next
     setLocal(next)
-    await supabase.auth.updateUser({ data: {
+    const { data } = await supabase.auth.updateUser({ data: {
       cal_google: next.connected.google, cal_apple: next.connected.apple, cal_outlook: next.connected.outlook,
       cal_defaults: next.defaults, cal_reminder: next.reminder, cal_ask: next.ask,
     } })
     setSaving(false)
+    return data
   }
 
-  const toggleConnected = (key, value) => {
-    const connected = { ...local.connected, [key]: value }
-    const defaults = value ? local.defaults : local.defaults.filter(d => d !== key)
-    persist({ connected, defaults })
+  const toggleConnected = async (key, value) => {
+    const connected = { ...localRef.current.connected, [key]: value }
+    const defaults = value ? [...new Set([...localRef.current.defaults, key])] : localRef.current.defaults.filter(d => d !== key)
+    await persist({ connected, defaults })
     if (!value) setConnecting(null)
   }
 
