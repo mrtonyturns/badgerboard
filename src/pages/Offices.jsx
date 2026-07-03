@@ -98,11 +98,26 @@ function matchOffices(district, allOffices) {
   }
 
   if (layerKey === 'municipal') {
-    // "Wausau city" → "Wausau". Three-tier fallback matches offices regardless of
-    // how the city field was populated at import time.
+    // "Wausau city" → "Wausau". When the clicked feature carries its CTV type and
+    // county (regenerated geodata), match precisely on district_name — this keeps
+    // "Town of Grant" clicks from pulling in Grant County or Village of Grant
+    // offices, and disambiguates same-named towns in different counties.
     const norm = (s) => (s || '').replace(/ (city|village|town|township|borough|cdp)$/i, '').trim().toLowerCase()
     const cityName = norm(name)
     if (!cityName) return []
+    const { county, ctv } = district
+    if (ctv === 'city' || ctv === 'village' || ctv === 'town') {
+      const target = `${ctv} of ${cityName}`
+      const precise = allOffices.filter(o => {
+        if ((o.district_name || '').toLowerCase() !== target) return false
+        if (ctv === 'town' && county && o.county) {
+          return o.county.toLowerCase() === county.toLowerCase()
+        }
+        return true
+      })
+      if (precise.length > 0) return precise
+    }
+    // Fallback for offices imported without district_name
     return allOffices.filter(o => {
       if (norm(o.city) === cityName) return true
       if (o.district_name && norm(o.district_name).includes(cityName)) return true

@@ -3,16 +3,25 @@ import { createClient } from '@supabase/supabase-js'
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-if (!supabaseUrl || !supabaseAnonKey) {
+// If env vars are missing (misconfigured build), fall back to placeholder values so
+// the module doesn't throw at import time (which would white-screen the whole app
+// before the React error boundary can mount). App.jsx checks `supabaseConfigured`
+// and renders a clear error screen instead.
+export const supabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey)
+if (!supabaseConfigured) {
   console.error('Missing Supabase environment variables. Please check your .env file.')
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-  },
-})
+export const supabase = createClient(
+  supabaseUrl || 'https://unconfigured.supabase.co',
+  supabaseAnonKey || 'unconfigured',
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+    },
+  }
+)
 
 // ── Helper: get current user ID ────────────────────────────────
 // Used by create functions to stamp ownership.  Cached per call.

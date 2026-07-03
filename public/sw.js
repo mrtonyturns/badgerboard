@@ -7,8 +7,8 @@
 //
 // v2.0: Bumped to clear v1 stale caches that caused white-screen on deploy
 
-const CACHE_NAME    = 'badgerboard-v2'
-const GEODATA_CACHE = 'badgerboard-geodata-v1'
+const CACHE_NAME    = 'badgerboard-v3'
+const GEODATA_CACHE = 'badgerboard-geodata-v2'
 
 // Assets to pre-cache on install (app shell)
 const PRECACHE_URLS = [

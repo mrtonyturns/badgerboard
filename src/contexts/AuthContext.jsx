@@ -55,6 +55,13 @@ export const AuthProvider = ({ children }) => {
         }
       }
 
+    }).catch((err) => {
+      // Network/storage failure during auth init — treat as signed-out rather than
+      // hanging on the loading spinner forever.
+      console.error('[Auth] getSession failed during init:', err)
+      setSession(null)
+      setUser(null)
+    }).finally(() => {
       setLoading(false)
     })
 

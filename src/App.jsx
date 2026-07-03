@@ -44,6 +44,7 @@ class ErrorBoundary extends React.Component {
   }
 }
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { supabaseConfigured } from './lib/supabase'
 import { DossierStatusProvider } from './contexts/DossierStatusContext'
 import Layout from './components/Layout'
 import Login from './pages/Login'
@@ -94,7 +95,13 @@ const ProtectedRoute = ({ children }) => {
 // Admin-only route — redirects non-admins silently to dashboard
 const AdminRoute = ({ children }) => {
   const { isAdmin, loading } = useAuth()
-  if (loading) return null
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-brand-navy flex items-center justify-center">
+        <div className="w-12 h-12 border-4 border-brand-red border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
   if (!isAdmin) return <Navigate to="/" replace />
   return children
 }
@@ -156,6 +163,21 @@ const AppRoutes = () => {
 }
 
 export default function App() {
+  // A build shipped without its Supabase env vars can never work — show a clear
+  // message instead of a broken login/white screen.
+  if (!supabaseConfigured) {
+    return (
+      <div className="min-h-screen bg-brand-navy flex items-center justify-center p-8">
+        <div className="text-center max-w-md">
+          <h1 className="text-white text-xl font-bold mb-2">Configuration error</h1>
+          <p className="text-white/60 text-sm">
+            This deployment is missing its database configuration. Please contact support
+            — the site will be back shortly.
+          </p>
+        </div>
+      </div>
+    )
+  }
   return (
     <ErrorBoundary>
       <BrowserRouter>

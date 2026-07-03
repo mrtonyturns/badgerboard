@@ -177,6 +177,8 @@ export default function LeafletMapView({
   const onClickRef         = useRef(onDistrictClick)
   const citycentroidsRef   = useRef({})     // normalized city name → [lat, lng]
   const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError]   = useState(null)
+  const [layerReloadKey, setLayerReloadKey] = useState(0)
 
   // Keep callback ref fresh across re-renders
   useEffect(() => { onClickRef.current = onDistrictClick })
@@ -228,6 +230,14 @@ export default function LeafletMapView({
 
     requestAnimationFrame(() => requestAnimationFrame(() => map.invalidateSize()))
 
+    // Keep the map sized to its container — handles table→map view toggles and
+    // responsive layout changes where the container was hidden or resized.
+    const ro = new ResizeObserver(() => {
+      try { map.invalidateSize() } catch (_) {}
+    })
+    ro.observe(containerRef.current)
+    map._bbResizeObserver = ro
+
     // ── Load WI grey mask (always on) ────────────────────────────────────────
     fetch('/geodata/wi-mask.geojson')
       .then(r => r.json())
@@ -251,7 +261,11 @@ export default function LeafletMapView({
       })
       .catch(err => console.warn('[LeafletMapView] mask load failed:', err))
 
-    return () => { map.remove(); mapRef.current = null }
+    return () => {
+      try { map._bbResizeObserver?.disconnect() } catch (_) {}
+      map.remove()
+      mapRef.current = null
+    }
   }, [])
 
   // ── 2. Dot markers ─────────────────────────────────────────────────────────
@@ -391,6 +405,10 @@ export default function LeafletMapView({
         style: () => ({ ...source.style }),
         onEachFeature(feature, lyr) {
           const name = feature.properties?.NAME || ''
+          // Municipal layer extras (regenerated geodata): county + city/town/village type.
+          // Towns share names across counties, so county is required for precise matching.
+          const county = feature.properties?.COUNTY_NAME || null
+          const ctv    = feature.properties?.CTV || null
 
           lyr.on({
             mouseover(e) {
@@ -421,12 +439,15 @@ export default function LeafletMapView({
                 name,
                 sublabel: source.sublabel,
                 layerKey: capturedLayerKey,
+                county,
+                ctv,
               })
             },
           })
 
           if (name) {
-            lyr.bindTooltip(name, {
+            const tooltipText = ctv === 'town' && county ? `${name} (${county} Co.)` : name
+            lyr.bindTooltip(tooltipText, {
               sticky: true,
               direction: 'top',
               offset: [0, -4],
@@ -453,14 +474,16 @@ export default function LeafletMapView({
         }
       } catch (err) {
         console.warn('[LeafletMapView] boundary load failed:', err)
+        if (!cancelled) setLoadError('District boundaries failed to load — check your connection and try again.')
       } finally {
         if (!cancelled) setLoading(false)
       }
     }
 
+    setLoadError(null)
     loadAll()
     return () => { cancelled = true }
-  }, [activeLayer]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeLayer, layerReloadKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Legend ─────────────────────────────────────────────────────────────────
   const isOfficeMode = !!(offices && offices.length > 0)
@@ -481,6 +504,24 @@ export default function LeafletMapView({
         }}>
           <div className="animate-spin" style={{ width:12, height:12, border:'2px solid #dc2626', borderTopColor:'transparent', borderRadius:'50%' }} />
           <span style={{ color:'#555' }}>Loading boundaries…</span>
+        </div>
+      )}
+
+      {loadError && !loading && (
+        <div style={{
+          position:'absolute', top:12, left:'50%', transform:'translateX(-50%)', zIndex:1100,
+          background:'#fef2f2', border:'1px solid #fca5a5', color:'#b91c1c',
+          borderRadius:8, padding:'8px 14px', fontSize:12, fontWeight:600,
+          display:'flex', alignItems:'center', gap:8, boxShadow:'0 1px 6px rgba(0,0,0,0.12)',
+        }}>
+          {loadError}
+          <button
+            type="button"
+            onClick={() => { setLoadError(null); setLayerReloadKey(k => k + 1) }}
+            style={{ background:'none', border:'none', color:'#b91c1c', fontWeight:700, cursor:'pointer', textDecoration:'underline', fontSize:12 }}
+          >
+            Retry
+          </button>
         </div>
       )}
 
