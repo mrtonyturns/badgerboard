@@ -27,3 +27,19 @@ CREATE INDEX IF NOT EXISTS election_results_contest_idx
 --   created_at timestamptz DEFAULT now()
 -- );
 -- ALTER TABLE turf_blocks ENABLE ROW LEVEL SECURITY;
+
+-- ─── District intelligence cache (added 2026-07-03, applied via dashboard) ────
+CREATE TABLE IF NOT EXISTS district_intel (
+  district_key text PRIMARY KEY,
+  layer        text,
+  name         text,
+  history      jsonb,
+  history_at   timestamptz,
+  updated_at   timestamptz DEFAULT now()
+);
+ALTER TABLE district_intel ENABLE ROW LEVEL SECURITY;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='district_intel' AND policyname='district_intel_read') THEN
+    CREATE POLICY district_intel_read ON district_intel FOR SELECT TO authenticated USING (true);
+  END IF;
+END $$;

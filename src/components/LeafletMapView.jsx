@@ -441,6 +441,7 @@ export default function LeafletMapView({
                 layerKey: capturedLayerKey,
                 county,
                 ctv,
+                geometry: feature.geometry,
               })
             },
           })

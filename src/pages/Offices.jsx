@@ -5,6 +5,7 @@ import { Building2, Search, Plus, ChevronDown, ChevronUp, ChevronsUpDown,
 import { getOffices, createOffice, getCandidates, getOfficeHistory } from '../lib/supabase'
 import LeafletMapView from '../components/LeafletMapView'
 import MapErrorBoundary from '../components/MapErrorBoundary'
+import DistrictDashboard, { districtKeyFor } from '../components/DistrictDashboard'
 import LoadingBar from '../components/LoadingBar'
 
 const LEVELS     = ['', 'federal', 'state', 'county', 'municipal']
@@ -616,8 +617,8 @@ export default function Offices() {
             />
           </MapErrorBoundary>
 
-          {/* District side panel */}
-          {selectedDistrict && (
+          {/* District side panel (county/municipal) — state & federal open the full dashboard */}
+          {selectedDistrict && !districtKeyFor(selectedDistrict) && (
             <DistrictPanel
               district={selectedDistrict}
               panelOffices={panelOffices}
@@ -730,6 +731,17 @@ export default function Offices() {
           })}
         </div>
       ))}
+
+      {/* ── District intelligence dashboard (state & federal districts) ── */}
+      {selectedDistrict && districtKeyFor(selectedDistrict) && (
+        <DistrictDashboard
+          district={selectedDistrict}
+          panelOffices={panelOffices}
+          allCandidates={allCandidates}
+          onClose={() => setSelectedDistrict(null)}
+          navigate={navigate}
+        />
+      )}
 
       {/* ── Office history modal ── */}
       {historyOffice && (

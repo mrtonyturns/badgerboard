@@ -1654,6 +1654,17 @@ export default function Dossiers() {
   const [bulkProgress, setBulkProgress]     = useState(null)
   // ── New Candidate modal ────────────────────────────────────────────────────
   const [showNewCandModal, setShowNewCandModal] = useState(false)
+
+  // Deep link from the District Dashboard: /profiler?newname=...&context=...
+  // opens the New Candidate modal prefilled with the researched official.
+  useEffect(() => {
+    const newName = searchParams.get('newname')
+    if (newName) {
+      setNewCandForm({ name: newName, research_context: searchParams.get('context') || '' })
+      setShowNewCandModal(true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [offices, setOffices]                   = useState([])
   const [newCandForm, setNewCandForm]           = useState({ name: '', research_context: '' })
   const [creatingCand, setCreatingCand]         = useState(false)
