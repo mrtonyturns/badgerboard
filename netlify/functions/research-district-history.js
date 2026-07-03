@@ -31,7 +31,7 @@ export const handler = async (event) => {
   try { body = JSON.parse(event.body || '{}') } catch {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
-  const { district_key, layer, district_name, office_label, force } = body
+  const { district_key, layer, district_name, office_label, force, step, research: providedResearch } = body
   if (!district_key || !district_name || !office_label) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'district_key, district_name, office_label required' }) }
   }
@@ -56,16 +56,16 @@ export const handler = async (event) => {
   }
 
   // ── Step 1: Perplexity research ────────────────────────────────────────────
-  let research = null
-  if (PERPLEXITY_API_KEY) {
+  let research = providedResearch || null
+  if (!research && PERPLEXITY_API_KEY) {
     try {
       const ctrl = new AbortController()
-      setTimeout(() => ctrl.abort(), 30000)
+      setTimeout(() => ctrl.abort(), 18000)
       const pRes = await fetch('https://api.perplexity.ai/chat/completions', {
         method: 'POST', signal: ctrl.signal,
         headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'sonar-pro',
+          model: 'sonar',
           messages: [
             { role: 'system', content: 'You are a Wisconsin political historian. Be precise about names, parties, years, and vote percentages. Cite what actually happened in this specific district.' },
             { role: 'user', content: `List every person who has held the office of ${office_label} (${district_name}, Wisconsin) from 2010 through today. For each person include: full name, party, years served, each election in this district they won or lost with the year and their vote percentage, whether they are the current officeholder, and a 2-3 sentence biography (background, notable work, committees). Note any redistricting that changed the district's territory. Include election results for every general election for this seat from 2010 to now.` }
@@ -81,6 +81,9 @@ export const handler = async (event) => {
   }
   if (!research) {
     return { statusCode: 502, headers, body: JSON.stringify({ error: 'Research service unavailable — try again shortly' }) }
+  }
+  if (step === 'research') {
+    return { statusCode: 200, headers, body: JSON.stringify({ step: 'research', research }) }
   }
 
   // ── Step 2: Claude structures the research into JSON ───────────────────────

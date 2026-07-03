@@ -94,7 +94,8 @@ function computeLean({ contests, history, countyMix, pres }) {
   }
   if (!factors.length) return null
   const totalW = factors.reduce((s, f) => s + f.weight, 0)
-  const score = factors.reduce((s, f) => s + f.margin * (f.weight / totalW), 0)
+  factors.forEach(f => { f.weight = f.weight / totalW })
+  const score = factors.reduce((s, f) => s + f.margin * f.weight, 0)
   const points = factors.reduce((s, f) => s + (f.n || 1), 0)
   const confidence = points >= 8 ? 'High' : points >= 4 ? 'Medium' : 'Low'
   return { score, factors, confidence, points }
@@ -213,14 +214,22 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
     setHistLoading(true); setHistErr(null)
     try {
       const { data: { session } } = await supabase.auth.getSession()
-      const res = await fetch('/.netlify/functions/research-district-history', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ district_key: id.key, layer: district.layerKey, district_name: district.name, office_label: officeLabel, force }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Research failed')
-      setHistory(data.history)
+      const call = async (payload) => {
+        const res = await fetch('/.netlify/functions/research-district-history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+          body: JSON.stringify({ district_key: id.key, layer: district.layerKey, district_name: district.name, office_label: officeLabel, ...payload }),
+        })
+        const data = await res.json().catch(() => ({ error: 'Service temporarily unavailable — try again' }))
+        if (!res.ok) throw new Error(data.error || 'Research failed')
+        return data
+      }
+      // Two fast calls (web research, then structuring) — each stays under the
+      // serverless gateway time limit. Cached results return from call one.
+      const step1 = await call({ force, step: 'research' })
+      if (step1.history) { setHistory(step1.history); setHistLoading(false); return }
+      const step2 = await call({ force, research: step1.research })
+      setHistory(step2.history)
     } catch (e) { setHistErr(e.message) }
     setHistLoading(false)
   }, [id?.key, district, officeLabel])
