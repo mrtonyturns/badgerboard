@@ -132,6 +132,7 @@ const navItems = [
   { to: '/voter-lists', icon: UserCheck,       label: 'Voter Lists'   },
   { to: '/profiler',    icon: FileText,        label: 'Profiler'      },
   { to: '/compare',     icon: Scale,           label: 'Compare'       },
+  { to: '/events',      icon: CalendarDays,    label: 'Events',        badge: 'New' },
   { to: '/door-knocking', icon: DoorOpen,      label: 'Door Knocking', badge: 'Beta', adminOnly: true },
 ]
 
@@ -226,8 +227,12 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, onNavigate, onSignOut, ti
         {navItems.slice(4, 8).map(item => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
+        <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">Outreach</p>
+        {navItems.slice(8, 9).map(item => (
+          <NavItem key={item.to} item={item} onNavigate={onNavigate} />
+        ))}
         <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">Field Ops</p>
-        {navItems.slice(8).filter(item => !item.adminOnly || isAdmin).map(item => (
+        {navItems.slice(9).filter(item => !item.adminOnly || isAdmin).map(item => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
       </nav>

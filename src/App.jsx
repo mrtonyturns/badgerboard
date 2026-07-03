@@ -72,6 +72,7 @@ import DossierDisclaimer from './pages/DossierDisclaimer'
 import Compare from './pages/Compare'
 import VolunteerPortal from './pages/VolunteerPortal'
 import SharedDossier from './pages/SharedDossier'
+import Events from './pages/Events'
 import ResetPassword from './pages/ResetPassword'
 
 const ProtectedRoute = ({ children }) => {
@@ -153,6 +154,7 @@ const AppRoutes = () => {
         <Route path="dossiers" element={<Dossiers />} />
         <Route path="profiler" element={<Dossiers />} />
         <Route path="compare" element={<Compare />} />
+        <Route path="events" element={<Events />} />
         <Route path="settings" element={<Settings />} />
         <Route path="plans" element={<Pricing />} />
         <Route path="admin" element={<AdminDashboard />} />

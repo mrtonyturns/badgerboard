@@ -4,7 +4,7 @@ import {
   User, Users, Shield, CreditCard, ExternalLink, Lock,
   Loader2, ChevronRight, Sparkles, ArrowRight, Edit2, Eye, EyeOff, Save,
   Trash2, AlertTriangle, X, Bell,
-} from 'lucide-react'
+  CalendarDays, Copy, Check } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import {
@@ -63,6 +63,146 @@ function DossierBar({ used, limit }) {
 }
 
 // ── Main Settings page ────────────────────────────────────────────────────────
+
+
+// ── Calendars (Outreach events) ───────────────────────────────────────────────
+const CAL_PROVIDERS = [
+  { key: 'google',  name: 'Google Calendar',  color: '#1A73E8', letter: 'G',
+    steps: ['Open Google Calendar on the web', 'In the left sidebar: Other calendars → + → From URL', 'Paste your feed URL below and click "Add calendar"'] },
+  { key: 'apple',   name: 'Apple Calendar',   color: '#0F172A', letter: '\uF8FF',
+    steps: ['Click the webcal button below (or Calendar → File → New Calendar Subscription)', 'Confirm the subscription', 'Set auto-refresh to "Every hour" for fastest updates'] },
+  { key: 'outlook', name: 'Outlook Calendar', color: '#0F6CBD', letter: 'O',
+    steps: ['Open Outlook calendar on the web', 'Add calendar → Subscribe from web', 'Paste your feed URL below and name it "Badger Board Events"'] },
+]
+const REMINDER_OPTIONS = [[15,'15 min'],[30,'30 min'],[60,'1 hour'],[120,'2 hours'],[1440,'1 day']]
+
+function CalendarsSection({ user }) {
+  const meta = user?.user_metadata || {}
+  const [feedToken, setFeedToken]   = useState(null)
+  const [connecting, setConnecting] = useState(null)   // provider key with open instructions
+  const [copied, setCopied]         = useState(false)
+  const [saving, setSaving]         = useState(false)
+  const [local, setLocal]           = useState({
+    reminder: meta.cal_reminder ?? 60,
+    ask: meta.cal_ask !== false,
+    connected: { google: !!meta.cal_google, apple: !!meta.cal_apple, outlook: !!meta.cal_outlook },
+    defaults: meta.cal_defaults || [],
+  })
+
+  useEffect(() => {
+    if (!user?.id) return
+    supabase.from('calendar_feeds').select('token').eq('user_id', user.id).maybeSingle().then(async ({ data }) => {
+      if (data?.token) { setFeedToken(data.token); return }
+      const { data: ins } = await supabase.from('calendar_feeds').insert({ user_id: user.id }).select('token').single()
+      if (ins?.token) setFeedToken(ins.token)
+    })
+  }, [user?.id])
+
+  const feedUrl   = feedToken ? `https://badgerboardwi.com/.netlify/functions/calendar-feed?token=${feedToken}` : ''
+  const webcalUrl = feedUrl.replace(/^https:/, 'webcal:')
+
+  const persist = async (patch) => {
+    setSaving(true)
+    const next = { ...local, ...patch }
+    setLocal(next)
+    await supabase.auth.updateUser({ data: {
+      cal_google: next.connected.google, cal_apple: next.connected.apple, cal_outlook: next.connected.outlook,
+      cal_defaults: next.defaults, cal_reminder: next.reminder, cal_ask: next.ask,
+    } })
+    setSaving(false)
+  }
+
+  const toggleConnected = (key, value) => {
+    const connected = { ...local.connected, [key]: value }
+    const defaults = value ? local.defaults : local.defaults.filter(d => d !== key)
+    persist({ connected, defaults })
+    if (!value) setConnecting(null)
+  }
+
+  const copy = () => { navigator.clipboard.writeText(feedUrl); setCopied(true); setTimeout(() => setCopied(false), 2000) }
+
+  return (
+    <section id="calendars" className="card scroll-mt-8">
+      <h2 className="text-base font-bold text-gray-900 mb-1 flex items-center gap-2">
+        <CalendarDays className="w-4 h-4 text-brand-red" /> Calendars
+      </h2>
+      <p className="text-sm text-gray-500 mb-5">
+        Connect your calendars once — events you add from the Events page appear in them automatically with your default reminder.
+      </p>
+
+      {CAL_PROVIDERS.map(p => {
+        const isConn = local.connected[p.key]
+        const isDflt = local.defaults.includes(p.key)
+        return (
+          <div key={p.key} className="border-b border-gray-100 last:border-0">
+            <div className="flex items-center gap-3 py-3">
+              <span className="w-10 h-10 rounded-xl flex items-center justify-center text-white text-sm font-black flex-shrink-0" style={{ background: p.color }}>{p.letter}</span>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                  {p.name}
+                  {isDflt && <span className="text-[9px] font-black bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full tracking-wide">DEFAULT</span>}
+                </div>
+                <div className="text-xs text-gray-400 font-medium">{isConn ? 'Connected · synced via your personal feed' : 'Not connected'}</div>
+              </div>
+              {isConn && (
+                <button onClick={() => persist({ defaults: isDflt ? local.defaults.filter(d => d !== p.key) : [...local.defaults, p.key] })}
+                  className="text-xs font-bold text-gray-400 hover:text-amber-600">{isDflt ? 'Unset default' : 'Set default'}</button>
+              )}
+              {isConn ? (
+                <button onClick={() => toggleConnected(p.key, false)} className="text-xs font-bold bg-green-100 text-green-700 border border-green-200 px-3.5 py-2 rounded-lg">✓ Connected</button>
+              ) : (
+                <button onClick={() => setConnecting(connecting === p.key ? null : p.key)} className="btn-secondary text-xs px-3.5 py-2">Connect →</button>
+              )}
+            </div>
+            {connecting === p.key && !isConn && (
+              <div className="mb-4 ml-13 bg-gray-50 rounded-xl p-4" style={{ marginLeft: 52 }}>
+                <ol className="text-xs text-gray-600 font-medium space-y-1.5 list-decimal list-inside">
+                  {p.steps.map((st, i) => <li key={i}>{st}</li>)}
+                </ol>
+                <div className="flex items-center gap-2 mt-3">
+                  <input readOnly value={feedUrl} className="input text-xs flex-1 font-mono" onFocus={e => e.target.select()} />
+                  <button onClick={copy} className="btn-secondary text-xs px-3 py-2 flex items-center gap-1">
+                    {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />} {copied ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 mt-3">
+                  {p.key === 'apple' && (
+                    <a href={webcalUrl} className="text-xs font-bold bg-brand-navy text-white px-3.5 py-2 rounded-lg">Open in Apple Calendar (webcal)</a>
+                  )}
+                  <button onClick={() => toggleConnected(p.key, true)} className="text-xs font-bold bg-brand-red text-white px-3.5 py-2 rounded-lg">
+                    I've subscribed — mark as connected
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      <div className="flex items-center gap-2 flex-wrap pt-4 mt-1 border-t border-gray-100">
+        <span className="text-sm font-semibold text-gray-700 mr-1">Default event reminder</span>
+        {REMINDER_OPTIONS.map(([mins, label]) => (
+          <button key={mins} onClick={() => persist({ reminder: mins })}
+            className={`text-xs font-bold px-3.5 py-1.5 rounded-full border-2 transition-colors ${local.reminder === mins ? 'bg-brand-red border-brand-red text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-2 flex-wrap pt-4 mt-3 border-t border-gray-100">
+        <span className="text-sm font-semibold text-gray-700 mr-1">When adding events</span>
+        <button onClick={() => persist({ ask: true })}
+          className={`text-xs font-bold px-3.5 py-1.5 rounded-full border-2 ${local.ask ? 'bg-brand-red border-brand-red text-white' : 'bg-white border-gray-200 text-gray-500'}`}>Always ask which calendar</button>
+        <button onClick={() => persist({ ask: false })}
+          className={`text-xs font-bold px-3.5 py-1.5 rounded-full border-2 ${!local.ask ? 'bg-brand-red border-brand-red text-white' : 'bg-white border-gray-200 text-gray-500'}`}>Use default calendar</button>
+      </div>
+      <p className="text-xs text-gray-400 font-medium mt-4 leading-relaxed">
+        Your feed URL is private — anyone with it can see events you add, so treat it like a password.
+        Google refreshes subscribed feeds every few hours; Apple and Outlook are faster.
+        {saving ? ' Saving…' : ''}
+      </p>
+    </section>
+  )
+}
 
 export default function Settings() {
   const { user, session, signOut, refreshSession, isDowngradeLocked, downgradedAt } = useAuth()
@@ -778,6 +918,8 @@ export default function Settings() {
           </div>
         </div>
       </section>
+
+      <CalendarsSection user={user} />
 
       {/* ── Notifications ────────────────────────────────────────────────────── */}
       <section id="notifications" className="card scroll-mt-8">
