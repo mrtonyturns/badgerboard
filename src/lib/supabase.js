@@ -23,6 +23,26 @@ export const supabase = createClient(
   }
 )
 
+// ── Office election history ────────────────────────────────────
+// Past contests + results for an office, matched on the free-text contest.office
+// field. Used by the Offices page "history" view to show previous office holders.
+export const getOfficeHistory = async (officeName) => {
+  if (!officeName) return { data: [], error: null }
+  // Trim descriptors that won't appear in contest names, e.g.
+  // "Town of Grant (Portage Co.) Town Board Chairperson" → "Town of Grant"
+  const needle = officeName.replace(/\s*\(.*?\)\s*/g, ' ').trim().slice(0, 60)
+  const { data, error } = await supabase
+    .from('election_contests')
+    .select('id, office, district, county, seats, election:elections(id, name, election_date, type), results:election_results(id, candidate_name, party, votes, vote_pct, winner, declared)')
+    .ilike('office', `%${needle}%`)
+    .limit(50)
+  if (error) return { data: [], error }
+  const sorted = (data || []).sort((a, b) =>
+    new Date(b.election?.election_date || 0) - new Date(a.election?.election_date || 0)
+  )
+  return { data: sorted, error: null }
+}
+
 // ── Helper: get current user ID ────────────────────────────────
 // Used by create functions to stamp ownership.  Cached per call.
 async function currentUserId() {

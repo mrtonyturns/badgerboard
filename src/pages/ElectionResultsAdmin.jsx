@@ -255,6 +255,30 @@ export default function ElectionResultsAdmin({ showToast }) {
     setCallConfirm(null)
     showToast(newWinnerCount >= seats ? `All ${seats} seat${seats > 1 ? 's' : ''} called` : 'Candidate declared winner')
     loadContests(selectedElection.id)
+
+    // Best-effort: keep offices.current_officeholder in sync so the Offices page
+    // "previous office holders" history always shows who currently holds the seat.
+    // Single-seat races only — multi-seat bodies don't map to one officeholder.
+    try {
+      if ((seats || 1) === 1) {
+        const contest = contests.find(c => c.id === contestId)
+        const winnerName = callConfirm.candidateName
+        if (contest?.office && winnerName) {
+          const { data: matches } = await supabase
+            .from('offices')
+            .select('id, name')
+            .ilike('name', `%${contest.office}%`)
+            .limit(2)
+          if (matches?.length === 1) {
+            await supabase.from('offices')
+              .update({ current_officeholder: winnerName })
+              .eq('id', matches[0].id)
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[ElectionResultsAdmin] officeholder sync skipped:', err)
+    }
   }
 
   const uncallRace = async (contestId) => {

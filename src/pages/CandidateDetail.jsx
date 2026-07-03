@@ -148,7 +148,7 @@ function IncumbentRecordForm({ candidateId, userId, onSave, onCancel, existing }
 
   return (
     <div className="bg-gray-50 rounded-xl border border-gray-200 p-4 space-y-3">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <label className="label text-xs">Type</label>
           <select className="input" value={form.record_type} onChange={f('record_type')}>
@@ -168,7 +168,7 @@ function IncumbentRecordForm({ candidateId, userId, onSave, onCancel, existing }
         <input className="input" value={form.title} onChange={f('title')} placeholder="e.g. Assembly Bill 123 — Property Tax Reform" />
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <label className="label text-xs">Bill / Case Number</label>
           <input className="input" value={form.bill_number} onChange={f('bill_number')} placeholder="AB 123" />
@@ -191,7 +191,7 @@ function IncumbentRecordForm({ candidateId, userId, onSave, onCancel, existing }
         <textarea className="input" rows={3} value={form.description} onChange={f('description')} placeholder="Brief summary of what this bill/act/event involved..." />
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <label className="label text-xs">Source</label>
           <input className="input" value={form.source} onChange={f('source')} placeholder="Wisconsin Legislature, WI Courts..." />
@@ -1557,7 +1557,7 @@ function SwotTab({ candidate, dossiers, user, onRefresh }) {
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {quadrants.map(({ key, label, icon: Icon, borderColor, bgColor, textColor, iconColor }) => (
               <div key={key} className={`rounded-xl border ${borderColor} ${bgColor} p-4`}>
                 <div className="flex items-center gap-2 mb-2">
@@ -2685,7 +2685,7 @@ export default function CandidateDetail() {
                   <label className="label text-xs">Campaign Address</label>
                   <input className="input" value={form.campaign_address || ''} onChange={f('campaign_address')} />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="label text-xs">City</label>
                     <input className="input" value={form.campaign_city || ''} onChange={f('campaign_city')} />
@@ -2753,7 +2753,7 @@ export default function CandidateDetail() {
                   <label className="label text-xs">Committee Name</label>
                   <input className="input" value={form.campaign_committee || ''} onChange={f('campaign_committee')} />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="label text-xs">Campaign Manager</label>
                     <input className="input" value={form.campaign_manager || ''} onChange={f('campaign_manager')} />
@@ -2763,7 +2763,7 @@ export default function CandidateDetail() {
                     <input className="input" value={form.treasurer || ''} onChange={f('treasurer')} />
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="label text-xs">Total Raised ($)</label>
                     <input className="input" type="number" value={form.total_raised || ''} onChange={f('total_raised')} />
@@ -2787,7 +2787,7 @@ export default function CandidateDetail() {
                 </div>
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {[
                   { label: 'Committee', val: candidate.campaign_committee },
                   { label: 'Campaign Manager', val: candidate.campaign_manager },
@@ -2801,7 +2801,7 @@ export default function CandidateDetail() {
                   </div>
                 ) : null)}
                 {(candidate.total_raised || candidate.total_spent || candidate.cash_on_hand) && (
-                  <div className="col-span-2 grid grid-cols-3 gap-3 p-3 bg-gray-50 rounded-lg">
+                  <div className="sm:col-span-2 grid grid-cols-3 gap-3 p-3 bg-gray-50 rounded-lg">
                     {candidate.total_raised && <div><p className="text-xs text-gray-400">Total Raised</p><p className="text-sm font-bold text-gray-900">${Number(candidate.total_raised).toLocaleString()}</p></div>}
                     {candidate.total_spent  && <div><p className="text-xs text-gray-400">Total Spent</p><p className="text-sm font-bold text-gray-900">${Number(candidate.total_spent).toLocaleString()}</p></div>}
                     {candidate.cash_on_hand && <div><p className="text-xs text-gray-400">Cash on Hand</p><p className="text-sm font-bold text-green-700">${Number(candidate.cash_on_hand).toLocaleString()}</p></div>}

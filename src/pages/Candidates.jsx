@@ -881,7 +881,7 @@ export default function Candidates() {
               {/* Discovery Mode Selection */}
               <div>
                 <label className="label">Discovery Mode</label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {['county', 'level', 'office'].map(m => (
                     <button
                       key={m}
@@ -1088,7 +1088,7 @@ export default function Candidates() {
                       <label className="label">Full Name *</label>
                       <input className="input" value={form.name} onChange={f('name')} placeholder="Jane Smith" required />
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
                         <label className="label">Party</label>
                         <select className="input" value={form.party} onChange={f('party')}>
@@ -1156,7 +1156,7 @@ export default function Candidates() {
                       )}
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
                         <label className="label">Occupation</label>
                         <input className="input" value={form.occupation} onChange={f('occupation')} placeholder="Attorney" />
@@ -1187,7 +1187,7 @@ export default function Candidates() {
                       <label className="label">Campaign Address</label>
                       <input className="input" value={form.campaign_address} onChange={f('campaign_address')} placeholder="123 Main St" />
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
                         <label className="label">City</label>
                         <input className="input" value={form.campaign_city} onChange={f('campaign_city')} placeholder="Madison" />

@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Building2, Search, Plus, ChevronDown, ChevronUp, ChevronsUpDown,
          MapPin, Briefcase, Scale, Map, LayoutList, X, Users, ChevronRight } from 'lucide-react'
-import { getOffices, createOffice, getCandidates } from '../lib/supabase'
+import { getOffices, createOffice, getCandidates, getOfficeHistory } from '../lib/supabase'
 import LeafletMapView from '../components/LeafletMapView'
 import MapErrorBoundary from '../components/MapErrorBoundary'
 import LoadingBar from '../components/LoadingBar'
@@ -127,6 +127,103 @@ function matchOffices(district, allOffices) {
   }
 
   return []
+}
+
+// ── Office history modal — past elections & previous office holders ──────────
+function OfficeHistoryModal({ office, onClose }) {
+  const [history, setHistory] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let mounted = true
+    getOfficeHistory(office.name).then(({ data }) => {
+      if (mounted) { setHistory(data || []); setLoading(false) }
+    }).catch(() => { if (mounted) setLoading(false) })
+    return () => { mounted = false }
+  }, [office.name])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+        <div className="p-6 border-b border-gray-100 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">{office.name}</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              {office.current_officeholder
+                ? <>Current officeholder: <span className="font-semibold text-gray-900">{office.current_officeholder}</span></>
+                : 'No current officeholder on record'}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-6 overflow-y-auto flex-1">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="w-8 h-8 border-4 border-brand-red border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : history.length === 0 ? (
+            <div className="text-center py-10">
+              <p className="text-gray-500 font-medium">No election records for this office yet</p>
+              <p className="text-gray-400 text-sm mt-1">
+                Past results appear here once elections for this office are recorded on the Elections page.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-5">
+              {history.map(contest => {
+                const winners = (contest.results || []).filter(r => r.winner && r.declared)
+                const others  = (contest.results || []).filter(r => !(r.winner && r.declared))
+                  .sort((a, b) => (b.votes || 0) - (a.votes || 0))
+                return (
+                  <div key={contest.id} className="rounded-xl border border-gray-200 overflow-hidden">
+                    <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-100 flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-sm font-semibold text-gray-900">{contest.election?.name || contest.office}</span>
+                      <span className="text-xs text-gray-400">
+                        {contest.election?.election_date
+                          ? new Date(contest.election.election_date + 'T12:00:00').toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' })
+                          : ''}
+                      </span>
+                    </div>
+                    <div className="divide-y divide-gray-50">
+                      {winners.map(r => (
+                        <div key={r.id} className="px-4 py-2.5 flex items-center justify-between gap-2 bg-green-50/50">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-xs font-bold text-green-700 bg-green-100 px-1.5 py-0.5 rounded flex-shrink-0">WON</span>
+                            <span className="text-sm font-semibold text-gray-900 truncate">{r.candidate_name}</span>
+                            {r.party && <span className="text-xs text-gray-400 flex-shrink-0">({r.party})</span>}
+                          </div>
+                          <span className="text-sm text-gray-600 flex-shrink-0">
+                            {(r.votes || 0).toLocaleString()} votes{r.vote_pct != null ? ` · ${Number(r.vote_pct).toFixed(1)}%` : ''}
+                          </span>
+                        </div>
+                      ))}
+                      {others.map(r => (
+                        <div key={r.id} className="px-4 py-2 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-sm text-gray-600 truncate">{r.candidate_name}</span>
+                            {r.party && <span className="text-xs text-gray-400 flex-shrink-0">({r.party})</span>}
+                          </div>
+                          <span className="text-sm text-gray-400 flex-shrink-0">
+                            {(r.votes || 0).toLocaleString()} votes{r.vote_pct != null ? ` · ${Number(r.vote_pct).toFixed(1)}%` : ''}
+                          </span>
+                        </div>
+                      ))}
+                      {(contest.results || []).length === 0 && (
+                        <div className="px-4 py-3 text-sm text-gray-400">No results recorded for this contest</div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // ── District side panel ───────────────────────────────────────────────────────
@@ -291,6 +388,8 @@ export default function Offices() {
   const [levelFilter, setLevelFilter] = useState('')
   const [typeFilter, setTypeFilter]   = useState('')
   const [showModal, setShowModal]     = useState(false)
+  const [historyOffice, setHistoryOffice] = useState(null)   // office row for history modal
+  const [expandedGroups, setExpandedGroups] = useState({})   // level → true (show all rows)
   const [saving, setSaving]           = useState(false)
   const [fetchError, setFetchError]   = useState(null)
   const [sortField, setSortField]     = useState(null)
@@ -564,11 +663,13 @@ export default function Offices() {
                         <th className={`${thClass} hidden lg:table-cell`} onClick={() => handleSort('location')}><span className="flex items-center">County / City <SortIcon field="location" /></span></th>
                         <th className={thClass} onClick={() => handleSort('office_type')}><span className="flex items-center">Type <SortIcon field="office_type" /></span></th>
                         <th className={`${thClass} hidden sm:table-cell`} onClick={() => handleSort('term_years')}><span className="flex items-center">Term <SortIcon field="term_years" /></span></th>
+                        <th className={`${thClass} hidden lg:table-cell`} onClick={() => handleSort('current_officeholder')}><span className="flex items-center">Current Officeholder <SortIcon field="current_officeholder" /></span></th>
                         <th className={`${thClass} hidden xl:table-cell`} onClick={() => handleSort('notes')}><span className="flex items-center">Notes <SortIcon field="notes" /></span></th>
+                        <th className="table-header w-20"><span className="sr-only">History</span></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {sortOffices(group).map((office, i) => {
+                      {(expandedGroups[level] ? sortOffices(group) : sortOffices(group).slice(0, 150)).map((office, i) => {
                         const TypeIcon = typeIcons[office.office_type] || Building2
                         return (
                           <tr key={office.id} className={`table-row ${i%2===0?'bg-white':'bg-gray-50/50'}`}>
@@ -593,18 +694,47 @@ export default function Offices() {
                               </span>
                             </td>
                             <td className="table-cell hidden sm:table-cell text-gray-500">{office.term_years}yr</td>
+                            <td className="table-cell hidden lg:table-cell text-gray-600 text-sm">
+                              {office.current_officeholder || <span className="text-gray-300">—</span>}
+                            </td>
                             <td className="table-cell hidden xl:table-cell text-gray-400 text-xs max-w-xs truncate">{office.notes||'—'}</td>
+                            <td className="table-cell text-right">
+                              <button
+                                type="button"
+                                onClick={() => setHistoryOffice(office)}
+                                title="Election history & previous office holders"
+                                className="text-xs font-medium text-brand-red hover:underline whitespace-nowrap"
+                              >
+                                History
+                              </button>
+                            </td>
                           </tr>
                         )
                       })}
                     </tbody>
                   </table>
+                  {!expandedGroups[level] && group.length > 150 && (
+                    <div className="p-3 text-center border-t border-gray-100 bg-gray-50/50">
+                      <button
+                        type="button"
+                        onClick={() => setExpandedGroups(g => ({ ...g, [level]: true }))}
+                        className="text-sm font-medium text-brand-red hover:underline"
+                      >
+                        Show all {group.length.toLocaleString()} {LEVEL_LABELS[level].toLowerCase()} offices
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             )
           })}
         </div>
       ))}
+
+      {/* ── Office history modal ── */}
+      {historyOffice && (
+        <OfficeHistoryModal office={historyOffice} onClose={() => setHistoryOffice(null)} />
+      )}
 
       {/* ── Add Office Modal ── */}
       {showModal && (
