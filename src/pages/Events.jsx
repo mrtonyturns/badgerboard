@@ -9,6 +9,12 @@ import {
   Check, X, Settings as SettingsIcon, ExternalLink,
 } from 'lucide-react'
 import { supabase, getCandidates } from '../lib/supabase'
+
+let _placesCache = null
+async function loadPlaces() {
+  if (!_placesCache) _placesCache = await fetch('/geodata/wi-district-places.json').then(r => r.json()).catch(() => ({}))
+  return _placesCache
+}
 import { useAuth } from '../contexts/AuthContext'
 import LoadingBar from '../components/LoadingBar'
 
@@ -80,6 +86,9 @@ export default function Events() {
   const [pickerRemember, setPickerRemember] = useState(false)
   const [added, setAdded]             = useState({})     // event name → true
   const [toast, setToast]             = useState(null)
+  const [places, setPlaces]           = useState(null)
+
+  useEffect(() => { loadPlaces().then(setPlaces) }, [])
 
   useEffect(() => {
     getCandidates().then(({ data }) => {
@@ -105,7 +114,11 @@ export default function Events() {
           body: JSON.stringify({
             district_key: district.key,
             district_name: district.name,
-            area_description: selected?.office?.county ? `${selected.office.county} County area` : '',
+            area_description: (() => {
+              const pl = places?.[district.key]
+              if (!pl) return selected?.office?.county ? `${selected.office.county} County area` : district.name
+              return `${pl.places.join(', ')} (${pl.counties.join(', ')} ${pl.counties.length > 1 ? 'counties' : 'county'})`
+            })(),
             ...payload,
           }),
         })
@@ -121,7 +134,7 @@ export default function Events() {
       setEvents(step2.events); setFetchedAt(step2.fetched_at)
     } catch (e) { setError(e.message) }
     setLoading(false)
-  }, [district?.key, selected])
+  }, [district?.key, selected, places])
 
   // auto-load when office changes (cache-first — cheap)
   useEffect(() => { if (district?.key) { setEvents(null); loadEvents(false) } }, [district?.key]) // eslint-disable-line

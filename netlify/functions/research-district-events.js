@@ -72,7 +72,7 @@ export const handler = async (event) => {
           model: 'sonar',
           messages: [
             { role: 'system', content: 'You are a Wisconsin community events researcher helping a political campaign find public events to attend. Be specific about dates, times, venues, and organizers. Only include real, verifiable upcoming events.' },
-            { role: 'user', content: `Today is ${today}. List 10-16 upcoming public events in the next 60 days in ${district_name}, Wisconsin (${area_description || 'the district area'}). Include: county fairs, farmers markets, festivals, parades, chamber of commerce events, town halls / listening sessions, county Republican or Democratic party events, union/labor events, church festivals, and community fundraisers. For each event give: exact name, date(s), start time, venue and city, the organizer/host, a one-sentence description, and the event website URL if one exists.` }
+            { role: 'user', content: `Today is ${today}. Search for upcoming public events happening in the next 60 days in and around these Wisconsin communities: ${area_description || district_name}. Search for things like "${(area_description || '').split(',')[0] || 'Wisconsin'} events calendar 2026", county fair schedules, farmers markets, summer festivals, parades, chamber of commerce calendars, county Republican and Democratic party event pages, and union events for this area. List every real event you find (aim for 10-16). For each: exact name, date(s), start time, venue and city, organizer/host, a one-sentence description, and the event website URL if one exists. These communities are in ${district_name}. Only include events you can verify from actual sources.` }
           ],
           max_tokens: 2500,
         }),
