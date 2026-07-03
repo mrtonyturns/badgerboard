@@ -156,6 +156,50 @@ ${research}`,
   }
   let events = (parsed.events || []).filter(e => e?.name && e?.date_start)
 
+  // Thin result (search variance): one supplemental research pass, merged + deduped.
+  if (events.length < 6 && PERPLEXITY_API_KEY) {
+    try {
+      const ctrl2 = new AbortController()
+      setTimeout(() => ctrl2.abort(), 21000)
+      const p2 = await fetch('https://api.perplexity.ai/chat/completions', {
+        method: 'POST', signal: ctrl2.signal,
+        headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'sonar-pro',
+          messages: [
+            { role: 'system', content: 'You are a Wisconsin community events researcher. Only public events. Include street addresses.' },
+            { role: 'user', content: `List public community events (fairs, markets, festivals, parades, concerts, civic meetings, party events) in the next 60 days near ${area_description || district_name}, Wisconsin that are NOT in this list: ${events.map(e => e.name).join('; ') || 'none'}. Name, date, time, venue with street address, city, host, one-sentence description, URL if known.` }
+          ],
+          max_tokens: 2000,
+        }),
+      })
+      if (p2.ok) {
+        const d2 = await p2.json()
+        const extra = d2.choices?.[0]?.message?.content
+        if (extra) {
+          const c2 = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: CLAUDE_MODEL, max_tokens: 6000,
+              messages: [{ role: 'user', content: `Convert to the same strict JSON schema {"events":[...]} used before (name, date_start, date_end, time, venue, address, city, host, description, category, url, lean{label,certainty,score,basis}). Public events only, next 60 days, district lean ${district_lean || 'unknown'}. Output ONLY JSON.
+
+RESEARCH:
+${extra}` }],
+            }),
+          })
+          if (c2.ok) {
+            const cd2 = await c2.json()
+            const raw2 = (cd2.content?.find(b => b.type === 'text')?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
+            const more = (JSON.parse(raw2).events || []).filter(e => e?.name && e?.date_start)
+            const seen = new Set(events.map(e => e.name.toLowerCase()))
+            for (const e of more) if (!seen.has(e.name.toLowerCase())) { events.push(e); seen.add(e.name.toLowerCase()) }
+          }
+        }
+      }
+    } catch (e) { console.warn('[district-events] supplemental pass skipped:', e.message) }
+  }
+
   // ── og:image enrichment (best-effort, tight budget) ────────────────────────
   const withUrls = events.filter(e => e.url).slice(0, 8)
   await Promise.all(withUrls.map(async (e) => {

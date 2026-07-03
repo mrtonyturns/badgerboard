@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
+import { pointInGeometry } from '../lib/geo'
 import 'leaflet/dist/leaflet.css'
 import {
   WI_CENTROID,
@@ -340,6 +341,7 @@ export default function LeafletMapView({
         if (g.names.length < 5) g.names.push(o.name)
       })
 
+      const capturedLayer = activeLayer
       groups.forEach(({ coords, count, level, names }) => {
         const color = levelColor(level)
         const icon  = count > 1 ? countBadgeIcon(color, count) : dotIcon(color)
@@ -347,7 +349,34 @@ export default function LeafletMapView({
           ? `<b>${names[0]}</b><br><small>${level}</small>`
           : `<b>${count} ${level} offices</b>` +
             (names.length ? `<br><small style="color:#555">${names.slice(0,5).join('<br>')}</small>` : '')
-        L.marker(coords, { icon }).bindPopup(popup).addTo(layer)
+        const marker = L.marker(coords, { icon }).addTo(layer)
+        if (capturedLayer) {
+          // A district layer is showing: dots sit on top of the polygons, so make a
+          // dot click open the district it sits in (same payload as a polygon click)
+          // instead of swallowing the click with a tiny popup.
+          marker.on('click', () => {
+            const sources = DISTRICT_LAYERS[capturedLayer]?.sources || []
+            for (const source of sources) {
+              const data = geoDataCache.current[source.url]
+              if (!data) continue
+              const feat = (data.features || []).find(f => pointInGeometry(coords[1], coords[0], f.geometry))
+              if (feat) {
+                onClickRef.current?.({
+                  name: feat.properties?.NAME || '',
+                  sublabel: source.sublabel,
+                  layerKey: capturedLayer,
+                  county: feat.properties?.COUNTY_NAME || null,
+                  ctv: feat.properties?.CTV || null,
+                  geometry: feat.geometry,
+                })
+                return
+              }
+            }
+            marker.bindPopup(popup).openPopup()
+          })
+        } else {
+          marker.bindPopup(popup)
+        }
       })
     }
 

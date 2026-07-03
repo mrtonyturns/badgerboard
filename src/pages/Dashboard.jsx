@@ -89,7 +89,7 @@ export default function Dashboard() {
     setLoading(true)
     try {
       const [electionsRes, candidatesRes, dossiersRes, prospectsRes] = await Promise.all([
-        supabase.from('elections').select('*').order('election_date').limit(8),
+        supabase.from('elections').select('*').gte('election_date', new Date().toISOString().slice(0, 10)).order('election_date').limit(8),
         supabase.from('candidates').select('id, party, status', { count: 'exact' }),
         supabase.from('dossiers').select('id', { count: 'exact', head: true }),
         supabase.from('prospecting_lists').select('id', { count: 'exact', head: true }),
