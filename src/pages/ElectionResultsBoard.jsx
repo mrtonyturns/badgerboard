@@ -221,9 +221,9 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
   const realtimeRef = useRef(null)
 
   // ── Load contests + results ─────────────────────────────────────────────────
-  const loadData = useCallback(async (id) => {
+  const loadData = useCallback(async (id, quiet = false) => {
     if (!id) return
-    setLoading(true)
+    if (!quiet) setLoading(true)
     try {
       const { data: contestRows } = await supabase
         .from('election_contests')
@@ -251,7 +251,7 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
     } catch (err) {
       console.error('[ElectionResultsBoard] load error:', err)
     }
-    setLoading(false)
+    if (!quiet) setLoading(false)
   }, [])
 
   useEffect(() => {
@@ -289,8 +289,15 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
       .subscribe()
 
     realtimeRef.current = channel
-    return () => { supabase.removeChannel(channel) }
-  }, [electionId])
+
+    // Polling fallback: realtime requires the tables to be in the project's
+    // realtime publication — if that's ever disabled, this keeps the board live.
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') loadData(electionId, true)
+    }, 60000)
+
+    return () => { supabase.removeChannel(channel); clearInterval(interval) }
+  }, [electionId, loadData])
 
   // ── CSV export ──────────────────────────────────────────────────────────────
   const exportCSV = () => {
