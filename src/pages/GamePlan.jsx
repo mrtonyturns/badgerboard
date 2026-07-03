@@ -14,8 +14,8 @@ import {
   Loader2, AlertTriangle, List, ChevronUp,
 } from 'lucide-react'
 import {
-  getMilestones, createMilestone,
-  updateMilestone, deleteMilestone,
+  getMilestones, createMilestone, createMilestoneBatch,
+  updateMilestone, deleteMilestone, deleteTemplateMilestones,
   getElections, createElection, updateElection, deleteElection,
   getCandidates,
 } from '../lib/supabase'
@@ -69,6 +69,31 @@ const ELECTION_TYPE_COLORS = {
   spring_general: { bg: 'bg-emerald-600',light: 'bg-emerald-100 text-emerald-800',border:'border-emerald-300' },
   special:        { bg: 'bg-yellow-500', light: 'bg-yellow-100 text-yellow-800', border: 'border-yellow-300' },
 }
+
+// ── Standard Wisconsin campaign plan template ─────────────────────────────────
+// Day offsets are relative to election day (negative = days before).
+const PLAN_TEMPLATE = [
+  { off: -300, phase: 'planning',      category: 'legal',       title: 'Confirm eligibility & residency requirements' },
+  { off: -285, phase: 'planning',      category: 'recruitment', title: 'Recruit campaign leadership (manager, treasurer)' },
+  { off: -275, phase: 'planning',      category: 'admin',       title: 'Open dedicated campaign bank account' },
+  { off: -265, phase: 'planning',      category: 'general',     title: 'Draft campaign plan, message & budget' },
+  { off: -255, phase: 'filing',        category: 'legal',       title: 'Register campaign committee (CF-1) with the WEC / filing officer' },
+  { off: -240, phase: 'fundraising',   category: 'finance',     title: 'Launch initial fundraising push (early money)' },
+  { off: -210, phase: 'filing',        category: 'legal',       title: 'Begin circulating nomination papers' },
+  { off: -180, phase: 'voter_contact', category: 'outreach',    title: 'Build voter universe & targeting lists' },
+  { off: -155, phase: 'filing',        category: 'legal',       title: 'File nomination papers & declaration of candidacy' },
+  { off: -145, phase: 'filing',        category: 'legal',       title: 'Confirm ballot access with filing officer' },
+  { off: -120, phase: 'voter_contact', category: 'outreach',    title: 'Launch door-to-door canvassing program' },
+  { off: -90,  phase: 'fundraising',   category: 'finance',     title: 'File pre-primary campaign finance report' },
+  { off: -75,  phase: 'voter_contact', category: 'outreach',    title: 'Distribute yard signs & field materials' },
+  { off: -60,  phase: 'voter_contact', category: 'media',       title: 'Direct mail round 1 + digital ads live' },
+  { off: -21,  phase: 'gotv',          category: 'outreach',    title: 'Absentee & early-vote push begins' },
+  { off: -8,   phase: 'fundraising',   category: 'finance',     title: 'File pre-election campaign finance report' },
+  { off: -3,   phase: 'gotv',          category: 'outreach',    title: 'GOTV weekend canvass & phone blitz' },
+  { off: 0,    phase: 'election_day',  category: 'admin',       title: 'Election Day — turnout tracking & poll coverage' },
+  { off: 14,   phase: 'election_day',  category: 'admin',       title: 'Thank-you notes to volunteers & donors' },
+  { off: 30,   phase: 'election_day',  category: 'finance',     title: 'File post-election campaign finance report' },
+]
 
 const defaultMilestoneForm = {
   title: '', notes: '', phase: 'planning', category: 'general',
@@ -465,6 +490,74 @@ const defaultElectionForm = {
   year: new Date().getFullYear(), notes: '',
 }
 
+function GeneratePlanModal({ open, onClose, onGenerate, generating, elections, candidates }) {
+  const [electionId,  setElectionId]  = useState('')
+  const [candidateId, setCandidateId] = useState('')
+
+  useEffect(() => {
+    if (open) {
+      // default to the next upcoming election
+      const next = [...elections]
+        .filter(e => !isPast(parseISO(e.election_date)) || isToday(parseISO(e.election_date)))
+        .sort((a, b) => parseISO(a.election_date) - parseISO(b.election_date))[0]
+      setElectionId(next?.id || elections[0]?.id || '')
+      setCandidateId('')
+    }
+  }, [open, elections])
+
+  if (!open) return null
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div className="p-6 border-b border-gray-100">
+          <h2 className="text-lg font-bold text-gray-900">Generate standard campaign plan</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Creates {PLAN_TEMPLATE.length} standard Wisconsin campaign milestones with due dates
+            calculated from the election date. You can edit or delete any of them afterward.
+          </p>
+        </div>
+        <div className="p-6 space-y-4">
+          <div>
+            <label className="label">Election *</label>
+            <select className="input" value={electionId} onChange={e => setElectionId(e.target.value)}>
+              {elections.length === 0 && <option value="">No elections — add one on the Calendar tab first</option>}
+              {[...elections].sort((a, b) => parseISO(a.election_date) - parseISO(b.election_date)).map(e => (
+                <option key={e.id} value={e.id}>
+                  {e.name} — {format(parseISO(e.election_date), 'MMM d, yyyy')}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Candidate (optional)</label>
+            <select className="input" value={candidateId} onChange={e => setCandidateId(e.target.value)}>
+              <option value="">All / campaign-wide</option>
+              {candidates.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <p className="text-xs text-gray-400">
+            Dates are estimates based on a typical WI race calendar — filing windows and finance
+            report deadlines vary by office. Always confirm with the WEC or your filing officer.
+          </p>
+        </div>
+        <div className="p-6 pt-0 flex items-center justify-end gap-2">
+          <button type="button" onClick={onClose} className="btn-secondary text-sm">Cancel</button>
+          <button
+            type="button"
+            disabled={!electionId || generating}
+            onClick={() => onGenerate({ electionId, candidateId })}
+            className="btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
+          >
+            {generating && <Loader2 className="w-4 h-4 animate-spin" />}
+            Generate {PLAN_TEMPLATE.length} milestones
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ElectionModal({ open, onClose, editing, onSave, saving }) {
   const [form, setForm] = useState(defaultElectionForm)
   useEffect(() => {
@@ -692,6 +785,50 @@ export default function GamePlan() {
   }
 
   // ── Milestone CRUD ────────────────────────────────────────────────────────
+  const [showGenerate, setShowGenerate] = useState(false)
+  const [generating,   setGenerating]   = useState(false)
+
+  const hasTemplateMilestones = milestones.some(m => m.is_template)
+
+  const handleGeneratePlan = async ({ electionId, candidateId }) => {
+    const election = elections.find(e => e.id === electionId)
+    if (!election?.election_date) return
+    setGenerating(true)
+    try {
+      const base = parseISO(election.election_date)
+      const rows = PLAN_TEMPLATE.map(t => {
+        const d = new Date(base)
+        d.setDate(d.getDate() + t.off)
+        return {
+          title: t.title,
+          phase: t.phase,
+          category: t.category,
+          due_date: d.toISOString().slice(0, 10),
+          status: 'upcoming',
+          election_id: electionId,
+          candidate_id: candidateId || null,
+          is_template: true,
+          notes: 'Generated from the standard WI campaign plan — adjust dates to your race. Filing deadlines vary by office; always confirm with your filing officer.',
+        }
+      })
+      const { error } = await createMilestoneBatch(rows)
+      if (error) throw error
+      await fetchMilestones()
+      setShowGenerate(false)
+    } catch (err) {
+      console.error('[GamePlan] generate plan failed:', err)
+      setSaveError(err.message || 'Failed to generate plan')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const handleRemoveGenerated = async () => {
+    if (!window.confirm('Remove all generated plan milestones? Milestones you added manually are kept.')) return
+    await deleteTemplateMilestones()
+    fetchMilestones()
+  }
+
   const openAdd  = ()  => { setEditing(null); setSaveError(null); setShowMilestone(true) }
   const openEdit = (m) => { setEditing(m); setSaveError(null); setShowMilestone(true) }
 
@@ -822,9 +959,19 @@ export default function GamePlan() {
         </div>
         <div className="ml-auto flex items-center gap-2">
           {activeTab === 'milestones' && (
-            <button onClick={openAdd} className="btn-primary flex items-center gap-2 text-sm">
-              <Plus className="w-4 h-4" /> Add milestone
-            </button>
+            <>
+              {hasTemplateMilestones && (
+                <button onClick={handleRemoveGenerated} className="btn-secondary flex items-center gap-2 text-sm" title="Remove milestones created by Generate plan">
+                  <Trash2 className="w-4 h-4" /> Remove generated
+                </button>
+              )}
+              <button onClick={() => setShowGenerate(true)} className="btn-secondary flex items-center gap-2 text-sm">
+                <Target className="w-4 h-4" /> Generate plan
+              </button>
+              <button onClick={openAdd} className="btn-primary flex items-center gap-2 text-sm">
+                <Plus className="w-4 h-4" /> Add milestone
+              </button>
+            </>
           )}
           {activeTab === 'calendar' && (
             <button onClick={() => { setEditingElect(null); setShowElect(true) }} className="btn-primary flex items-center gap-2 text-sm">
@@ -1169,6 +1316,14 @@ export default function GamePlan() {
       )}
 
       {/* ── Modals ── */}
+      <GeneratePlanModal
+        open={showGenerate}
+        onClose={() => setShowGenerate(false)}
+        onGenerate={handleGeneratePlan}
+        generating={generating}
+        elections={elections}
+        candidates={candidates}
+      />
       <MilestoneModal
         open={showMilestone}
         onClose={() => { if (!saving) setShowMilestone(false) }}
