@@ -102,36 +102,51 @@ export default function Events() {
   const selected = candidates.find(c => c.id === officeId)
   const district = officeToDistrict(selected?.office)
 
+  const CACHE_MS = 24 * 3600 * 1000
   const loadEvents = useCallback(async (force = false) => {
     if (!district) return
     setLoading(true); setError(null); setPhase('Checking for cached events…')
     try {
-      const { data: { session } } = await supabase.auth.getSession()
-      const call = async (payload) => {
-        const res = await fetch('/.netlify/functions/research-district-events', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-          body: JSON.stringify({
-            district_key: district.key,
-            district_name: district.name,
-            area_description: (() => {
-              const pl = places?.[district.key]
-              if (!pl) return selected?.office?.county ? `${selected.office.county} County area` : district.name
-              return `${pl.places.join(', ')} (${pl.counties.join(', ')} ${pl.counties.length > 1 ? 'counties' : 'county'})`
-            })(),
-            ...payload,
-          }),
-        })
-        const data = await res.json().catch(() => ({ error: 'Service temporarily unavailable' }))
-        if (!res.ok) throw new Error(data.error || 'Event research failed')
-        return data
+      // 1. Cache first — shared across all users, refreshed daily
+      if (!force) {
+        const { data: row } = await supabase.from('district_events')
+          .select('events, fetched_at').eq('district_key', district.key).maybeSingle()
+        if (row?.events?.length && row.fetched_at && Date.now() - new Date(row.fetched_at).getTime() < CACHE_MS) {
+          setEvents(row.events); setFetchedAt(row.fetched_at); setLoading(false)
+          return
+        }
       }
-      setPhase('Searching for events in your district…')
-      const step1 = await call({ force, step: 'research' })
-      if (step1.events) { setEvents(step1.events); setFetchedAt(step1.fetched_at); setLoading(false); return }
-      setPhase('Organizing events and classifying audiences…')
-      const step2 = await call({ force, research: step1.research })
-      setEvents(step2.events); setFetchedAt(step2.fetched_at)
+      // 2. Kick off the background research (202 returns immediately), then poll the cache
+      const startedAt = Date.now()
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/.netlify/functions/research-district-events-background', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({
+          district_key: district.key,
+          district_name: district.name,
+          force,
+          area_description: (() => {
+            const pl = places?.[district.key]
+            if (!pl) return selected?.office?.county ? `${selected.office.county} County area` : district.name
+            return `${pl.places.join(', ')} (${pl.counties.join(', ')} ${pl.counties.length > 1 ? 'counties' : 'county'})`
+          })(),
+        }),
+      })
+      if (res.status !== 202 && !res.ok) throw new Error('Could not start event research — try again')
+      setPhase('Searching for public events in your district…')
+      for (let i = 0; i < 40; i++) {
+        await new Promise(r => setTimeout(r, 3000))
+        if (i === 8) setPhase('Classifying audiences and gathering addresses…')
+        const { data: row } = await supabase.from('district_events')
+          .select('events, fetched_at').eq('district_key', district.key).maybeSingle()
+        if (row?.fetched_at && new Date(row.fetched_at).getTime() >= startedAt - 5000) {
+          if (!row.events?.length) throw new Error('No public events found for this district right now — try Refresh later')
+          setEvents(row.events); setFetchedAt(row.fetched_at); setLoading(false)
+          return
+        }
+      }
+      throw new Error('Research is taking longer than expected — try Refresh in a minute')
     } catch (e) { setError(e.message) }
     setLoading(false)
   }, [district?.key, selected, places])

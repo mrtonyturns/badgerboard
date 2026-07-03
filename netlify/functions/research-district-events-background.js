@@ -2,7 +2,8 @@
 // Finds upcoming community events in a district using Perplexity (web research)
 // + Claude (structuring + political-lean classification), enriches with og:image
 // thumbnails, and caches per district for 24 hours.
-// Called in two steps (research → structure) to stay under the gateway limit.
+// Runs as a Netlify BACKGROUND function (-background suffix → 15 min budget):
+// the client gets a 202 immediately and polls the district_events cache row.
 
 const CACHE_HOURS = 24
 
@@ -33,7 +34,7 @@ export const handler = async (event) => {
   try { body = JSON.parse(event.body || '{}') } catch {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
-  const { district_key, district_name, area_description, district_lean, force, step, research: providedResearch } = body
+  const { district_key, district_name, area_description, district_lean, force } = body
   if (!district_key || !district_name) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'district_key, district_name required' }) }
   }
@@ -59,11 +60,11 @@ export const handler = async (event) => {
   }
 
   // ── Step 1: Perplexity research ─────────────────────────────────────────────
-  let research = providedResearch || null
-  if (!research && PERPLEXITY_API_KEY) {
+  let research = null
+  if (PERPLEXITY_API_KEY) {
     try {
       const ctrl = new AbortController()
-      setTimeout(() => ctrl.abort(), 21000)
+      setTimeout(() => ctrl.abort(), 60000)
       const today = new Date().toISOString().slice(0, 10)
       const pRes = await fetch('https://api.perplexity.ai/chat/completions', {
         method: 'POST', signal: ctrl.signal,
@@ -84,10 +85,13 @@ export const handler = async (event) => {
     } catch (e) { console.warn('[district-events] Perplexity failed:', e.message) }
   }
   if (!research) {
-    return { statusCode: 502, headers, body: JSON.stringify({ error: 'Event research unavailable — try again shortly' }) }
-  }
-  if (step === 'research') {
-    return { statusCode: 200, headers, body: JSON.stringify({ step: 'research', research }) }
+    const fetched_at = new Date().toISOString()
+    await sb('district_events', {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ district_key, name: district_name, events: [], fetched_at, updated_at: fetched_at }),
+    })
+    return { statusCode: 502, headers, body: JSON.stringify({ error: 'Event research unavailable' }) }
   }
 
   // ── Step 2: Claude structures + classifies lean ─────────────────────────────

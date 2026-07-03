@@ -37,8 +37,6 @@
 [functions."research-district-history"]
   timeout = 60
 
-[functions."research-district-events"]
-  timeout = 60
 
 # Auto-regenerate stale dossiers every Monday at 9am CT (UTC-6 standard / UTC-5 daylight)
 # Using 15:00 UTC to cover CT regardless of DST
