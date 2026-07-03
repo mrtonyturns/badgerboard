@@ -30,6 +30,10 @@ export function districtKeyFor(info) {
     if (info.sublabel === 'State Senate District') return { key: `senate-${num}`, chamber: 'senate', num }
     return { key: `assembly-${num}`, chamber: 'assembly', num }
   }
+  if (info.layerKey === 'county' && info.name) {
+    const countyName = info.name.replace(/ county$/i, '').trim()
+    if (countyName) return { key: `county-${countyName}`, chamber: 'county', num: null, countyName }
+  }
   return null
 }
 
@@ -40,6 +44,8 @@ const CHAMBER_META = {
     elig: (n) => `Qualified elector of Senate District ${n} (resident 28+ days before filing) · U.S. citizen, age 18+ · nomination papers with 400–800 district signatures · CF-1 + declaration of candidacy filed by June 1 of the election year · no felony conviction unless rights restored` },
   congress: { office: (n) => `U.S. Representative, Congressional District ${n}`, badge: 'Federal · Legislative', term: 2,
     elig: (n) => `U.S. citizen for 7+ years · age 25+ · resident of Wisconsin (district residency customary, not required) · nomination papers with 1,000–2,000 district signatures · federal FEC registration once raising/spending over $5,000 · WI filing by June 1 of the election year` },
+  county:   { office: (n, name) => `County Sheriff of ${name} County`, badge: 'County', term: 4,
+    elig: (n, name) => `Qualified elector of ${name} County (resident 28+ days before filing) · U.S. citizen, age 18+ · nomination papers: 500–1,000 county signatures (counties of 100,000+) or 200–400 (smaller counties) · CF-1 + declaration of candidacy by June 1 of the election year · some offices carry extra requirements (Sheriff: law-enforcement certification; District Attorney: WI bar license)` },
 }
 
 const PARTY_COLOR = { Republican: '#B91C1C', Democrat: '#1D4ED8', Independent: '#7C3AED', Nonpartisan: '#64748B', Other: '#64748B' }
@@ -141,7 +147,7 @@ function DistrictHeatMap({ geometry, popPoints }) {
 export default function DistrictDashboard({ district, panelOffices, allCandidates, onClose, navigate }) {
   const id = districtKeyFor(district)
   const meta = id ? CHAMBER_META[id.chamber] : null
-  const officeLabel = meta ? meta.office(id.num) : district.name
+  const officeLabel = meta ? meta.office(id.num, id.countyName) : district.name
 
   const [statics, setStatics]   = useState(null)
   const [contests, setContests] = useState([])
@@ -158,18 +164,22 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
     loadStatic().then(s => { if (alive) setStatics(s) })
 
     const num = id?.num
-    const chamberWord = id?.chamber === 'assembly' ? 'Assembly' : id?.chamber === 'senate' ? 'Senate' : 'Congressional'
-    supabase.from('election_contests')
+    const baseSel = supabase.from('election_contests')
       .select('id, office, district, seats, election:elections(id, name, election_date), results:election_results(candidate_name, party, votes, vote_pct, winner, declared)')
-      .or(`office.ilike.%${chamberWord}%District ${num}%,district.ilike.%District ${num}%`)
-      .limit(40)
-      .then(({ data }) => {
-        if (!alive) return
-        const filtered = (data || []).filter(c =>
-          (c.office || '').toLowerCase().includes(chamberWord.toLowerCase()) &&
-          new RegExp(`district\\s*0*${num}(\\D|$)`, 'i').test(`${c.office} ${c.district || ''}`))
-        setContests(filtered)
-      })
+    if (id?.chamber === 'county') {
+      baseSel.eq('county', id.countyName).limit(60).then(({ data }) => { if (alive) setContests(data || []) })
+    } else {
+      const chamberWord = id?.chamber === 'assembly' ? 'Assembly' : id?.chamber === 'senate' ? 'Senate' : 'Congressional'
+      baseSel.or(`office.ilike.%${chamberWord}%District ${num}%,district.ilike.%District ${num}%`)
+        .limit(40)
+        .then(({ data }) => {
+          if (!alive) return
+          const filtered = (data || []).filter(c =>
+            (c.office || '').toLowerCase().includes(chamberWord.toLowerCase()) &&
+            new RegExp(`district\\s*0*${num}(\\D|$)`, 'i').test(`${c.office} ${c.district || ''}`))
+          setContests(filtered)
+        })
+    }
 
     supabase.from('district_intel').select('history').eq('district_key', id?.key || '').maybeSingle()
       .then(({ data }) => { if (alive && data?.history) setHistory(data.history) })
@@ -351,14 +361,16 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
 
               {/* right — office history */}
               <div style={S.card}>
-                <div style={S.cardTitle}>Office history <span style={S.note}>15 years</span></div>
+                <div style={S.cardTitle}>Office history <span style={S.note}>{id.chamber === 'county' ? 'County Sheriff · 15 years' : '15 years'}</span></div>
 
                 {!history && !histLoading && (
                   <div style={{ textAlign: 'center', padding: '28px 10px' }}>
                     <Sparkles size={26} style={{ color: '#8B0000', margin: '0 auto 10px' }} />
-                    <p style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>Research this seat's history</p>
+                    <p style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>{id.chamber === 'county' ? 'Research this county\'s flagship seat' : "Research this seat's history"}</p>
                     <p style={{ fontSize: 12.5, color: '#94A3B8', margin: '6px 0 14px', lineHeight: 1.5 }}>
-                      AI finds every officeholder since 2010 with bios and results, then saves it for everyone. Takes ~20 seconds, runs once.
+                      {id.chamber === 'county'
+                        ? 'AI researches the elected County Sheriff — every officeholder since 2010 with bios and results — then saves it for everyone.'
+                        : 'AI finds every officeholder since 2010 with bios and results, then saves it for everyone. Takes ~20 seconds, runs once.'}
                     </p>
                     <button onClick={() => researchHistory(false)} style={{ ...S.btn, background: '#8B0000', borderColor: '#8B0000', color: '#fff' }}>
                       <Sparkles size={13} style={{ display: 'inline', verticalAlign: -2, marginRight: 6 }} />Research history
