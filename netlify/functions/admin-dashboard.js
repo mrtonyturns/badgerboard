@@ -71,7 +71,6 @@ async function getUserActivity(userId) {
 async function getAICosts() {
   // Pricing per million tokens (Anthropic published rates as of 2025)
   const pricingMap = {
-    'claude-fable-5':           { input: 5.00,  output: 25.00 }, // estimate — Fable 5 premium tier
     'claude-sonnet-5':          { input: 3.00,  output: 15.00 },
     'claude-opus-4-8':          { input: 5.00,  output: 25.00 },
     'claude-sonnet-4-6':        { input: 3.00,  output: 15.00 },
@@ -86,8 +85,8 @@ async function getAICosts() {
   const fixedEstimates = [
     { label: 'Perplexity — News Research',   estimated_cost: 3.20, count: null, model: 'perplexity/sonar', note: 'Per-dossier web search calls' },
     { label: 'Perplexity — Social Media',    estimated_cost: 1.80, count: null, model: 'perplexity/sonar', note: 'Per-dossier social media search' },
-    { label: 'Weekly Auto-Refresh',          estimated_cost: 2.50, count: null, model: 'claude-fable-5', note: 'Monday auto-regeneration job' },
-    { label: 'Election Night Sync',          estimated_cost: 0.40, count: null, model: 'claude-fable-5', note: 'Real-time result ingestion' },
+    { label: 'Weekly Auto-Refresh',          estimated_cost: 2.50, count: null, model: 'claude-opus-4-8', note: 'Monday auto-regeneration job' },
+    { label: 'Election Night Sync',          estimated_cost: 0.40, count: null, model: 'claude-opus-4-8', note: 'Real-time result ingestion' },
   ];
 
   const categoryMap = {};

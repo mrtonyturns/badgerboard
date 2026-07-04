@@ -5,7 +5,7 @@
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const SUPABASE_URL      = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
-const MODEL = 'claude-fable-5'
+const MODEL = 'claude-opus-4-8'
 
 // ─── Sanitization & allowlists ────────────────────────────────────────────────
 function sanitize(val, maxLen = 200) {

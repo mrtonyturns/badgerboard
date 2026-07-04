@@ -21,7 +21,7 @@ async function callClaude(prompt) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-fable-5',
+      model: 'claude-opus-4-8',
       max_tokens: 6000,
       messages: [{ role: 'user', content: prompt }],
     }),

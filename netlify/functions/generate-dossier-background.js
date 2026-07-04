@@ -8,7 +8,7 @@ const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY // must be set in Netl
 const XAI_API_KEY        = process.env.XAI_API_KEY        // xAI Grok — x.ai console
 const SUPABASE_URL       = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-const CLAUDE_MODEL       = 'claude-fable-5' // Fable 5 (per request) — always-on thinking; parsing skips thinking blocks & max_tokens sized for it
+const CLAUDE_MODEL       = 'claude-opus-4-8' // Opus 4.8 — profile writer (per request)
 const GROK_MODEL         = 'grok-4.3'  // latest Grok — Responses API w/ server-side x_search + web_search (verified 2026-07)
 
 // Admin emails — always treated as Agency tier
@@ -1319,7 +1319,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     const webSearchTools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }]
     const claudePayload = {
       model: CLAUDE_MODEL,
-      max_tokens: 14000,
+      max_tokens: 12000,
       system: systemPrompt + webSearchDirective,
       tools: webSearchTools,
       messages: [{ role: 'user', content: userPrompt }],
@@ -1362,7 +1362,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     if (sectionCount < 10) {
       console.log('[dossier-bg] Too few sections — retrying with continuation prompt')
       const retryPrompt = `The dossier you just generated for ${safe.name} was cut short — only ${sectionCount} of 14 sections were included. Continue from where it was cut off and complete ALL missing sections. Start with the next missing ## SECTION header and continue through ## SECTION 14. Do not repeat sections already written.\n\nPrevious output (partial):\n${content.slice(-3000)}`
-      const retryResp = await callClaudeWithRetry({ model: CLAUDE_MODEL, max_tokens: 14000, system: systemPrompt + webSearchDirective, tools: webSearchTools, messages: [{ role: 'user', content: retryPrompt }] })
+      const retryResp = await callClaudeWithRetry({ model: CLAUDE_MODEL, max_tokens: 12000, system: systemPrompt + webSearchDirective, tools: webSearchTools, messages: [{ role: 'user', content: retryPrompt }] })
       if (retryResp.ok) {
         const retryData = await retryResp.json()
         const continuation = extractClaudeText(retryData)
