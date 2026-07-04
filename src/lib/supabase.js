@@ -548,6 +548,94 @@ export const deleteTemplateMilestones = async (candidateId = null) => {
   return q
 }
 
+// ─── Game Plan Tasks (Todoist-style, USER-SCOPED via RLS + explicit filter) ───
+// Projects → sections → tasks (subtasks via parent_id). project_id NULL = Inbox.
+
+export const getTaskProjects = async () => {
+  const uid = await currentUserId()
+  if (!uid) return { data: [], error: new Error('Not authenticated') }
+  return withOffline(`gp_projects:${uid}`, () =>
+    supabase.from('gp_projects').select('*').eq('created_by', uid)
+      .eq('archived', false).order('sort_order').order('created_at'))
+}
+
+export const createTaskProject = async (data) => {
+  const uid = await currentUserId()
+  return supabase.from('gp_projects').insert({ ...data, created_by: uid }).select().single()
+}
+
+export const updateTaskProject = async (id, data) =>
+  supabase.from('gp_projects').update(data).eq('id', id).select().single()
+
+export const deleteTaskProject = async (id) =>
+  supabase.from('gp_projects').delete().eq('id', id)
+
+export const getTaskSections = async () => {
+  const uid = await currentUserId()
+  if (!uid) return { data: [], error: new Error('Not authenticated') }
+  return withOffline(`gp_sections:${uid}`, () =>
+    supabase.from('gp_sections').select('*').eq('created_by', uid)
+      .order('sort_order').order('created_at'))
+}
+
+export const createTaskSection = async (data) => {
+  const uid = await currentUserId()
+  return supabase.from('gp_sections').insert({ ...data, created_by: uid }).select().single()
+}
+
+export const updateTaskSection = async (id, data) =>
+  supabase.from('gp_sections').update(data).eq('id', id).select().single()
+
+export const deleteTaskSection = async (id) =>
+  supabase.from('gp_sections').delete().eq('id', id)
+
+// All open tasks + recently completed (completed list is fetched separately when needed)
+export const getTasks = async () => {
+  const uid = await currentUserId()
+  if (!uid) return { data: [], error: new Error('Not authenticated') }
+  return withOffline(`gp_tasks:${uid}`, () =>
+    supabase.from('gp_tasks').select('*').eq('created_by', uid)
+      .eq('completed', false)
+      .order('sort_order').order('created_at'))
+}
+
+export const getCompletedTasks = async (limit = 200) => {
+  const uid = await currentUserId()
+  if (!uid) return { data: [], error: new Error('Not authenticated') }
+  return withOffline(`gp_tasks_done:${uid}`, () =>
+    supabase.from('gp_tasks').select('*').eq('created_by', uid)
+      .eq('completed', true)
+      .order('completed_at', { ascending: false }).limit(limit))
+}
+
+export const createTask = async (data) => {
+  const uid = await currentUserId()
+  return supabase.from('gp_tasks').insert({ ...data, created_by: uid }).select().single()
+}
+
+export const updateTask = async (id, data) =>
+  supabase.from('gp_tasks').update(data).eq('id', id).select().single()
+
+export const deleteTask = async (id) =>
+  supabase.from('gp_tasks').delete().eq('id', id)
+
+export const getTaskLabels = async () => {
+  const uid = await currentUserId()
+  if (!uid) return { data: [], error: new Error('Not authenticated') }
+  return withOffline(`gp_labels:${uid}`, () =>
+    supabase.from('gp_labels').select('*').eq('created_by', uid).order('name'))
+}
+
+export const createTaskLabel = async (data) => {
+  const uid = await currentUserId()
+  return supabase.from('gp_labels')
+    .upsert({ ...data, created_by: uid }, { onConflict: 'created_by,name' })
+    .select().single()
+}
+
+export const deleteTaskLabel = async (id) =>
+  supabase.from('gp_labels').delete().eq('id', id)
+
 // ─── Turf blocks — localStorage-backed (no DDL required) ─────────────────────
 // Stored as: localStorage['turf_blocks_{listId}'] = JSON array of block objects
 function _turfKey(listId) { return `turf_blocks_${listId}` }
