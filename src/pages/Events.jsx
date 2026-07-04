@@ -30,16 +30,17 @@ export function officeToDistrict(office) {
   return null
 }
 
+const PATTERN = `url("data:image/svg+xml,%3Csvg width='44' height='44' viewBox='0 0 44 44' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='0.07'%3E%3Ccircle cx='6' cy='6' r='2.2'/%3E%3Ccircle cx='28' cy='18' r='1.6'/%3E%3Ccircle cx='14' cy='32' r='1.9'/%3E%3Ccircle cx='38' cy='38' r='2.4'/%3E%3C/g%3E%3C/svg%3E")`
 const CATEGORY_META = {
-  fair:     { label: 'County fair',    color: '#B45309', emoji: '🎡' },
-  market:   { label: 'Farmers market', color: '#15803D', emoji: '🥕' },
-  festival: { label: 'Festival',       color: '#B45309', emoji: '🎪' },
-  parade:   { label: 'Parade',         color: '#B91C1C', emoji: '🎆' },
-  civic:    { label: 'Civic',          color: '#0369A1', emoji: '🏛️' },
-  party:    { label: 'Party event',    color: '#7C3AED', emoji: '🗳️' },
-  labor:    { label: 'Labor',          color: '#1D4ED8', emoji: '⚒️' },
-  church:   { label: 'Church',         color: '#92400E', emoji: '⛪' },
-  other:    { label: 'Community',      color: '#64748B', emoji: '📍' },
+  fair:     { label: 'County fair',    color: '#B45309', emoji: '🎡', art: 'linear-gradient(135deg, #D97706 0%, #92400E 55%, #431407 100%)' },
+  market:   { label: 'Farmers market', color: '#15803D', emoji: '🥕', art: 'linear-gradient(135deg, #16A34A 0%, #14532D 60%, #052E16 100%)' },
+  festival: { label: 'Festival',       color: '#B45309', emoji: '🎪', art: 'linear-gradient(135deg, #F59E0B 0%, #B45309 45%, #7C2D12 100%)' },
+  parade:   { label: 'Parade',         color: '#B91C1C', emoji: '🎆', art: 'linear-gradient(135deg, #DC2626 0%, #7F1D1D 55%, #0A1628 100%)' },
+  civic:    { label: 'Civic',          color: '#0369A1', emoji: '🏛️', art: 'linear-gradient(135deg, #0284C7 0%, #075985 55%, #0A1628 100%)' },
+  party:    { label: 'Party event',    color: '#7C3AED', emoji: '🗳️', art: 'linear-gradient(135deg, #8B5CF6 0%, #5B21B6 55%, #2E1065 100%)' },
+  labor:    { label: 'Labor',          color: '#1D4ED8', emoji: '⚒️', art: 'linear-gradient(135deg, #2563EB 0%, #1E40AF 55%, #172554 100%)' },
+  church:   { label: 'Church',         color: '#92400E', emoji: '⛪', art: 'linear-gradient(135deg, #B45309 0%, #713F12 55%, #292018 100%)' },
+  other:    { label: 'Community',      color: '#64748B', emoji: '📍', art: 'linear-gradient(135deg, #64748B 0%, #334155 55%, #0F172A 100%)' },
 }
 const LEAN_PILL = {
   confirmed_conservative: { text: 'Confirmed conservative', bg: '#B91C1C', fg: '#fff' },
@@ -338,8 +339,8 @@ export default function Events() {
               <div key={`${ev.name}-${i}`} className="bg-white rounded-2xl overflow-hidden border-2 border-transparent hover:border-brand-red transition-all shadow-sm hover:shadow-lg hover:-translate-y-0.5">
                 <div className="h-28 relative flex items-center justify-center" style={ev.image
                   ? { backgroundImage: `linear-gradient(rgba(10,22,40,0.08), rgba(10,22,40,0.35)), url(${ev.image})`, backgroundSize: 'cover', backgroundPosition: 'center' }
-                  : { background: `linear-gradient(135deg, ${cat.color}cc, #0A1628e6)` }}>
-                  {!ev.image && <span style={{ fontSize: 34 }}>{cat.emoji}</span>}
+                  : { backgroundImage: `${PATTERN}, ${cat.art}` }}>
+                  {!ev.image && <span style={{ fontSize: 38, filter: 'drop-shadow(0 3px 6px rgba(0,0,0,0.35))' }}>{cat.emoji}</span>}
                   <span className="absolute top-2.5 left-2.5 text-[10px] font-extrabold uppercase tracking-wide text-white px-2.5 py-1 rounded-full" style={{ background: cat.color }}>{cat.label}</span>
                   <div className="absolute top-2.5 right-2.5 bg-white rounded-lg px-2.5 py-1.5 text-center shadow-lg">
                     <div className="text-base font-black text-brand-red leading-none">{day.getDate()}</div>
@@ -352,6 +353,11 @@ export default function Events() {
                     {fmtDate(ev)}{ev.time ? ` · ${ev.time}` : ''} · {[ev.venue, ev.address, ev.city].filter(Boolean).join(', ')}
                   </p>
                   <p className="text-[13px] text-gray-600 font-medium leading-relaxed mt-2">{ev.description}</p>
+                  {ev.source_note && (
+                    <p className="text-[11px] text-gray-400 font-bold mt-1.5">
+                      {ev.source === 'x' ? '𝕏 ' : ev.source === 'news' ? '📰 ' : ''}via {ev.source_note}
+                    </p>
+                  )}
 
                   {/* lean strip */}
                   <div className="mt-3">

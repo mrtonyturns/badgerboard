@@ -85,6 +85,57 @@ export const handler = async (event) => {
       }
     } catch (e) { console.warn('[district-events] Perplexity failed:', e.message) }
   }
+  // ── Supplementary sources: X (Twitter) + local news outlets ─────────────────
+  const placeList = (area_description || district_name).split('(')[0].split(',').map(x => x.trim()).filter(Boolean).slice(0, 4)
+
+  let xPosts = null
+  if (process.env.X_BEARER_TOKEN && placeList.length) {
+    try {
+      const ctrlX = new AbortController()
+      setTimeout(() => ctrlX.abort(), 12000)
+      const q = `(${placeList.map(pl => `"${pl}"`).join(' OR ')}) (event OR festival OR parade OR fair OR "farmers market" OR concert OR fundraiser OR "town hall" OR happening) -is:retweet lang:en`
+      const xr = await fetch(`https://api.x.com/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=25&tweet.fields=created_at,author_id&expansions=author_id&user.fields=username,name`, {
+        signal: ctrlX.signal,
+        headers: { Authorization: `Bearer ${process.env.X_BEARER_TOKEN}` },
+      })
+      if (xr.ok) {
+        const xd = await xr.json()
+        const users = Object.fromEntries((xd.includes?.users || []).map(u => [u.id, u]))
+        const rows = (xd.data || []).map(t => {
+          const u = users[t.author_id] || {}
+          return `@${u.username || 'unknown'} (${u.name || ''}) on ${String(t.created_at).slice(0, 10)}: ${t.text.replace(/\s+/g, ' ').slice(0, 260)}`
+        })
+        if (rows.length) xPosts = rows.join('\n')
+      } else {
+        console.warn('[district-events] X search HTTP', xr.status)
+      }
+    } catch (e) { console.warn('[district-events] X search skipped:', e.message) }
+  }
+
+  let newsResearch = null
+  if (PERPLEXITY_API_KEY) {
+    try {
+      const ctrlN = new AbortController()
+      setTimeout(() => ctrlN.abort(), 21000)
+      const nr = await fetch('https://api.perplexity.ai/chat/completions', {
+        method: 'POST', signal: ctrlN.signal,
+        headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'sonar',
+          messages: [
+            { role: 'system', content: 'You research LOCAL NEWS coverage of upcoming community events in Wisconsin. Prefer local TV stations, local newspapers, and city/chamber announcement pages. Name the outlet for every item.' },
+            { role: 'user', content: `Check local news outlets and their community/event calendars covering ${placeList.join(', ')}, Wisconsin (local TV like WSAW/WAOW, local papers like the Wausau Pilot & Review or city weeklies, chamber and city hall announcements). What upcoming public events in the next 60 days have they announced or covered? For each: event name, date, time, venue with street address, city, host, one-sentence description, the OUTLET that reported it, and the article/calendar URL if available.` }
+          ],
+          max_tokens: 1800,
+        }),
+      })
+      if (nr.ok) {
+        const nd = await nr.json()
+        newsResearch = nd.choices?.[0]?.message?.content || null
+      }
+    } catch (e) { console.warn('[district-events] news pass skipped:', e.message) }
+  }
+
   if (!research) {
     const fetched_at = new Date().toISOString()
     await sb('district_events', {
@@ -121,6 +172,8 @@ Schema — an array "events":
       "description": "One sentence describing the event and why a campaign would attend.",
       "category": "fair" | "market" | "festival" | "parade" | "civic" | "party" | "labor" | "church" | "other",
       "url": "https://..." or null,
+      "source": "web" | "news" | "x",
+      "source_note": "attribution, e.g. 'Wausau Pilot & Review' or '@WausauChamber on X'" or null,
       "lean": {
         "label": "confirmed_conservative" | "likely_conservative" | "nonpartisan" | "likely_liberal" | "confirmed_liberal",
         "certainty": 0-100,
@@ -138,8 +191,16 @@ Lean rules — be strict:
 Include EVERY event from the research that is public and has a usable date in the next ~60 days — do not drop events merely because a date is approximate (keep them, using the best-estimate date). Recurring weekly events get one entry starting at the next occurrence.
 PUBLIC-ONLY RULE: include only events open to the general public. EXCLUDE anything private, invite-only, members-only, or requiring approval to attend (private fundraisers with invitation lists, closed club meetings, school-family-only events). Free-and-open government meetings, fairs, markets, festivals, and ticketed-but-open events all count as public. Output ONLY the JSON object.
 
-RESEARCH:
-${research}`,
+Merge events found across ALL sources below and dedupe by name (prefer the entry with the most detail; if a web event is also covered by news or X, keep source="news"/"x" attribution in source_note but the fullest details). Events found ONLY on X must clearly be real public events with a date — skip vague chatter.
+
+WEB RESEARCH:
+${research}
+
+LOCAL NEWS RESEARCH:
+${newsResearch || '(none available)'}
+
+RECENT X (TWITTER) POSTS FROM THE AREA:
+${xPosts || '(none available)'}`,
       }],
     }),
   })
