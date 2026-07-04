@@ -282,14 +282,114 @@ const TOOL_CARDS = [
   },
 ]
 
-function ToolLauncher() {
+// Per-browser "has connected to the marketing account" marker. We can't read
+// DayFramer's cross-origin session cookie, so this tracks whether THIS browser
+// has completed the one-time connect step. Keyed by user so shared machines
+// don't cross-signal.
+const connectKey = (userId) => `bb_marketing_connected_${userId || 'anon'}`
+function isConnected(userId) {
+  try { return localStorage.getItem(connectKey(userId)) === '1' } catch { return false }
+}
+function markConnected(userId) {
+  try { localStorage.setItem(connectKey(userId), '1') } catch { /* ignore */ }
+}
+function clearConnected(userId) {
+  try { localStorage.removeItem(connectKey(userId)) } catch { /* ignore */ }
+}
+
+// ─── Connect step ─────────────────────────────────────────────────────────────
+// One-time: open DayFramer's own login so the browser establishes a first-party
+// session. After that, every tool opens already signed in. We can't set that
+// session from our page (cross-site cookie + CSRF), so the login happens on
+// DayFramer's page — but only once per browser.
+
+function ConnectCard({ onConnected }) {
+  const { session } = useAuth()
+  const [connecting, setConnecting] = useState(false)
+  const [error,      setError]      = useState(null)
+
+  const connect = useCallback(async () => {
+    setError(null)
+    setConnecting(true)
+    // Pre-open synchronously so the popup isn't blocked.
+    const tab = window.open('about:blank', '_blank', 'noopener,noreferrer')
+    try {
+      // Any tool URL lands them on DayFramer's login if not yet signed in.
+      const res = await fetch(`${SSO_API}?section=social`, {
+        headers: { Authorization: `Bearer ${session?.access_token}` },
+      })
+      const json = await res.json()
+      if (!res.ok || !json.url) throw new Error(json.error || 'Could not open the marketing account')
+      if (tab) tab.location.href = json.url
+      else window.location.href = json.url
+    } catch (err) {
+      if (tab) tab.close()
+      setError(err.message || 'Could not connect. Please try again.')
+      setConnecting(false)
+    }
+  }, [session?.access_token])
+
+  return (
+    <div className="max-w-xl mx-auto">
+      <div className="text-center mb-8">
+        <div className="w-14 h-14 bg-brand-red/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <Megaphone className="w-7 h-7 text-brand-red" />
+        </div>
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">Connect your marketing account</h1>
+        <p className="text-gray-500">
+          Sign in to your marketing workspace once. After that, your tools open
+          instantly — no need to sign in again on this device.
+        </p>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 mb-6">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="rounded-xl border border-gray-200 bg-white p-6">
+        <button
+          onClick={connect}
+          disabled={connecting}
+          className="w-full bg-brand-red hover:bg-red-700 text-white font-semibold py-3 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
+        >
+          {connecting
+            ? <><Loader2 className="w-4 h-4 animate-spin" /> Opening sign-in…</>
+            : <>Connect Marketing Account</>}
+        </button>
+
+        {connecting && (
+          <div className="mt-5 pt-5 border-t border-gray-100 text-center">
+            <p className="text-sm text-gray-600 mb-3">
+              Finish signing in on the tab that just opened, then click below.
+            </p>
+            <button
+              onClick={onConnected}
+              className="inline-flex items-center gap-1.5 text-sm font-semibold text-brand-red hover:text-red-700"
+            >
+              <Check className="w-4 h-4" /> I've signed in — continue
+            </button>
+          </div>
+        )}
+      </div>
+
+      <p className="text-xs text-gray-400 mt-4 text-center">
+        You only do this once per device.
+      </p>
+    </div>
+  )
+}
+
+function ToolLauncher({ onDisconnect }) {
   const { session } = useAuth()
   const [opening, setOpening] = useState(null)   // section key currently opening
   const [error,   setError]   = useState(null)
 
   // Open the tool in a new tab. We pre-open a blank tab synchronously (inside the
   // click) so the browser doesn't block the popup, then point it at the signed
-  // tool URL once the SSO endpoint returns. Falls back to closing the tab on error.
+  // tool URL once the endpoint returns. Falls back to closing the tab on error.
   const openTool = useCallback(async (section) => {
     setError(null)
     setOpening(section)
@@ -311,11 +411,19 @@ function ToolLauncher() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Marketing</h1>
-        <p className="text-sm text-gray-500 mt-0.5">
-          Campaigns, content planning, and QR codes — open a tool to get started.
-        </p>
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Marketing</h1>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Campaigns, content planning, and QR codes — open a tool to get started.
+          </p>
+        </div>
+        {/* Connected indicator + escape hatch if the session expired */}
+        <div className="flex items-center gap-2 flex-shrink-0 mt-1">
+          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green-700 bg-green-50 border border-green-200 px-2.5 py-1 rounded-full">
+            <Check className="w-3 h-3" /> Connected
+          </span>
+        </div>
       </div>
 
       {error && (
@@ -357,7 +465,10 @@ function ToolLauncher() {
       </div>
 
       <p className="text-xs text-gray-400 mt-6">
-        Tools open in a new tab and stay signed in for your session.
+        Tools open in a new tab and stay signed in.{' '}
+        <button onClick={onDisconnect} className="underline underline-offset-2 hover:text-gray-600">
+          Not signed in?
+        </button>
       </p>
     </div>
   )
@@ -374,6 +485,10 @@ export default function Marketing() {
   // even before the refreshed JWT propagates through context
   const [createdLocationId, setCreatedLocationId] = useState(null)
   const [activating, setActivating] = useState(searchParams.get('marketing') === 'success' && !hasAccess)
+  // Per-browser connect state: has this device completed the one-time DayFramer
+  // sign-in? (We can't read the cross-origin session cookie, so we track the
+  // connect step locally.)
+  const [connected, setConnected] = useState(() => isConnected(user?.id))
 
   // After Stripe redirect, the webhook may take a few seconds to write
   // marketing_tier to user_metadata — poll the session until it lands.
@@ -418,5 +533,18 @@ export default function Marketing() {
     return <WorkspaceSetup onCreated={setCreatedLocationId} />
   }
 
-  return <ToolLauncher />
+  // One-time connect step per device, then the tool launcher.
+  if (!connected) {
+    return (
+      <ConnectCard
+        onConnected={() => { markConnected(user?.id); setConnected(true) }}
+      />
+    )
+  }
+
+  return (
+    <ToolLauncher
+      onDisconnect={() => { clearConnected(user?.id); setConnected(false) }}
+    />
+  )
 }
