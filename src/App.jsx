@@ -62,7 +62,8 @@ import Candidates from './pages/Candidates'
 import CandidateDetail from './pages/CandidateDetail'
 import Prospecting from './pages/Prospecting'
 import VoterLists from './pages/VoterLists'
-import DoorKnocking from './pages/DoorKnocking'
+// Door Knocking parked — restore import + route to re-enable
+// import DoorKnocking from './pages/DoorKnocking'
 import Dossiers from './pages/Dossiers'
 import Settings from './pages/Settings'
 import Terms from './pages/Terms'
@@ -150,7 +151,7 @@ const AppRoutes = () => {
         <Route path="candidates/:id" element={<CandidateDetail />} />
         <Route path="prospecting" element={<Prospecting />} />
         <Route path="voter-lists" element={<VoterLists />} />
-        <Route path="door-knocking" element={<AdminRoute><DoorKnocking /></AdminRoute>} />
+        {/* <Route path="door-knocking" element={<AdminRoute><DoorKnocking /></AdminRoute>} /> */}
         <Route path="dossiers" element={<Dossiers />} />
         <Route path="profiler" element={<Dossiers />} />
         <Route path="compare" element={<Compare />} />

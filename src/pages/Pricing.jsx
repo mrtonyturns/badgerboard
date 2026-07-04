@@ -216,7 +216,6 @@ const C_FEATURES = [
       { label: 'Active candidate slots',      scout: '0',         c_monitor: '0',    c_active: '1',    c_campaign: '3'    },
       { label: 'Game Plan',                   scout: '1 only',    c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Compare tool',                scout: false,       c_monitor: false,  c_active: true,   c_campaign: true   },
-      { label: 'Door Knocking Beta',          scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'CSV bulk import',             scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Social media links',          scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Elections tracking',          scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
@@ -248,7 +247,6 @@ const A_FEATURES = [
       { label: 'Compare tool',                a_monitor: false,          a_active: true,             a_campaign: true           },
       { label: 'Prospecting lists',           a_monitor: true,           a_active: true,             a_campaign: true           },
       { label: 'CSV bulk import',             a_monitor: true,           a_active: true,             a_campaign: true           },
-      { label: 'Door Knocking Beta',          a_monitor: true,           a_active: true,             a_campaign: true           },
       { label: 'Elections tracking',          a_monitor: true,           a_active: true,             a_campaign: true           },
     ],
   },
@@ -302,7 +300,6 @@ const FAQS = [
 const C_CARD_FEATURES = {
   scout: [
     '1 lite profile per month',
-    'Door Knocking Beta',
     'Elections tracking',
     'Wisconsin district map',
   ],
@@ -310,7 +307,6 @@ const C_CARD_FEATURES = {
     '1 full AI profile per month',
     'CSV import & social links',
     'A la carte credit packs',
-    'Door Knocking Beta',
   ],
   c_active: [
     '2 profiles per month',

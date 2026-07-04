@@ -133,7 +133,8 @@ const navItems = [
   { to: '/profiler',    icon: FileText,        label: 'Profiler'      },
   { to: '/compare',     icon: Scale,           label: 'Compare'       },
   { to: '/events',      icon: CalendarDays,    label: 'Events',        badge: 'New' },
-  { to: '/door-knocking', icon: DoorOpen,      label: 'Door Knocking', badge: 'Beta', adminOnly: true },
+  // Door Knocking hidden from UI (feature parked — restore this line to re-enable)
+  // { to: '/door-knocking', icon: DoorOpen,      label: 'Door Knocking', badge: 'Beta', adminOnly: true },
 ]
 
 // ─── NavItem ─────────────────────────────────────────────────────────────────

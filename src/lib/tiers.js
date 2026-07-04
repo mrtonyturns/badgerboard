@@ -42,7 +42,6 @@ export const CANDIDATE_PLAN_CONFIG = {
     unlocks: [],
     nextUnlocks: [
       'Full AI profile generation',
-      'Door Knocking Beta',
       '1 user seat',
     ],
   },
@@ -76,7 +75,6 @@ export const CANDIDATE_PLAN_CONFIG = {
     },
     unlocks: [
       'Full AI profile generation',
-      'Door Knocking Beta',
       'CSV import',
       'Social media links',
     ],
