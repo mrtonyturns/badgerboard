@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { Building2, Search, Plus, ChevronDown, ChevronUp, ChevronsUpDown,
          MapPin, Briefcase, Scale, Map, LayoutList, X, Users, ChevronRight } from 'lucide-react'
 import { getOffices, createOffice, getCandidates, getOfficeHistory } from '../lib/supabase'
+import { useAuth } from '../contexts/AuthContext'
+import { ADMIN_EMAILS } from '../lib/tiers'
 import LeafletMapView from '../components/LeafletMapView'
 import MapErrorBoundary from '../components/MapErrorBoundary'
 import DistrictDashboard, { districtKeyFor } from '../components/DistrictDashboard'
@@ -383,6 +385,8 @@ export default function Offices() {
   const [offices, setOffices]     = useState([])
   const [allOfficesUnfiltered, setAllOfficesUnfiltered] = useState([])
   const [loading, setLoading]     = useState(true)
+  const { user } = useAuth()
+  const isAdmin = !!(user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase()))
   const [allCandidates, setAllCandidates] = useState([])
   const [search, setSearch]       = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -545,9 +549,11 @@ export default function Offices() {
               className={`p-1.5 rounded transition-colors ${viewMode==='map' ? 'bg-white text-brand-red shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
               title="Map view"><Map className="w-4 h-4" /></button>
           </div>
-          <button onClick={() => setShowModal(true)} className="btn-primary flex items-center gap-2 whitespace-nowrap">
-            <Plus className="w-4 h-4" /> Add Office
-          </button>
+          {isAdmin && (
+            <button onClick={() => setShowModal(true)} className="btn-primary flex items-center gap-2 whitespace-nowrap">
+              <Plus className="w-4 h-4" /> Add Office
+            </button>
+          )}
         </div>
       </div>
 
@@ -749,7 +755,7 @@ export default function Offices() {
       )}
 
       {/* ── Add Office Modal ── */}
-      {showModal && (
+      {isAdmin && showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-black/50" onClick={() => setShowModal(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
