@@ -5,7 +5,27 @@
 // Runs as a Netlify BACKGROUND function (-background suffix → 15 min budget):
 // the client gets a 202 immediately and polls the district_events cache row.
 
+import COUNTY_SOURCES from './_county-sources.json'
+
 const CACHE_HOURS = 24
+
+/** Build a per-county source brief for the research prompts. */
+function countySourceBrief(counties = []) {
+  const parts = []
+  for (const c of counties.slice(0, 5)) {
+    const src = COUNTY_SOURCES[c]
+    if (!src) continue
+    const lines = []
+    if (src.newspapers?.length)      lines.push(`newspapers: ${src.newspapers.join('; ')}`)
+    if (src.broadcast?.length)       lines.push(`TV/radio: ${src.broadcast.join('; ')}`)
+    if (src.chambers_tourism?.length) lines.push(`chambers/tourism: ${src.chambers_tourism.join('; ')}`)
+    if (src.gov_calendars?.length)   lines.push(`government calendars: ${src.gov_calendars.join('; ')}`)
+    if (src.community?.length)       lines.push(`community orgs/pages: ${src.community.join('; ')}`)
+    if (src.prompt_hint)             lines.push(`tip: ${src.prompt_hint}`)
+    parts.push(`${c} County —\n  ${lines.join('\n  ')}`)
+  }
+  return parts.join('\n')
+}
 
 export const handler = async (event) => {
   const headers = {
@@ -35,7 +55,8 @@ export const handler = async (event) => {
   try { body = JSON.parse(event.body || '{}') } catch {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
-  const { district_key, district_name, area_description, district_lean, force } = body
+  const { district_key, district_name, area_description, district_lean, counties, force } = body
+  const sourceBrief = countySourceBrief(Array.isArray(counties) ? counties : [])
   if (!district_key || !district_name) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'district_key, district_name required' }) }
   }
@@ -74,7 +95,7 @@ export const handler = async (event) => {
           model: 'sonar-pro',
           messages: [
             { role: 'system', content: 'You are a Wisconsin community events researcher helping a political campaign find public events to attend. Be specific about dates, times, venues, and organizers. Include well-known annual and recurring events (county fairs, farmers markets, festivals, parades) that fall in the window based on their usual schedule even if the current-year page is sparse — note when a date is approximate. Never invent one-off events.' },
-            { role: 'user', content: `Today is ${today}. Search for upcoming public events happening in the next 60 days in and around these Wisconsin communities: ${area_description || district_name}. Search for things like "${(area_description || '').split(',')[0] || 'Wisconsin'} events calendar 2026", county fair schedules, farmers markets, summer festivals, parades, chamber of commerce calendars, county Republican and Democratic party event pages, and union events for this area. List every event you find (aim for 10-16), including recurring weekly ones (farmers markets) and annual ones whose usual dates fall in the window — mark approximate dates. ONLY include events open to the general public with no invitation, membership, or private registration required — skip private parties, members-only club events, and invite-only gatherings. For each: name, date(s), start time, venue with its STREET ADDRESS and city, organizer/host, a one-sentence description, and the event website URL if known. These communities are in ${district_name}, Wisconsin.` }
+            { role: 'user', content: `Today is ${today}. Search for upcoming public events happening in the next 60 days in and around these Wisconsin communities: ${area_description || district_name}. Search for things like "${(area_description || '').split(',')[0] || 'Wisconsin'} events calendar 2026", county fair schedules, farmers markets, summer festivals, parades, chamber of commerce calendars, county Republican and Democratic party event pages, and union events for this area. List every event you find (aim for 10-16), including recurring weekly ones (farmers markets) and annual ones whose usual dates fall in the window — mark approximate dates. ONLY include events open to the general public with no invitation, membership, or private registration required — skip private parties, members-only club events, and invite-only gatherings. For each: name, date(s), start time, venue with its STREET ADDRESS and city, organizer/host, a one-sentence description, and the event website URL if known. These communities are in ${district_name}, Wisconsin.${sourceBrief ? ` Check these county-specific sources known to publish local events:\n${sourceBrief}` : ''}` }
           ],
           max_tokens: 2500,
         }),
@@ -124,7 +145,7 @@ export const handler = async (event) => {
           model: 'sonar',
           messages: [
             { role: 'system', content: 'You research LOCAL NEWS coverage of upcoming community events in Wisconsin. Prefer local TV stations, local newspapers, and city/chamber announcement pages. Name the outlet for every item.' },
-            { role: 'user', content: `Check local news outlets and their community/event calendars covering ${placeList.join(', ')}, Wisconsin (local TV like WSAW/WAOW, local papers like the Wausau Pilot & Review or city weeklies, chamber and city hall announcements). What upcoming public events in the next 60 days have they announced or covered? For each: event name, date, time, venue with street address, city, host, one-sentence description, the OUTLET that reported it, and the article/calendar URL if available.` }
+            { role: 'user', content: `Check local news outlets and their community/event calendars covering ${placeList.join(', ')}, Wisconsin.${sourceBrief ? ` Prioritize these county-specific sources:\n${sourceBrief}` : ' Check local TV, local papers and city weeklies, chamber and city hall announcements.'}\nWhat upcoming public events in the next 60 days have they announced or covered? For each: event name, date, time, venue with street address, city, host, one-sentence description, the OUTLET that reported it, and the article/calendar URL if available.` }
           ],
           max_tokens: 1800,
         }),
@@ -137,12 +158,17 @@ export const handler = async (event) => {
   }
 
   if (!research) {
-    const fetched_at = new Date().toISOString()
-    await sb('district_events', {
-      method: 'POST',
-      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify({ district_key, name: district_name, events: [], fetched_at, updated_at: fetched_at }),
-    })
+    // Research source unavailable (e.g. Perplexity credits exhausted). Never
+    // overwrite an existing good cache — only mark empty if nothing was cached.
+    const existing = await (await sb(`district_events?district_key=eq.${encodeURIComponent(district_key)}&select=events`)).json()
+    if (!existing?.[0]?.events?.length) {
+      const fetched_at = new Date().toISOString()
+      await sb('district_events', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify({ district_key, name: district_name, events: [], fetched_at, updated_at: fetched_at }),
+      })
+    }
     return { statusCode: 502, headers, body: JSON.stringify({ error: 'Event research unavailable' }) }
   }
 

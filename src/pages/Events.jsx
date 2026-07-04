@@ -126,6 +126,7 @@ export default function Events() {
         body: JSON.stringify({
           district_key: district.key,
           district_name: district.name,
+          counties: places?.[district.key]?.counties || (selected?.office?.county ? [selected.office.county] : []),
           force,
           area_description: (() => {
             const pl = places?.[district.key]
