@@ -1313,6 +1313,36 @@ function SectionPill({ section, active, onClick }) {
 }
 
 // ─── Dossier Viewer ───────────────────────────────────────────────────────────
+// ── Quiet inline generation progress (time-estimated stages) ─────────────────
+function GenerationStrip({ startedAt, candidateName }) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const iv = setInterval(() => setNow(Date.now()), 2000)
+    return () => clearInterval(iv)
+  }, [])
+  const t0 = startedAt ? new Date(startedAt).getTime() : now
+  const sec = Math.max(0, (now - t0) / 1000)
+  const pct = Math.min(96, Math.round((sec / 210) * 100))
+  const stage = sec < 25 ? 'Scanning Wisconsin news & public records…'
+    : sec < 55 ? 'Reading campaign finance & election data…'
+    : sec < 170 ? `Writing sections · ~${Math.min(14, Math.max(1, Math.floor(sec / 13)))} of 14`
+    : 'Final review & source check…'
+  const left = Math.max(0, Math.round((210 - sec) / 10) * 10)
+  return (
+    <div className="mt-3 pt-3 border-t border-gray-100">
+      <p className="text-[13px] font-bold text-gray-900">{candidateName || 'Profile'} <span className="text-gray-400 font-medium">— generating now</span></p>
+      <p className="text-xs text-gray-500 font-medium mt-0.5">{stage}</p>
+      <div className="h-1.5 rounded-full bg-gray-100 mt-2.5 overflow-hidden">
+        <div className="h-full rounded-full bg-brand-red transition-all duration-1000" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="flex justify-between text-[11px] text-gray-400 font-semibold mt-1.5">
+        <span>estimated progress</span>
+        <span>{left > 0 ? `~${left}s left` : 'finishing up…'}</span>
+      </div>
+    </div>
+  )
+}
+
 function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan }) {
   const sections = parseSections(dossier.content)
   const [activeSection, setActiveSection]   = useState(sections[0]?.id)
@@ -1367,28 +1397,40 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
 
   const flaggedCount = parseFlaggedClaims(dossier.content).length
 
+  // Verified-claims metric from the report's own confidence badges
+  const badgeCounts = { strong: 0, weak: 0 }
+  for (const m of dossier.content.matchAll(/\*\*\[(KNOWN|CONFIRMED|LIKELY|VERIFY|RESEARCH REQUIRED)\]\*\*/g)) {
+    if (m[1] === 'KNOWN' || m[1] === 'CONFIRMED') badgeCounts.strong++
+    else badgeCounts.weak++
+  }
+  const totalClaims = badgeCounts.strong + badgeCounts.weak
+  const verifiedPct = totalClaims >= 5 ? Math.round((badgeCounts.strong / totalClaims) * 100) : null
+
   return (
-    <div className="card flex flex-col" style={{ height: '80vh' }}>
-      {/* Header */}
-      <div className="flex items-start justify-between pb-3 border-b border-gray-100 flex-shrink-0">
+    <div className="card !p-0 flex flex-col overflow-hidden" style={{ height: '80vh' }}>
+      {/* Document header */}
+      <div className="relative flex-shrink-0 px-6 pt-5 pb-5 text-white" style={{ background: 'linear-gradient(135deg, #0A1628 0%, #12203A 65%, #1A0A0A 100%)' }}>
+        <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <Sparkles className="w-4 h-4 text-brand-red flex-shrink-0" />
-            <span className="text-xs font-semibold text-brand-red uppercase tracking-wider">AI-Generated Intelligence Report</span>
-          </div>
-          <h2 className="text-lg font-bold text-gray-900 truncate">{dossier.title}</h2>
-          <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-            {dossier.candidate?.office?.name && <span className="text-xs text-gray-500">{dossier.candidate.office.name}</span>}
-            {dossier.candidate?.party && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium">{dossier.candidate.party}</span>}
-            <span className="text-xs text-gray-400">
-              {dossier.generated_at ? format(new Date(dossier.generated_at), 'MMM d, yyyy h:mm a') : ''}
+          <div className="text-[10px] font-extrabold uppercase" style={{ letterSpacing: '0.14em', color: 'rgba(255,255,255,0.45)' }}>Political intelligence profile</div>
+          <h2 className="text-2xl font-extrabold truncate mt-1" style={{ letterSpacing: '-0.02em' }}>{dossier.candidate?.name || dossier.title}</h2>
+          <div className="flex items-center gap-2 mt-2.5 flex-wrap">
+            {dossier.candidate?.party && <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full" style={{ background: dossier.candidate.party === 'Democrat' ? '#1D4ED8' : dossier.candidate.party === 'Republican' ? '#B91C1C' : 'rgba(255,255,255,0.2)' }}>{dossier.candidate.party}</span>}
+            {dossier.candidate?.office?.name && <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full border" style={{ borderColor: 'rgba(255,255,255,0.25)', color: 'rgba(255,255,255,0.85)' }}>{dossier.candidate.office.name}</span>}
+            <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full border" style={{ borderColor: 'rgba(255,255,255,0.25)', color: 'rgba(255,255,255,0.85)' }}>
+              Generated {dossier.generated_at ? format(new Date(dossier.generated_at), 'MMM d, yyyy') : '—'} · {sections.length} sections
             </span>
+            {verifiedPct !== null && (
+              <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full" style={{ background: verifiedPct >= 70 ? '#15803D' : verifiedPct >= 40 ? '#B45309' : '#B91C1C' }} title={`${badgeCounts.strong} of ${totalClaims} tagged claims are KNOWN/CONFIRMED`}>
+                {verifiedPct}% verified claims
+              </span>
+            )}
           </div>
         </div>
-        <div className="flex items-center gap-1.5 flex-shrink-0 ml-3 flex-wrap justify-end">
+        <div className="flex items-center gap-1.5 flex-shrink-0 ml-3 flex-wrap justify-end" style={{ ['--tw-ring-color']: 'transparent' }}>
           <button
             onClick={() => setShowAnnotations(v => !v)}
-            className={`text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg border font-medium transition-all ${showAnnotations ? 'bg-yellow-500 text-white border-yellow-500' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+            className={`text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold transition-all ${showAnnotations ? 'bg-yellow-500 text-white' : 'bg-white/10 text-white hover:bg-white/20'}`}
             title="Research annotations"
           >
             <MessageSquare className="w-3.5 h-3.5" />
@@ -1396,7 +1438,7 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
           </button>
           <button
             onClick={() => setShowReviewer(v => !v)}
-            className={`text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg border font-medium transition-all ${showReviewer ? 'bg-brand-navy text-white border-brand-navy' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+            className={`text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold transition-all ${showReviewer ? 'bg-white text-brand-navy' : 'bg-white/10 text-white hover:bg-white/20'}`}
             title="Review flagged claims"
           >
             <Scale className="w-3.5 h-3.5" />
@@ -1405,31 +1447,33 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
           {isAgency && (
             <button
               onClick={() => setShowShareModal(true)}
-              className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg border font-medium transition-all border-purple-200 text-purple-700 hover:bg-purple-50"
+              className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold transition-all text-white"
+              style={{ background: '#B91C1C' }}
               title="Share temporary profile link (Agency)"
             >
               <Link2 className="w-3.5 h-3.5" />
               Share
             </button>
           )}
-          <button onClick={handleCopy} className="btn-secondary text-xs flex items-center gap-1 py-1.5 px-2.5">
+          <button onClick={handleCopy} className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold bg-white/10 text-white hover:bg-white/20 transition-all">
             {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
             {copied ? 'Copied' : 'Copy'}
           </button>
-          <button onClick={handleExportPdf} className="btn-secondary text-xs flex items-center gap-1 py-1.5 px-2.5">
+          <button onClick={handleExportPdf} className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold bg-white/10 text-white hover:bg-white/20 transition-all">
             <Download className="w-3.5 h-3.5" />
             Export PDF
           </button>
           {dossier.candidate_id && (
-            <Link to={`/candidates/${dossier.candidate_id}`} className="btn-secondary text-xs py-1.5 px-2.5">
-              Profile →
+            <Link to={`/candidates/${dossier.candidate_id}`} className="text-xs py-1.5 px-2.5 rounded-lg font-bold bg-white/10 text-white hover:bg-white/20 transition-all">
+              Candidate →
             </Link>
           )}
+        </div>
         </div>
       </div>
 
       {/* Disclaimer banner */}
-      <div className="py-2 flex-shrink-0">
+      <div className="py-2 px-4 flex-shrink-0">
         <DossierDisclaimerBanner />
       </div>
 
@@ -1440,9 +1484,9 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
         regenerating={regenerating}
       />
 
-      {/* Section nav pills */}
+      {/* Section nav pills — mobile only (desktop gets the sticky TOC rail) */}
       {sections.length > 1 && (
-        <div className="flex gap-2 overflow-x-auto py-2 border-b border-gray-100 flex-shrink-0 scrollbar-hide">
+        <div className="flex lg:hidden gap-2 overflow-x-auto py-2 px-4 border-b border-gray-100 flex-shrink-0 scrollbar-hide">
           {sections.map(s => (
             <SectionPill key={s.id} section={s} active={activeSection === s.id} onClick={scrollToSection} />
           ))}
@@ -1451,11 +1495,29 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
 
       {/* Main content + optional claim reviewer side panel */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
+        {/* Numbered scroll-spy table of contents */}
+        {sections.length > 1 && (
+          <nav className="hidden lg:block w-[188px] flex-shrink-0 overflow-y-auto border-r border-gray-100 py-4 pl-3">
+            <div className="text-[10px] font-extrabold uppercase text-gray-300 pl-3 mb-2" style={{ letterSpacing: '0.1em' }}>Sections</div>
+            {sections.map((sec, i) => {
+              const on = activeSection === sec.id
+              const label = sec.label.replace(/^\d+\s*/, '')
+              return (
+                <button key={sec.id} onClick={() => scrollToSection(sec.id)}
+                  className={`w-full flex items-center gap-2 text-left text-xs font-bold py-1.5 pl-3 pr-2 transition-colors ${on ? 'text-brand-red' : 'text-gray-400 hover:text-gray-600'}`}
+                  style={{ borderLeft: on ? '3px solid #8B0000' : '3px solid transparent', background: on ? 'linear-gradient(to right, #FEF6F6, transparent)' : 'transparent' }}>
+                  <span className={`w-[18px] h-[18px] rounded-md text-[9.5px] font-extrabold inline-flex items-center justify-center flex-shrink-0 ${on ? 'bg-brand-red text-white' : 'bg-gray-100 text-gray-400'}`}>{sec.index || i}</span>
+                  <span className="truncate">{label}</span>
+                </button>
+              )
+            })}
+          </nav>
+        )}
         {/* Scrollable dossier content */}
         <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className={`flex-1 overflow-y-auto pt-3 space-y-4 ${showReviewer ? 'pr-2' : ''}`}
+          className={`flex-1 overflow-y-auto pt-3 px-4 space-y-4 ${showReviewer ? 'pr-2' : ''}`}
         >
           {sections.map((s) => {
             const isGatedSection = s.id === 'section-6' || s.id === 'section-13'
@@ -1534,6 +1596,18 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
             </button>
             <p className="text-xs text-gray-400">Creates a fresh AI analysis — current profile will be replaced.</p>
           </div>
+
+          {/* Compare hook */}
+          {dossier.candidate_id && (
+            <div className="flex items-center justify-between gap-3 rounded-2xl px-5 py-4 mb-4" style={{ background: '#0A1628' }}>
+              <span className="text-[13px] font-bold" style={{ color: 'rgba(255,255,255,0.85)' }}>
+                See how {(dossier.candidate?.name || 'this candidate').split(' ')[0]} stacks up against an opponent
+              </span>
+              <Link to="/compare" className="text-xs font-extrabold px-4 py-2.5 rounded-lg text-white flex-shrink-0" style={{ background: '#B91C1C' }}>
+                Compare candidates →
+              </Link>
+            </div>
+          )}
         </div>
 
         {/* Claim Reviewer side panel — hidden on phones, visible on tablet+ */}
@@ -2165,6 +2239,27 @@ export default function Dossiers() {
                 <p className="text-xs text-gray-400 mt-1">
                   Include city, employer, profession, or any context that disambiguates this person. Critical for pre-announcement candidates.
                 </p>
+                {(() => {
+                  const cand = candidates.find(c => c.id === candidateId)
+                  if (!cand) return null
+                  const chips = []
+                  if (cand.office?.name && !researchContext.includes(cand.office.name)) chips.push({ label: 'their district', text: `Running for ${cand.office.name}.` })
+                  if (cand.office?.county && !researchContext.includes(cand.office.county)) chips.push({ label: 'their county', text: `Based in ${cand.office.county} County, Wisconsin.` })
+                  const opp = candidates.find(c => c.id !== cand.id && c.office_id && c.office_id === cand.office_id)
+                  if (opp && !researchContext.includes(opp.name)) chips.push({ label: 'their opponent', text: `Opponent in the race: ${opp.name}.` })
+                  if (!chips.length) return null
+                  return (
+                    <div className="flex gap-1.5 flex-wrap mt-2">
+                      {chips.map(ch => (
+                        <button key={ch.label} type="button"
+                          onClick={() => setResearchContext(prev => (prev ? prev.replace(/\s+$/, '') + ' ' : '') + ch.text)}
+                          className="text-[11px] font-semibold px-2.5 py-1 rounded-full border border-gray-200 text-gray-500 hover:border-brand-red hover:text-brand-red transition-colors">
+                          ＋ {ch.label}
+                        </button>
+                      ))}
+                    </div>
+                  )
+                })()}
               </div>
 
               {/* ── Upgrade gate: at monthly limit ── */}
@@ -2194,7 +2289,8 @@ export default function Dossiers() {
                       <><Sparkles className="w-4 h-4" /> Generate AI Profile</>
                     )}
                   </button>
-                  <p className="text-xs text-gray-400 text-center">14-section report · 2–4 minutes · Claude AI + Perplexity</p>
+                  <p className="text-xs text-gray-400 text-center">14-section report · 2–4 minutes · Fable AI + live web research</p>
+                  {generating && <GenerationStrip startedAt={generationStartedAt} candidateName={candidates.find(c => c.id === pendingCandidateId)?.name || candidates.find(c => c.id === candidateId)?.name} />}
                 </>
               )}
             </div>
@@ -2395,29 +2491,40 @@ export default function Dossiers() {
                   {dossiers.length === 0 ? 'No profiles yet' : 'No results'}
                 </p>
               ) : (
-                (Array.isArray(filteredDossiers) ? filteredDossiers : []).map(d => (
-                  <div
-                    key={d.id}
-                    onClick={() => openDossier(d.id)}
-                    className={`group flex items-start justify-between p-2.5 rounded-lg cursor-pointer transition-colors ${
-                      selected?.id === d.id ? 'bg-brand-red/10 border border-brand-red/20' : 'hover:bg-gray-50'
-                    }`}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-xs font-semibold truncate ${selected?.id === d.id ? 'text-brand-red' : 'text-gray-800'}`}>
-                        {d.candidate?.name || 'Unknown'}
-                      </p>
-                      <p className="text-xs text-gray-400 truncate">{d.candidate?.office?.name || ''}</p>
-                      <p className="text-xs text-gray-300 mt-0.5">{d.generated_at ? format(new Date(d.generated_at), 'MMM d, yyyy') : '—'}</p>
-                    </div>
-                    <button
-                      onClick={e => { e.stopPropagation(); setConfirmDelete(d.id) }}
-                      className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-50 text-gray-300 hover:text-brand-red transition-all ml-2 flex-shrink-0"
+                (Array.isArray(filteredDossiers) ? filteredDossiers : []).map(d => {
+                  const nm = d.candidate?.name || 'Unknown'
+                  const initials = nm.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
+                  const avBg = d.candidate?.party === 'Republican' ? '#8B0000' : d.candidate?.party === 'Democrat' ? '#1D4ED8' : '#64748B'
+                  const days = d.generated_at ? Math.floor((Date.now() - new Date(d.generated_at).getTime()) / 86400000) : null
+                  const when = days === null ? '—' : days === 0 ? 'today' : days === 1 ? 'yesterday' : `${days}d ago`
+                  return (
+                    <div
+                      key={d.id}
+                      onClick={() => openDossier(d.id)}
+                      className={`group relative flex items-center gap-2.5 p-2.5 rounded-xl cursor-pointer transition-colors ${
+                        selected?.id === d.id ? 'bg-red-50' : 'hover:bg-gray-50'
+                      }`}
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ))
+                      {selected?.id === d.id && <span className="absolute left-0 top-2.5 bottom-2.5 w-[3px] rounded bg-brand-red" />}
+                      <span className="w-9 h-9 rounded-lg flex items-center justify-center text-white text-[11px] font-extrabold flex-shrink-0" style={{ background: avBg }}>{initials}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-xs font-bold truncate ${selected?.id === d.id ? 'text-brand-red' : 'text-gray-800'}`}>{nm}</p>
+                        <p className="text-[11px] text-gray-400 truncate">{d.candidate?.office?.name || ''}</p>
+                      </div>
+                      <span className={`text-[11px] font-semibold flex-shrink-0 group-hover:hidden ${days !== null && days >= 30 ? 'text-amber-600' : 'text-gray-300'}`}>
+                        {days !== null && days >= 30 ? `${days}d — update?` : when}
+                      </span>
+                      <div className="hidden group-hover:flex items-center gap-1 flex-shrink-0">
+                        <button onClick={e => { e.stopPropagation(); openDossier(d.id) }}
+                          className="text-[11px] font-bold px-2 py-1 rounded-md bg-gray-100 text-gray-600 hover:bg-gray-200">Open</button>
+                        <button onClick={e => { e.stopPropagation(); setConfirmDelete(d.id) }}
+                          className="p-1.5 rounded-md bg-gray-100 text-gray-400 hover:bg-red-50 hover:text-brand-red" title="Delete profile">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })
               )}
             </div>
           </div>
