@@ -9,6 +9,7 @@ import {
   Check, X, Settings as SettingsIcon, ExternalLink,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { eventImage } from '../lib/imageProxy'
 
 let _placesCache = null
 async function loadPlaces() {
@@ -368,7 +369,7 @@ export default function Events() {
             return (
               <div key={`${ev.name}-${i}`} className="bg-white rounded-2xl overflow-hidden border-2 border-transparent hover:border-brand-red transition-all shadow-sm hover:shadow-lg hover:-translate-y-0.5">
                 <div className="h-28 relative flex items-center justify-center" style={ev.image
-                  ? { backgroundImage: `linear-gradient(rgba(10,22,40,0.08), rgba(10,22,40,0.35)), url(${ev.image})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+                  ? { backgroundImage: `linear-gradient(rgba(10,22,40,0.08), rgba(10,22,40,0.35)), url(${eventImage(ev.image)})`, backgroundSize: 'cover', backgroundPosition: 'center' }
                   : { backgroundImage: `${PATTERN}, ${cat.art}` }}>
                   {!ev.image && <span style={{ fontSize: 38, filter: 'drop-shadow(0 3px 6px rgba(0,0,0,0.35))' }}>{cat.emoji}</span>}
                   <span className="absolute top-2.5 left-2.5 text-[10px] font-extrabold uppercase tracking-wide text-white px-2.5 py-1 rounded-full" style={{ background: cat.color }}>{cat.label}</span>

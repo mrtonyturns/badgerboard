@@ -27,6 +27,74 @@ function countySourceBrief(counties = []) {
   return parts.join('\n')
 }
 
+
+// ── HTML metadata extraction ──────────────────────────────────────────────────
+const EXPIRING_CDN = /(^|\.)fbcdn\.net$|(^|\.)fbsbx\.com$/i
+
+function absolutize(src, base) {
+  try {
+    const u = new URL(String(src), base)
+    if (!/^https?:$/.test(u.protocol)) return null
+    if (EXPIRING_CDN.test(u.hostname)) return null   // signed URLs that expire
+    return u.href
+  } catch { return null }
+}
+
+/** Pull image + event details from a page: JSON-LD schema.org/Event first,
+ *  then og:image / twitter:image / link rel=image_src. */
+function extractEventMeta(html, pageUrl) {
+  const out = {}
+
+  // 1. JSON-LD (authoritative when present)
+  for (const b of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const nodes = []
+      const walk = (n) => {
+        if (!n) return
+        if (Array.isArray(n)) return n.forEach(walk)
+        if (typeof n === 'object') { nodes.push(n); if (n['@graph']) walk(n['@graph']) }
+      }
+      walk(JSON.parse(b[1].trim()))
+      const ev = nodes.find(n => /(^|\W)Event/i.test(String(n['@type'] || '')))
+      if (!ev) continue
+      const rawImg = Array.isArray(ev.image) ? ev.image[0] : ev.image
+      const imgUrl = typeof rawImg === 'object' ? rawImg?.url : rawImg
+      if (imgUrl) out.image = absolutize(imgUrl, pageUrl)
+      if (ev.startDate) {
+        out.date_start = String(ev.startDate).slice(0, 10)
+        const t = String(ev.startDate).match(/T(\d{2}:\d{2})/)
+        if (t) out.time = t[1]
+      }
+      if (ev.endDate) out.date_end = String(ev.endDate).slice(0, 10)
+      const loc = Array.isArray(ev.location) ? ev.location[0] : ev.location
+      if (loc?.name) out.venue = String(loc.name)
+      const addr = loc?.address
+      if (typeof addr === 'string') out.address = addr
+      else if (addr?.streetAddress) {
+        out.address = [addr.streetAddress, addr.addressLocality].filter(Boolean).join(', ')
+      }
+      break
+    } catch { /* malformed JSON-LD block — try the next one */ }
+  }
+
+  // 2. Meta-tag fallbacks for the image — try each candidate until one
+  // survives absolutize() (which rejects non-http and expiring-CDN URLs)
+  if (!out.image) {
+    const candidates = [
+      html.match(/<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i),
+      html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image(?::secure_url)?["']/i),
+      html.match(/<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i),
+      html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i),
+    ]
+    for (const m of candidates) {
+      const abs = m?.[1] ? absolutize(m[1], pageUrl) : null
+      if (abs) { out.image = abs; break }
+    }
+  }
+  if (out.image === null) delete out.image
+  return out
+}
+
 export const handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -287,18 +355,30 @@ ${extra}` }],
     } catch (e) { console.warn('[district-events] supplemental pass skipped:', e.message) }
   }
 
-  // ── og:image enrichment (best-effort, tight budget) ────────────────────────
-  const withUrls = events.filter(e => e.url).slice(0, 8)
+  // ── Image + detail enrichment (JSON-LD Event > og:image > twitter:image) ───
+  // Event pages very often embed schema.org/Event JSON-LD with authoritative
+  // dates, venue, address, AND an image. Fall back to og/twitter meta tags.
+  // Images are later served through the Netlify Image CDN proxy, so any
+  // https URL works — but skip expiring CDNs (Facebook) that die in days.
+  const withUrls = events.filter(e => e.url).slice(0, 16)
   await Promise.all(withUrls.map(async (e) => {
     try {
       const ctrl = new AbortController()
-      setTimeout(() => ctrl.abort(), 3500)
-      const res = await fetch(e.url, { signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BadgerBoard/1.0)' } })
-      if (!res.ok) return
-      const html = (await res.text()).slice(0, 60000)
-      const m = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
-        || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)
-      if (m?.[1] && /^https?:\/\//.test(m[1])) e.image = m[1]
+      setTimeout(() => ctrl.abort(), 5000)
+      const res = await fetch(e.url, {
+        signal: ctrl.signal, redirect: 'follow',
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BadgerBoard/1.0; +https://badgerboardwi.com)' },
+      })
+      if (!res.ok || !/text\/html/i.test(res.headers.get('content-type') || '')) return
+      const html = (await res.text()).slice(0, 250000)
+      const meta = extractEventMeta(html, res.url || e.url)
+      // Fill details the research pass missed (never overwrite existing values)
+      if (meta.date_start && !e.date_start) e.date_start = meta.date_start
+      if (meta.date_end   && !e.date_end)   e.date_end   = meta.date_end
+      if (meta.time       && !e.time)       e.time       = meta.time
+      if (meta.venue      && !e.venue)      e.venue      = meta.venue
+      if (meta.address    && !e.address)    e.address    = meta.address
+      if (meta.image) e.image = meta.image
     } catch (_) { /* no image — card uses category visual */ }
   }))
 

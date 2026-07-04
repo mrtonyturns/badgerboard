@@ -31,6 +31,13 @@
 [functions]
   node_bundler = "esbuild"
 
+# Netlify Image CDN — proxies event thumbnails (og:image URLs scraped from
+# arbitrary local event sites) through /.netlify/images. Same-origin, so the
+# strict CSP img-src stays untouched; also caches, resizes, and defeats
+# hotlink/referrer blocking on the source sites.
+[images]
+  remote_images = ["https?://.*"]
+
 [functions."generate-dossier"]
   timeout = 60
 
