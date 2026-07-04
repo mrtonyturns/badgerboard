@@ -54,7 +54,7 @@ exports.handler = async (event) => {
   const caller = await authRes.json()
   const plan = ADMIN_EMAILS.includes(caller.email?.toLowerCase())
     ? 'agency'
-    : (caller?.user_metadata?.plan || 'scout')
+    : (caller?.app_metadata?.plan || 'scout')
   if (!CAMPAIGN_PLUS.includes(plan)) {
     return { statusCode: 403, headers, body: JSON.stringify({ error: 'Campaign plan or higher required.' }) }
   }

@@ -22,8 +22,20 @@ export const handler = async (event) => {
     'Content-Type': 'application/json',
   }
 
-  // Allow manual POST trigger (from admin tools) as well as Netlify scheduler
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers, body: '' }
+
+  // Netlify's scheduler invokes this without an HTTP method. Any real HTTP
+  // request (external POST) MUST carry the shared trigger secret — otherwise
+  // anyone could hit the URL and burn AI spend (up to MAX_REGEN_PER_RUN Opus
+  // regenerations per call).
+  const isHttp = Boolean(event.httpMethod)
+  if (isHttp) {
+    const secret = process.env.ADMIN_TRIGGER_SECRET
+    const provided = event.headers?.['x-admin-trigger'] || event.headers?.['X-Admin-Trigger']
+    if (!secret || provided !== secret) {
+      return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authorized' }) }
+    }
+  }
 
   console.log('[auto-regen] Starting active-monitoring dossier regeneration run')
 

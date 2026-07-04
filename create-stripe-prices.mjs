@@ -4,7 +4,12 @@
 
 import Stripe from 'stripe'
 
-const STRIPE_KEY = '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'
+// Never hardcode secrets. Run with:  STRIPE_SECRET_KEY=sk_live_... node create-stripe-prices.mjs
+const STRIPE_KEY = process.env.STRIPE_SECRET_KEY
+if (!STRIPE_KEY) {
+  console.error('Set STRIPE_SECRET_KEY in the environment before running this script.')
+  process.exit(1)
+}
 const stripe = new Stripe(STRIPE_KEY)
 
 const MONTHLY = {

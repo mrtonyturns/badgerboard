@@ -105,7 +105,7 @@ export const AuthProvider = ({ children }) => {
   // Poll for payment status resolution every 5 min while locked
   useEffect(() => {
     const isLocked = user && !ADMIN_EMAILS.includes(user.email?.toLowerCase())
-      && user.user_metadata?.payment_status === 'past_due'
+      && user.app_metadata?.payment_status === 'past_due'
 
     if (!isLocked) return
     const id = setInterval(refreshSession, 5 * 60 * 1000)
@@ -117,7 +117,7 @@ export const AuthProvider = ({ children }) => {
   const isPaymentLocked = Boolean(
     user &&
     !ADMIN_EMAILS.includes(user.email?.toLowerCase()) &&
-    user.user_metadata?.payment_status === 'past_due'
+    user.app_metadata?.payment_status === 'past_due'
   )
 
   // Downgrade lock: subscription was cancelled/expired (not a payment failure).
@@ -126,12 +126,12 @@ export const AuthProvider = ({ children }) => {
   const isDowngradeLocked = Boolean(
     user &&
     !ADMIN_EMAILS.includes(user.email?.toLowerCase()) &&
-    user.user_metadata?.payment_status === 'inactive' &&
-    user.user_metadata?.downgraded_at
+    user.app_metadata?.payment_status === 'inactive' &&
+    user.app_metadata?.downgraded_at
   )
 
   // Timestamp (ms) of when the subscription was cancelled — used for deletion countdown
-  const downgradedAt = isDowngradeLocked ? Number(user.user_metadata.downgraded_at) : null
+  const downgradedAt = isDowngradeLocked ? Number(user.app_metadata.downgraded_at) : null
 
   const signIn = async (email, password) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })

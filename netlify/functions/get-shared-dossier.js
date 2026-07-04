@@ -127,14 +127,14 @@ exports.handler = async (event) => {
       if (!dossier_id) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'dossier_id required' }) }
 
       // Verify ownership
-      const own = await supa('dossiers', 'GET', null, `?id=eq.${dossier_id}&generated_by=eq.${user.id}&select=id`)
+      const own = await supa('dossiers', 'GET', null, `?id=eq.${encodeURIComponent(dossier_id)}&generated_by=eq.${user.id}&select=id`)
       if (!own.ok || !Array.isArray(own.data) || own.data.length === 0) {
         return { statusCode: 403, headers: CORS, body: JSON.stringify({ error: 'Access denied' }) }
       }
 
       const shares = await supa(
         'dossier_shares', 'GET', null,
-        `?dossier_id=eq.${dossier_id}&created_by=eq.${user.id}&order=created_at.desc&select=id,token,expires_at,view_count,is_active,created_at`
+        `?dossier_id=eq.${encodeURIComponent(dossier_id)}&created_by=eq.${user.id}&order=created_at.desc&select=id,token,expires_at,view_count,is_active,created_at`
       )
       return {
         statusCode: 200,
@@ -149,7 +149,7 @@ exports.handler = async (event) => {
       if (!share_id) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'share_id required' }) }
 
       const res = await supa(
-        `dossier_shares?id=eq.${share_id}&created_by=eq.${user.id}`,
+        `dossier_shares?id=eq.${encodeURIComponent(share_id)}&created_by=eq.${user.id}`,
         'PATCH', { is_active: false }, '', 'return=minimal'
       )
       if (!res.ok) return { statusCode: 500, headers: CORS, body: JSON.stringify({ error: 'Failed to deactivate share' }) }

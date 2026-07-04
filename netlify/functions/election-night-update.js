@@ -53,6 +53,18 @@ exports.handler = async (event) => {
     return { statusCode: 200, headers, body: '' }
   }
 
+  // This endpoint uses the service-role key to overwrite election notes and
+  // candidate statuses. Netlify's scheduler invokes it with no HTTP method;
+  // any real HTTP request must carry the shared admin-trigger secret.
+  const isHttp = Boolean(event.httpMethod)
+  if (isHttp) {
+    const secret = process.env.ADMIN_TRIGGER_SECRET
+    const provided = event.headers?.['x-admin-trigger'] || event.headers?.['X-Admin-Trigger']
+    if (!secret || provided !== secret) {
+      return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authorized' }) }
+    }
+  }
+
   // Parse optional body for force mode (bypasses time check)
   let force = false
   try {
@@ -94,7 +106,7 @@ exports.handler = async (event) => {
       const { data: candidates } = await supabase
         .from('candidates')
         .select(`
-          id, name, party, status,
+          id, name, party, status, section_timestamps,
           office:offices(name, district_name, level)
         `)
         .eq('election_id', election.id)
@@ -227,11 +239,14 @@ If you cannot find real results, return an empty results array and explain in su
             return cn === rn || cn.includes(rn) || rn.includes(cn)
           })
           if (candidate) {
+            // Merge into existing section_timestamps — never replace the whole
+            // object (that would wipe the `monitoring` flag auto-regen relies on)
             await supabase
               .from('candidates')
               .update({
                 status: 'elected',
                 section_timestamps: {
+                  ...(candidate.section_timestamps || {}),
                   election_result: {
                     updated_at: new Date().toISOString(),
                     updated_by: 'Election Night AI',

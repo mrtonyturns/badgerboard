@@ -2,6 +2,7 @@
 // Expiry adjustable 30 minutes → 7 days. Expiry hides the profile from the candidate;
 // the underlying dossier is NEVER deleted.
 const H = require('./_campaign-connect')
+const enc = encodeURIComponent
 
 const MIN_MS = 30 * 60 * 1000
 const MAX_MS = 7 * 24 * 3600 * 1000
@@ -30,7 +31,7 @@ exports.handler = async (event) => {
         if (!perms.receive_profiles) return reply({ error: 'This link does not allow sending profiles.' }, 403)
 
         // verify the dossier belongs to the sender
-        const { data: dr } = await H.sb(`dossiers?id=eq.${dossier_id}&created_by=eq.${user.id}&select=id,title`)
+        const { data: dr } = await H.sb(`dossiers?id=eq.${enc(dossier_id)}&created_by=eq.${user.id}&select=id,title`)
         const doss = dr?.[0]
         if (!doss) return reply({ error: 'Profile not found or not yours.' }, 404)
 
@@ -57,12 +58,12 @@ exports.handler = async (event) => {
       // ── Candidate opens a shared profile (returns dossier content if not expired) ──
       case 'open': {
         const { handoff_id } = body
-        const { data } = await H.sb(`profile_handoffs?id=eq.${handoff_id}&to_candidate_user=eq.${user.id}&select=*`)
+        const { data } = await H.sb(`profile_handoffs?id=eq.${enc(handoff_id)}&to_candidate_user=eq.${user.id}&select=*`)
         const h = data?.[0]
         if (!h) return reply({ error: 'Not found.' }, 404)
         if (h.status !== 'active' || new Date(h.expires_at).getTime() <= now) return reply({ error: 'This shared profile has expired.' }, 410)
         const { data: dr } = await H.sb(`dossiers?id=eq.${h.dossier_id}&select=id,title,content,created_at`)
-        if (!h.viewed_at) await H.sb(`profile_handoffs?id=eq.${handoff_id}`, 'PATCH', { viewed_at: new Date().toISOString() })
+        if (!h.viewed_at) await H.sb(`profile_handoffs?id=eq.${enc(handoff_id)}`, 'PATCH', { viewed_at: new Date().toISOString() })
         return reply({ ok: true, handoff: h, dossier: dr?.[0] || null })
       }
 
@@ -76,10 +77,10 @@ exports.handler = async (event) => {
       // ── Revoke a handoff (sender) ───────────────────────────────────────────
       case 'revoke': {
         const { handoff_id } = body
-        const { data } = await H.sb(`profile_handoffs?id=eq.${handoff_id}&from_action_user=eq.${user.id}&select=id,link_id,to_candidate_user`)
+        const { data } = await H.sb(`profile_handoffs?id=eq.${enc(handoff_id)}&from_action_user=eq.${user.id}&select=id,link_id,to_candidate_user`)
         const h = data?.[0]
         if (!h) return reply({ error: 'Not found.' }, 404)
-        await H.sb(`profile_handoffs?id=eq.${handoff_id}`, 'PATCH', { status: 'revoked' })
+        await H.sb(`profile_handoffs?id=eq.${enc(handoff_id)}`, 'PATCH', { status: 'revoked' })
         await H.logActivity(h.link_id, user.id, h.to_candidate_user, 'profile_revoked', { handoff_id })
         return reply({ ok: true })
       }

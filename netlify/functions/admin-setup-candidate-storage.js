@@ -11,7 +11,8 @@ const SUPABASE_URL    = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_UR
 const SERVICE_KEY     = process.env.SUPABASE_SERVICE_ROLE_KEY
 const SUPABASE_ANON   = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
 
-const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'tony@thebluejackgroup.com,ruffi452@gmail.com').split(',').map(e => e.trim())
+// Canonical admin allowlist — no divergent hardcoded fallback, no personal Gmail.
+const { ADMIN_EMAILS } = require('./_config')
 const BUCKET_NAME  = 'candidate-files'
 
 const HEADERS = {
@@ -29,7 +30,7 @@ async function verifyAdmin(authHeader) {
   })
   if (!res.ok) return null
   const user = await res.json()
-  if (!user?.email || !ADMIN_EMAILS.includes(user.email)) return null
+  if (!user?.email || !ADMIN_EMAILS.includes(user.email.toLowerCase())) return null
   return user
 }
 

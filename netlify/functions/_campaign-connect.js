@@ -60,12 +60,12 @@ async function findUserByEmail(email) {
 const planOf = (user) => {
   if (!user) return 'scout'
   if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'a_campaign'
-  return user.user_metadata?.plan || 'scout'
+  return user.app_metadata?.plan || 'scout'
 }
 const planTypeOf = (user) => {
   const p = planOf(user)
   if (ADMIN_EMAILS.includes(user?.email?.toLowerCase())) return 'action'
-  return user?.user_metadata?.plan_type || (p.startsWith('a_') || ['monitor','campaign','agency'].includes(p) ? 'action' : 'candidate')
+  return user?.app_metadata?.plan_type || (p.startsWith('a_') || ['monitor','campaign','agency'].includes(p) ? 'action' : 'candidate')
 }
 const isActionUser = (user) => planTypeOf(user) === 'action' || ADMIN_EMAILS.includes(user?.email?.toLowerCase())
 // A candidate account is "paid" if it is on any plan other than free Scout.

@@ -15,6 +15,9 @@ const SUPABASE_URL  = process.env.SUPABASE_URL
 const SERVICE_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY
 const SITE_URL      = process.env.URL || 'https://badgerboardwi.com'
 
+// UUID guard for any id interpolated into a PostgREST filter
+const isUuid = (v) => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)
+
 const sb = (path, opts = {}) =>
   fetch(`${SUPABASE_URL}/rest/v1${path}`, {
     ...opts,
@@ -134,9 +137,14 @@ async function verifyToken(params) {
   if (!token || !email) {
     return { statusCode: 400, body: JSON.stringify({ error: 'token and email required' }) }
   }
+  // Token is a 64-char hex string. Rejecting anything else (and encoding it)
+  // prevents PostgREST filter injection that could bypass the token check.
+  if (!/^[0-9a-f]{64}$/i.test(token)) {
+    return { statusCode: 401, body: JSON.stringify({ error: 'Invalid or expired token' }) }
+  }
 
   const res = await sb(
-    `/volunteers?magic_token=eq.${token}&email=eq.${encodeURIComponent(email)}&select=*`
+    `/volunteers?magic_token=eq.${encodeURIComponent(token)}&email=eq.${encodeURIComponent(email)}&select=*`
   )
   const volunteers = await res.json()
 
@@ -238,12 +246,12 @@ async function getVolunteer(params, authHeader) {
 // ─── Action: update_stats ─────────────────────────────────────────────────────
 async function updateStats(params, authHeader) {
   const { volunteer_id, doors_knocked = 0, contacts_made = 0, shift_completed = false } = params
-  if (!volunteer_id) {
-    return { statusCode: 400, body: JSON.stringify({ error: 'volunteer_id required' }) }
+  if (!volunteer_id || !isUuid(volunteer_id)) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'valid volunteer_id required' }) }
   }
 
   // Get current stats + token for authorization
-  const res = await sb(`/volunteers?id=eq.${volunteer_id}&select=doors_knocked,contacts_made,shifts_worked,session_token,email`)
+  const res = await sb(`/volunteers?id=eq.${encodeURIComponent(volunteer_id)}&select=doors_knocked,contacts_made,shifts_worked,session_token,email`)
   const rows = await res.json()
   if (!rows?.length) {
     return { statusCode: 404, body: JSON.stringify({ error: 'Volunteer not found' }) }

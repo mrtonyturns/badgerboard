@@ -92,7 +92,9 @@ export const handler = async (event) => {
   }
 
   const candidateName = sanitize(body.candidateName, 150)
-  const handle        = sanitize(body.handle, 50).replace(/^@/, '')   // strip leading @
+  // X handles are [A-Za-z0-9_], ≤15 chars. Enforce strictly so a crafted handle
+  // can't inject search operators (e.g. "foo OR from:someoneelse").
+  const handle        = (sanitize(body.handle, 50).replace(/^@/, '').match(/^[A-Za-z0-9_]{1,15}/) || [''])[0]
   const district      = sanitize(body.district, 100)
 
   if (!candidateName) {

@@ -47,7 +47,7 @@ async function verifyUser(authHeader) {
 function getUserPlan(user) {
   if (!user) return 'scout'
   if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'agency'
-  const p = user?.user_metadata?.plan
+  const p = user?.app_metadata?.plan
   // Normalize new-format plan keys introduced in v1.14 pricing overhaul
   const PLAN_MAP = {
     c_monitor: 'monitor',  a_monitor: 'monitor',
@@ -67,7 +67,7 @@ const MONTHLY_BASE = { scout: 1, monitor: 1, campaign: 2, agency: Infinity }
 async function consumeProfileCreditIfOverage(user, userId, userPlan) {
   try {
     if (!userId) return
-    const bank = Number(user?.user_metadata?.profile_credits) || 0
+    const bank = Number(user?.app_metadata?.profile_credits) || 0
     if (bank <= 0) return
     const base = MONTHLY_BASE[userPlan]
     if (!Number.isFinite(base)) return  // unlimited plans never consume credits
@@ -80,11 +80,11 @@ async function consumeProfileCreditIfOverage(user, userId, userPlan) {
     const monthCount = (await cntRes.json()).length  // includes the one just saved
     if (monthCount <= base) return  // still within the free monthly allotment
     const newBank = Math.max(0, bank - 1)
-    const meta = { ...(user.user_metadata || {}), profile_credits: newBank }
+    const meta = { ...(user.app_metadata || {}), profile_credits: newBank }
     await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
-      body: JSON.stringify({ user_metadata: meta }),
+      body: JSON.stringify({ app_metadata: meta }),
     })
     console.log(`[dossier-bg] Consumed 1 profile credit (bank ${bank} -> ${newBank}) for user ${userId}`)
   } catch (e) {

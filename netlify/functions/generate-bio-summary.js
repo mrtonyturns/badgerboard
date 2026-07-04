@@ -34,8 +34,12 @@ async function verifyUser(authHeader) {
 
 // ── Fetch dossier content via service role (user already verified above) ──────
 async function fetchDossierContent(dossierId, userId) {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (!UUID.test(dossierId)) return null
+  // Scope to a candidate the caller owns (covers auto-regen dossiers where
+  // generated_by is null — those must NOT be readable by any authenticated user)
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/dossiers?id=eq.${dossierId}&select=content,generated_by`,
+    `${SUPABASE_URL}/rest/v1/dossiers?id=eq.${encodeURIComponent(dossierId)}&select=content,generated_by,candidate:candidates!inner(created_by)&candidate.created_by=eq.${encodeURIComponent(userId)}`,
     {
       headers: {
         apikey:        SERVICE_KEY,
@@ -47,10 +51,7 @@ async function fetchDossierContent(dossierId, userId) {
   if (!res.ok) return null
   const rows = await res.json()
   if (!rows || rows.length === 0) return null
-  const dossier = rows[0]
-  // Belt-and-suspenders: ensure the requesting user owns this dossier
-  if (dossier.generated_by && dossier.generated_by !== userId) return null
-  return dossier.content
+  return rows[0].content
 }
 
 // ── Extract a numbered section from dossier content ──────────────────────────

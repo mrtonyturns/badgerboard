@@ -25,16 +25,19 @@ export const handler = async (event) => {
     headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${token}` },
   })
   if (!authRes.ok) return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid token' }) }
+  const uid = (await authRes.json())?.id
+  if (!uid) return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid token' }) }
 
   // ── Parse body ──────────────────────────────────────────────────────────────
   let body
   try { body = JSON.parse(event.body || '{}') } catch { return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) } }
   const { candidate_id, candidate_name } = body
-  if (!candidate_id) return { statusCode: 400, headers, body: JSON.stringify({ error: 'candidate_id required' }) }
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (!candidate_id || !UUID.test(candidate_id)) return { statusCode: 400, headers, body: JSON.stringify({ error: 'valid candidate_id required' }) }
 
-  // ── Fetch latest dossier for candidate ─────────────────────────────────────
+  // ── Fetch latest dossier — scoped to a candidate the CALLER owns (IDOR guard) ─
   const dossierRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/dossiers?candidate_id=eq.${candidate_id}&order=generated_at.desc&limit=1`,
+    `${SUPABASE_URL}/rest/v1/dossiers?candidate_id=eq.${encodeURIComponent(candidate_id)}&select=*,candidate:candidates!inner(created_by)&candidate.created_by=eq.${encodeURIComponent(uid)}&order=generated_at.desc&limit=1`,
     { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
   )
   const dossiers = await dossierRes.json()
@@ -131,7 +134,7 @@ Return ONLY the JSON array:`
   let existingRecords = []
   try {
     const existRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/incumbent_records?candidate_id=eq.${candidate_id}&select=title,bill_number,date`,
+      `${SUPABASE_URL}/rest/v1/incumbent_records?candidate_id=eq.${encodeURIComponent(candidate_id)}&select=title,bill_number,date`,
       { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
     )
     if (existRes.ok) existingRecords = await existRes.json()

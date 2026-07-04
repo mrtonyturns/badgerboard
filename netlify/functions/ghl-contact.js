@@ -30,7 +30,7 @@ const ALLOWED_POSITIONS = [
 exports.handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Content-Type': 'application/json',
   }
@@ -38,6 +38,22 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' }
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) }
+  }
+
+  // Require a signed-in user — prevents anonymous abuse that spams the CRM.
+  const SUPABASE_URL  = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
+  const SUPABASE_ANON = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
+  const authHeader = event.headers?.authorization || event.headers?.Authorization
+  if (!authHeader?.startsWith('Bearer ')) {
+    return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authenticated' }) }
+  }
+  try {
+    const authRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: SUPABASE_ANON, Authorization: authHeader },
+    })
+    if (!authRes.ok) return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid token' }) }
+  } catch {
+    return { statusCode: 401, headers, body: JSON.stringify({ error: 'Auth check failed' }) }
   }
 
   if (!GHL_API_KEY || !GHL_LOCATION_ID) {

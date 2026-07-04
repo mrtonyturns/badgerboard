@@ -389,8 +389,8 @@ export default function Pricing() {
     setCheckoutError(null)
     try {
       const token = session?.access_token
-      const currentPlan = user?.user_metadata?.plan
-      const hasActiveSub = currentPlan && currentPlan !== 'scout' && user?.user_metadata?.stripe_subscription_id
+      const currentPlan = user?.app_metadata?.plan
+      const hasActiveSub = currentPlan && currentPlan !== 'scout' && user?.app_metadata?.stripe_subscription_id
 
       // Credits always use checkout (payment, not subscription)
       const isCredits = payload.product === 'credits' || payload.product === 'bulk_credits'

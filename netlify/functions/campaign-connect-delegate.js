@@ -13,7 +13,9 @@ exports.handler = async (event) => {
   const { action, candidate_user_id } = body
   const reply = (obj, code = 200) => ({ statusCode: code, headers: H.CORS, body: JSON.stringify(obj) })
 
-  if (!candidate_user_id) return reply({ error: 'candidate_user_id required' }, 400)
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (!candidate_user_id || !UUID.test(candidate_user_id)) return reply({ error: 'valid candidate_user_id required' }, 400)
+  const enc = encodeURIComponent
   const link = await H.activeLinkFor(user.id, candidate_user_id)
   if (!link) return reply({ error: 'No active Campaign Connect link with this candidate.' }, 403)
   const perms = { ...H.DEFAULT_PERMS, ...(link.permissions || {}) }
@@ -24,9 +26,9 @@ exports.handler = async (event) => {
       case 'workspace': {
         need('view')
         const [cands, doss, miles] = await Promise.all([
-          H.sb(`candidates?created_by=eq.${candidate_user_id}&select=id,name,party,status,office:offices(name,district_name)&order=created_at.desc`),
-          H.sb(`dossiers?created_by=eq.${candidate_user_id}&select=id,title,created_at&order=created_at.desc&limit=50`),
-          H.sb(`game_plan_milestones?created_by=eq.${candidate_user_id}&select=*&order=due_date.asc.nullslast`),
+          H.sb(`candidates?created_by=eq.${enc(candidate_user_id)}&select=id,name,party,status,office:offices(name,district_name)&order=created_at.desc`),
+          H.sb(`dossiers?created_by=eq.${enc(candidate_user_id)}&select=id,title,created_at&order=created_at.desc&limit=50`),
+          H.sb(`game_plan_milestones?created_by=eq.${enc(candidate_user_id)}&select=*&order=due_date.asc.nullslast`),
         ])
         const milestones = Array.isArray(miles.data) ? miles.data : []
         const openCount = milestones.filter(m => m.status !== 'done' && m.status !== 'complete').length
@@ -62,9 +64,10 @@ exports.handler = async (event) => {
       case 'task_update': {
         need('manage_tasks')
         const { task_id } = body
+        if (!UUID.test(task_id || '')) return reply({ error: 'valid task_id required' }, 400)
         const patch = {}
         for (const k of ['title', 'phase', 'category', 'status', 'due_date']) if (k in body) patch[k] = body[k]
-        const upd = await H.sb(`game_plan_milestones?id=eq.${task_id}&created_by=eq.${candidate_user_id}`, 'PATCH', patch)
+        const upd = await H.sb(`game_plan_milestones?id=eq.${enc(task_id)}&created_by=eq.${enc(candidate_user_id)}`, 'PATCH', patch)
         if (!upd.ok) return reply({ error: 'Could not update task' }, 500)
         await H.logActivity(link.id, user.id, candidate_user_id, 'task_updated', { task_id, patch })
         return reply({ ok: true, task: (upd.data || [])[0] })
@@ -73,7 +76,7 @@ exports.handler = async (event) => {
       case 'task_toggle': {
         need('manage_tasks')
         const { task_id, done } = body
-        const upd = await H.sb(`game_plan_milestones?id=eq.${task_id}&created_by=eq.${candidate_user_id}`, 'PATCH', { status: done ? 'done' : 'todo' })
+        const upd = await H.sb(`game_plan_milestones?id=eq.${enc(task_id)}&created_by=eq.${enc(candidate_user_id)}`, 'PATCH', { status: done ? 'done' : 'todo' })
         if (!upd.ok) return reply({ error: 'Could not update task' }, 500)
         await H.logActivity(link.id, user.id, candidate_user_id, 'task_toggled', { task_id, done })
         return reply({ ok: true, task: (upd.data || [])[0] })
@@ -82,14 +85,14 @@ exports.handler = async (event) => {
       case 'task_delete': {
         need('manage_tasks')
         const { task_id } = body
-        const del = await H.sb(`game_plan_milestones?id=eq.${task_id}&created_by=eq.${candidate_user_id}`, 'DELETE')
+        const del = await H.sb(`game_plan_milestones?id=eq.${enc(task_id)}&created_by=eq.${enc(candidate_user_id)}`, 'DELETE')
         await H.logActivity(link.id, user.id, candidate_user_id, 'task_deleted', { task_id })
         return reply({ ok: true })
       }
 
       case 'activity': {
         need('view')
-        const { data } = await H.sb(`cc_activity?candidate_user_id=eq.${candidate_user_id}&select=*&order=created_at.desc&limit=50`)
+        const { data } = await H.sb(`cc_activity?candidate_user_id=eq.${enc(candidate_user_id)}&select=*&order=created_at.desc&limit=50`)
         return reply({ ok: true, activity: Array.isArray(data) ? data : [] })
       }
 

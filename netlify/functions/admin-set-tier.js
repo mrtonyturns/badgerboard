@@ -101,7 +101,7 @@ exports.handler = async (event) => {
 
     // Build updated metadata — preserve existing fields, update plan-related keys
     const newMeta = {
-      ...user.user_metadata,
+      ...user.app_metadata,
       plan,
       plan_type: planType(plan),
     }
@@ -112,7 +112,7 @@ exports.handler = async (event) => {
       delete newMeta.bracket
     }
 
-    // Update plan in user_metadata
+    // Update plan in app_metadata (service-role-writable only)
     const updateRes = await fetch(
       `${SB_URL}/auth/v1/admin/users/${user.id}`,
       {
@@ -122,7 +122,7 @@ exports.handler = async (event) => {
           apikey: SERVICE_KEY,
           Authorization: `Bearer ${SERVICE_KEY}`,
         },
-        body: JSON.stringify({ user_metadata: newMeta }),
+        body: JSON.stringify({ app_metadata: newMeta }),
       }
     )
 
@@ -141,7 +141,7 @@ exports.handler = async (event) => {
         success: true,
         user_id: updated.id,
         email:   updated.email,
-        plan:    updated.user_metadata?.plan,
+        plan:    updated.app_metadata?.plan,
       }),
     }
   } catch (err) {

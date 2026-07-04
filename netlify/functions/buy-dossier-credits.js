@@ -44,6 +44,13 @@ export const handler = async (event) => {
   if (!authRes.ok) {
     return { statusCode: 401, body: JSON.stringify({ error: 'Invalid or expired token' }) }
   }
+  // Bank credits to the VERIFIED caller — never a body-supplied id (that let a
+  // paying user credit an arbitrary account).
+  const authedUser = await authRes.json()
+  const userId     = authedUser?.id
+  if (!userId) {
+    return { statusCode: 401, body: JSON.stringify({ error: 'Invalid or expired token' }) }
+  }
 
   const stripe  = new Stripe(process.env.STRIPE_SECRET_KEY)
   const siteUrl = process.env.SITE_URL || 'https://www.badgerboardwi.com'
@@ -55,9 +62,8 @@ export const handler = async (event) => {
     return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
 
-  const pack   = parseInt(sanitize(body.pack))
-  const userId = sanitize(body.userId)
-  const email  = sanitize(body.email, 320)
+  const pack  = parseInt(sanitize(body.pack))
+  const email = authedUser?.email || sanitize(body.email, 320)
 
   if (!PACK_CONFIG[pack]) {
     return { statusCode: 400, body: JSON.stringify({ error: `Invalid pack size. Choose from: ${Object.keys(PACK_CONFIG).join(', ')}` }) }

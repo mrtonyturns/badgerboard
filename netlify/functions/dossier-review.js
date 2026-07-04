@@ -228,7 +228,7 @@ export const handler = async (event) => {
       `dossier_claim_reviews`,
       'GET',
       null,
-      `?dossier_id=eq.${dossier_id}&user_id=eq.${user.id}&section_id=eq.${section_id}&claim_text=like.${encodeURIComponent(claimKey + '*')}&limit=1`
+      `?dossier_id=eq.${encodeURIComponent(dossier_id)}&user_id=eq.${user.id}&section_id=eq.${encodeURIComponent(section_id)}&claim_text=like.${encodeURIComponent(claimKey + '*')}&limit=1`
     )
 
     const existing = Array.isArray(checkRes.data) ? checkRes.data[0] : null
@@ -271,7 +271,7 @@ export const handler = async (event) => {
       `dossier_claim_reviews`,
       'GET',
       null,
-      `?dossier_id=eq.${dossier_id}&user_id=eq.${user.id}&order=reviewed_at.desc`
+      `?dossier_id=eq.${encodeURIComponent(dossier_id)}&user_id=eq.${user.id}&order=reviewed_at.desc`
     )
 
     return {

@@ -3,7 +3,7 @@
 //   CANDIDATE PLAN  — for individual campaigns (flat monthly price)
 //   ACTION PLAN     — for orgs managing multiple candidates (bracket pricing)
 //
-// Stored in Supabase user_metadata: { plan, bracket, plan_type, billing_period }
+// Stored in Supabase app_metadata (service-role-writable only): { plan, bracket, plan_type, billing }
 // plan_type: 'candidate' | 'action'
 // billing_period: 'monthly' | 'quarterly' | 'semiannual' | 'annual'
 
@@ -445,11 +445,20 @@ export const LITE_PROFILE_FREE_SECTIONS = [
 export const ADMIN_EMAILS = ['tony@bluejackgroup.com', 'tony@thebluejackgroup.com', 'tom@thebluejackgroup.com']
 
 // ─── Core getters ─────────────────────────────────────────────────────────────
+//
+// Entitlements (plan, bracket, billing, credits, payment_status) are read from
+// `app_metadata`, which ONLY the service-role key can write (via the Stripe
+// webhook / admin functions). This is deliberate: `user_metadata` is writable
+// by the end user themselves (supabase.auth.updateUser), so trusting it for
+// plan/credits let anyone self-grant a paid tier. `ent()` reads app_metadata.
+function ent(user) {
+  return user?.app_metadata ?? {}
+}
 
 export function getUserPlan(user) {
   if (!user) return 'scout'
   if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'a_campaign'
-  const p = user?.user_metadata?.plan
+  const p = ent(user).plan
   return p && PLAN_CONFIG[p] ? p : 'scout'
 }
 
@@ -459,12 +468,12 @@ export function getUserPlanType(user) {
 }
 
 export function getUserBracket(user) {
-  const b = user?.user_metadata?.bracket
+  const b = ent(user).bracket
   return b && BRACKET_CONFIG[b] ? b : 'b1'
 }
 
 export function getUserBillingPeriod(user) {
-  const bp = user?.user_metadata?.billing
+  const bp = ent(user).billing
   return bp && BILLING_PERIODS[bp] ? bp : 'monthly'
 }
 
@@ -512,7 +521,7 @@ export function getProfileLimit(planKey, bracketKey) {
 // Effective monthly profile limit for a USER — admin accounts (platform owners)
 // are never capped; everyone else gets their plan/bracket limit.
 export function getBankedProfileCredits(user) {
-  const n = Number(user?.user_metadata?.profile_credits)
+  const n = Number(ent(user).profile_credits)
   return Number.isFinite(n) && n > 0 ? n : 0
 }
 

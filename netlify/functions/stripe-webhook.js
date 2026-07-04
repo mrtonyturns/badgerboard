@@ -1,5 +1,5 @@
 // netlify/functions/stripe-webhook.js
-// Handles Stripe webhook events and syncs plan + bracket to Supabase user_metadata.
+// Handles Stripe webhook events and syncs plan + bracket to Supabase app_metadata.
 //
 // Required env vars:
 //   STRIPE_SECRET_KEY         — Stripe secret key
@@ -214,13 +214,13 @@ async function isAdminUser(supabaseUserId) {
   }
 }
 
-// Writes plan + plan_type + bracket (and optionally billing) to user_metadata.
+// Writes plan + plan_type + bracket (and optionally billing) to app_metadata.
 // Merges with existing metadata — does NOT clobber other fields.
 // extraFields: optional object merged in last (e.g. payment_status, downgraded_at)
 async function updateSupabasePlan(supabaseUserId, plan, bracket, billing, stripeIds, extraFields = {}) {
   // GET existing user metadata first to avoid clobbering unrelated fields
   const existingUser = await getSupabaseUser(supabaseUserId)
-  const existingMeta = existingUser?.user_metadata ?? {}
+  const existingMeta = existingUser?.app_metadata ?? {}
 
   const newFields = { plan, plan_type: planType(plan) }
   if (bracket) newFields.bracket = bracket
@@ -235,6 +235,8 @@ async function updateSupabasePlan(supabaseUserId, plan, bracket, billing, stripe
     metadata.stripe_subscription_id = extraFields.stripe_subscription_id
   }
 
+  // Entitlements live in app_metadata (service-role-writable only) so users
+  // cannot self-grant a plan via supabase.auth.updateUser.
   const res = await fetch(
     `${process.env.SUPABASE_URL}/auth/v1/admin/users/${supabaseUserId}`,
     {
@@ -244,7 +246,7 @@ async function updateSupabasePlan(supabaseUserId, plan, bracket, billing, stripe
         apikey:         process.env.SUPABASE_SERVICE_ROLE_KEY,
         Authorization:  `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
       },
-      body: JSON.stringify({ user_metadata: metadata }),
+      body: JSON.stringify({ app_metadata: metadata }),
     }
   )
   if (!res.ok) {
@@ -254,11 +256,11 @@ async function updateSupabasePlan(supabaseUserId, plan, bracket, billing, stripe
   return res.json()
 }
 
-// Updates payment_status in user_metadata (e.g. 'active', 'past_due')
+// Updates payment_status in app_metadata (e.g. 'active', 'past_due')
 async function updateSupabasePaymentStatus(supabaseUserId, paymentStatus) {
   // GET existing user metadata first to avoid clobbering unrelated fields
   const existingUser = await getSupabaseUser(supabaseUserId)
-  const existingMeta = existingUser?.user_metadata ?? {}
+  const existingMeta = existingUser?.app_metadata ?? {}
 
   const metadata = { ...existingMeta, payment_status: paymentStatus }
 
@@ -271,7 +273,7 @@ async function updateSupabasePaymentStatus(supabaseUserId, paymentStatus) {
         apikey:         process.env.SUPABASE_SERVICE_ROLE_KEY,
         Authorization:  `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
       },
-      body: JSON.stringify({ user_metadata: metadata }),
+      body: JSON.stringify({ app_metadata: metadata }),
     }
   )
   if (!res.ok) {
@@ -309,7 +311,7 @@ function getCreditsForPack(product, pack) {
 // carry their quantity directly rather than a pack key).
 async function addProfileCredits(userId, qty) {
   const existingUser = await getSupabaseUser(userId)
-  const existingMeta = existingUser?.user_metadata ?? {}
+  const existingMeta = existingUser?.app_metadata ?? {}
   const metadata = { ...existingMeta, profile_credits: (existingMeta.profile_credits || 0) + qty }
   const res = await fetch(
     `${process.env.SUPABASE_URL}/auth/v1/admin/users/${userId}`,
@@ -320,7 +322,7 @@ async function addProfileCredits(userId, qty) {
         apikey:         process.env.SUPABASE_SERVICE_ROLE_KEY,
         Authorization:  `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
       },
-      body: JSON.stringify({ user_metadata: metadata }),
+      body: JSON.stringify({ app_metadata: metadata }),
     }
   )
   if (!res.ok) {
@@ -332,7 +334,7 @@ async function addProfileCredits(userId, qty) {
 
 async function addCreditsToUser(userId, product, pack) {
   const existingUser = await getSupabaseUser(userId)
-  const existingMeta = existingUser?.user_metadata ?? {}
+  const existingMeta = existingUser?.app_metadata ?? {}
   const amount = getCreditsForPack(product, pack)
   if (amount === 0) return
 
@@ -352,7 +354,7 @@ async function addCreditsToUser(userId, product, pack) {
         apikey:         process.env.SUPABASE_SERVICE_ROLE_KEY,
         Authorization:  `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
       },
-      body: JSON.stringify({ user_metadata: metadata }),
+      body: JSON.stringify({ app_metadata: metadata }),
     }
   )
   if (!res.ok) {

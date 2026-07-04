@@ -1,5 +1,6 @@
 // Campaign Connect — link management: invite / accept / decline / revoke / list / permissions.
 const H = require('./_campaign-connect')
+const enc = encodeURIComponent
 const crypto = require('crypto')
 
 // Human-friendly connect code — 8 chars, no ambiguous 0/O/1/I/L
@@ -40,7 +41,7 @@ exports.handler = async (event) => {
         // unique connect code (retry a few times on the rare collision)
         let code = genCode()
         for (let i = 0; i < 5; i++) {
-          const { data: clash } = await H.sb(`account_links?invite_code=eq.${code}&select=id`)
+          const { data: clash } = await H.sb(`account_links?invite_code=eq.${enc(code)}&select=id`)
           if (!Array.isArray(clash) || !clash.length) break
           code = genCode()
         }
@@ -76,12 +77,12 @@ exports.handler = async (event) => {
       case 'accept': {
         if (!H.isPaidCandidate(user)) return reply({ error: 'Campaign Connect for candidates requires a paid plan. Upgrade from Scout to accept a manager.' , upgrade: true }, 402)
         const { link_id } = body
-        const { data: rows } = await H.sb(`account_links?id=eq.${link_id}&select=*`)
+        const { data: rows } = await H.sb(`account_links?id=eq.${enc(link_id)}&select=*`)
         const link = rows?.[0]
         if (!link) return reply({ error: 'Invite not found.' }, 404)
         if (link.candidate_email?.toLowerCase() !== user.email?.toLowerCase()) return reply({ error: 'This invite is for a different email.' }, 403)
         if (link.status !== 'invited') return reply({ error: `Invite is already ${link.status}.` }, 409)
-        const upd = await H.sb(`account_links?id=eq.${link_id}`, 'PATCH', { status: 'active', candidate_user_id: user.id, accepted_at: new Date().toISOString() })
+        const upd = await H.sb(`account_links?id=eq.${enc(link_id)}`, 'PATCH', { status: 'active', candidate_user_id: user.id, accepted_at: new Date().toISOString() })
         if (!upd.ok) return reply({ error: 'Could not accept.' }, 500)
         await H.logActivity(link_id, user.id, user.id, 'invite_accepted', null)
         return reply({ ok: true, link: upd.data[0] })
@@ -93,7 +94,7 @@ exports.handler = async (event) => {
         const raw = String(body.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
         if (raw.length !== 8) return reply({ error: 'Enter a valid 8-character connect code.' }, 400)
         const code = raw.slice(0, 4) + '-' + raw.slice(4)
-        const { data: rows } = await H.sb(`account_links?invite_code=eq.${code}&select=*`)
+        const { data: rows } = await H.sb(`account_links?invite_code=eq.${enc(code)}&select=*`)
         const link = rows?.[0]
         if (!link) return reply({ error: 'That connect code was not found.' }, 404)
         if (link.status === 'active') return reply({ error: 'That code has already been used.' }, 409)
@@ -110,10 +111,10 @@ exports.handler = async (event) => {
       // ── Candidate declines ──────────────────────────────────────────────────
       case 'decline': {
         const { link_id } = body
-        const { data: rows } = await H.sb(`account_links?id=eq.${link_id}&select=*`)
+        const { data: rows } = await H.sb(`account_links?id=eq.${enc(link_id)}&select=*`)
         const link = rows?.[0]
         if (!link || link.candidate_email?.toLowerCase() !== user.email?.toLowerCase()) return reply({ error: 'Invite not found.' }, 404)
-        await H.sb(`account_links?id=eq.${link_id}`, 'PATCH', { status: 'declined' })
+        await H.sb(`account_links?id=eq.${enc(link_id)}`, 'PATCH', { status: 'declined' })
         await H.logActivity(link_id, user.id, user.id, 'invite_declined', null)
         return reply({ ok: true })
       }
@@ -121,12 +122,12 @@ exports.handler = async (event) => {
       // ── Revoke (either party) ───────────────────────────────────────────────
       case 'revoke': {
         const { link_id } = body
-        const { data: rows } = await H.sb(`account_links?id=eq.${link_id}&select=*`)
+        const { data: rows } = await H.sb(`account_links?id=eq.${enc(link_id)}&select=*`)
         const link = rows?.[0]
         if (!link) return reply({ error: 'Link not found.' }, 404)
         const isParty = [link.action_user_id, link.candidate_user_id].includes(user.id)
         if (!isParty) return reply({ error: 'Not authorized.' }, 403)
-        await H.sb(`account_links?id=eq.${link_id}`, 'PATCH', { status: 'revoked', revoked_at: new Date().toISOString() })
+        await H.sb(`account_links?id=eq.${enc(link_id)}`, 'PATCH', { status: 'revoked', revoked_at: new Date().toISOString() })
         await H.logActivity(link_id, user.id, link.candidate_user_id, 'link_revoked', { by: user.id === link.candidate_user_id ? 'candidate' : 'action' })
         return reply({ ok: true })
       }
@@ -146,11 +147,11 @@ exports.handler = async (event) => {
       // ── Update per-link permissions (Action owner only) ─────────────────────
       case 'set_permissions': {
         const { link_id, permissions } = body
-        const { data: rows } = await H.sb(`account_links?id=eq.${link_id}&select=*`)
+        const { data: rows } = await H.sb(`account_links?id=eq.${enc(link_id)}&select=*`)
         const link = rows?.[0]
         if (!link || link.action_user_id !== user.id) return reply({ error: 'Not authorized.' }, 403)
         const merged = { ...H.DEFAULT_PERMS, ...(link.permissions || {}), ...(permissions || {}) }
-        await H.sb(`account_links?id=eq.${link_id}`, 'PATCH', { permissions: merged })
+        await H.sb(`account_links?id=eq.${enc(link_id)}`, 'PATCH', { permissions: merged })
         await H.logActivity(link_id, user.id, link.candidate_user_id, 'permissions_updated', merged)
         return reply({ ok: true, permissions: merged })
       }

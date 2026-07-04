@@ -3,8 +3,11 @@
 node_modules/
 dist/
 dist2/
-.env
-.env.local
-.env.*.local
 *.log
 npm-debug.log*
+
+# Environment files — never commit real secrets (templates *.example are kept)
+.env
+.env.*
+!.env.example
+!.env.*.example

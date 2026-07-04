@@ -33,7 +33,7 @@ async function verifyUser(authHeader) {
 function getUserPlan(user) {
   if (!user) return 'scout'
   if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'agency'
-  const p = user?.user_metadata?.plan
+  const p = user?.app_metadata?.plan
   // Normalize v1.14 plan keys so Action-plan (a_campaign) users aren't misread as scout.
   const PLAN_MAP = {
     c_monitor: 'monitor',  a_monitor: 'monitor',
@@ -103,13 +103,13 @@ exports.handler = async (event) => {
   }
 
   // Verify the dossier belongs to this user
-  const check = await supa('dossiers', 'GET', null, `?id=eq.${dossier_id}&generated_by=eq.${user.id}&select=id,title`)
+  const check = await supa('dossiers', 'GET', null, `?id=eq.${encodeURIComponent(dossier_id)}&generated_by=eq.${user.id}&select=id,title`)
   if (!check.ok || !Array.isArray(check.data) || check.data.length === 0) {
     return { statusCode: 404, headers: CORS, body: JSON.stringify({ error: 'Profile not found or access denied' }) }
   }
 
   // Enforce per-dossier active share limit (max 5 active shares per dossier)
-  const existing = await supa('dossier_shares', 'GET', null, `?dossier_id=eq.${dossier_id}&created_by=eq.${user.id}&is_active=eq.true&select=id`)
+  const existing = await supa('dossier_shares', 'GET', null, `?dossier_id=eq.${encodeURIComponent(dossier_id)}&created_by=eq.${user.id}&is_active=eq.true&select=id`)
   if (existing.ok && Array.isArray(existing.data) && existing.data.length >= 5) {
     return { statusCode: 429, headers: CORS, body: JSON.stringify({ error: 'Maximum of 5 active share links per profile. Deactivate an existing link first.' }) }
   }

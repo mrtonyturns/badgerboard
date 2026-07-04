@@ -194,10 +194,10 @@ exports.handler = async (event) => {
     }
   }
 
-  // ── Update user_metadata.plan ─────────────────────────────────────────────
+  // ── Update app_metadata.plan (service-role-writable only) ─────────────────
   const { error: updateError } = await supabase.auth.admin.updateUserById(user.id, {
-    user_metadata: {
-      ...user.user_metadata,
+    app_metadata: {
+      ...user.app_metadata,
       plan: newTier,
     },
   })

@@ -47,7 +47,7 @@ async function getSupabaseUser(supabaseUserId) {
 async function resetToScout(supabaseUserId) {
   // GET existing user metadata first to avoid clobbering unrelated fields
   const existingUser = await getSupabaseUser(supabaseUserId)
-  const existingMeta = existingUser?.user_metadata ?? {}
+  const existingMeta = existingUser?.app_metadata ?? {}
 
   // Voluntary downgrade: user is in good standing on the free plan.
   // Do NOT set downgraded_at or payment_status: 'inactive' — those are
@@ -72,7 +72,7 @@ async function resetToScout(supabaseUserId) {
         apikey:         process.env.SUPABASE_SERVICE_ROLE_KEY,
         Authorization:  `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
       },
-      body: JSON.stringify({ user_metadata: metadata }),
+      body: JSON.stringify({ app_metadata: metadata }),
     }
   )
   if (!res.ok) {

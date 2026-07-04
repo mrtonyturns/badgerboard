@@ -154,7 +154,7 @@ exports.handler = async (event) => {
   }
 
   // Tier gate — prospecting classification requires Campaign or Agency plan
-  const plan = (user.user_metadata?.plan || user.app_metadata?.plan || 'scout').toLowerCase()
+  const plan = (user.app_metadata?.plan || 'scout').toLowerCase()
   if (!CAMPAIGN_PLUS.includes(plan)) {
     return { statusCode: 403, headers: HEADERS, body: JSON.stringify({ error: 'Campaign or Agency plan required for AI prospect classification.' }) }
   }

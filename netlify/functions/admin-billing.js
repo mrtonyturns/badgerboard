@@ -204,7 +204,7 @@ async function updatePlan(stripe, userId, plan, bracket) {
   }
   const user = await userRes.json();
 
-  const updatedMetadata = { ...user.user_metadata, plan, bracket };
+  const updatedMetadata = { ...user.app_metadata, plan, bracket };
 
   const metaRes = await fetch(
     `${process.env.SUPABASE_URL}/auth/v1/admin/users/${userId}`,
@@ -215,7 +215,7 @@ async function updatePlan(stripe, userId, plan, bracket) {
         Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ user_metadata: updatedMetadata }),
+      body: JSON.stringify({ app_metadata: updatedMetadata }),
     }
   );
   if (!metaRes.ok) {
@@ -307,7 +307,7 @@ async function createUser(email, password, plan, bracket) {
       email,
       password,
       email_confirm: true,
-      user_metadata: { plan: plan || 'scout', bracket: bracket || 'b1' },
+      app_metadata: { plan: plan || 'scout', bracket: bracket || 'b1' },
     }),
   });
   if (!res.ok) {

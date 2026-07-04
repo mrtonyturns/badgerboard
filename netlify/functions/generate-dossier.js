@@ -29,7 +29,7 @@ async function verifyUser(authHeader) {
 function getUserPlan(user) {
   if (!user) return 'scout'
   if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'agency'
-  const p = user?.user_metadata?.plan
+  const p = user?.app_metadata?.plan
   // Normalize new-format plan keys introduced in v1.14 pricing overhaul
   const PLAN_MAP = {
     c_monitor: 'monitor',  a_monitor: 'monitor',

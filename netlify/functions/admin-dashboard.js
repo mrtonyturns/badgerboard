@@ -45,9 +45,9 @@ async function getAllUsers() {
       email: u.email,
       created_at: u.created_at,
       last_sign_in_at: u.last_sign_in_at,
-      plan: u.user_metadata?.plan || null,
-      bracket: u.user_metadata?.bracket || null,
-      payment_status: u.user_metadata?.payment_status || null,
+      plan: u.app_metadata?.plan || null,
+      bracket: u.app_metadata?.bracket || null,
+      payment_status: u.app_metadata?.payment_status || null,
       email_confirmed: !!u.email_confirmed_at,
     }))
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));

@@ -192,7 +192,9 @@ export const getDossiers = async (candidateId = null) => {
     .select(`*, candidate:candidates(id, name, party, office:offices(name, district_name))`)
     .order('generated_at', { ascending: false })
   if (candidateId) query = query.eq('candidate_id', candidateId)
-  if (uid) query = query.eq('generated_by', uid)
+  // Ownership (own dossiers + auto-regenerated ones for candidates you own) is
+  // enforced by RLS on created_by / candidate ownership — no generated_by filter
+  // (that would hide auto-regenerated dossiers, whose generated_by is null).
   return withOffline(`dossiers:${uid}:${candidateId || 'all'}`, () => query)
 }
 
@@ -202,13 +204,17 @@ export const getDossier = async (id) => {
     .from('dossiers')
     .select(`*, candidate:candidates(*, office:offices(*), election:elections(*))`)
     .eq('id', id)
-  if (uid) q = q.eq('generated_by', uid)
+  // RLS scopes to owner / candidate owner; no generated_by filter (hides auto-regen).
   return withOffline(`dossier:${uid}:${id}`, () => q.single())
 }
 
 export const createDossier = async (data) => {
   const uid = await currentUserId()
-  return supabase.from('dossiers').insert({ ...data, generated_by: uid }).select().single()
+  // Stamp created_by (the ownership column RLS now enforces) plus generated_by
+  // (kept for the "auto-regen vs user-generated" distinction) and user_id.
+  return supabase.from('dossiers')
+    .insert({ ...data, created_by: uid, generated_by: uid, user_id: uid })
+    .select().single()
 }
 
 export const deleteDossier = async (id) => {
