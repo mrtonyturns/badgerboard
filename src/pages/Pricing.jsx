@@ -2,9 +2,10 @@ import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Check, ChevronDown, ChevronUp,
-  ArrowLeft, AlertCircle, Loader2,
+  ArrowLeft, AlertCircle, Loader2, Lock,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { isNativeApp } from '../lib/native'
 import {
   CANDIDATE_PLAN_CONFIG, ACTION_PLAN_CONFIG,
   CANDIDATE_PLAN_ORDER, ACTION_PLAN_ORDER,
@@ -348,6 +349,26 @@ const A_CARD_FEATURES = {
 export default function Pricing() {
   const { user, session, refreshSession } = useAuth()
   const navigate          = useNavigate()
+
+  // ── Native app (App Store / Play Store) ─────────────────────────────────────
+  // Apple/Google rules prohibit selling digital subscriptions in-app outside
+  // their IAP systems. The native app shows a neutral notice instead of plans.
+  if (isNativeApp) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center p-8">
+        <div className="max-w-md text-center">
+          <div className="w-14 h-14 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <Lock className="w-7 h-7 text-gray-500" />
+          </div>
+          <h1 className="text-xl font-black text-gray-900 mb-2">Plans aren&apos;t available in the app</h1>
+          <p className="text-sm text-gray-600 leading-relaxed">
+            Subscriptions and plan changes are managed from your account on the BadgerBoard website. Everything included in your plan works right here in the app.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   const userPlan          = user ? getUserPlan(user)     : null
   const userPlanType      = user ? getUserPlanType(user) : null
   const userBracket       = user ? getUserBracket(user)  : null

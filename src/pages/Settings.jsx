@@ -11,6 +11,7 @@ import {
   getUserPlan, getUserBracket, getPlanConfig, getBracketConfig,
   PLAN_CONFIG, MONTHLY_PRICES, getProfileLimit, getEffectiveProfileLimit,
 } from '../lib/tiers'
+import { isNativeApp } from '../lib/native'
 import { useNavigate, useLocation } from 'react-router-dom'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -730,12 +731,18 @@ export default function Settings() {
                 <p className="text-xs text-red-700 leading-relaxed">
                   Your account is locked. All candidates, profiles, and data will be <strong>permanently deleted on {deleteDate}</strong> ({daysLeft} {daysLeft === 1 ? 'day' : 'days'} from now) unless you resubscribe.
                 </p>
-                <button
-                  onClick={() => navigate('/plans')}
-                  className="mt-3 inline-flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors"
-                >
-                  Resubscribe Now →
-                </button>
+                {isNativeApp ? (
+                  <p className="mt-3 text-xs text-red-700">
+                    To resubscribe, sign in to your account on the BadgerBoard website.
+                  </p>
+                ) : (
+                  <button
+                    onClick={() => navigate('/plans')}
+                    className="mt-3 inline-flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors"
+                  >
+                    Resubscribe Now →
+                  </button>
+                )}
               </div>
             </div>
           )
@@ -817,7 +824,8 @@ export default function Settings() {
         )}
 
         {/* ── Need more dossiers ─────────────────────────────────────────── */}
-        {dossierLimit !== Infinity && (
+        {/* Upsell hidden in native app builds (store rules) */}
+        {!isNativeApp && dossierLimit !== Infinity && (
           <div className="p-4 bg-brand-navy/5 border border-brand-navy/15 rounded-xl flex items-center justify-between gap-4 mb-4">
             <div>
               <p className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
@@ -838,28 +846,36 @@ export default function Settings() {
         )}
 
         {/* ── Manage billing link ────────────────────────────────────────── */}
-        <div className="flex items-center justify-between pt-3 border-t border-gray-100">
-          <p className="text-xs text-gray-400">Invoices, payment method, and subscription details.</p>
-          <div className="flex items-center gap-3">
-            {userPlan !== 'scout' && !cancelPeriodEnd && (
-              <button
-                onClick={() => setCancelPeriodModal(true)}
-                className="inline-flex items-center gap-1.5 text-xs text-red-500 font-semibold hover:underline underline-offset-2"
-              >
-                Cancel plan
-              </button>
-            )}
-            <button
-              onClick={handleManageBilling}
-              disabled={portalLoading}
-              className="inline-flex items-center gap-1.5 text-xs text-brand-navy font-semibold hover:underline underline-offset-2 disabled:opacity-50"
-            >
-              {portalLoading
-                ? <><Loader2 className="w-3 h-3 animate-spin" /> Opening…</>
-                : <><ExternalLink className="w-3 h-3" /> Manage billing</>}
-            </button>
+        {isNativeApp ? (
+          <div className="pt-3 border-t border-gray-100">
+            <p className="text-xs text-gray-400">
+              Billing, invoices, and plan changes are managed from your account on the BadgerBoard website.
+            </p>
           </div>
-        </div>
+        ) : (
+          <div className="flex items-center justify-between pt-3 border-t border-gray-100">
+            <p className="text-xs text-gray-400">Invoices, payment method, and subscription details.</p>
+            <div className="flex items-center gap-3">
+              {userPlan !== 'scout' && !cancelPeriodEnd && (
+                <button
+                  onClick={() => setCancelPeriodModal(true)}
+                  className="inline-flex items-center gap-1.5 text-xs text-red-500 font-semibold hover:underline underline-offset-2"
+                >
+                  Cancel plan
+                </button>
+              )}
+              <button
+                onClick={handleManageBilling}
+                disabled={portalLoading}
+                className="inline-flex items-center gap-1.5 text-xs text-brand-navy font-semibold hover:underline underline-offset-2 disabled:opacity-50"
+              >
+                {portalLoading
+                  ? <><Loader2 className="w-3 h-3 animate-spin" /> Opening…</>
+                  : <><ExternalLink className="w-3 h-3" /> Manage billing</>}
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* AI API Configuration — hidden from users; managed via Netlify env vars */}

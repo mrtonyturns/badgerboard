@@ -1,6 +1,7 @@
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Lock, Sparkles, Check, ArrowRight, Zap } from 'lucide-react'
+import { isNativeApp } from '../lib/native'
 
 /**
  * UpgradePrompt — aggressive, Hormozi-style upgrade gate.
@@ -22,6 +23,34 @@ export default function UpgradePrompt({
   compact  = false,
 }) {
   const navigate = useNavigate()
+
+  // ── Native app (App Store / Play Store) version ────────────────────────────
+  // Store rules don't allow linking to external purchase flows for digital
+  // subscriptions, so the native app shows a neutral notice instead of
+  // pricing, upgrade CTAs, or links to the plans page.
+  if (isNativeApp) {
+    return (
+      <div className={compact
+        ? 'flex items-center gap-3 p-4 bg-gray-50 border border-gray-200 rounded-xl'
+        : 'rounded-2xl border border-gray-200 bg-gray-50 p-8 text-center'}
+      >
+        <div className={compact
+          ? 'w-8 h-8 bg-gray-200 rounded-lg flex items-center justify-center flex-shrink-0'
+          : 'w-14 h-14 bg-gray-200 rounded-2xl flex items-center justify-center mx-auto mb-4'}
+        >
+          <Lock className={compact ? 'w-4 h-4 text-gray-500' : 'w-7 h-7 text-gray-500'} />
+        </div>
+        <div className={compact ? 'min-w-0' : ''}>
+          <p className={compact ? 'text-sm font-bold text-gray-900' : 'text-xl font-black text-gray-900 mb-2'}>
+            {feature} isn&apos;t included in your current plan
+          </p>
+          <p className={compact ? 'text-xs text-gray-500' : 'text-sm text-gray-600 max-w-sm mx-auto'}>
+            Plan changes aren&apos;t available in the app. You can manage your plan from your account on the BadgerBoard website.
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   if (compact) {
     return (

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">BadgerBoard</string>
+    <string name="title_activity_main">BadgerBoard</string>
+    <string name="package_name">com.thebluejackgroup.badgerboard</string>
+    <string name="custom_url_scheme">com.thebluejackgroup.badgerboard</string>
+</resources>

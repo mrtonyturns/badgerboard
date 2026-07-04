@@ -2,6 +2,7 @@ import React from 'react'
 import { useNavigate, useLocation, Link } from 'react-router-dom'
 import { Lock, AlertTriangle, CreditCard, Calendar, ArrowRight } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { isNativeApp } from '../lib/native'
 
 // Pages that remain accessible even when payment is locked.
 // /profiler is included so downgrade-locked users can still read their existing
@@ -73,19 +74,27 @@ export default function PaymentLockOverlay({ children }) {
                 </div>
               </div>
 
-              <Link
-                to="/plans"
-                className="w-full flex items-center justify-center gap-2 bg-brand-red hover:bg-red-700 text-white font-semibold px-6 py-3 rounded-xl transition-colors shadow-sm mb-3"
-              >
-                <ArrowRight className="w-4 h-4" />
-                Resubscribe Now
-              </Link>
-              <button
-                onClick={() => navigate('/settings#billing')}
-                className="w-full text-sm text-gray-500 hover:text-gray-700 transition-colors py-1"
-              >
-                View billing &amp; plan →
-              </button>
+              {isNativeApp ? (
+                <p className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-xl p-3.5">
+                  Subscriptions can&apos;t be managed in the app. Sign in to your account on the BadgerBoard website to resubscribe.
+                </p>
+              ) : (
+                <>
+                  <Link
+                    to="/plans"
+                    className="w-full flex items-center justify-center gap-2 bg-brand-red hover:bg-red-700 text-white font-semibold px-6 py-3 rounded-xl transition-colors shadow-sm mb-3"
+                  >
+                    <ArrowRight className="w-4 h-4" />
+                    Resubscribe Now
+                  </Link>
+                  <button
+                    onClick={() => navigate('/settings#billing')}
+                    className="w-full text-sm text-gray-500 hover:text-gray-700 transition-colors py-1"
+                  >
+                    View billing &amp; plan →
+                  </button>
+                </>
+              )}
             </>
           ) : (
             /* ── Payment failed (past_due) ─── */
@@ -108,13 +117,19 @@ export default function PaymentLockOverlay({ children }) {
                 </p>
               </div>
 
-              <button
-                onClick={() => navigate('/settings#billing')}
-                className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white font-semibold px-6 py-3 rounded-xl transition-colors shadow-sm"
-              >
-                <CreditCard className="w-4 h-4" />
-                Update Payment Method
-              </button>
+              {isNativeApp ? (
+                <p className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-xl p-3.5">
+                  Payment methods can&apos;t be updated in the app. Sign in to your account on the BadgerBoard website to resolve this.
+                </p>
+              ) : (
+                <button
+                  onClick={() => navigate('/settings#billing')}
+                  className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white font-semibold px-6 py-3 rounded-xl transition-colors shadow-sm"
+                >
+                  <CreditCard className="w-4 h-4" />
+                  Update Payment Method
+                </button>
+              )}
             </>
           )}
         </div>

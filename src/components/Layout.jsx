@@ -10,6 +10,32 @@ import { useAuth } from '../contexts/AuthContext'
 import BluejackLogo from './BluejackLogo'
 import BadgerBoardLogo from './BadgerBoardLogo'
 import { getUserTier, getTierConfig } from '../lib/tiers'
+import { isNativeApp } from '../lib/native'
+
+// ── Offline banner ─────────────────────────────────────────────────────────────
+// Shown while the device has no connection. Reads (recently viewed data) are
+// served from the on-device cache; door-knock logging queues via offlineQueue.
+function OfflineBanner() {
+  const [offline, setOffline] = React.useState(
+    typeof navigator !== 'undefined' && navigator.onLine === false
+  )
+  React.useEffect(() => {
+    const on  = () => setOffline(false)
+    const off = () => setOffline(true)
+    window.addEventListener('online', on)
+    window.addEventListener('offline', off)
+    return () => {
+      window.removeEventListener('online', on)
+      window.removeEventListener('offline', off)
+    }
+  }, [])
+  if (!offline) return null
+  return (
+    <div className="bg-amber-500 text-white text-xs font-semibold text-center px-4 py-2">
+      You&apos;re offline — showing recently viewed data where available. Changes to door-knock logs will sync when you reconnect.
+    </div>
+  )
+}
 import AnnouncementBanner from './AnnouncementBanner'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
@@ -257,18 +283,21 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, onNavigate, onSignOut, ti
             <span>Admin Panel</span>
           </NavLink>
         )}
-        <NavLink
-          to="/plans"
-          onClick={onNavigate}
-          className={({ isActive }) =>
-            `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
-              isActive ? 'bg-brand-red text-white' : 'text-white/70 hover:text-white hover:bg-white/10'
-            }`
-          }
-        >
-          <Tag className="w-4 h-4" />
-          <span>Plans &amp; Pricing</span>
-        </NavLink>
+        {/* Store rules: no purchase/pricing UI in the native app */}
+        {!isNativeApp && (
+          <NavLink
+            to="/plans"
+            onClick={onNavigate}
+            className={({ isActive }) =>
+              `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
+                isActive ? 'bg-brand-red text-white' : 'text-white/70 hover:text-white hover:bg-white/10'
+              }`
+            }
+          >
+            <Tag className="w-4 h-4" />
+            <span>Plans &amp; Pricing</span>
+          </NavLink>
+        )}
         <NavLink
           to="/settings"
           onClick={onNavigate}
@@ -754,6 +783,9 @@ export default function Layout() {
 
         {/* Announcement banner (above page content) */}
         <AnnouncementBanner />
+
+        {/* Offline indicator */}
+        <OfflineBanner />
 
         {/* Page content */}
         <main className="flex-1 overflow-y-auto relative">

@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { withOffline } from './offlineCache'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -70,7 +71,12 @@ async function currentUserId() {
 // ── Offices (shared reference data — no user scoping) ──────────
 // Fetch ALL offices, paginating through Supabase's 1000-row max_rows limit.
 // The offices table has 3,200+ rows so a single request would be truncated.
-export const getOffices = async (filters = {}) => {
+export const getOffices = async (filters = {}) => withOffline(
+  `offices:${JSON.stringify(filters)}`,
+  () => fetchOffices(filters)
+)
+
+const fetchOffices = async (filters = {}) => {
   const PAGE = 1000
   let all = []
   let offset = 0
@@ -108,8 +114,10 @@ export const deleteOffice = async (id) =>
   supabase.from('offices').delete().eq('id', id)
 
 // ── Elections (shared reference data — no user scoping) ────────
-export const getElections = async () =>
-  supabase.from('elections').select('*').order('election_date')
+export const getElections = async () => withOffline(
+  'elections',
+  () => supabase.from('elections').select('*').order('election_date')
+)
 
 export const createElection = async (data) =>
   supabase.from('elections').insert(data).select().single()
@@ -143,7 +151,7 @@ export const getCandidates = async (filters = {}) => {
   if (filters.party) query = query.eq('party', filters.party)
   if (filters.status) query = query.eq('status', filters.status)
   if (filters.search) query = query.ilike('name', `%${filters.search}%`)
-  return query
+  return withOffline(`candidates:${uid}:${JSON.stringify(filters)}`, () => query)
 }
 
 export const getCandidate = async (id) => {
@@ -157,7 +165,7 @@ export const getCandidate = async (id) => {
     `)
     .eq('id', id)
   if (uid) q = q.eq('created_by', uid)
-  return q.single()
+  return withOffline(`candidate:${uid}:${id}`, () => q.single())
 }
 
 export const createCandidate = async (data) => {
@@ -185,7 +193,7 @@ export const getDossiers = async (candidateId = null) => {
     .order('generated_at', { ascending: false })
   if (candidateId) query = query.eq('candidate_id', candidateId)
   if (uid) query = query.eq('generated_by', uid)
-  return query
+  return withOffline(`dossiers:${uid}:${candidateId || 'all'}`, () => query)
 }
 
 export const getDossier = async (id) => {
@@ -195,7 +203,7 @@ export const getDossier = async (id) => {
     .select(`*, candidate:candidates(*, office:offices(*), election:elections(*))`)
     .eq('id', id)
   if (uid) q = q.eq('generated_by', uid)
-  return q.single()
+  return withOffline(`dossier:${uid}:${id}`, () => q.single())
 }
 
 export const createDossier = async (data) => {
@@ -260,7 +268,7 @@ export const getRecentActivity = async (limit = 20) => {
   const uid = await currentUserId()
   let q = supabase.from('activity_log').select('*').order('created_at', { ascending: false }).limit(limit)
   if (uid) q = q.eq('user_id', uid)
-  return q
+  return withOffline(`activity:${uid}:${limit}`, () => q)
 }
 
 // ── Incumbent Records (USER-SCOPED via candidate) ──────────────

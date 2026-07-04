@@ -1,0 +1,22 @@
+{
+  "appId": "com.thebluejackgroup.badgerboard",
+  "appName": "BadgerBoard",
+  "webDir": "dist2",
+  "server": {
+    "androidScheme": "https"
+  },
+  "ios": {
+    "contentInset": "automatic"
+  },
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "launchAutoHide": true,
+      "backgroundColor": "#0A1628",
+      "showSpinner": false
+    }
+  }
+}
