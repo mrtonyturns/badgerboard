@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Building2, CalendarDays, Target, Users, ListChecks,
   FileText, Settings, LogOut, Menu, X, ChevronRight, Bell,
   User, CreditCard, Shield, ChevronDown, Tag, DoorOpen, UserCheck,
-  ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink,
+  ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink, Users2,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import BluejackLogo from './BluejackLogo'
