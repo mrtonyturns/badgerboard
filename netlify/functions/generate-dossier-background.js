@@ -659,7 +659,9 @@ exports.handler = async (event) => {
   // Grok: real-time X sentiment + breaking coverage (runs in parallel with Perplexity)
   const grokPromise         = fetchGrokXIntelligence(safe.name, officeLine, safe.districtName, safe.twitter_handle, ctx, mode)
   // Official government records (FEC / CourtListener / LegiScan) — direct API ground truth
-  const officialPromise     = fetchOfficialRecords(safe.name, officeLine).catch(() => null)
+  // Include user research-context in the federal-office check so FEC still fires
+  // for congressional candidates whose office isn't linked in the DB.
+  const officialPromise     = fetchOfficialRecords(safe.name, `${officeLine} ${ctx || ''} ${safe.occupation || ''}`).catch(() => null)
 
   // ─── System Prompt (v4.1 structure + current legal compliance) ─────────────
   const systemPrompt = `You are a WI opposition researcher for The Bluejack Group. Build a sourced dossier using public records only. Tables over prose. Concise. Use "&" not "and" in tables.

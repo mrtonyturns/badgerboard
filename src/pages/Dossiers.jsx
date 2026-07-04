@@ -2325,7 +2325,7 @@ export default function Dossiers() {
                       <><Sparkles className="w-4 h-4" /> Generate AI Profile</>
                     )}
                   </button>
-                  <p className="text-xs text-gray-400 text-center">14-section report · 2–4 minutes · Fable AI + live web research</p>
+                  <p className="text-xs text-gray-400 text-center">14-section report · 2–4 minutes · Claude AI + live web search</p>
                   {generating && <GenerationStrip startedAt={generationStartedAt} candidateName={candidates.find(c => c.id === pendingCandidateId)?.name || candidates.find(c => c.id === candidateId)?.name} />}
                 </>
               )}
