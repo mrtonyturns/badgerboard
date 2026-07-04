@@ -160,15 +160,42 @@ async function verifyToken(params) {
     list = lists?.[0] || null
   }
 
+  // Issue a durable session token (magic_token is single-use and cleared above).
+  // The portal stores this and must present it on subsequent get_volunteer/update_stats calls.
+  const sessionToken = crypto.randomBytes(32).toString('hex')
+  await sb(`/volunteers?id=eq.${volunteer.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ session_token: sessionToken }),
+  })
+
   return {
     statusCode: 200,
-    body: JSON.stringify({ volunteer: { ...volunteer, magic_token: undefined }, list }),
+    body: JSON.stringify({
+      volunteer: { ...volunteer, magic_token: undefined, session_token: undefined },
+      session_token: sessionToken,
+      list,
+    }),
   }
 }
 
 // ─── Action: get_volunteer ────────────────────────────────────────────────────
 // Returns volunteer profile by email (post-login, using stored session)
-async function getVolunteer(params) {
+// Returns the authenticated volunteer's email if the request carries a valid
+// Supabase JWT, else null. Used to let email-based self-lookups authenticate.
+async function emailFromJwt(authHeader) {
+  const token = (authHeader || '').replace('Bearer ', '')
+  if (!token) return null
+  try {
+    const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${token}` },
+    })
+    if (!r.ok) return null
+    const u = await r.json()
+    return u?.email ? String(u.email).toLowerCase() : null
+  } catch { return null }
+}
+
+async function getVolunteer(params, authHeader) {
   const { email, volunteer_id } = params
   if (!email && !volunteer_id) {
     return { statusCode: 400, body: JSON.stringify({ error: 'email or volunteer_id required' }) }
@@ -186,26 +213,54 @@ async function getVolunteer(params) {
   }
 
   const volunteer = volunteers[0]
-  // Mask the token
+
+  // Authorize: caller must present this volunteer's session_token, OR a valid
+  // Supabase JWT whose email matches this volunteer. Prevents unauthenticated
+  // enumeration of volunteer PII by email/id.
+  const providedToken = params.session_token || (authHeader || '').replace('Bearer ', '')
+  const tokenOk = volunteer.session_token && providedToken && providedToken === volunteer.session_token
+  let jwtOk = false
+  if (!tokenOk) {
+    const jwtEmail = await emailFromJwt(authHeader)
+    jwtOk = jwtEmail && volunteer.email && jwtEmail === String(volunteer.email).toLowerCase()
+  }
+  if (!tokenOk && !jwtOk) {
+    return { statusCode: 401, body: JSON.stringify({ error: 'Unauthorized' }) }
+  }
+
+  // Never leak the tokens back to the client
   delete volunteer.magic_token
+  delete volunteer.session_token
 
   return { statusCode: 200, body: JSON.stringify({ volunteer }) }
 }
 
 // ─── Action: update_stats ─────────────────────────────────────────────────────
-async function updateStats(params) {
+async function updateStats(params, authHeader) {
   const { volunteer_id, doors_knocked = 0, contacts_made = 0, shift_completed = false } = params
   if (!volunteer_id) {
     return { statusCode: 400, body: JSON.stringify({ error: 'volunteer_id required' }) }
   }
 
-  // Get current stats
-  const res = await sb(`/volunteers?id=eq.${volunteer_id}&select=doors_knocked,contacts_made,shifts_worked`)
+  // Get current stats + token for authorization
+  const res = await sb(`/volunteers?id=eq.${volunteer_id}&select=doors_knocked,contacts_made,shifts_worked,session_token,email`)
   const rows = await res.json()
   if (!rows?.length) {
     return { statusCode: 404, body: JSON.stringify({ error: 'Volunteer not found' }) }
   }
   const current = rows[0]
+
+  // Authorize: session_token match OR a Supabase JWT whose email matches.
+  const providedToken = params.session_token || (authHeader || '').replace('Bearer ', '')
+  const tokenOk = current.session_token && providedToken && providedToken === current.session_token
+  let jwtOk = false
+  if (!tokenOk) {
+    const jwtEmail = await emailFromJwt(authHeader)
+    jwtOk = jwtEmail && current.email && jwtEmail === String(current.email).toLowerCase()
+  }
+  if (!tokenOk && !jwtOk) {
+    return { statusCode: 401, body: JSON.stringify({ error: 'Unauthorized' }) }
+  }
 
   const patch = {
     doors_knocked: (current.doors_knocked || 0) + doors_knocked,
@@ -288,10 +343,13 @@ export const handler = async (event) => {
 
   const { action, params = {} } = body
 
-  // Token verification doesn't require coordinator auth
+  // verify_token exchanges a single-use magic link for a durable session token.
+  // get_volunteer/update_stats are self-service but now require that session
+  // token (or a matching Supabase JWT) — see the checks inside each.
+  const selfAuthHeader = event.headers.authorization || event.headers.Authorization || ''
   if (action === 'verify_token') return verifyToken(params)
-  if (action === 'get_volunteer') return getVolunteer(params)
-  if (action === 'update_stats')  return updateStats(params)
+  if (action === 'get_volunteer') return getVolunteer(params, selfAuthHeader)
+  if (action === 'update_stats')  return updateStats(params, selfAuthHeader)
 
   // All other actions require coordinator auth
   const authHeader = event.headers.authorization || ''

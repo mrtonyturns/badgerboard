@@ -338,11 +338,12 @@ function DoorsTab({ volunteer }) {
       })
     }
 
-    // Update volunteer stats
+    // Update volunteer stats (authenticated with the durable session token)
     await callApi('update_stats', {
       volunteer_id: volunteer.id,
       doors_knocked: 1,
       contacts_made: outcome === 'contact' ? 1 : 0,
+      session_token: loadSession()?.session_token,
     })
 
     setTotal(t => t + 1)
@@ -1025,7 +1026,7 @@ export default function VolunteerPortal() {
       if (token && email) {
         const res = await callApi('verify_token', { token, email })
         if (res.volunteer) {
-          const sessionData = { volunteer: res.volunteer, list: res.list }
+          const sessionData = { volunteer: res.volunteer, list: res.list, session_token: res.session_token }
           saveSession(sessionData)
           setVolunteer({ ...res.volunteer, list: res.list })
           // Clean URL
@@ -1038,8 +1039,8 @@ export default function VolunteerPortal() {
       // 2. Check Supabase session (from OTP email link)
       const { data: { session } } = await supabase.auth.getSession()
       if (session?.user?.email) {
-        // Look up volunteer by email
-        const res = await callApi('get_volunteer', { email: session.user.email })
+        // Look up volunteer by email — authenticate with the Supabase JWT
+        const res = await callApi('get_volunteer', { email: session.user.email }, session.access_token)
         if (res.volunteer) {
           const sessionData = { volunteer: res.volunteer }
           saveSession(sessionData)
@@ -1052,10 +1053,10 @@ export default function VolunteerPortal() {
       // 3. Check local session cache
       const cached = loadSession()
       if (cached?.volunteer) {
-        // Re-validate from server
-        const res = await callApi('get_volunteer', { volunteer_id: cached.volunteer.id })
+        // Re-validate from server using the durable session token
+        const res = await callApi('get_volunteer', { volunteer_id: cached.volunteer.id, session_token: cached.session_token })
         if (res.volunteer) {
-          saveSession({ volunteer: res.volunteer })
+          saveSession({ volunteer: res.volunteer, list: cached.list, session_token: cached.session_token })
           setVolunteer(res.volunteer)
         } else {
           clearSession()
@@ -1070,7 +1071,7 @@ export default function VolunteerPortal() {
     // Also listen for Supabase auth changes (magic link click)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user?.email && !volunteer) {
-        const res = await callApi('get_volunteer', { email: session.user.email })
+        const res = await callApi('get_volunteer', { email: session.user.email }, session.access_token)
         if (res.volunteer) {
           saveSession({ volunteer: res.volunteer })
           setVolunteer(res.volunteer)
@@ -1218,10 +1219,11 @@ export default function VolunteerPortal() {
   // ── Refresh volunteer data ─────────────────────────────────────────────────
   const handleRefresh = useCallback(async () => {
     if (!volunteer?.id) return
-    const res = await callApi('get_volunteer', { volunteer_id: volunteer.id })
+    const cached = loadSession()
+    const res = await callApi('get_volunteer', { volunteer_id: volunteer.id, session_token: cached?.session_token })
     if (res.volunteer) {
       const updated = { ...res.volunteer, list: volunteer.list }
-      saveSession({ volunteer: updated })
+      saveSession({ volunteer: updated, list: cached?.list, session_token: cached?.session_token })
       setVolunteer(updated)
     }
   }, [volunteer])
