@@ -8,7 +8,7 @@ const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY // must be set in Netl
 const XAI_API_KEY        = process.env.XAI_API_KEY        // xAI Grok — x.ai console
 const SUPABASE_URL       = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-const CLAUDE_MODEL       = 'claude-sonnet-5' // latest Sonnet — Fable 5's always-on thinking is cost-prohibitive here
+const CLAUDE_MODEL       = 'claude-fable-5' // Fable 5 (per request) — always-on thinking; parsing skips thinking blocks & max_tokens sized for it
 const GROK_MODEL         = 'grok-4.3'  // latest Grok — Responses API w/ server-side x_search + web_search (verified 2026-07)
 
 // Admin emails — always treated as Agency tier
@@ -600,7 +600,7 @@ exports.handler = async (event) => {
           },
           body: JSON.stringify({
             model: CLAUDE_MODEL,
-            max_tokens: 20,
+            max_tokens: 512,
             messages: [{ role: 'user', content: 'Say OK' }],
           }),
         })
@@ -610,7 +610,7 @@ exports.handler = async (event) => {
           return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: `API ${r.status}: ${errText.slice(0, 300)}`, ms }) }
         }
         const d = await r.json()
-        return { statusCode: 200, headers, body: JSON.stringify({ ok: true, reply: d.content?.[0]?.text, ms, model: CLAUDE_MODEL }) }
+        return { statusCode: 200, headers, body: JSON.stringify({ ok: true, reply: (d.content || []).filter(b => b.type === 'text').map(b => b.text).join(''), ms, model: CLAUDE_MODEL }) }
       } catch (e) {
         return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: e.message, hint: 'API call failed or timed out' }) }
       }
@@ -1319,7 +1319,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     const webSearchTools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }]
     const claudePayload = {
       model: CLAUDE_MODEL,
-      max_tokens: 10000,
+      max_tokens: 14000,
       system: systemPrompt + webSearchDirective,
       tools: webSearchTools,
       messages: [{ role: 'user', content: userPrompt }],
@@ -1362,7 +1362,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     if (sectionCount < 10) {
       console.log('[dossier-bg] Too few sections — retrying with continuation prompt')
       const retryPrompt = `The dossier you just generated for ${safe.name} was cut short — only ${sectionCount} of 14 sections were included. Continue from where it was cut off and complete ALL missing sections. Start with the next missing ## SECTION header and continue through ## SECTION 14. Do not repeat sections already written.\n\nPrevious output (partial):\n${content.slice(-3000)}`
-      const retryResp = await callClaudeWithRetry({ model: CLAUDE_MODEL, max_tokens: 10000, system: systemPrompt + webSearchDirective, tools: webSearchTools, messages: [{ role: 'user', content: retryPrompt }] })
+      const retryResp = await callClaudeWithRetry({ model: CLAUDE_MODEL, max_tokens: 14000, system: systemPrompt + webSearchDirective, tools: webSearchTools, messages: [{ role: 'user', content: retryPrompt }] })
       if (retryResp.ok) {
         const retryData = await retryResp.json()
         const continuation = extractClaudeText(retryData)

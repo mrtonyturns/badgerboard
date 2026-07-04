@@ -21,14 +21,14 @@ async function callClaude(prompt) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-5',
-      max_tokens: 1024,
+      model: 'claude-fable-5',
+      max_tokens: 6000,
       messages: [{ role: 'user', content: prompt }],
     }),
   })
   if (!res.ok) throw new Error(`Anthropic API error ${res.status}`)
   const data = await res.json()
-  return data.content?.[0]?.text || ''
+  return ((data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')) || ''
 }
 
 // Is it election night? 6pm–3am CST
@@ -120,7 +120,7 @@ exports.handler = async (event) => {
                 { role: 'system', content: 'You are a Wisconsin election results researcher. Search for and return the latest vote totals and results for the specified election. Include vote counts, percentages, winner declarations, and reporting percentages.' },
                 { role: 'user', content: `Find the latest election results for: ${election.name} on ${election.election_date} in Wisconsin. Candidates: ${candidateList}` }
               ],
-              max_tokens: 1500
+              max_tokens: 6000
             })
           })
           if (pRes.ok) {

@@ -5,7 +5,7 @@
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const SUPABASE_URL      = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
-const MODEL = 'claude-sonnet-5'
+const MODEL = 'claude-fable-5'
 
 const { ADMIN_EMAILS } = require('./_config')
 const CAMPAIGN_PLUS  = ['campaign', 'agency', 'c_active', 'c_campaign', 'a_monitor', 'a_active', 'a_campaign']
@@ -128,7 +128,7 @@ Include 5-15 candidates if available. If fewer are known, include only those wit
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 2000,
+        max_tokens: 7000,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
       }),
@@ -140,7 +140,7 @@ Include 5-15 candidates if available. If fewer are known, include only those wit
     }
 
     const data    = await response.json()
-    const rawText = data.content?.[0]?.text || '[]'
+    const rawText = ((data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')) || '[]'
 
     let candidates = []
     try {

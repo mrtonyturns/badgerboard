@@ -5,7 +5,7 @@
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const SUPABASE_URL      = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
-const MODEL = 'claude-sonnet-5'
+const MODEL = 'claude-fable-5'
 
 // ─── Sanitization & allowlists ────────────────────────────────────────────────
 function sanitize(val, maxLen = 200) {
@@ -192,7 +192,7 @@ Sort candidates by priority (high first, then medium, then low). Include ALL can
     }
 
     const data = await response.json()
-    const text = data.content?.[0]?.text
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
 
     if (!text) throw new Error('No content returned from Claude')
 

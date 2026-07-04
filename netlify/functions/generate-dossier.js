@@ -6,7 +6,7 @@ const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY // must be set in Netlify env vars
 const SUPABASE_URL       = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-const CLAUDE_MODEL       = 'claude-sonnet-5'
+const CLAUDE_MODEL       = 'claude-fable-5'
 
 const { ADMIN_EMAILS } = require('./_config')
 
@@ -70,7 +70,7 @@ exports.handler = async (event) => {
         const r = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST', signal: ctrl.signal,
           headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: 20, messages: [{ role: 'user', content: 'Say OK' }] }),
+          body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: 512, messages: [{ role: 'user', content: 'Say OK' }] }),
         })
         const ms = Date.now() - t0
         if (!r.ok) {
@@ -78,7 +78,7 @@ exports.handler = async (event) => {
           return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: `API ${r.status}: ${errText.slice(0, 300)}`, ms }) }
         }
         const d = await r.json()
-        return { statusCode: 200, headers, body: JSON.stringify({ ok: true, reply: d.content?.[0]?.text, ms, model: CLAUDE_MODEL }) }
+        return { statusCode: 200, headers, body: JSON.stringify({ ok: true, reply: (d.content || []).filter(b => b.type === 'text').map(b => b.text).join(''), ms, model: CLAUDE_MODEL }) }
       } catch (e) {
         return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: e.message }) }
       }
