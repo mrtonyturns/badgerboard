@@ -8,7 +8,7 @@ import {
   CalendarDays, RefreshCw, Loader2, Sparkles, MapPin, ChevronDown,
   Check, X, Settings as SettingsIcon, ExternalLink,
 } from 'lucide-react'
-import { supabase, getCandidates } from '../lib/supabase'
+import { supabase } from '../lib/supabase'
 
 let _placesCache = null
 async function loadPlaces() {
@@ -28,6 +28,40 @@ export function officeToDistrict(office) {
   if (/u\.?s\.? house|congress/i.test(name) && num) return { key: `congress-${num}`, name: `Congressional District ${num}` }
   if (office.county) return { key: `county-${office.county}`, name: `${office.county} County` }
   return null
+}
+
+// ── Build selectable district / county / city index from the places dataset ──
+export function buildPlaceIndex(places) {
+  if (!places) return { district: [], county: [], city: [] }
+  const districts = [], counties = [], cityMap = new Map()
+  const labelFor = (key) => {
+    const [t, n] = key.split('-')
+    if (t === 'assembly') return `Assembly District ${n}`
+    if (t === 'senate')   return `State Senate District ${n}`
+    if (t === 'congress') return `Congressional District ${n}`
+    return key
+  }
+  for (const [key, v] of Object.entries(places)) {
+    const cts = v.counties || [], pls = v.places || []
+    if (key.startsWith('county-')) {
+      const cty = key.slice(7)
+      counties.push({ key, name: `${cty} County`, counties: [cty],
+        area: pls.length ? `${pls.slice(0, 8).join(', ')} (${cty} County)` : `${cty} County` })
+      for (const city of pls) if (!cityMap.has(city)) cityMap.set(city, cty)
+    } else {
+      districts.push({ key, name: labelFor(key), counties: cts,
+        area: `${pls.join(', ')}${cts.length ? ` (${cts.join(', ')} ${cts.length > 1 ? 'counties' : 'county'})` : ''}` })
+    }
+  }
+  const ord = { congress: 0, senate: 1, assembly: 2 }
+  districts.sort((a, b) => {
+    const [ta, na] = a.key.split('-'), [tb, nb] = b.key.split('-')
+    return (ord[ta] - ord[tb]) || (parseInt(na) - parseInt(nb))
+  })
+  counties.sort((a, b) => a.name.localeCompare(b.name))
+  const cities = [...cityMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([city, cty]) => ({ key: `city-${city}-${cty}`, name: `${city}, WI`, counties: [cty], area: `${city}, WI (${cty} County)` }))
+  return { district: districts, county: counties, city: cities }
 }
 
 const PATTERN = `url("data:image/svg+xml,%3Csvg width='44' height='44' viewBox='0 0 44 44' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='0.07'%3E%3Ccircle cx='6' cy='6' r='2.2'/%3E%3Ccircle cx='28' cy='18' r='1.6'/%3E%3Ccircle cx='14' cy='32' r='1.9'/%3E%3Ccircle cx='38' cy='38' r='2.4'/%3E%3C/g%3E%3C/svg%3E")`
@@ -74,8 +108,8 @@ export default function Events() {
   const askPref       = meta.cal_ask !== false   // default: ask when multiple
   const reminderMins  = meta.cal_reminder ?? 60
 
-  const [candidates, setCandidates]   = useState([])
-  const [officeId, setOfficeId]       = useState('')
+  const [mode, setMode]               = useState('district')  // district | county | city
+  const [sel, setSel]                 = useState('')
   const [events, setEvents]           = useState(null)
   const [fetchedAt, setFetchedAt]     = useState(null)
   const [loading, setLoading]         = useState(false)
@@ -91,27 +125,24 @@ export default function Events() {
 
   useEffect(() => { loadPlaces().then(setPlaces) }, [])
 
-  useEffect(() => {
-    getCandidates().then(({ data }) => {
-      const withOffice = (data || []).filter(c => c.office)
-      setCandidates(withOffice)
-      if (withOffice.length && !officeId) setOfficeId(withOffice[0].id)
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  const index   = useMemo(() => buildPlaceIndex(places), [places])
+  const options = index[mode] || []
+  const target  = options.find(o => o.key === sel) || null
 
-  const selected = candidates.find(c => c.id === officeId)
-  const district = officeToDistrict(selected?.office)
+  // Keep a valid selection when the mode changes or the dataset loads
+  useEffect(() => {
+    if (options.length && !options.find(o => o.key === sel)) setSel(options[0].key)
+  }, [mode, index]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const CACHE_MS = 24 * 3600 * 1000
   const loadEvents = useCallback(async (force = false) => {
-    if (!district) return
+    if (!target) return
     setLoading(true); setError(null); setPhase('Checking for cached events…')
     try {
       // 1. Cache first — shared across all users, refreshed daily
       if (!force) {
         const { data: row } = await supabase.from('district_events')
-          .select('events, fetched_at').eq('district_key', district.key).maybeSingle()
+          .select('events, fetched_at').eq('district_key', target.key).maybeSingle()
         if (row?.events?.length && row.fetched_at && Date.now() - new Date(row.fetched_at).getTime() < CACHE_MS) {
           setEvents(row.events); setFetchedAt(row.fetched_at); setLoading(false)
           return
@@ -124,15 +155,11 @@ export default function Events() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
         body: JSON.stringify({
-          district_key: district.key,
-          district_name: district.name,
-          counties: places?.[district.key]?.counties || (selected?.office?.county ? [selected.office.county] : []),
+          district_key: target.key,
+          district_name: target.name,
+          counties: target.counties || [],
           force,
-          area_description: (() => {
-            const pl = places?.[district.key]
-            if (!pl) return selected?.office?.county ? `${selected.office.county} County area` : district.name
-            return `${pl.places.join(', ')} (${pl.counties.join(', ')} ${pl.counties.length > 1 ? 'counties' : 'county'})`
-          })(),
+          area_description: target.area || target.name,
         }),
       })
       if (res.status !== 202 && !res.ok) throw new Error('Could not start event research — try again')
@@ -141,7 +168,7 @@ export default function Events() {
         await new Promise(r => setTimeout(r, 3000))
         if (i === 8) setPhase('Classifying audiences and gathering addresses…')
         const { data: row } = await supabase.from('district_events')
-          .select('events, fetched_at').eq('district_key', district.key).maybeSingle()
+          .select('events, fetched_at').eq('district_key', target.key).maybeSingle()
         if (row?.fetched_at && new Date(row.fetched_at).getTime() >= startedAt - 5000) {
           if (!row.events?.length) throw new Error('No public events found for this district right now — try Refresh later')
           setEvents(row.events); setFetchedAt(row.fetched_at); setLoading(false)
@@ -151,10 +178,10 @@ export default function Events() {
       throw new Error('Research is taking longer than expected — try Refresh in a minute')
     } catch (e) { setError(e.message) }
     setLoading(false)
-  }, [district?.key, selected, places])
+  }, [target?.key]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // auto-load when office changes (cache-first — cheap)
-  useEffect(() => { if (district?.key) { setEvents(null); loadEvents(false) } }, [district?.key]) // eslint-disable-line
+  useEffect(() => { if (target?.key) { setEvents(null); loadEvents(false) } }, [target?.key]) // eslint-disable-line
 
   const filtered = useMemo(() => {
     if (!events) return []
@@ -257,35 +284,37 @@ export default function Events() {
         </div>
       </div>
 
-      {/* office selector + refresh */}
+      {/* area selector: district / county / city + refresh */}
       <div className="card py-4">
-        <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-          {candidates.length === 0 ? (
-            <p className="text-sm text-gray-500 font-medium">
-              Add a candidate with an office to see their district's events.{' '}
-              <button onClick={() => navigate('/candidates')} className="text-brand-red font-bold hover:underline">Add candidate →</button>
-            </p>
-          ) : (
-            <>
-              <div className="relative flex-1 max-w-xl">
-                <select className="input font-semibold pr-8" value={officeId} onChange={e => setOfficeId(e.target.value)}>
-                  {candidates.map(c => (
-                    <option key={c.id} value={c.id}>{c.name} — {c.office?.name || 'No office'}</option>
-                  ))}
-                </select>
-              </div>
-              {district && (
-                <span className="text-xs font-bold bg-red-50 text-brand-red px-2.5 py-1 rounded-full whitespace-nowrap">{district.name}</span>
-              )}
-              <button onClick={() => loadEvents(true)} disabled={loading} className="flex items-center gap-1.5 text-sm font-bold text-brand-red hover:underline disabled:opacity-50 whitespace-nowrap">
-                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh events
+        <div className="flex flex-col gap-3">
+          <div className="flex gap-1.5">
+            {[['district', 'District'], ['county', 'County'], ['city', 'City']].map(([k, label]) => (
+              <button key={k} onClick={() => setMode(k)}
+                className={`text-xs font-bold px-3.5 py-1.5 rounded-full border-2 transition-colors ${mode === k ? 'bg-brand-navy border-brand-navy text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                {label}
               </button>
-            </>
-          )}
+            ))}
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+            <div className="relative flex-1 max-w-xl">
+              <select className="input font-semibold pr-8" value={sel} onChange={e => setSel(e.target.value)} disabled={!options.length}>
+                {!options.length && <option>Loading…</option>}
+                {options.map(o => (
+                  <option key={o.key} value={o.key}>{o.name}</option>
+                ))}
+              </select>
+            </div>
+            {target && (
+              <span className="text-xs font-bold bg-red-50 text-brand-red px-2.5 py-1 rounded-full whitespace-nowrap">{target.name}</span>
+            )}
+            <button onClick={() => loadEvents(true)} disabled={loading || !target} className="flex items-center gap-1.5 text-sm font-bold text-brand-red hover:underline disabled:opacity-50 whitespace-nowrap">
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh events
+            </button>
+          </div>
+          <p className="text-xs text-gray-400 font-semibold">
+            Browse upcoming public events by legislative district, county, or city — pick any area in Wisconsin.
+          </p>
         </div>
-        {selected && !district && (
-          <p className="text-xs text-amber-600 font-semibold mt-2">This office's district type isn't supported yet — events work for Assembly, State Senate, Congressional, and county offices.</p>
-        )}
       </div>
 
       {/* meta + filters */}
