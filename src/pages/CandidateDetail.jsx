@@ -297,7 +297,7 @@ const PLATFORM_META = {
   facebook:  { color: 'bg-blue-600',   label: 'Facebook',  icon: 'f' },
   twitter:   { color: 'bg-sky-500',    label: 'Twitter/X', icon: '𝕏' },
   x:         { color: 'bg-black',      label: 'X',         icon: '𝕏' },
-  instagram: { color: 'bg-pink-500',   label: 'Instagram', icon: '📷' },
+  instagram: { color: 'bg-pink-500',   label: 'Instagram', icon: 'ig' },
   youtube:   { color: 'bg-red-600',    label: 'YouTube',   icon: '▶' },
   linkedin:  { color: 'bg-blue-700',   label: 'LinkedIn',  icon: 'in' },
   tiktok:    { color: 'bg-gray-900',   label: 'TikTok',    icon: '♪' },
@@ -477,7 +477,7 @@ function SocialMediaCard({ title, searchUrl, url, source, date, description, fla
             {date && <span className="text-xs text-gray-400">· {date}</span>}
             {sentiment && (
               <span className={`inline-flex items-center text-xs font-semibold px-1.5 py-0.5 rounded border ${SENTIMENT_BADGE[sentiment]}`}>
-                {sentiment === '+' ? '👍 Positive' : sentiment === '-' ? '👎 Negative' : '➖ Neutral'}
+                {sentiment === '+' ? '▲ Positive' : sentiment === '-' ? '▼ Negative' : '– Neutral'}
               </span>
             )}
           </div>
@@ -936,8 +936,8 @@ function XTweetCard({ id, text, author_name, author_username, author_image, crea
           {/* Metrics */}
           {(likes > 0 || retweets > 0 || replies > 0) && (
             <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-400">
-              {replies  > 0 && <span>💬 {replies.toLocaleString()}</span>}
-              {retweets > 0 && <span>🔁 {retweets.toLocaleString()}</span>}
+              {replies  > 0 && <span>↩ {replies.toLocaleString()}</span>}
+              {retweets > 0 && <span>↻ {retweets.toLocaleString()}</span>}
               {likes    > 0 && <span>♡ {likes.toLocaleString()}</span>}
             </div>
           )}
@@ -1682,11 +1682,11 @@ function parseNotesData(raw) {
 }
 
 function fileIcon(mimeType = '') {
-  if (mimeType.includes('pdf'))    return '📄'
-  if (mimeType.includes('word') || mimeType.includes('document')) return '📝'
-  if (mimeType.includes('sheet') || mimeType.includes('excel') || mimeType.includes('csv')) return '📊'
-  if (mimeType.startsWith('image/')) return '🖼️'
-  return '📎'
+  if (mimeType.includes('pdf'))    return 'PDF'
+  if (mimeType.includes('word') || mimeType.includes('document')) return 'DOC'
+  if (mimeType.includes('sheet') || mimeType.includes('excel') || mimeType.includes('csv')) return 'XLS'
+  if (mimeType.startsWith('image/')) return 'IMG'
+  return 'FILE'
 }
 
 function formatBytes(bytes) {

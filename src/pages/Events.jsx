@@ -32,15 +32,15 @@ export function officeToDistrict(office) {
 
 const PATTERN = `url("data:image/svg+xml,%3Csvg width='44' height='44' viewBox='0 0 44 44' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='0.07'%3E%3Ccircle cx='6' cy='6' r='2.2'/%3E%3Ccircle cx='28' cy='18' r='1.6'/%3E%3Ccircle cx='14' cy='32' r='1.9'/%3E%3Ccircle cx='38' cy='38' r='2.4'/%3E%3C/g%3E%3C/svg%3E")`
 const CATEGORY_META = {
-  fair:     { label: 'County fair',    color: '#B45309', emoji: '🎡', art: 'linear-gradient(135deg, #D97706 0%, #92400E 55%, #431407 100%)' },
-  market:   { label: 'Farmers market', color: '#15803D', emoji: '🥕', art: 'linear-gradient(135deg, #16A34A 0%, #14532D 60%, #052E16 100%)' },
-  festival: { label: 'Festival',       color: '#B45309', emoji: '🎪', art: 'linear-gradient(135deg, #F59E0B 0%, #B45309 45%, #7C2D12 100%)' },
-  parade:   { label: 'Parade',         color: '#B91C1C', emoji: '🎆', art: 'linear-gradient(135deg, #DC2626 0%, #7F1D1D 55%, #0A1628 100%)' },
-  civic:    { label: 'Civic',          color: '#0369A1', emoji: '🏛️', art: 'linear-gradient(135deg, #0284C7 0%, #075985 55%, #0A1628 100%)' },
-  party:    { label: 'Party event',    color: '#7C3AED', emoji: '🗳️', art: 'linear-gradient(135deg, #8B5CF6 0%, #5B21B6 55%, #2E1065 100%)' },
-  labor:    { label: 'Labor',          color: '#1D4ED8', emoji: '⚒️', art: 'linear-gradient(135deg, #2563EB 0%, #1E40AF 55%, #172554 100%)' },
-  church:   { label: 'Church',         color: '#92400E', emoji: '⛪', art: 'linear-gradient(135deg, #B45309 0%, #713F12 55%, #292018 100%)' },
-  other:    { label: 'Community',      color: '#64748B', emoji: '📍', art: 'linear-gradient(135deg, #64748B 0%, #334155 55%, #0F172A 100%)' },
+  fair:     { label: 'County fair',    color: '#B45309', emoji: '◉', art: 'linear-gradient(135deg, #D97706 0%, #92400E 55%, #431407 100%)' },
+  market:   { label: 'Farmers market', color: '#15803D', emoji: '❋', art: 'linear-gradient(135deg, #16A34A 0%, #14532D 60%, #052E16 100%)' },
+  festival: { label: 'Festival',       color: '#B45309', emoji: '▲', art: 'linear-gradient(135deg, #F59E0B 0%, #B45309 45%, #7C2D12 100%)' },
+  parade:   { label: 'Parade',         color: '#B91C1C', emoji: '✦', art: 'linear-gradient(135deg, #DC2626 0%, #7F1D1D 55%, #0A1628 100%)' },
+  civic:    { label: 'Civic',          color: '#0369A1', emoji: '■', art: 'linear-gradient(135deg, #0284C7 0%, #075985 55%, #0A1628 100%)' },
+  party:    { label: 'Party event',    color: '#7C3AED', emoji: '▣', art: 'linear-gradient(135deg, #8B5CF6 0%, #5B21B6 55%, #2E1065 100%)' },
+  labor:    { label: 'Labor',          color: '#1D4ED8', emoji: '⨳', art: 'linear-gradient(135deg, #2563EB 0%, #1E40AF 55%, #172554 100%)' },
+  church:   { label: 'Church',         color: '#92400E', emoji: '†', art: 'linear-gradient(135deg, #B45309 0%, #713F12 55%, #292018 100%)' },
+  other:    { label: 'Community',      color: '#64748B', emoji: '●', art: 'linear-gradient(135deg, #64748B 0%, #334155 55%, #0F172A 100%)' },
 }
 const LEAN_PILL = {
   confirmed_conservative: { text: 'Confirmed conservative', bg: '#B91C1C', fg: '#fff' },
@@ -356,7 +356,7 @@ export default function Events() {
                   <p className="text-[13px] text-gray-600 font-medium leading-relaxed mt-2">{ev.description}</p>
                   {ev.source_note && (
                     <p className="text-[11px] text-gray-400 font-bold mt-1.5">
-                      {ev.source === 'x' ? '𝕏 ' : ev.source === 'news' ? '📰 ' : ''}via {ev.source_note}
+                      {ev.source === 'x' ? '𝕏 ' : ev.source === 'news' ? '§ ' : ''}via {ev.source_note}
                     </p>
                   )}
 
@@ -447,7 +447,7 @@ export default function Events() {
                   Connect Google, Apple, or Outlook in Settings for one-click adds — or download this event now:
                 </p>
                 <button onClick={() => { downloadIcs(pickerEvent); setPickerEvent(null) }} className="w-full mt-3 bg-brand-navy text-white text-sm font-extrabold py-3 rounded-xl">
-                  ⬇ Download event (.ics) with reminder
+                  ↓ Download event (.ics) with reminder
                 </button>
                 <button onClick={() => { setPickerEvent(null); navigate('/settings#calendars') }} className="w-full mt-2 border-2 border-gray-200 text-gray-700 text-sm font-extrabold py-3 rounded-xl">
                   Connect calendars in Settings →

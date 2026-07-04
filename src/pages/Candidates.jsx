@@ -313,7 +313,7 @@ export default function Candidates() {
         setForm(prev => ({ ...prev, ...formFields }))
         const count = Object.keys(formFields).length
         const context = notes ? ` ${notes}` : ''
-        setAutofillNote(`⚠️ ${count} field${count !== 1 ? 's' : ''} pre-filled from AI training data — accuracy is not guaranteed, especially for local officials. Verify every field before saving.${context}`)
+        setAutofillNote(`Note: ${count} field${count !== 1 ? 's' : ''} pre-filled from AI training data — accuracy is not guaranteed, especially for local officials. Verify every field before saving.${context}`)
       } else {
         setAutofillNote('No information found. AI autofill works best for well-known state/federal candidates — local officials should be entered manually.')
       }

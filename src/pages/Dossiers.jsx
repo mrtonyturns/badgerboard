@@ -241,7 +241,7 @@ function mdToHtml(text, accentColor = '#2563eb') {
     closeList()
     const hasBadge = /\*\*\[(KNOWN|RESEARCH REQUIRED|VERIFY|LIKELY|CONFIRMED)\]\*\*/.test(line)
     const verifyHint = hasBadge
-      ? ` <a href="https://www.google.com/search?q=${encodeURIComponent(line.replace(/\*\*\[[A-Z ]+\]\*\*/g,'').replace(/\*\*/g,'').slice(0,80).trim())}" target="_blank" rel="noopener noreferrer" style="display:inline-block;font-size:0.7rem;color:#6b7280;text-decoration:none;border:1px solid #d1d5db;border-radius:4px;padding:1px 5px;margin-left:4px;vertical-align:middle;" title="Verify this claim">🔍</a>`
+      ? ` <a href="https://www.google.com/search?q=${encodeURIComponent(line.replace(/\*\*\[[A-Z ]+\]\*\*/g,'').replace(/\*\*/g,'').slice(0,80).trim())}" target="_blank" rel="noopener noreferrer" style="display:inline-block;font-size:0.7rem;color:#6b7280;text-decoration:none;border:1px solid #d1d5db;border-radius:4px;padding:1px 5px;margin-left:4px;vertical-align:middle;" title="Verify this claim">⌕</a>`
       : ''
     out.push(`<p style="margin:5px 0;color:#374151;font-size:0.95rem;line-height:1.65;">${applyInline(line)}${verifyHint}</p>`)
   })
@@ -2071,10 +2071,10 @@ export default function Dossiers() {
   })()
 
   const RESEARCH_MODE_CONFIG = {
-    prospect:       { label: 'Prospect',          icon: '🔍', color: 'bg-gray-100 text-gray-700 border-gray-200',     desc: 'Civic background, professional record, community ties — no campaign data expected' },
-    newly_declared: { label: 'Newly Declared',    icon: '📣', color: 'bg-blue-50 text-blue-700 border-blue-200',      desc: 'Announcement coverage, WEC filing, early fundraising, background that led to the run' },
-    challenger:     { label: 'Challenger',         icon: '⚔️', color: 'bg-amber-50 text-amber-700 border-amber-200',   desc: 'Full electoral history, active campaign finance, head-to-head dynamics, polling' },
-    incumbent:      { label: 'Incumbent',          icon: '🏛️', color: 'bg-purple-50 text-purple-700 border-purple-200', desc: 'Voting record, bills sponsored, performance vs. promises, re-election dynamics' },
+    prospect:       { label: 'Prospect',          icon: '○', color: 'bg-gray-100 text-gray-700 border-gray-200',     desc: 'Civic background, professional record, community ties — no campaign data expected' },
+    newly_declared: { label: 'Newly Declared',    icon: '◆', color: 'bg-blue-50 text-blue-700 border-blue-200',      desc: 'Announcement coverage, WEC filing, early fundraising, background that led to the run' },
+    challenger:     { label: 'Challenger',         icon: '▲', color: 'bg-amber-50 text-amber-700 border-amber-200',   desc: 'Full electoral history, active campaign finance, head-to-head dynamics, polling' },
+    incumbent:      { label: 'Incumbent',          icon: '■', color: 'bg-purple-50 text-purple-700 border-purple-200', desc: 'Voting record, bills sponsored, performance vs. promises, re-election dynamics' },
   }
 
   // Pre-populate research context from the candidate record when selection changes

@@ -117,8 +117,8 @@ const AdminDashboard = () => {
               { id: 'errors', label: 'Error Logs' },
               { id: 'elections', label: 'Elections' },
               { id: 'announcements', label: 'Announcements' },
-              { id: 'security', label: '🔒 Security Audit' },
-              { id: 'coupons', label: '🎟️ Coupons' },
+              { id: 'security', label: 'Security Audit' },
+              { id: 'coupons', label: 'Coupons' },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -1811,7 +1811,7 @@ const ErrorLogsTab = ({ apiCall, showToast }) => {
             ) : (
               <tr>
                 <td colSpan={6} className="px-4 py-10 text-center text-gray-500">
-                  {errors.length === 0 ? '🎉 No errors logged' : 'No errors match your filters'}
+                  {errors.length === 0 ? '✓ No errors logged' : 'No errors match your filters'}
                 </td>
               </tr>
             )}

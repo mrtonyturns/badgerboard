@@ -214,7 +214,7 @@ const LEADERBOARD = [
   { rank:4, initials:'LS', name:'Lisa Santos',  color:'#f59e0b', doors:19, contact:52, streak:1 },
 ]
 
-const MEDAL = ['🥇','🥈','🥉','']
+const MEDAL = ['#1','#2','#3','']
 
 // ─── Sub-tab config ───────────────────────────────────────────────────────────
 const TABS = [
@@ -769,11 +769,11 @@ function TurfBuilder({ candKey, cfg, houses, districtGeo, geoLoading, listId }) 
         <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8, flexWrap:'wrap' }}>
           <span style={{ fontSize:13, fontWeight:700, color:'#111' }}>{cfg?.label}</span>
           <div style={{ marginLeft:'auto', display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
-            <button onClick={() => setTool('draw')}   style={btnStyle(tool==='draw')}>✏ Draw Net</button>
+            <button onClick={() => setTool('draw')}   style={btnStyle(tool==='draw')}>✎ Draw Net</button>
             <button onClick={() => setTool('select')} style={btnStyle(tool==='select')}>↖ Select</button>
             <button onClick={() => setIsSatellite(s => !s)} title={isSatellite ? 'Switch to street map' : 'Switch to satellite view'}
               style={{ ...btnStyle(isSatellite), display:'flex', alignItems:'center', gap:5 }}>
-              🛰 {isSatellite ? 'Street' : 'Satellite'}
+              ◍ {isSatellite ? 'Street' : 'Satellite'}
             </button>
             <button onClick={fitDistrict} title="Fit district in view"
               style={{ padding:'4px 9px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer', border:'1px solid #E5E7EB', background:'#fff', color:'#374151' }}>
@@ -797,7 +797,7 @@ function TurfBuilder({ candKey, cfg, houses, districtGeo, geoLoading, listId }) 
                 color: routeVisible ? '#fff' : '#7e22ce',
                 opacity: selectedId === null ? 0.5 : 1,
               }}>
-              🗺 {routeVisible ? 'Hide Route' : 'Show Route'}
+              ➤ {routeVisible ? 'Hide Route' : 'Show Route'}
             </button>
           </div>
         </div>
@@ -814,7 +814,7 @@ function TurfBuilder({ candKey, cfg, houses, districtGeo, geoLoading, listId }) 
             <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center',
               background:'rgba(244,245,247,0.8)', borderRadius:10, pointerEvents:'none' }}>
               <div style={{ textAlign:'center', color:'#6B7280' }}>
-                <div style={{ fontSize:24, marginBottom:8 }}>🗺️</div>
+                <div style={{ fontSize:24, marginBottom:8 }}>➤</div>
                 <div style={{ fontSize:13, fontWeight:600 }}>Loading district map…</div>
               </div>
             </div>
@@ -878,7 +878,7 @@ function TurfBuilder({ candKey, cfg, houses, districtGeo, geoLoading, listId }) 
 
         {nets.length === 0 ? (
           <div style={{ textAlign:'center', padding:'32px 16px', color:'#6B7280' }}>
-            <div style={{ fontSize:28, marginBottom:8 }}>✏️</div>
+            <div style={{ fontSize:28, marginBottom:8 }}>✎</div>
             <div style={{ fontSize:13, fontWeight:600, marginBottom:4 }}>Draw nets on the map</div>
             <div style={{ fontSize:11 }}>Switch to Draw mode, then click & drag to create a turf block. Or use Auto-Assign.</div>
           </div>
@@ -1208,15 +1208,15 @@ function _CanvasserView({ isOnline, listId, onKnockSaved, activeCandidates = [],
   ]
 
   const SIMPLE_BTNS = [
-    { label:'🏠 Home',          bg:'#dcfce7', c:'#15803d', val:'contacted' },
-    { label:'📄 Left Lit',      bg:'#fef9c3', c:'#a16207', val:'not_home' },
-    { label:'🚫 Refused',       bg:'#fee2e2', c:'#b91c1c', val:'refused' },
-    { label:'🛑 No Soliciting', bg:'#fef3c7', c:'#92400e', val:'no_soliciting' },
+    { label:'⌂ Home',          bg:'#dcfce7', c:'#15803d', val:'contacted' },
+    { label:'▤ Left Lit',      bg:'#fef9c3', c:'#a16207', val:'not_home' },
+    { label:'⊘ Refused',       bg:'#fee2e2', c:'#b91c1c', val:'refused' },
+    { label:'■ No Soliciting', bg:'#fef3c7', c:'#92400e', val:'no_soliciting' },
   ]
   const ADVANCED_BTNS = [
-    { label:'⛔ Do Not Knock',  bg:'#dbeafe', c:'#1d4ed8', val:'do_not_knock' },
-    { label:'📬 Moved',         bg:'#f3e8ff', c:'#7e22ce', val:'moved' },
-    { label:'🚗 Wrong Address', bg:'#f3f4f6', c:'#6b7280', val:'wrong_address' },
+    { label:'⊗ Do Not Knock',  bg:'#dbeafe', c:'#1d4ed8', val:'do_not_knock' },
+    { label:'✉ Moved',         bg:'#f3e8ff', c:'#7e22ce', val:'moved' },
+    { label:'✕ Wrong Address', bg:'#f3f4f6', c:'#6b7280', val:'wrong_address' },
   ]
 
   // Load contact history when house is selected
@@ -1363,7 +1363,7 @@ function _CanvasserView({ isOnline, listId, onKnockSaved, activeCandidates = [],
                     type="button"
                     onClick={() => setAdvancedMode(m => !m)}
                     style={{ fontSize:10, fontWeight:600, color: advancedMode ? '#7e22ce' : '#6B7280', background: advancedMode ? '#f3e8ff' : '#f3f4f6', border:'none', borderRadius:5, padding:'3px 8px', cursor:'pointer' }}>
-                    {advancedMode ? '⚡ Simple mode' : '⚙ Advanced'}
+                    {advancedMode ? '▸ Simple mode' : '≡ Advanced'}
                   </button>
                 </div>
 
@@ -1395,7 +1395,7 @@ function _CanvasserView({ isOnline, listId, onKnockSaved, activeCandidates = [],
                 {advancedMode && activeCandidates.length > 1 && (
                   <div style={{ background:'#fafafa', border:'1px solid #E5E7EB', borderRadius:8, padding:'10px 12px', marginBottom:10 }}>
                     <div style={{ fontSize:11, fontWeight:700, color:'#374151', marginBottom:7 }}>
-                      🗳 Voter Support Levels
+                      Voter Support Levels
                     </div>
                     {activeCandidates.map(cand => (
                       <div key={cand.id} style={{ marginBottom:8 }}>
@@ -1435,7 +1435,7 @@ function _CanvasserView({ isOnline, listId, onKnockSaved, activeCandidates = [],
                   return (
                     <div style={{ background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:8, padding:'10px 12px', marginBottom:10 }}>
                       <div style={{ fontSize:11, fontWeight:700, color:'#1d4ed8', marginBottom:7 }}>
-                        📋 Survey Questions
+                        Survey Questions
                       </div>
                       {questions.map(q => (
                         <div key={q.id} style={{ marginBottom:10 }}>
@@ -1692,7 +1692,7 @@ function Leaderboard() {
   return (
     <div style={{ overflowY:'auto', padding:'16px 20px', flex:1 }}>
       <div style={{ maxWidth:640 }}>
-        <div style={{ fontSize:14, fontWeight:700, marginBottom:12 }}>🏆 Volunteer Leaderboard — Spring General 2026</div>
+        <div style={{ fontSize:14, fontWeight:700, marginBottom:12 }}>★ Volunteer Leaderboard — Spring General 2026</div>
         <div style={{ background:'#fff', border:'1px solid #E5E7EB', borderRadius:10, overflow:'hidden', marginBottom:16 }}>
           {LEADERBOARD.map((v, i) => (
             <div key={v.name} style={{ display:'flex', alignItems:'center', gap:12, padding:14, borderBottom: i<LEADERBOARD.length-1 ? '1px solid #f3f4f6':'none', background: i===0 ? '#fffbeb' : '#fff' }}>
@@ -1704,7 +1704,7 @@ function Leaderboard() {
               </div>
               <div style={{ flex:1 }}>
                 <div style={{ fontWeight:700 }}>{v.name}</div>
-                <div style={{ fontSize:11, color:'#6B7280' }}>{v.contact}% contact rate · {v.streak}-day streak 🔥</div>
+                <div style={{ fontSize:11, color:'#6B7280' }}>{v.contact}% contact rate · {v.streak}-day streak ▲</div>
               </div>
               <div style={{ textAlign:'right' }}>
                 <div style={{ fontSize:22, fontWeight:800, color: i===0?'#d97706':'#111' }}>{v.doors}</div>
@@ -1716,7 +1716,7 @@ function Leaderboard() {
 
         {/* Weekly challenge card */}
         <div style={{ background:'linear-gradient(135deg,#7c3aed,#4f46e5)', borderRadius:12, padding:20, color:'#fff' }}>
-          <div style={{ fontSize:15, fontWeight:700, marginBottom:6 }}>🎯 Weekly Challenge: 50 Doors</div>
+          <div style={{ fontSize:15, fontWeight:700, marginBottom:6 }}>◎ Weekly Challenge: 50 Doors</div>
           <p style={{ fontSize:12, color:'rgba(255,255,255,.75)', lineHeight:1.5, marginBottom:12 }}>
             First volunteer to knock 50 doors this week earns a campaign T-shirt and a personal thank-you from the candidate.
           </p>
@@ -2322,10 +2322,10 @@ function MessagesTab({ listId, coordinatorName }) {
   }
 
   const typeColors = {
-    broadcast: { bg:'#dbeafe', c:'#1d4ed8', label:'📢 Broadcast' },
-    alert:     { bg:'#fee2e2', c:'#b91c1c', label:'🚨 Alert' },
-    reroute:   { bg:'#fef9c3', c:'#a16207', label:'🗺️ Reroute' },
-    praise:    { bg:'#dcfce7', c:'#15803d', label:'🏆 Praise' },
+    broadcast: { bg:'#dbeafe', c:'#1d4ed8', label:'◈ Broadcast' },
+    alert:     { bg:'#fee2e2', c:'#b91c1c', label:'▲ Alert' },
+    reroute:   { bg:'#fef9c3', c:'#a16207', label:'➤ Reroute' },
+    praise:    { bg:'#dcfce7', c:'#15803d', label:'★ Praise' },
   }
 
   return (
@@ -2523,7 +2523,7 @@ function SurveyQuestionsModal({ candidate, onClose, onSaved }) {
 function ScoutUpgradePrompt({ feature }) {
   return (
     <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', gap:16, padding:40, textAlign:'center' }}>
-      <div style={{ fontSize:32 }}>🔒</div>
+      <div style={{ fontSize:32, fontWeight:800, color:'#94A3B8' }}>▣</div>
       <div style={{ fontSize:16, fontWeight:700, color:'#111827' }}>{feature} — Campaign Plan & above</div>
       <div style={{ fontSize:13, color:'#6B7280', maxWidth:360 }}>Upgrade to unlock exports, volunteer management, unlimited doors, and more.</div>
       <a href="/plans" style={{ display:'inline-block', background:'#8B0000', color:'#fff', padding:'10px 24px', borderRadius:8, fontSize:14, fontWeight:600, textDecoration:'none' }}>View Plans →</a>

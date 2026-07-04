@@ -55,7 +55,7 @@ function SimulatedDataBanner() {
       borderRadius: 8, padding: '8px 12px', marginBottom: 12,
       fontSize: 12, color: '#854d0e',
     }}>
-      <span style={{ fontSize: 16 }}>⚠️</span>
+      <AlertTriangle style={{ width: 16, height: 16 }} />
       <span>
         <strong>Simulated data:</strong> Vote history dots and propensity scores shown here are placeholder values generated for display purposes only. They do not reflect actual voter records. Connect a voter data provider for real data.
       </span>
@@ -658,7 +658,7 @@ export default function VoterLists() {
                       borderRadius: 8, padding: '8px 12px', marginBottom: 8,
                       fontSize: 12, color: '#92400e',
                     }}>
-                      <span style={{ fontSize: 16 }}>⚠️</span>
+                      <AlertTriangle style={{ width: 16, height: 16 }} />
                       <span>
                         Showing first 1,000 voters. This list has more records — use filters to narrow results or export for the full list.
                       </span>

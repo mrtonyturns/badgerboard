@@ -36,11 +36,11 @@ const KNOCK_OUTCOMES = [
 ]
 
 const SUPPORT_LEVELS = [
-  { value: 5, label: 'Strong Support',   emoji: '💪' },
-  { value: 4, label: 'Lean Support',     emoji: '👍' },
-  { value: 3, label: 'Undecided',        emoji: '🤔' },
-  { value: 2, label: 'Lean Oppose',      emoji: '👎' },
-  { value: 1, label: 'Strong Oppose',    emoji: '✋' },
+  { value: 5, label: 'Strong Support',   emoji: '▲▲' },
+  { value: 4, label: 'Lean Support',     emoji: '▲' },
+  { value: 3, label: 'Undecided',        emoji: '●' },
+  { value: 2, label: 'Lean Oppose',      emoji: '▼' },
+  { value: 1, label: 'Strong Oppose',    emoji: '▼▼' },
 ]
 
 const NOTIF_ICONS = {
@@ -638,11 +638,11 @@ function ProfileTab({ volunteer, onLogout }) {
         <h3 className="text-white/50 text-xs font-semibold uppercase tracking-wider mb-3">Achievements</h3>
         <div className="space-y-2">
           {[
-            { threshold: 1,   icon: '🚪', label: 'First Door',       desc: 'Knocked your first door' },
-            { threshold: 10,  icon: '⚡', label: 'Getting Warmed Up', desc: 'Knocked 10 doors'        },
-            { threshold: 50,  icon: '🔥', label: 'On Fire',           desc: 'Knocked 50 doors'        },
-            { threshold: 100, icon: '🏆', label: 'Century Club',      desc: 'Knocked 100 doors'       },
-            { threshold: 250, icon: '💪', label: 'Road Warrior',      desc: 'Knocked 250 doors'       },
+            { threshold: 1,   icon: '⚑', label: 'First Door',       desc: 'Knocked your first door' },
+            { threshold: 10,  icon: '✦', label: 'Getting Warmed Up', desc: 'Knocked 10 doors'        },
+            { threshold: 50,  icon: '▲', label: 'On Fire',           desc: 'Knocked 50 doors'        },
+            { threshold: 100, icon: '★', label: 'Century Club',      desc: 'Knocked 100 doors'       },
+            { threshold: 250, icon: '◆', label: 'Road Warrior',      desc: 'Knocked 250 doors'       },
           ].map(a => {
             const earned = (volunteer.doors_knocked || 0) >= a.threshold
             return (
