@@ -548,20 +548,56 @@ export const deleteTemplateMilestones = async (candidateId = null) => {
   return q
 }
 
-// ─── Game Plan Tasks (Todoist-style, USER-SCOPED via RLS + explicit filter) ───
+// ─── Game Plan Tasks (Todoist-style) ──────────────────────────────────────────
 // Projects → sections → tasks (subtasks via parent_id). project_id NULL = Inbox.
+//
+// Owner model (Campaign Connect): every row has owner_id = whose plan it is.
+// By default that's the current user. Action accounts with an active link
+// (permissions.manage_tasks) may pass a connected candidate's user id as
+// `ownerId` to view/manage that candidate's plan — enforced by RLS
+// (gp_can_view / gp_can_edit in the DB), not just by these filters.
 
-export const getTaskProjects = async () => {
+const planOwner = async (ownerId) => ownerId || await currentUserId()
+
+// Plans the current user can open: their own + active Campaign Connect links.
+export const getTaskPlanOwners = async () => {
   const uid = await currentUserId()
   if (!uid) return { data: [], error: new Error('Not authenticated') }
-  return withOffline(`gp_projects:${uid}`, () =>
-    supabase.from('gp_projects').select('*').eq('created_by', uid)
+  const { data: links, error } = await supabase
+    .from('account_links')
+    .select('candidate_user_id, candidate_email, permissions, status')
+    .eq('action_user_id', uid)
+    .eq('status', 'active')
+    .not('candidate_user_id', 'is', null)
+  if (error) return { data: [{ id: uid, label: 'My plan', canEdit: true, self: true }], error: null }
+  return {
+    data: [
+      { id: uid, label: 'My plan', canEdit: true, self: true },
+      ...(links || [])
+        .filter(l => l.permissions?.view || l.permissions?.manage_tasks)
+        .map(l => ({
+          id: l.candidate_user_id,
+          label: l.candidate_email,
+          canEdit: Boolean(l.permissions?.manage_tasks),
+          self: false,
+        })),
+    ],
+    error: null,
+  }
+}
+
+export const getTaskProjects = async (ownerId = null) => {
+  const owner = await planOwner(ownerId)
+  if (!owner) return { data: [], error: new Error('Not authenticated') }
+  return withOffline(`gp_projects:${owner}`, () =>
+    supabase.from('gp_projects').select('*').eq('owner_id', owner)
       .eq('archived', false).order('sort_order').order('created_at'))
 }
 
-export const createTaskProject = async (data) => {
+export const createTaskProject = async (data, ownerId = null) => {
   const uid = await currentUserId()
-  return supabase.from('gp_projects').insert({ ...data, created_by: uid }).select().single()
+  const owner = await planOwner(ownerId)
+  return supabase.from('gp_projects').insert({ ...data, created_by: uid, owner_id: owner }).select().single()
 }
 
 export const updateTaskProject = async (id, data) =>
@@ -570,17 +606,18 @@ export const updateTaskProject = async (id, data) =>
 export const deleteTaskProject = async (id) =>
   supabase.from('gp_projects').delete().eq('id', id)
 
-export const getTaskSections = async () => {
-  const uid = await currentUserId()
-  if (!uid) return { data: [], error: new Error('Not authenticated') }
-  return withOffline(`gp_sections:${uid}`, () =>
-    supabase.from('gp_sections').select('*').eq('created_by', uid)
+export const getTaskSections = async (ownerId = null) => {
+  const owner = await planOwner(ownerId)
+  if (!owner) return { data: [], error: new Error('Not authenticated') }
+  return withOffline(`gp_sections:${owner}`, () =>
+    supabase.from('gp_sections').select('*').eq('owner_id', owner)
       .order('sort_order').order('created_at'))
 }
 
-export const createTaskSection = async (data) => {
+export const createTaskSection = async (data, ownerId = null) => {
   const uid = await currentUserId()
-  return supabase.from('gp_sections').insert({ ...data, created_by: uid }).select().single()
+  const owner = await planOwner(ownerId)
+  return supabase.from('gp_sections').insert({ ...data, created_by: uid, owner_id: owner }).select().single()
 }
 
 export const updateTaskSection = async (id, data) =>
@@ -589,28 +626,30 @@ export const updateTaskSection = async (id, data) =>
 export const deleteTaskSection = async (id) =>
   supabase.from('gp_sections').delete().eq('id', id)
 
-// All open tasks + recently completed (completed list is fetched separately when needed)
-export const getTasks = async () => {
-  const uid = await currentUserId()
-  if (!uid) return { data: [], error: new Error('Not authenticated') }
-  return withOffline(`gp_tasks:${uid}`, () =>
-    supabase.from('gp_tasks').select('*').eq('created_by', uid)
-      .eq('completed', false)
+// Open tasks plus completed *subtasks* (so parent progress counts stay right).
+// The full completed log is fetched separately via getCompletedTasks.
+export const getTasks = async (ownerId = null) => {
+  const owner = await planOwner(ownerId)
+  if (!owner) return { data: [], error: new Error('Not authenticated') }
+  return withOffline(`gp_tasks:${owner}`, () =>
+    supabase.from('gp_tasks').select('*').eq('owner_id', owner)
+      .or('completed.eq.false,parent_id.not.is.null')
       .order('sort_order').order('created_at'))
 }
 
-export const getCompletedTasks = async (limit = 200) => {
-  const uid = await currentUserId()
-  if (!uid) return { data: [], error: new Error('Not authenticated') }
-  return withOffline(`gp_tasks_done:${uid}`, () =>
-    supabase.from('gp_tasks').select('*').eq('created_by', uid)
-      .eq('completed', true)
+export const getCompletedTasks = async (ownerId = null, limit = 200) => {
+  const owner = await planOwner(ownerId)
+  if (!owner) return { data: [], error: new Error('Not authenticated') }
+  return withOffline(`gp_tasks_done:${owner}`, () =>
+    supabase.from('gp_tasks').select('*').eq('owner_id', owner)
+      .eq('completed', true).is('parent_id', null)
       .order('completed_at', { ascending: false }).limit(limit))
 }
 
-export const createTask = async (data) => {
+export const createTask = async (data, ownerId = null) => {
   const uid = await currentUserId()
-  return supabase.from('gp_tasks').insert({ ...data, created_by: uid }).select().single()
+  const owner = await planOwner(ownerId)
+  return supabase.from('gp_tasks').insert({ ...data, created_by: uid, owner_id: owner }).select().single()
 }
 
 export const updateTask = async (id, data) =>
@@ -619,17 +658,18 @@ export const updateTask = async (id, data) =>
 export const deleteTask = async (id) =>
   supabase.from('gp_tasks').delete().eq('id', id)
 
-export const getTaskLabels = async () => {
-  const uid = await currentUserId()
-  if (!uid) return { data: [], error: new Error('Not authenticated') }
-  return withOffline(`gp_labels:${uid}`, () =>
-    supabase.from('gp_labels').select('*').eq('created_by', uid).order('name'))
+export const getTaskLabels = async (ownerId = null) => {
+  const owner = await planOwner(ownerId)
+  if (!owner) return { data: [], error: new Error('Not authenticated') }
+  return withOffline(`gp_labels:${owner}`, () =>
+    supabase.from('gp_labels').select('*').eq('owner_id', owner).order('name'))
 }
 
-export const createTaskLabel = async (data) => {
+export const createTaskLabel = async (data, ownerId = null) => {
   const uid = await currentUserId()
+  const owner = await planOwner(ownerId)
   return supabase.from('gp_labels')
-    .upsert({ ...data, created_by: uid }, { onConflict: 'created_by,name' })
+    .upsert({ ...data, created_by: uid, owner_id: owner }, { onConflict: 'owner_id,name' })
     .select().single()
 }
 

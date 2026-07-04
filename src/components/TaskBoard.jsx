@@ -18,7 +18,7 @@ import {
   getTaskSections, createTaskSection, updateTaskSection, deleteTaskSection,
   getTasks, getCompletedTasks, createTask, updateTask, deleteTask,
   getTaskLabels, createTaskLabel, deleteTaskLabel,
-  getElections,
+  getTaskPlanOwners, getElections,
 } from '../lib/supabase'
 import { parseQuickAdd } from '../lib/quickAdd'
 import LoadingBar from './LoadingBar'
@@ -119,7 +119,12 @@ function TaskRow({ task, subtasks = [], projects, onToggle, onOpen, onDelete, sh
     <div>
       <div
         draggable={draggable}
-        onDragStart={(e) => { e.stopPropagation(); onDragStart?.(task) }}
+        onDragStart={(e) => {
+          e.stopPropagation()
+          e.dataTransfer.setData('text/plain', task.id)
+          e.dataTransfer.effectAllowed = 'move'
+          onDragStart?.(task)
+        }}
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDropOn?.(task) }}
         onClick={() => onOpen(task)}
@@ -206,12 +211,13 @@ function QuickAdd({ projects, context, onAdd, autoFocus }) {
   const inputRef = useRef(null)
 
   const submit = async () => {
+    if (saving) return
     const parsed = parseQuickAdd(value, projects)
     if (!parsed.content) return
     setSaving(true)
-    await onAdd(parsed)
+    const ok = await onAdd(parsed)
     setSaving(false)
-    setValue('')
+    if (ok !== false) setValue('')
     inputRef.current?.focus()
   }
 
@@ -541,6 +547,20 @@ export default function TaskBoard() {
   const [fromCache, setFromCache] = useState(false)
   const [setupNeeded, setSetupNeeded] = useState(false)
 
+  const [opError, setOpError] = useState(null)   // last failed mutation message
+  const opErrTimer = useRef(null)
+  const failOp = (msg) => {
+    setOpError(msg)
+    clearTimeout(opErrTimer.current)
+    opErrTimer.current = setTimeout(() => setOpError(null), 6000)
+    loadAll()  // resync state from server (rolls back optimistic change)
+  }
+
+  // Campaign Connect: plans this user can open (own + connected candidates)
+  const [planOwners, setPlanOwners]   = useState([])
+  const [activePlan, setActivePlan]   = useState(null)   // { id, label, canEdit, self }
+  const canEdit = activePlan ? activePlan.canEdit : true
+
   // view: { type: 'today'|'upcoming'|'inbox'|'completed'|'project'|'label', id? }
   const [view, setView]           = useState({ type: 'today' })
   const [layout, setLayout]       = useState('list')   // list | board (project views)
@@ -552,10 +572,15 @@ export default function TaskBoard() {
   const dragTask = useRef(null)
 
   // ── Load ────────────────────────────────────────────────────────────────────
-  const loadAll = async () => {
+  const ownerId = activePlan?.self === false ? activePlan.id : null
+
+  const loadSeq = useRef(0)
+  const loadAll = async (owner = ownerId) => {
+    const seq = ++loadSeq.current
     const [p, s, t, l] = await Promise.all([
-      getTaskProjects(), getTaskSections(), getTasks(), getTaskLabels(),
+      getTaskProjects(owner), getTaskSections(owner), getTasks(owner), getTaskLabels(owner),
     ])
+    if (seq !== loadSeq.current) return   // a newer load (e.g. plan switch) superseded this one
     setProjects(p.data || [])
     setSections(s.data || [])
     setTasks(t.data || [])
@@ -566,13 +591,30 @@ export default function TaskBoard() {
     setSetupNeeded(/relation .* does not exist|schema cache/i.test(errMsg))
     setLoading(false)
   }
-  useEffect(() => { loadAll() }, [])
+
+  useEffect(() => {
+    getTaskPlanOwners().then(({ data }) => {
+      setPlanOwners(data || [])
+      setActivePlan((data || [])[0] || null)
+    })
+    loadAll(null)
+  }, [])
+
+  const switchPlan = async (id) => {
+    const plan = planOwners.find(o => o.id === id)
+    if (!plan || plan.id === activePlan?.id) return
+    setActivePlan(plan)
+    setLoading(true)
+    setView({ type: 'today' })
+    setCompleted([])
+    await loadAll(plan.self ? null : plan.id)
+  }
 
   const loadCompleted = async () => {
-    const { data } = await getCompletedTasks()
+    const { data } = await getCompletedTasks(ownerId)
     setCompleted(data || [])
   }
-  useEffect(() => { if (view.type === 'completed') loadCompleted() }, [view.type])
+  useEffect(() => { if (view.type === 'completed') loadCompleted() }, [view.type, activePlan?.id])
 
   // ── Derived ─────────────────────────────────────────────────────────────────
   const topTasks    = useMemo(() => tasks.filter(t => !t.parent_id), [tasks])
@@ -592,48 +634,84 @@ export default function TaskBoard() {
 
   // ── Task ops (optimistic) ───────────────────────────────────────────────────
   const handleToggle = async (task) => {
+    if (!canEdit) return
     const nowDone = !task.completed
-    const affectedIds = [task.id, ...(nowDone ? (subsByParent[task.id] || []).map(s => s.id) : [])]
+    const stamp = nowDone ? new Date().toISOString() : null
+
+    if (task.parent_id) {
+      // Subtask: stays in state either way so parent progress counts stay right
+      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, completed: nowDone, completed_at: stamp } : t))
+      const { error } = await updateTask(task.id, { completed: nowDone, completed_at: stamp })
+      if (error) failOp("Couldn't update the task — are you online?")
+      return
+    }
+
     if (nowDone) {
-      setTasks(prev => prev.filter(t => !affectedIds.includes(t.id)))
-      setCompleted(prev => [{ ...task, completed: true, completed_at: new Date().toISOString() }, ...prev])
+      // Complete parent + its open subtasks
+      const subIds = (subsByParent[task.id] || []).filter(s => !s.completed).map(s => s.id)
+      setTasks(prev => prev.filter(t => t.id !== task.id && t.parent_id !== task.id))
+      setCompleted(prev => [{ ...task, completed: true, completed_at: stamp }, ...prev])
+      for (const id of [task.id, ...subIds]) {
+        const { error } = await updateTask(id, { completed: true, completed_at: stamp })
+        if (error) { failOp("Couldn't complete the task — are you online?"); return }
+      }
     } else {
+      // Reopen from Completed view, then resync to pull its subtasks back
       setCompleted(prev => prev.filter(t => t.id !== task.id))
       setTasks(prev => [...prev, { ...task, completed: false, completed_at: null }])
-    }
-    for (const id of affectedIds) {
-      await updateTask(id, { completed: nowDone, completed_at: nowDone ? new Date().toISOString() : null })
+      const { error } = await updateTask(task.id, { completed: false, completed_at: null })
+      if (error) { failOp("Couldn't reopen the task — are you online?"); return }
+      loadAll()
     }
   }
 
   const handleDelete = async (task) => {
+    if (!canEdit) return
     setTasks(prev => prev.filter(t => t.id !== task.id && t.parent_id !== task.id))
     setCompleted(prev => prev.filter(t => t.id !== task.id))
-    await deleteTask(task.id)
+    const { error } = await deleteTask(task.id)
+    if (error) failOp("Couldn't delete the task — are you online?")
   }
 
-  const handleSave = async (id, patch) => {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t))
-    const { data } = await updateTask(id, patch)
-    if (data) setTasks(prev => prev.map(t => t.id === id ? data : t))
-    // Persist any new labels to the label registry
-    for (const name of patch.labels || []) {
+  const registerLabels = async (names = []) => {
+    for (const name of names) {
       if (!labels.some(l => l.name === name)) {
-        const { data: nl } = await createTaskLabel({ name })
+        const { data: nl } = await createTaskLabel({ name }, ownerId)
         if (nl) setLabels(prev => prev.some(l => l.name === nl.name) ? prev : [...prev, nl])
       }
     }
   }
 
+  const handleSave = async (id, patch) => {
+    if (!canEdit) return
+    const before = tasks.find(t => t.id === id)
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t))
+    const { data, error } = await updateTask(id, patch)
+    if (error) { failOp("Couldn't save the task — are you online?"); return }
+    if (data) setTasks(prev => prev.map(t => t.id === id ? data : t))
+    // Keep subtasks in the same project/section as their parent
+    if (before && !before.parent_id &&
+        (patch.project_id !== before.project_id || patch.section_id !== before.section_id)) {
+      const move = { project_id: patch.project_id, section_id: patch.section_id }
+      setTasks(prev => prev.map(t => t.parent_id === id ? { ...t, ...move } : t))
+      for (const s of tasks.filter(t => t.parent_id === id)) await updateTask(s.id, move)
+    }
+    await registerLabels(patch.labels)
+  }
+
   const handleAddSub = async (parent, content) => {
-    const { data } = await createTask({
+    if (!canEdit) return
+    const { data, error } = await createTask({
       content, parent_id: parent.id,
       project_id: parent.project_id, section_id: parent.section_id,
-    })
+    }, ownerId)
+    if (error) { failOp("Couldn't add the subtask — are you online?"); return false }
     if (data) setTasks(prev => [...prev, data])
+    return true
   }
 
   const handleQuickAdd = async (parsed, ctx = {}) => {
+    if (!canEdit) return
     const payload = {
       content: parsed.content,
       priority: parsed.priority,
@@ -642,89 +720,110 @@ export default function TaskBoard() {
       project_id: parsed.projectId || ctx.projectId || null,
       section_id: parsed.projectId ? null : (ctx.sectionId || null),
     }
-    const { data } = await createTask(payload)
+    const { data, error } = await createTask(payload, ownerId)
+    if (error) { failOp("Couldn't add the task — are you online?"); return false }
     if (data) setTasks(prev => [...prev, data])
-    for (const name of parsed.labels) {
-      if (!labels.some(l => l.name === name)) {
-        const { data: nl } = await createTaskLabel({ name })
-        if (nl) setLabels(prev => prev.some(l => l.name === nl.name) ? prev : [...prev, nl])
-      }
-    }
+    await registerLabels(parsed.labels)
+    return true
   }
 
   // ── Drag & drop ─────────────────────────────────────────────────────────────
   const onDragStart = (task) => { dragTask.current = task }
 
   const moveToSection = async (sectionId, projectId) => {
+    if (!canEdit) { dragTask.current = null; return }
     const t = dragTask.current
     if (!t) return
     dragTask.current = null
     if (t.section_id === sectionId && t.project_id === projectId) return
     const patch = { section_id: sectionId, project_id: projectId }
     setTasks(prev => prev.map(x => (x.id === t.id || x.parent_id === t.id) ? { ...x, ...patch } : x))
-    await updateTask(t.id, patch)
+    const { error } = await updateTask(t.id, patch)
+    if (error) { failOp("Couldn't move the task — are you online?"); return }
     for (const s of subsByParent[t.id] || []) await updateTask(s.id, patch)
   }
 
+  // Reorder within a project view: may also change section (drop target's home).
   const reorderOn = async (target) => {
+    if (!canEdit) { dragTask.current = null; return }
     const t = dragTask.current
-    if (!t || t.id === target.id) return
     dragTask.current = null
+    if (!t || t.id === target.id) return
     const patch = {
       section_id: target.section_id, project_id: target.project_id,
       sort_order: target.sort_order + 1,
     }
+    setTasks(prev => prev.map(x => (x.id === t.id || x.parent_id === t.id) ? { ...x, ...patch } : x))
+    const { error } = await updateTask(t.id, patch)
+    if (error) { failOp("Couldn't reorder the task — are you online?"); return }
+    for (const s of subsByParent[t.id] || []) await updateTask(s.id, patch)
+  }
+
+  // Reorder in cross-project views (Today/Inbox): sort only — never re-home the task.
+  const reorderOnly = async (target) => {
+    if (!canEdit) { dragTask.current = null; return }
+    const t = dragTask.current
+    dragTask.current = null
+    if (!t || t.id === target.id) return
+    const patch = { sort_order: target.sort_order + 1 }
     setTasks(prev => prev.map(x => x.id === t.id ? { ...x, ...patch } : x))
-    await updateTask(t.id, patch)
+    const { error } = await updateTask(t.id, patch)
+    if (error) failOp("Couldn't reorder the task — are you online?")
   }
 
   // ── Project / section ops ───────────────────────────────────────────────────
   const saveProject = async (form) => {
+    if (!canEdit) return
     if (projectModal && projectModal !== 'new') {
       const { data } = await updateTaskProject(projectModal.id, form)
       if (data) setProjects(prev => prev.map(p => p.id === data.id ? data : p))
     } else {
-      const { data } = await createTaskProject({ ...form, sort_order: projects.length })
+      const { data } = await createTaskProject({ ...form, sort_order: projects.length }, ownerId)
       if (data) { setProjects(prev => [...prev, data]); setView({ type: 'project', id: data.id }) }
     }
   }
 
   const removeProject = async (project) => {
+    if (!canEdit) return
     if (!window.confirm(`Delete "${project.name}" and all its tasks?`)) return
     setProjects(prev => prev.filter(p => p.id !== project.id))
     setTasks(prev => prev.filter(t => t.project_id !== project.id))
     setSections(prev => prev.filter(s => s.project_id !== project.id))
     if (view.type === 'project' && view.id === project.id) setView({ type: 'today' })
-    await deleteTaskProject(project.id)
+    const { error } = await deleteTaskProject(project.id)
+    if (error) failOp("Couldn't delete the project — are you online?")
   }
 
   const addSection = async (projectId) => {
     const name = newSectionName.trim()
     if (!name) { setAddingSection(false); return }
     const secs = sections.filter(s => s.project_id === projectId)
-    const { data } = await createTaskSection({ project_id: projectId, name, sort_order: secs.length })
+    const { data } = await createTaskSection({ project_id: projectId, name, sort_order: secs.length }, ownerId)
     if (data) setSections(prev => [...prev, data])
     setNewSectionName(''); setAddingSection(false)
   }
 
   const removeSection = async (section) => {
+    if (!canEdit) return
     if (!window.confirm(`Delete section "${section.name}"? Its tasks move to the project root.`)) return
     setSections(prev => prev.filter(s => s.id !== section.id))
     setTasks(prev => prev.map(t => t.section_id === section.id ? { ...t, section_id: null } : t))
-    await deleteTaskSection(section.id)
+    const { error } = await deleteTaskSection(section.id)
+    if (error) failOp("Couldn't delete the section — are you online?")
   }
 
   // ── Template generator ──────────────────────────────────────────────────────
   const generateTemplate = async (election) => {
+    if (!canEdit) return
     const base = parseISO(election.election_date)
     const { data: proj } = await createTaskProject({
       name: `Campaign — ${election.name}`, color: '#8B0000', is_favorite: true,
       sort_order: projects.length,
-    })
+    }, ownerId)
     if (!proj) return
     const secMap = {}
     for (let i = 0; i < PHASE_ORDER.length; i++) {
-      const { data: sec } = await createTaskSection({ project_id: proj.id, name: PHASE_ORDER[i], sort_order: i })
+      const { data: sec } = await createTaskSection({ project_id: proj.id, name: PHASE_ORDER[i], sort_order: i }, ownerId)
       if (sec) secMap[PHASE_ORDER[i]] = sec.id
     }
     const newTasks = []
@@ -738,7 +837,7 @@ export default function TaskBoard() {
         labels: t.label ? [t.label] : [],
         priority: 4,
         sort_order: i,
-      })
+      }, ownerId)
       if (data) newTasks.push(data)
     }
     setProjects(prev => [...prev, proj])
@@ -771,6 +870,26 @@ export default function TaskBoard() {
 
       {/* ══ Sidebar ══ */}
       <aside className="w-56 flex-shrink-0 bg-gray-50/80 border-r border-gray-200 p-3 hidden md:flex flex-col gap-0.5 overflow-y-auto">
+        {/* Campaign Connect plan switcher */}
+        {planOwners.length > 1 && (
+          <div className="mb-2">
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider px-3 mb-1">Viewing plan</label>
+            <select
+              value={activePlan?.id || ''}
+              onChange={(e) => switchPlan(e.target.value)}
+              className="w-full text-xs font-medium border border-gray-200 rounded-lg px-2 py-1.5 bg-white truncate"
+            >
+              {planOwners.map(o => (
+                <option key={o.id} value={o.id}>{o.self ? 'My plan' : o.label}</option>
+              ))}
+            </select>
+            {activePlan && !activePlan.self && (
+              <p className="px-1 mt-1 text-[10px] text-gray-400">
+                Connected candidate {activePlan.canEdit ? '· can manage' : '· view only'}
+              </p>
+            )}
+          </div>
+        )}
         {[
           { key: 'today',     icon: Sun,          label: 'Today',     count: counts.today },
           { key: 'upcoming',  icon: CalendarDays, label: 'Upcoming' },
@@ -789,9 +908,11 @@ export default function TaskBoard() {
         {/* Projects */}
         <div className="flex items-center justify-between mt-4 mb-1 px-3">
           <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Projects</span>
-          <button onClick={() => setProjectModal('new')} className="p-0.5 text-gray-400 hover:text-brand-red" title="Add project">
-            <Plus className="w-3.5 h-3.5" />
-          </button>
+          {canEdit && (
+            <button onClick={() => setProjectModal('new')} className="p-0.5 text-gray-400 hover:text-brand-red" title="Add project">
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
         {projects.length === 0 && (
           <p className="px-3 text-xs text-gray-400">No projects yet</p>
@@ -833,14 +954,29 @@ export default function TaskBoard() {
           </>
         )}
 
-        <button onClick={() => setTemplateModal(true)}
-          className="mt-auto pt-4 flex items-center gap-2 px-3 py-2 text-xs font-semibold text-brand-navy/70 hover:text-brand-red transition-colors">
-          <Sparkles className="w-3.5 h-3.5" /> Generate campaign plan
-        </button>
+        {canEdit && (
+          <button onClick={() => setTemplateModal(true)}
+            className="mt-auto pt-4 flex items-center gap-2 px-3 py-2 text-xs font-semibold text-brand-navy/70 hover:text-brand-red transition-colors">
+            <Sparkles className="w-3.5 h-3.5" /> Generate campaign plan
+          </button>
+        )}
       </aside>
 
       {/* ══ Main pane ══ */}
       <main className="flex-1 min-w-0 p-4 md:p-6 overflow-y-auto">
+
+        {/* Mobile plan switcher */}
+        {planOwners.length > 1 && (
+          <select
+            value={activePlan?.id || ''}
+            onChange={(e) => switchPlan(e.target.value)}
+            className="md:hidden w-full text-xs font-medium border border-gray-200 rounded-lg px-2 py-2 bg-white mb-3"
+          >
+            {planOwners.map(o => (
+              <option key={o.id} value={o.id}>{o.self ? 'My plan' : `Plan: ${o.label}`}</option>
+            ))}
+          </select>
+        )}
 
         {/* Mobile view switcher */}
         <div className="md:hidden flex gap-1.5 mb-4 overflow-x-auto pb-1">
@@ -863,20 +999,27 @@ export default function TaskBoard() {
               </button>
             )
           })}
-          <button onClick={() => setProjectModal('new')}
-            className="px-3 py-1.5 rounded-full text-xs border border-dashed border-gray-300 text-gray-400">+ Project</button>
+          {canEdit && (
+            <button onClick={() => setProjectModal('new')}
+              className="px-3 py-1.5 rounded-full text-xs border border-dashed border-gray-300 text-gray-400">+ Project</button>
+          )}
         </div>
 
         {fromCache && (
           <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4">
-            <AlertCircle className="w-3.5 h-3.5" /> Offline — showing your last synced tasks.
+            <AlertCircle className="w-3.5 h-3.5" /> Offline — showing your last synced tasks. Changes can't be saved until you reconnect.
+          </div>
+        )}
+        {opError && (
+          <div className="flex items-center gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-4">
+            <AlertCircle className="w-3.5 h-3.5" /> {opError}
           </div>
         )}
 
-        {view.type === 'today'     && <TodayView     {...{ topTasks, subsByParent, projects, handleToggle, setDetail, handleDelete, handleQuickAdd, byPriorityThenOrder, onDragStart, reorderOn }} />}
-        {view.type === 'upcoming'  && <UpcomingView  {...{ topTasks, subsByParent, projects, handleToggle, setDetail, handleDelete, handleQuickAdd, byPriorityThenOrder }} />}
-        {view.type === 'inbox'     && <InboxView     {...{ topTasks, subsByParent, projects, handleToggle, setDetail, handleDelete, handleQuickAdd, byPriorityThenOrder, onDragStart, reorderOn }} />}
-        {view.type === 'label'     && <LabelView     labelName={view.id} {...{ topTasks, subsByParent, projects, handleToggle, setDetail, handleDelete, handleQuickAdd, byPriorityThenOrder }} />}
+        {view.type === 'today'     && <TodayView     {...{ topTasks, subsByParent, projects, handleToggle, setDetail, handleDelete, handleQuickAdd, byPriorityThenOrder, onDragStart, canEdit }} reorderOn={reorderOnly} />}
+        {view.type === 'upcoming'  && <UpcomingView  {...{ topTasks, subsByParent, projects, handleToggle, setDetail, handleDelete, handleQuickAdd, byPriorityThenOrder, canEdit }} />}
+        {view.type === 'inbox'     && <InboxView     {...{ topTasks, subsByParent, projects, handleToggle, setDetail, handleDelete, handleQuickAdd, byPriorityThenOrder, onDragStart, canEdit }} reorderOn={reorderOnly} />}
+        {view.type === 'label'     && <LabelView     labelName={view.id} {...{ topTasks, subsByParent, projects, handleToggle, setDetail, handleDelete, handleQuickAdd, byPriorityThenOrder, canEdit }} />}
         {view.type === 'completed' && <CompletedView completed={completed} projects={projects} onToggle={handleToggle} onDelete={handleDelete} />}
         {view.type === 'project' && activeProject && (
           <ProjectView
@@ -884,7 +1027,7 @@ export default function TaskBoard() {
             sections={sections.filter(s => s.project_id === activeProject.id)}
             {...{ topTasks, subsByParent, projects, layout, setLayout, handleToggle, setDetail, handleDelete,
                   handleQuickAdd, byPriorityThenOrder, onDragStart, reorderOn, moveToSection,
-                  addingSection, setAddingSection, newSectionName, setNewSectionName, addSection, removeSection,
+                  addingSection, setAddingSection, newSectionName, setNewSectionName, addSection, removeSection, canEdit,
                   onEditProject: () => setProjectModal(activeProject), onDeleteProject: () => removeProject(activeProject) }}
           />
         )}
@@ -951,7 +1094,7 @@ function TaskList({ items, subsByParent, projects, handleToggle, setDetail, hand
 
 // ── Today ─────────────────────────────────────────────────────────────────────
 function TodayView({ topTasks, subsByParent, projects, handleToggle, setDetail, handleDelete,
-                     handleQuickAdd, byPriorityThenOrder, onDragStart, reorderOn }) {
+                     handleQuickAdd, byPriorityThenOrder, onDragStart, reorderOn, canEdit = true }) {
   const overdue = topTasks
     .filter(t => t.due_date && differenceInCalendarDays(parseISO(t.due_date), new Date()) < 0)
     .sort((a, b) => a.due_date.localeCompare(b.due_date) || byPriorityThenOrder(a, b))
@@ -962,15 +1105,17 @@ function TodayView({ topTasks, subsByParent, projects, handleToggle, setDetail, 
   return (
     <div>
       <ViewHeader title="Today" subtitle={format(new Date(), 'EEEE, MMMM d')} />
-      <div className="mb-4">
-        <QuickAdd projects={projects} context="Today"
-          onAdd={(p) => handleQuickAdd(p, { dueDate: todayStr() })} />
-      </div>
+      {canEdit && (
+        <div className="mb-4">
+          <QuickAdd projects={projects} context="Today"
+            onAdd={(p) => handleQuickAdd(p, { dueDate: todayStr() })} />
+        </div>
+      )}
       {overdue.length > 0 && (
         <>
           <p className="text-xs font-bold text-red-600 uppercase tracking-wider mb-1 mt-2">Overdue</p>
           <TaskList items={overdue} {...{ subsByParent, projects, handleToggle, setDetail, handleDelete }}
-            showProject draggable onDragStart={onDragStart} reorderOn={reorderOn} />
+            showProject draggable={canEdit} onDragStart={onDragStart} reorderOn={reorderOn} />
         </>
       )}
       {today.length > 0 && (
@@ -986,7 +1131,7 @@ function TodayView({ topTasks, subsByParent, projects, handleToggle, setDetail, 
 
 // ── Upcoming ──────────────────────────────────────────────────────────────────
 function UpcomingView({ topTasks, subsByParent, projects, handleToggle, setDetail, handleDelete,
-                        handleQuickAdd, byPriorityThenOrder }) {
+                        handleQuickAdd, byPriorityThenOrder, canEdit = true }) {
   const dated = topTasks.filter(t => t.due_date)
   const days = []
   for (let i = 0; i < 14; i++) {
@@ -1006,7 +1151,7 @@ function UpcomingView({ topTasks, subsByParent, projects, handleToggle, setDetai
   return (
     <div>
       <ViewHeader title="Upcoming" subtitle="Next two weeks and beyond" />
-      <div className="mb-4"><QuickAdd projects={projects} onAdd={handleQuickAdd} /></div>
+      {canEdit && <div className="mb-4"><QuickAdd projects={projects} onAdd={handleQuickAdd} /></div>}
       {overdue.length > 0 && (
         <>
           <p className="text-xs font-bold text-red-600 uppercase tracking-wider mb-1">Overdue</p>
@@ -1041,31 +1186,33 @@ function UpcomingView({ topTasks, subsByParent, projects, handleToggle, setDetai
 
 // ── Inbox ─────────────────────────────────────────────────────────────────────
 function InboxView({ topTasks, subsByParent, projects, handleToggle, setDetail, handleDelete,
-                     handleQuickAdd, byPriorityThenOrder, onDragStart, reorderOn }) {
+                     handleQuickAdd, byPriorityThenOrder, onDragStart, reorderOn, canEdit = true }) {
   const items = topTasks.filter(t => !t.project_id).sort(byPriorityThenOrder)
   return (
     <div>
       <ViewHeader title="Inbox" subtitle="Capture now, organize later" />
-      <div className="mb-4"><QuickAdd projects={projects} context="Inbox" onAdd={handleQuickAdd} autoFocus /></div>
+      {canEdit && <div className="mb-4"><QuickAdd projects={projects} context="Inbox" onAdd={handleQuickAdd} autoFocus /></div>}
       {items.length === 0
         ? <EmptyState text="Inbox zero. Nicely done." />
         : <TaskList items={items} {...{ subsByParent, projects, handleToggle, setDetail, handleDelete }}
-            draggable onDragStart={onDragStart} reorderOn={reorderOn} />}
+            draggable={canEdit} onDragStart={onDragStart} reorderOn={reorderOn} />}
     </div>
   )
 }
 
 // ── Label view ────────────────────────────────────────────────────────────────
 function LabelView({ labelName, topTasks, subsByParent, projects, handleToggle, setDetail,
-                     handleDelete, handleQuickAdd, byPriorityThenOrder }) {
+                     handleDelete, handleQuickAdd, byPriorityThenOrder, canEdit = true }) {
   const items = topTasks.filter(t => t.labels?.includes(labelName)).sort(byPriorityThenOrder)
   return (
     <div>
       <ViewHeader title={`@${labelName}`} subtitle={`${items.length} task${items.length === 1 ? '' : 's'}`} />
-      <div className="mb-4">
-        <QuickAdd projects={projects}
-          onAdd={(p) => handleQuickAdd({ ...p, labels: [...new Set([...p.labels, labelName])] })} />
-      </div>
+      {canEdit && (
+        <div className="mb-4">
+          <QuickAdd projects={projects}
+            onAdd={(p) => handleQuickAdd({ ...p, labels: [...new Set([...p.labels, labelName])] })} />
+        </div>
+      )}
       {items.length === 0
         ? <EmptyState text={`No open tasks with @${labelName}.`} />
         : <TaskList items={items} {...{ subsByParent, projects, handleToggle, setDetail, handleDelete }} showProject />}
@@ -1112,7 +1259,7 @@ function ProjectView({ project, sections, topTasks, subsByParent, projects, layo
                        handleToggle, setDetail, handleDelete, handleQuickAdd, byPriorityThenOrder,
                        onDragStart, reorderOn, moveToSection,
                        addingSection, setAddingSection, newSectionName, setNewSectionName,
-                       addSection, removeSection, onEditProject, onDeleteProject }) {
+                       addSection, removeSection, canEdit = true, onEditProject, onDeleteProject }) {
   const projectTasks = topTasks.filter(t => t.project_id === project.id)
   const noSection    = projectTasks.filter(t => !t.section_id || !sections.some(s => s.id === t.section_id))
   const groups = [
@@ -1148,20 +1295,26 @@ function ProjectView({ project, sections, topTasks, subsByParent, projects, layo
                 <LayoutGrid className="w-3.5 h-3.5" />
               </button>
             </div>
-            <button onClick={onEditProject} className="p-2 text-gray-400 hover:text-brand-navy rounded-lg hover:bg-gray-100" title="Edit project">
-              <Edit2 className="w-3.5 h-3.5" />
-            </button>
-            <button onClick={onDeleteProject} className="p-2 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50" title="Delete project">
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
+            {canEdit && (
+              <>
+                <button onClick={onEditProject} className="p-2 text-gray-400 hover:text-brand-navy rounded-lg hover:bg-gray-100" title="Edit project">
+                  <Edit2 className="w-3.5 h-3.5" />
+                </button>
+                <button onClick={onDeleteProject} className="p-2 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50" title="Delete project">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </>
+            )}
           </div>
         }
       />
 
-      <div className="mb-5">
-        <QuickAdd projects={projects} context={project.name}
-          onAdd={(p) => handleQuickAdd(p, { projectId: project.id })} />
-      </div>
+      {canEdit && (
+        <div className="mb-5">
+          <QuickAdd projects={projects} context={project.name}
+            onAdd={(p) => handleQuickAdd(p, { projectId: project.id })} />
+        </div>
+      )}
 
       {layout === 'list' ? (
         <div className="space-y-5">
@@ -1183,10 +1336,12 @@ function ProjectView({ project, sections, topTasks, subsByParent, projects, layo
                   <p className="text-sm font-bold text-gray-400 border-b-2 border-gray-100 pb-1 mb-1">No section</p>
                 )}
                 <TaskList items={items} {...{ subsByParent, projects, handleToggle, setDetail, handleDelete }}
-                  draggable onDragStart={onDragStart} reorderOn={reorderOn} />
-                <div className="mt-1 ml-3">
-                  <InlineAdd onAdd={(p) => handleQuickAdd(p, { projectId: project.id, sectionId: section?.id || null })} projects={projects} />
-                </div>
+                  draggable={canEdit} onDragStart={onDragStart} reorderOn={reorderOn} />
+                {canEdit && (
+                  <div className="mt-1 ml-3">
+                    <InlineAdd onAdd={(p) => handleQuickAdd(p, { projectId: project.id, sectionId: section?.id || null })} projects={projects} />
+                  </div>
+                )}
               </div>
             )
           ))}
@@ -1199,7 +1354,7 @@ function ProjectView({ project, sections, topTasks, subsByParent, projects, layo
               <button onClick={() => addSection(project.id)} className="text-xs font-bold text-white bg-brand-red px-3 py-1.5 rounded-lg">Add</button>
               <button onClick={() => setAddingSection(false)} className="text-xs text-gray-400">Cancel</button>
             </div>
-          ) : (
+          ) : canEdit && (
             <button onClick={() => setAddingSection(true)}
               className="text-xs font-semibold text-gray-400 hover:text-brand-red inline-flex items-center gap-1">
               <Plus className="w-3.5 h-3.5" /> Add section
@@ -1228,8 +1383,12 @@ function ProjectView({ project, sections, topTasks, subsByParent, projects, layo
                   const due = dueMeta(t.due_date)
                   const subs = subsByParent[t.id] || []
                   return (
-                    <div key={t.id} draggable
-                      onDragStart={() => onDragStart(t)}
+                    <div key={t.id} draggable={canEdit}
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', t.id)
+                        e.dataTransfer.effectAllowed = 'move'
+                        onDragStart(t)
+                      }}
                       onClick={() => setDetail(t)}
                       className="bg-white rounded-lg border border-gray-200 p-3 cursor-pointer hover:shadow-sm group">
                       <div className="flex items-start gap-2">
@@ -1246,14 +1405,16 @@ function ProjectView({ project, sections, topTasks, subsByParent, projects, layo
                     </div>
                   )
                 })}
-                <InlineAdd board onAdd={(p) => handleQuickAdd(p, { projectId: project.id, sectionId: section?.id || null })} projects={projects} />
+                {canEdit && <InlineAdd board onAdd={(p) => handleQuickAdd(p, { projectId: project.id, sectionId: section?.id || null })} projects={projects} />}
               </div>
             </div>
           ))}
-          <button onClick={() => setAddingSection(true)}
-            className="w-52 flex-shrink-0 border-2 border-dashed border-gray-200 rounded-xl p-3 text-xs font-semibold text-gray-400 hover:border-brand-red/40 hover:text-brand-red">
-            + Add section
-          </button>
+          {canEdit && (
+            <button onClick={() => setAddingSection(true)}
+              className="w-52 flex-shrink-0 border-2 border-dashed border-gray-200 rounded-xl p-3 text-xs font-semibold text-gray-400 hover:border-brand-red/40 hover:text-brand-red">
+              + Add section
+            </button>
+          )}
           {addingSection && (
             <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-[20vh]" onClick={() => setAddingSection(false)}>
               <div className="bg-white rounded-xl p-4 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
@@ -1283,7 +1444,7 @@ function InlineAdd({ onAdd, projects, board }) {
   }
   return (
     <div className="my-1">
-      <QuickAdd projects={projects} autoFocus onAdd={async (p) => { await onAdd(p) }} />
+      <QuickAdd projects={projects} autoFocus onAdd={(p) => onAdd(p)} />
       <button onClick={() => setOpen(false)} className="text-[10px] text-gray-400 hover:text-gray-600 mt-1">Close</button>
     </div>
   )

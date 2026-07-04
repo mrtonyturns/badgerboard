@@ -54,7 +54,7 @@ export function parseDatePhrase(text) {
         const yr = m[3] ? (m[3].length === 2 ? 2000 + parseInt(m[3]) : parseInt(m[3])) : today.getFullYear()
         const d = new Date(yr, parseInt(m[1]) - 1, parseInt(m[2]))
         if (!isValid(d)) return null
-        if (!m[3] && d < today) d.setFullYear(d.getFullYear() + 1)  // "7/2" already past → next year
+        if (!m[3] && d < addDays(today, -1)) d.setFullYear(d.getFullYear() + 1)  // "7/2" already past → next year
         return d } },
     // "Jul 20" / "July 20" / "20 July"
     { re: new RegExp(`\\b(${MONTHS}) (\\d{1,2})\\b`, 'i'), fn: (m) => {
@@ -102,7 +102,7 @@ export function parseQuickAdd(input, knownProjects = []) {
 
   // Labels: @word (letters, numbers, _, -)
   const labels = []
-  text = text.replace(/@([\w-]+)/g, (_, l) => { labels.push(l.toLowerCase()); return ' ' })
+  text = text.replace(/(^|\s)@([\w-]+)/g, (_, sp, l) => { labels.push(l.toLowerCase()); return sp })
 
   // Project: greedy match against known project names first (#Campaign Plan),
   // then fall back to single-word #Name
@@ -111,7 +111,11 @@ export function parseQuickAdd(input, knownProjects = []) {
   if (hashIdx !== -1) {
     const after = text.slice(hashIdx + 1)
     const sorted = [...knownProjects].sort((a, b) => b.name.length - a.name.length)
-    const hit = sorted.find(p => after.toLowerCase().startsWith(p.name.toLowerCase()))
+    const hit = sorted.find(p => {
+      if (!after.toLowerCase().startsWith(p.name.toLowerCase())) return false
+      const next = after[p.name.length]
+      return next === undefined || /\s/.test(next)
+    })
     if (hit) {
       projectId = hit.id
       text = text.slice(0, hashIdx) + ' ' + after.slice(hit.name.length)

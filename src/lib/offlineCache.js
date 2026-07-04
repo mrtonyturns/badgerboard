@@ -47,7 +47,7 @@ export function cachePut(key, data) {
   } catch {
     // Quota exceeded — evict a few oldest entries and retry once
     idx = evict(idx, 5)
-    try { localStorage.setItem(PREFIX + key, payload) } catch { return }
+    try { localStorage.setItem(PREFIX + key, payload) } catch { writeIndex(idx); return }
   }
   idx.push({ k: key, at: Date.now() })
   writeIndex(idx)
