@@ -64,6 +64,7 @@ import Prospecting from './pages/Prospecting'
 import VoterLists from './pages/VoterLists'
 // Door Knocking parked — restore import + route to re-enable
 // import DoorKnocking from './pages/DoorKnocking'
+import CampaignConnect from './pages/CampaignConnect'
 import Dossiers from './pages/Dossiers'
 import Settings from './pages/Settings'
 import Terms from './pages/Terms'
@@ -156,6 +157,7 @@ const AppRoutes = () => {
         <Route path="profiler" element={<Dossiers />} />
         <Route path="compare" element={<Compare />} />
         <Route path="events" element={<Events />} />
+        <Route path="campaign-connect" element={<CampaignConnect />} />
         <Route path="settings" element={<Settings />} />
         <Route path="plans" element={<Pricing />} />
         <Route path="admin" element={<AdminDashboard />} />
