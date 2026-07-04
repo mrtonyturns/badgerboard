@@ -511,6 +511,13 @@ export function getProfileLimit(planKey, bracketKey) {
   return cfg.profileLimit ?? 0
 }
 
+// Effective monthly profile limit for a USER — admin accounts (platform owners)
+// are never capped; everyone else gets their plan/bracket limit.
+export function getEffectiveProfileLimit(user) {
+  if (user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase())) return Infinity
+  return getProfileLimit(getUserPlan(user), getUserBracket(user))
+}
+
 // Human-readable label for the profile limit shown in UI (e.g. "2 per candidate")
 export function getProfileLimitLabel(planKey) {
   const cfg = PLAN_CONFIG[planKey]

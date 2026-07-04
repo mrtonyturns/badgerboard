@@ -12,7 +12,7 @@ import {
 } from 'lucide-react'
 import { getCandidates, getDossiers, getDossier, createDossier, deleteDossier, createCandidate, updateCandidate, getOffices } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { getUserTier, getTierConfig, isLiteProfileOnly, LITE_PROFILE_FREE_SECTIONS, getUserBracket, getProfileLimit } from '../lib/tiers'
+import { getUserTier, getTierConfig, isLiteProfileOnly, LITE_PROFILE_FREE_SECTIONS, getUserBracket, getProfileLimit, getEffectiveProfileLimit } from '../lib/tiers'
 import { supabase } from '../lib/supabase'
 import UpgradePrompt from '../components/UpgradePrompt'
 import LoadingBar from '../components/LoadingBar'
@@ -1606,7 +1606,7 @@ export default function Dossiers() {
   const tierConfig      = getTierConfig(userTier) || getTierConfig('scout')
   const userBracket     = getUserBracket(user)
   // Effective monthly limit: fixed for Candidate plans, bracket-scaled for Action plans
-  const effectiveProfileLimit = getProfileLimit(userTier, userBracket)
+  const effectiveProfileLimit = getEffectiveProfileLimit(user)
 
   // ── Dossier status (drives the header indicator in Layout) ────────────────
   const { phase: dossierPhase, candidateId: pendingCandidateId, startedAt: generationStartedAt, startGeneration, setReady: setDossierReady, clearStatus: clearDossierStatus } = useDossierStatus()

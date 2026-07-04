@@ -9,7 +9,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import {
   getUserPlan, getUserBracket, getPlanConfig, getBracketConfig,
-  PLAN_CONFIG, MONTHLY_PRICES, getProfileLimit,
+  PLAN_CONFIG, MONTHLY_PRICES, getProfileLimit, getEffectiveProfileLimit,
 } from '../lib/tiers'
 import { useNavigate, useLocation } from 'react-router-dom'
 
@@ -300,7 +300,7 @@ export default function Settings() {
   const userBracket  = getUserBracket(user)
   const planConfig   = getPlanConfig(userPlan) || getPlanConfig('scout')
   const bracketCfg   = getBracketConfig(userBracket)
-  const dossierLimit = getProfileLimit(userPlan, userBracket)
+  const dossierLimit = getEffectiveProfileLimit(user)
 
   // Live monthly price for current plan+bracket
   const currentPrice = (() => {
