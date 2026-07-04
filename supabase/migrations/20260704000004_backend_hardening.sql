@@ -83,8 +83,8 @@ UPDATE incumbent_records ir SET created_by = (SELECT c.created_by FROM candidate
   WHERE ir.created_by IS NULL AND ir.candidate_id IS NOT NULL;
 UPDATE voters v SET created_by = (SELECT vl.created_by FROM voter_lists vl WHERE vl.id = v.voter_list_id)
   WHERE v.created_by IS NULL AND v.voter_list_id IS NOT NULL;
-UPDATE door_knocks dk SET created_by = (SELECT l.created_by FROM door_knock_lists l WHERE l.id = dk.list_id)
-  WHERE dk.created_by IS NULL AND dk.list_id IS NOT NULL;
+-- door_knocks has no created_by column (uses knocked_by + list_id for ownership via join);
+-- no backfill needed here.
 
 -- ─── 4. Drop migration_v5 ghost policies (permissive OR NULL escapes) ────────
 DO $$
