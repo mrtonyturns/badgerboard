@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
+import { hasFindings } from '../lib/profileContent'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { format } from 'date-fns'
 import {
@@ -2848,7 +2849,7 @@ export default function CandidateDetail() {
               ) : bioSummary.error ? (
                 <div className="space-y-2">
                   <p className="text-xs text-red-500">Could not generate summary: {bioSummary.error}</p>
-                  {candidate.bio_summary && (
+                  {candidate.bio_summary && hasFindings(candidate.bio_summary) && (
                     <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-line">
                       {candidate.bio_summary}
                     </p>
@@ -2873,7 +2874,7 @@ export default function CandidateDetail() {
             ) : (
               /* No dossier — fall back to manual bio_summary field */
               <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-line">
-                {candidate.bio_summary || (
+                {(candidate.bio_summary && hasFindings(candidate.bio_summary) ? candidate.bio_summary : null) || (
                   <span className="text-gray-400 italic">
                     No bio on file.{' '}
                     <Link to={`/dossiers?candidate=${candidate.id}`} className="text-brand-red underline">Generate a profile</Link>{' '}

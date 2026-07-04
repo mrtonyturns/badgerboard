@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { filterSections } from '../lib/profileContent'
 import { useParams, Link } from 'react-router-dom'
 import { format, formatDistanceToNow } from 'date-fns'
 import {
@@ -256,7 +257,7 @@ export default function SharedDossier() {
     )
   }
 
-  const sections = parseSections(dossier.content)
+  const { sections } = filterSections(parseSections(dossier.content))
   const candidate = dossier.candidate
   const generatedAt = dossier.generated_at ? format(new Date(dossier.generated_at), 'MMMM d, yyyy') : ''
 
@@ -323,7 +324,7 @@ export default function SharedDossier() {
                 <span className="text-xs font-bold uppercase tracking-wider" style={{ color: theme.accent }}>{s.label}</span>
               </div>
               <div className="px-5 py-4 bg-white prose-dossier">
-                <div dangerouslySetInnerHTML={{ __html: mdToHtml(s.content, theme.accent) }} />
+                <div dangerouslySetInnerHTML={{ __html: mdToHtml(s.displayContent || s.content, theme.accent) }} />
               </div>
             </div>
           )

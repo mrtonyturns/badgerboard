@@ -9,10 +9,11 @@ import {
   Scale, MessageSquare, ThumbsUp, ThumbsDown, HelpCircle, ChevronRight,
   Clock, DollarSign, Vote, Share2, Globe, Swords, ClipboardCheck,
   Link2, Eye, ExternalLink, ShieldAlert,
-} from 'lucide-react'
+  Maximize2, Minimize2, EyeOff } from 'lucide-react'
 import { getCandidates, getDossiers, getDossier, createDossier, deleteDossier, createCandidate, updateCandidate, getOffices } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserTier, getTierConfig, isLiteProfileOnly, LITE_PROFILE_FREE_SECTIONS, getUserBracket, getProfileLimit, getEffectiveProfileLimit } from '../lib/tiers'
+import { filterSections } from '../lib/profileContent'
 import { supabase } from '../lib/supabase'
 import UpgradePrompt from '../components/UpgradePrompt'
 import LoadingBar from '../components/LoadingBar'
@@ -261,7 +262,7 @@ function buildPrintHtml(dossier, sections) {
       <div style="border-top:3px solid #1e3a5f;padding-top:16px;margin-bottom:12px;">
         <h2 style="font-size:1.1rem;font-weight:800;color:#1e3a5f;margin:0;">${s.label}</h2>
       </div>
-      ${mdToHtml(s.content)}
+      ${mdToHtml(s.displayContent || s.content)}
     </section>
   `).join('')
 
@@ -1344,8 +1345,20 @@ function GenerationStrip({ startedAt, candidateName }) {
 }
 
 function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan }) {
-  const sections = parseSections(dossier.content)
+  const [showEmpty, setShowEmpty] = useState(false)
+  const [expanded, setExpanded]   = useState(false)
+  const allSections = parseSections(dossier.content)
+  const { sections, hiddenCount } = filterSections(allSections, showEmpty)
   const [activeSection, setActiveSection]   = useState(sections[0]?.id)
+
+  // Escape exits the enlarged reading mode
+  useEffect(() => {
+    if (!expanded) return
+    const onKey = (e) => { if (e.key === 'Escape') setExpanded(false) }
+    window.addEventListener('keydown', onKey)
+    document.body.style.overflow = 'hidden'
+    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = '' }
+  }, [expanded])
   const [copied, setCopied]                 = useState(false)
   const [showReviewer, setShowReviewer]     = useState(false)
   const [showAnnotations, setShowAnnotations] = useState(false)
@@ -1407,7 +1420,12 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
   const verifiedPct = totalClaims >= 5 ? Math.round((badgeCounts.strong / totalClaims) * 100) : null
 
   return (
-    <div className="card !p-0 flex flex-col overflow-hidden" style={{ height: '80vh' }}>
+    <div
+      className={expanded
+        ? 'fixed inset-0 z-[200] bg-white flex flex-col overflow-hidden'
+        : 'card !p-0 flex flex-col overflow-hidden rounded-2xl'}
+      style={expanded ? {} : { height: '80vh' }}
+    >
       {/* Document header */}
       <div className="relative flex-shrink-0 px-6 pt-5 pb-5 text-white" style={{ background: 'linear-gradient(135deg, #0A1628 0%, #12203A 65%, #1A0A0A 100%)' }}>
         <div className="flex items-start justify-between gap-3">
@@ -1428,6 +1446,14 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0 ml-3 flex-wrap justify-end" style={{ ['--tw-ring-color']: 'transparent' }}>
+          <button
+            onClick={() => setExpanded(v => !v)}
+            className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold bg-white/10 text-white hover:bg-white/20 transition-all"
+            title={expanded ? 'Exit full-screen reading (Esc)' : 'Enlarge — full-screen reading'}
+          >
+            {expanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            {expanded ? 'Minimize' : 'Enlarge'}
+          </button>
           <button
             onClick={() => setShowAnnotations(v => !v)}
             className={`text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold transition-all ${showAnnotations ? 'bg-yellow-500 text-white' : 'bg-white/10 text-white hover:bg-white/20'}`}
@@ -1504,13 +1530,20 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
               const label = sec.label.replace(/^\d+\s*/, '')
               return (
                 <button key={sec.id} onClick={() => scrollToSection(sec.id)}
-                  className={`w-full flex items-center gap-2 text-left text-xs font-bold py-1.5 pl-3 pr-2 transition-colors ${on ? 'text-brand-red' : 'text-gray-400 hover:text-gray-600'}`}
+                  className={`w-full flex items-center gap-2 text-left text-xs font-bold py-1.5 pl-3 pr-2 transition-colors ${on ? 'text-brand-red' : sec.isEmptySection ? 'text-amber-500' : 'text-gray-400 hover:text-gray-600'}`}
                   style={{ borderLeft: on ? '3px solid #8B0000' : '3px solid transparent', background: on ? 'linear-gradient(to right, #FEF6F6, transparent)' : 'transparent' }}>
                   <span className={`w-[18px] h-[18px] rounded-md text-[9.5px] font-extrabold inline-flex items-center justify-center flex-shrink-0 ${on ? 'bg-brand-red text-white' : 'bg-gray-100 text-gray-400'}`}>{sec.index || i}</span>
                   <span className="truncate">{label}</span>
                 </button>
               )
             })}
+            {hiddenCount > 0 && (
+              <button onClick={() => setShowEmpty(v => !v)}
+                className="w-full flex items-center gap-1.5 text-left text-[11px] font-bold text-gray-300 hover:text-gray-500 py-2 pl-3 mt-2 border-t border-gray-50">
+                {showEmpty ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                {showEmpty ? 'Hide empty sections' : `${hiddenCount} empty section${hiddenCount === 1 ? '' : 's'} hidden`}
+              </button>
+            )}
           </nav>
         )}
         {/* Scrollable dossier content */}
@@ -1563,12 +1596,15 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
                     // Scout lite profile: gate sections not in the free list
                     <LiteProfileGate sectionLabel={s.label} content={s.content} />
                   ) : isSection1or10 ? (
-                    <Section1Renderer content={s.content} />
+                    <Section1Renderer content={s.displayContent || s.content} />
                   ) : (
                     <div
                       className="prose-dossier"
-                      dangerouslySetInnerHTML={{ __html: mdToHtml(s.content, theme.accent) }}
+                      dangerouslySetInnerHTML={{ __html: mdToHtml(s.displayContent || s.content, theme.accent) }}
                     />
+                  )}
+                  {s.isEmptySection && (
+                    <p className="mt-2 text-[11px] font-bold text-amber-600">Hidden by default — no findings in this section for this profile.</p>
                   )}
                   {/* #14 Per-section annotation */}
                   {showAnnotations && (
