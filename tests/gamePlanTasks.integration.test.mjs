@@ -110,10 +110,23 @@ try {
     .update({ content: 'hacked' }).eq('owner_id', cand.id).select()
   ok('view-only: updates blocked (0 rows)', (voUpd || []).length === 0)
 
+  console.log('— v2 features: recurrence, fractional order, batch insert')
+  const { data: recTask, error: re } = await cand.client.from('gp_tasks')
+    .insert({ content: 'Weekly sync', due_date: '2026-07-06', sort_order: 1536.5,
+              recurrence: { freq: 'weekly', interval: 1, weekday: 1 },
+              created_by: cand.id, owner_id: cand.id }).select().single()
+  ok('recurrence JSONB + fractional sort_order accepted', !!recTask && !re
+     && recTask.recurrence?.freq === 'weekly' && recTask.sort_order === 1536.5, re?.message)
+  const { data: batch, error: be } = await cand.client.from('gp_tasks')
+    .insert([1,2,3].map(i => ({ content: 'Batch ' + i, project_id: proj.id, section_id: sec.id,
+      sort_order: i * 1024, created_by: cand.id, owner_id: cand.id }))).select()
+  ok('batch insert returns all rows', batch?.length === 3 && !be, be?.message)
+
   console.log('— project cascade delete')
   const { error: de } = await cand.client.from('gp_projects').delete().eq('id', proj.id)
   const { data: after } = await cand.client.from('gp_tasks').select('*').eq('owner_id', cand.id)
-  ok('deleting project cascades tasks', !de && (after || []).length === 0, de?.message)
+  // Only the Inbox recurring task (no project) should survive the cascade
+  ok('deleting project cascades its tasks', !de && (after || []).every(t => !t.project_id) && (after || []).length === 1, de?.message)
 
 } catch (e) {
   fail++

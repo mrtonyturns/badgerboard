@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { withOffline } from './offlineCache'
+import { withOffline, cachePut } from './offlineCache'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -675,6 +675,47 @@ export const createTaskLabel = async (data, ownerId = null) => {
 
 export const deleteTaskLabel = async (id) =>
   supabase.from('gp_labels').delete().eq('id', id)
+
+// Batch inserts (template generator: one round-trip instead of ~27)
+export const createTaskSectionsBatch = async (rows, ownerId = null) => {
+  const uid = await currentUserId()
+  const owner = await planOwner(ownerId)
+  return supabase.from('gp_sections')
+    .insert(rows.map(r => ({ ...r, created_by: uid, owner_id: owner }))).select()
+}
+
+export const createTasksBatch = async (rows, ownerId = null) => {
+  const uid = await currentUserId()
+  const owner = await planOwner(ownerId)
+  return supabase.from('gp_tasks')
+    .insert(rows.map(r => ({ ...r, created_by: uid, owner_id: owner }))).select()
+}
+
+// Keep the offline snapshot fresh after mutations (called from TaskBoard
+// whenever live state changes, so an offline reload shows current data).
+export const primeTaskCaches = async (ownerId, snap) => {
+  const owner = await planOwner(ownerId)
+  if (!owner) return
+  if (snap.projects) cachePut(`gp_projects:${owner}`, snap.projects)
+  if (snap.sections) cachePut(`gp_sections:${owner}`, snap.sections)
+  if (snap.tasks)    cachePut(`gp_tasks:${owner}`,    snap.tasks)
+  if (snap.labels)   cachePut(`gp_labels:${owner}`,   snap.labels)
+}
+
+// Realtime: change events for one plan's tables (RLS applies to events).
+// Returns an unsubscribe function.
+export const subscribeTaskChanges = async (ownerId, onChange) => {
+  const owner = await planOwner(ownerId)
+  if (!owner) return () => {}
+  const channel = supabase.channel(`gp-plan-${owner}`)
+  for (const table of ['gp_projects', 'gp_sections', 'gp_tasks', 'gp_labels']) {
+    channel.on('postgres_changes',
+      { event: '*', schema: 'public', table, filter: `owner_id=eq.${owner}` },
+      onChange)
+  }
+  channel.subscribe()
+  return () => { supabase.removeChannel(channel) }
+}
 
 // ─── Turf blocks — localStorage-backed (no DDL required) ─────────────────────
 // Stored as: localStorage['turf_blocks_{listId}'] = JSON array of block objects

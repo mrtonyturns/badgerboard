@@ -13,6 +13,7 @@
 //                 "July 20", "7/20", "2026-07-20"
 
 import { addDays, addWeeks, format, nextDay, parse, isValid } from 'date-fns'
+import { parseRecurrence } from './recurrence.js'
 
 const WEEKDAYS = {
   sunday: 0, monday: 1, tuesday: 2, wednesday: 3,
@@ -129,9 +130,17 @@ export function parseQuickAdd(input, knownProjects = []) {
     }
   }
 
+  // Recurrence phrase must be parsed BEFORE dates ("every friday" would
+  // otherwise be consumed by the bare-weekday date pattern)
+  const { recurrence, cleaned: afterRec, impliedDueDate } = parseRecurrence(text)
+
   // Date phrase
-  const { dueDate, cleaned } = parseDatePhrase(text)
+  const { dueDate, cleaned } = parseDatePhrase(afterRec)
 
   const content = cleaned.replace(/\s+/g, ' ').trim()
-  return { content, dueDate, priority, labels, projectId }
+  return {
+    content,
+    dueDate: dueDate || impliedDueDate || null,
+    priority, labels, projectId, recurrence,
+  }
 }

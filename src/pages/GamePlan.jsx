@@ -998,7 +998,10 @@ export default function GamePlan() {
       {/* ══════════════════════════════════════════════════════════ */}
       {/* TASKS TAB — Todoist-style task manager                    */}
       {/* ══════════════════════════════════════════════════════════ */}
-      {activeTab === 'milestones' && <TaskBoard />}
+      {/* Kept mounted across tab switches so the board doesn't refetch on every flip */}
+      <div className={activeTab === 'milestones' ? '' : 'hidden'}>
+        <TaskBoard />
+      </div>
 
       {/* ══════════════════════════════════════════════════════════ */}
       {/* CALENDAR TAB                                             */}

@@ -11,7 +11,7 @@ import {
   Plus, Calendar, CalendarDays, Inbox, CheckCircle2, Circle, Flag, Tag,
   Hash, ChevronDown, ChevronRight, X, Trash2, Edit2, Loader2, LayoutGrid,
   List as ListIcon, Sun, RotateCcw, Sparkles, MoreHorizontal, GripVertical,
-  AlertCircle, Star,
+  AlertCircle, Star, Repeat,
 } from 'lucide-react'
 import {
   getTaskProjects, createTaskProject, updateTaskProject, deleteTaskProject,
@@ -19,7 +19,9 @@ import {
   getTasks, getCompletedTasks, createTask, updateTask, deleteTask,
   getTaskLabels, createTaskLabel, deleteTaskLabel,
   getTaskPlanOwners, getElections,
+  createTasksBatch, createTaskSectionsBatch, primeTaskCaches, subscribeTaskChanges,
 } from '../lib/supabase'
+import { recurrenceLabel, nextOccurrence } from '../lib/recurrence.js'
 import { parseQuickAdd } from '../lib/quickAdd'
 import LoadingBar from './LoadingBar'
 
@@ -149,11 +151,16 @@ function TaskRow({ task, subtasks = [], projects, onToggle, onOpen, onDelete, sh
           {task.description && (
             <p className="text-xs text-gray-400 truncate mt-0.5">{task.description}</p>
           )}
-          {(due || task.labels?.length > 0 || subtasks.length > 0 || (showProject && project)) && (
+          {(due || task.recurrence?.freq || task.labels?.length > 0 || subtasks.length > 0 || (showProject && project)) && (
             <div className="flex items-center flex-wrap gap-1.5 mt-1">
               {due && (
                 <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-px rounded border ${due.cls}`}>
                   <Calendar className="w-2.5 h-2.5" />{due.label}
+                </span>
+              )}
+              {task.recurrence?.freq && (
+                <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-px rounded border text-sky-700 bg-sky-50 border-sky-200">
+                  <Repeat className="w-2.5 h-2.5" />{recurrenceLabel(task.recurrence)}
                 </span>
               )}
               {subtasks.length > 0 && (
@@ -253,6 +260,8 @@ function TaskDetailModal({ task, tasks, projects, sections, labels, onClose, onS
   const [projectId, setProjectId]     = useState(task.project_id || '')
   const [sectionId, setSectionId]     = useState(task.section_id || '')
   const [taskLabels, setTaskLabels]   = useState(task.labels || [])
+  const [recFreq, setRecFreq]         = useState(task.recurrence?.freq || '')
+  const [recInterval, setRecInterval] = useState(task.recurrence?.interval || 1)
   const [newLabel, setNewLabel]       = useState('')
   const [newSub, setNewSub]           = useState('')
   const [saving, setSaving]           = useState(false)
@@ -271,6 +280,11 @@ function TaskDetailModal({ task, tasks, projects, sections, labels, onClose, onS
       project_id: projectId || null,
       section_id: (projectId && projectSections.some(s => s.id === sectionId)) ? sectionId : null,
       labels: taskLabels,
+      recurrence: recFreq ? {
+        freq: recFreq,
+        interval: Math.max(1, parseInt(recInterval) || 1),
+        ...(recFreq === 'weekly' && dueDate ? { weekday: new Date(dueDate + 'T12:00:00').getDay() } : {}),
+      } : null,
     })
     setSaving(false)
     onClose()
@@ -337,6 +351,23 @@ function TaskDetailModal({ task, tasks, projects, sections, labels, onClose, onS
             <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Due date</label>
             <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)}
               className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+            <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mt-3">Repeat</label>
+            <div className="flex gap-2 mt-1">
+              <select value={recFreq} onChange={(e) => setRecFreq(e.target.value)}
+                className="flex-1 text-sm border border-gray-200 rounded-lg px-2.5 py-2 bg-white">
+                <option value="">Doesn't repeat</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly{dueDate ? ` (${new Date(dueDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' })}s)` : ''}</option>
+                <option value="monthly">Monthly</option>
+                <option value="yearly">Yearly</option>
+              </select>
+              {recFreq && (
+                <input type="number" min="1" max="52" value={recInterval}
+                  onChange={(e) => setRecInterval(e.target.value)}
+                  title="Every N periods"
+                  className="w-16 text-sm border border-gray-200 rounded-lg px-2 py-2" />
+              )}
+            </div>
             <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mt-3">Priority</label>
             <div className="flex gap-1.5 mt-1">
               {PRIORITIES.map(({ p, flag }) => (
@@ -616,6 +647,26 @@ export default function TaskBoard() {
   }
   useEffect(() => { if (view.type === 'completed') loadCompleted() }, [view.type, activePlan?.id])
 
+  // Keep the offline snapshot in sync with live state (recommendation #3)
+  useEffect(() => {
+    if (loading || setupNeeded) return
+    primeTaskCaches(ownerId, { projects, sections, tasks, labels })
+  }, [projects, sections, tasks, labels, loading, setupNeeded])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Realtime: when anyone else edits this plan, resync (debounced).
+  // RLS applies to change events, so users only ever receive their own plans'.
+  useEffect(() => {
+    if (setupNeeded) return
+    let dispose = () => {}
+    let timer = null
+    let cancelled = false
+    subscribeTaskChanges(ownerId, () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => loadAll(), 800)
+    }).then(fn => { if (cancelled) fn(); else dispose = fn })
+    return () => { cancelled = true; clearTimeout(timer); dispose() }
+  }, [activePlan?.id, setupNeeded])  // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Derived ─────────────────────────────────────────────────────────────────
   const topTasks    = useMemo(() => tasks.filter(t => !t.parent_id), [tasks])
   const subsByParent = useMemo(() => {
@@ -643,6 +694,22 @@ export default function TaskBoard() {
       setTasks(prev => prev.map(t => t.id === task.id ? { ...t, completed: nowDone, completed_at: stamp } : t))
       const { error } = await updateTask(task.id, { completed: nowDone, completed_at: stamp })
       if (error) failOp("Couldn't update the task — are you online?")
+      return
+    }
+
+    if (nowDone && task.recurrence?.freq && !task.parent_id) {
+      // Recurring task: advance to the next occurrence instead of completing,
+      // and reset its subtasks for the next cycle (Todoist behavior).
+      const nextDue = nextOccurrence(task.recurrence, task.due_date)
+      setTasks(prev => prev.map(t =>
+        t.id === task.id ? { ...t, due_date: nextDue }
+        : t.parent_id === task.id ? { ...t, completed: false, completed_at: null }
+        : t))
+      const { error } = await updateTask(task.id, { due_date: nextDue })
+      if (error) { failOp("Couldn't advance the recurring task — are you online?"); return }
+      for (const s of (subsByParent[task.id] || []).filter(s => s.completed)) {
+        await updateTask(s.id, { completed: false, completed_at: null })
+      }
       return
     }
 
@@ -716,6 +783,7 @@ export default function TaskBoard() {
       content: parsed.content,
       priority: parsed.priority,
       labels: parsed.labels,
+      recurrence: parsed.recurrence || null,
       due_date: parsed.dueDate || ctx.dueDate || null,
       project_id: parsed.projectId || ctx.projectId || null,
       section_id: parsed.projectId ? null : (ctx.sectionId || null),
@@ -743,31 +811,58 @@ export default function TaskBoard() {
     for (const s of subsByParent[t.id] || []) await updateTask(s.id, patch)
   }
 
+  // Fractional ranking: place the dragged task midway between the drop target
+  // and its next sibling. If the gap has collapsed (rare), renumber the pool
+  // to 1024-step spacing first, then take the midpoint.
+  const orderAfter = async (target, pool) => {
+    const sibs = pool
+      .filter(x => x.id !== dragTask.current?.id)
+      .sort((a, b) => (a.sort_order - b.sort_order) || String(a.created_at).localeCompare(String(b.created_at)))
+    const i = sibs.findIndex(s => s.id === target.id)
+    if (i === -1) return (target.sort_order ?? 0) + 1
+    const a = sibs[i].sort_order ?? 0
+    const b = i + 1 < sibs.length ? sibs[i + 1].sort_order : a + 2048
+    const mid = (a + b) / 2
+    if (mid > a && mid < b) return mid
+    // Gap exhausted — renumber this pool, then slot after the target
+    const renumbered = sibs.map((s, idx) => ({ id: s.id, sort_order: (idx + 1) * 1024 }))
+    setTasks(prev => prev.map(x => {
+      const r = renumbered.find(n => n.id === x.id)
+      return r ? { ...x, sort_order: r.sort_order } : x
+    }))
+    for (const r of renumbered) await updateTask(r.id, { sort_order: r.sort_order })
+    return (i + 1) * 1024 + 512
+  }
+
   // Reorder within a project view: may also change section (drop target's home).
   const reorderOn = async (target) => {
     if (!canEdit) { dragTask.current = null; return }
     const t = dragTask.current
+    if (!t || t.id === target.id) { dragTask.current = null; return }
+    const pool = topTasks.filter(x =>
+      x.project_id === target.project_id &&
+      (x.section_id || null) === (target.section_id || null))
+    const sort_order = await orderAfter(target, pool)
     dragTask.current = null
-    if (!t || t.id === target.id) return
-    const patch = {
-      section_id: target.section_id, project_id: target.project_id,
-      sort_order: target.sort_order + 1,
-    }
-    setTasks(prev => prev.map(x => (x.id === t.id || x.parent_id === t.id) ? { ...x, ...patch } : x))
+    const patch = { section_id: target.section_id, project_id: target.project_id, sort_order }
+    setTasks(prev => prev.map(x => (x.id === t.id || x.parent_id === t.id)
+      ? { ...x, ...(x.id === t.id ? patch : { section_id: target.section_id, project_id: target.project_id }) } : x))
     const { error } = await updateTask(t.id, patch)
     if (error) { failOp("Couldn't reorder the task — are you online?"); return }
-    for (const s of subsByParent[t.id] || []) await updateTask(s.id, patch)
+    for (const s of subsByParent[t.id] || []) {
+      await updateTask(s.id, { section_id: target.section_id, project_id: target.project_id })
+    }
   }
 
   // Reorder in cross-project views (Today/Inbox): sort only — never re-home the task.
   const reorderOnly = async (target) => {
     if (!canEdit) { dragTask.current = null; return }
     const t = dragTask.current
+    if (!t || t.id === target.id) { dragTask.current = null; return }
+    const sort_order = await orderAfter(target, topTasks)
     dragTask.current = null
-    if (!t || t.id === target.id) return
-    const patch = { sort_order: target.sort_order + 1 }
-    setTasks(prev => prev.map(x => x.id === t.id ? { ...x, ...patch } : x))
-    const { error } = await updateTask(t.id, patch)
+    setTasks(prev => prev.map(x => x.id === t.id ? { ...x, sort_order } : x))
+    const { error } = await updateTask(t.id, { sort_order })
     if (error) failOp("Couldn't reorder the task — are you online?")
   }
 
@@ -812,6 +907,22 @@ export default function TaskBoard() {
     if (error) failOp("Couldn't delete the section — are you online?")
   }
 
+  // ── Label deletion ──────────────────────────────────────────────────────────
+  const removeLabel = async (label) => {
+    if (!canEdit) return
+    if (!window.confirm(`Delete label "@${label.name}"? It will be removed from all tasks.`)) return
+    setLabels(prev => prev.filter(l => l.id !== label.id))
+    if (view.type === 'label' && view.id === label.name) setView({ type: 'today' })
+    const affected = tasks.filter(t => t.labels?.includes(label.name))
+    setTasks(prev => prev.map(t => t.labels?.includes(label.name)
+      ? { ...t, labels: t.labels.filter(x => x !== label.name) } : t))
+    const { error } = await deleteTaskLabel(label.id)
+    if (error) { failOp("Couldn't delete the label — are you online?"); return }
+    for (const t of affected) {
+      await updateTask(t.id, { labels: t.labels.filter(x => x !== label.name) })
+    }
+  }
+
   // ── Template generator ──────────────────────────────────────────────────────
   const generateTemplate = async (election) => {
     if (!canEdit) return
@@ -821,29 +932,25 @@ export default function TaskBoard() {
       sort_order: projects.length,
     }, ownerId)
     if (!proj) return
-    const secMap = {}
-    for (let i = 0; i < PHASE_ORDER.length; i++) {
-      const { data: sec } = await createTaskSection({ project_id: proj.id, name: PHASE_ORDER[i], sort_order: i }, ownerId)
-      if (sec) secMap[PHASE_ORDER[i]] = sec.id
-    }
-    const newTasks = []
-    for (let i = 0; i < PLAN_TEMPLATE.length; i++) {
-      const t = PLAN_TEMPLATE[i]
-      const { data } = await createTask({
+    // Two batched round-trips instead of ~27 sequential inserts
+    const { data: secs, error: se } = await createTaskSectionsBatch(
+      PHASE_ORDER.map((name, i) => ({ project_id: proj.id, name, sort_order: i })), ownerId)
+    if (se) { failOp("Couldn't create the campaign plan sections."); return }
+    const secMap = Object.fromEntries((secs || []).map(s => [s.name, s.id]))
+    const { data: newTasks, error: te } = await createTasksBatch(
+      PLAN_TEMPLATE.map((t, i) => ({
         content: t.title,
         project_id: proj.id,
         section_id: secMap[t.phase] || null,
         due_date: format(addDays(base, t.off), 'yyyy-MM-dd'),
         labels: t.label ? [t.label] : [],
         priority: 4,
-        sort_order: i,
-      }, ownerId)
-      if (data) newTasks.push(data)
-    }
+        sort_order: (i + 1) * 1024,
+      })), ownerId)
+    if (te) { failOp("Couldn't create the campaign plan tasks."); return }
     setProjects(prev => [...prev, proj])
-    setSections(prev => [...prev, ...Object.entries(secMap).map(([name, id], i) =>
-      ({ id, project_id: proj.id, name, sort_order: i }))])
-    setTasks(prev => [...prev, ...newTasks])
+    setSections(prev => [...prev, ...(secs || [])])
+    setTasks(prev => [...prev, ...(newTasks || [])])
     setView({ type: 'project', id: proj.id })
   }
 
@@ -944,12 +1051,20 @@ export default function TaskBoard() {
               <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Labels</span>
             </div>
             {labels.map(l => (
-              <button key={l.id} onClick={() => setView({ type: 'label', id: l.name })}
-                className={`flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-sm transition-colors text-left
-                  ${view.type === 'label' && view.id === l.name ? 'bg-brand-red/10 text-brand-red font-medium' : 'text-gray-600 hover:bg-gray-100'}`}>
-                <Tag className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
-                <span className="flex-1 truncate">{l.name}</span>
-              </button>
+              <div key={l.id} className="group flex items-center">
+                <button onClick={() => setView({ type: 'label', id: l.name })}
+                  className={`flex-1 flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-sm transition-colors text-left min-w-0
+                    ${view.type === 'label' && view.id === l.name ? 'bg-brand-red/10 text-brand-red font-medium' : 'text-gray-600 hover:bg-gray-100'}`}>
+                  <Tag className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
+                  <span className="flex-1 truncate">{l.name}</span>
+                </button>
+                {canEdit && (
+                  <button onClick={() => removeLabel(l)}
+                    className="p-1 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100" title="Delete label">
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
             ))}
           </>
         )}
