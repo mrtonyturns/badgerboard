@@ -511,9 +511,17 @@ export function getProfileLimit(planKey, bracketKey) {
 
 // Effective monthly profile limit for a USER — admin accounts (platform owners)
 // are never capped; everyone else gets their plan/bracket limit.
+export function getBankedProfileCredits(user) {
+  const n = Number(user?.user_metadata?.profile_credits)
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
 export function getEffectiveProfileLimit(user) {
   if (user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase())) return Infinity
-  return getProfileLimit(getUserPlan(user), getUserBracket(user))
+  const base = getProfileLimit(getUserPlan(user), getUserBracket(user))
+  if (base === Infinity) return Infinity
+  // Purchased credits bank on top of the monthly allotment and roll over until used.
+  return base + getBankedProfileCredits(user)
 }
 
 // Human-readable label for the profile limit shown in UI (e.g. "2 per candidate")

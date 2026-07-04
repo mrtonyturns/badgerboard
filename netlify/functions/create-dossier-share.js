@@ -34,8 +34,14 @@ function getUserPlan(user) {
   if (!user) return 'scout'
   if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'agency'
   const p = user?.user_metadata?.plan
+  // Normalize v1.14 plan keys so Action-plan (a_campaign) users aren't misread as scout.
+  const PLAN_MAP = {
+    c_monitor: 'monitor',  a_monitor: 'monitor',
+    c_active:  'campaign', a_active:  'campaign',
+    c_campaign:'campaign', a_campaign:'agency',
+  }
   const valid = ['scout', 'monitor', 'campaign', 'agency']
-  return valid.includes(p) ? p : 'scout'
+  return PLAN_MAP[p] || (valid.includes(p) ? p : 'scout')
 }
 
 // ─── Supabase REST helper ─────────────────────────────────────────────────────

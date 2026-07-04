@@ -222,6 +222,12 @@ export const handler = async (event) => {
   if (!authRes.ok) {
     return { statusCode: 401, body: JSON.stringify({ error: 'Invalid or expired token' }) }
   }
+  // Trust the verified token for identity — never the client-supplied userId.
+  const authedUser = await authRes.json().catch(() => null)
+  const authedUserId = authedUser?.id || null
+  if (!authedUserId) {
+    return { statusCode: 401, body: JSON.stringify({ error: 'Invalid or expired token' }) }
+  }
 
   const stripe  = new Stripe(process.env.STRIPE_SECRET_KEY)
   const siteUrl = process.env.SITE_URL || 'https://www.badgerboardwi.com'
@@ -234,7 +240,7 @@ export const handler = async (event) => {
   }
 
   const product = sanitize(body.product)
-  const userId  = sanitize(body.userId)
+  const userId  = authedUserId  // use the authenticated user id, not body.userId
   const email   = sanitize(body.email, 320)
 
   // ── A la carte profile credit pack (one-time payment) ────────────────────────

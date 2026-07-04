@@ -4,6 +4,7 @@ import {
   Users, Upload, Download, MapPin, Search, Trash2, Plus,
   X, Check, ChevronDown, ChevronUp, List, Map as MapIcon,
   FileText, Filter, FolderPlus, Tag, BarChart2, ChevronRight,
+  AlertTriangle,
 } from 'lucide-react'
 
 // ─── Vote history dot trail ───────────────────────────────────────────────────

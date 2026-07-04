@@ -52,6 +52,18 @@ async function insertVolunteer(record) {
   return Array.isArray(rows) ? rows[0] : rows
 }
 
+// Confirm the given list belongs to the calling coordinator before we let them
+// attach volunteers to it (prevents cross-coordinator volunteer injection).
+async function listBelongsToUser(listId, userId) {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/door_knock_lists?id=eq.${encodeURIComponent(listId)}&created_by=eq.${encodeURIComponent(userId)}&select=id`,
+    { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }
+  )
+  if (!res.ok) return false
+  const rows = await res.json()
+  return Array.isArray(rows) && rows.length > 0
+}
+
 // ── Send invite email via Resend ──────────────────────────────────────────────
 async function sendInviteEmail({ name, email, token }) {
   if (!RESEND_API_KEY || !email) return { skipped: true }
@@ -157,6 +169,16 @@ export const handler = async (event) => {
   const { name, email, phone, role, listId } = body
   if (!name?.trim()) {
     return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: 'name is required' }) }
+  }
+
+  // ── Ownership check ─────────────────────────────────────────────────────────
+  // If a list is specified, it must belong to the caller. Without this, a
+  // logged-in user could attach volunteers to another coordinator's list.
+  if (listId) {
+    const owns = await listBelongsToUser(listId, user.id)
+    if (!owns) {
+      return { statusCode: 403, headers: CORS_HEADERS, body: JSON.stringify({ error: 'You do not have access to that list.' }) }
+    }
   }
 
   // ── Create volunteer record ───────────────────────────────────────────────

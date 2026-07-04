@@ -19,6 +19,7 @@
 // ─── Product → Plan mapping ───────────────────────────────────────────────────
 // This maps the "Product Name" field from GHL orders to a Badger Board plan.
 // Update the keys to match your exact Dayframer product names.
+const crypto = require('crypto')
 const PLAN_TIER_MAP = {
   'Badger Scout':     'scout',
   'Badger Monitor':   'monitor',
@@ -118,18 +119,24 @@ exports.handler = async (event) => {
     return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) }
   }
 
-  // ── Verify webhook secret ──────────────────────────────────────────────────
+  // ── Verify webhook secret (fail closed) ─────────────────────────────────────
+  // This endpoint can change account plan tiers, so it must never run without a
+  // configured secret. If GHL_WEBHOOK_SECRET is unset, reject every request.
   const secret = process.env.GHL_WEBHOOK_SECRET
-  if (secret) {
-    const incoming =
-      event.headers['x-ghl-signature'] ||
-      event.headers['x-webhook-secret']  ||
-      event.headers['authorization']      ||
-      ''
-    const bare = incoming.replace(/^Bearer\s+/i, '')
-    if (bare !== secret) {
-      return { statusCode: 401, headers, body: JSON.stringify({ error: 'Unauthorized' }) }
-    }
+  if (!secret) {
+    console.error('[ghl-webhook] GHL_WEBHOOK_SECRET is not set — rejecting request')
+    return { statusCode: 503, headers, body: JSON.stringify({ error: 'Webhook not configured' }) }
+  }
+  const incoming =
+    event.headers['x-ghl-signature'] ||
+    event.headers['x-webhook-secret']  ||
+    event.headers['authorization']      ||
+    ''
+  const bare = incoming.replace(/^Bearer\s+/i, '')
+  const a = Buffer.from(bare)
+  const b = Buffer.from(secret)
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return { statusCode: 401, headers, body: JSON.stringify({ error: 'Unauthorized' }) }
   }
 
   // ── Parse body ────────────────────────────────────────────────────────────

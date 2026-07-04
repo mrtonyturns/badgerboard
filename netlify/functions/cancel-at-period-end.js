@@ -80,8 +80,8 @@ export const handler = async (event) => {
       statusCode: 200,
       body: JSON.stringify({
         success: true,
-        periodEnd: updated.current_period_end, // Unix timestamp
-        message: `Your plan will remain active until ${new Date(updated.current_period_end * 1000).toLocaleDateString()}, then access will be removed.`,
+        periodEnd: (updated.current_period_end ?? updated.items?.data?.[0]?.current_period_end), // Unix timestamp
+        message: `Your plan will remain active until ${new Date((updated.current_period_end ?? updated.items?.data?.[0]?.current_period_end) * 1000).toLocaleDateString()}, then access will be removed.`,
       }),
     }
   } catch (err) {

@@ -935,7 +935,8 @@ const BillingPlansTab = ({ billingCall, apiCall, showToast }) => {
 
   const handleApplyCredit = async (amount, description) => {
     try {
-      await billingCall('apply_credit', { user_id: selectedUser.id, amount, description })
+      // amount is in dollars from the modal; Stripe balance is in cents
+      await billingCall('apply_credit', { user_id: selectedUser.id, amount_cents: Math.round(amount * 100), description })
       const data = await billingCall('get_subscription', { user_id: selectedUser.id })
       setSubscriptionData(data)
       setModals({ ...modals, applyCredit: false })

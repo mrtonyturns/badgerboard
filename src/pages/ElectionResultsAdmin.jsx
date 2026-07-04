@@ -544,7 +544,7 @@ export default function ElectionResultsAdmin({ showToast }) {
 
                           {/* Actions */}
                           <div className="flex items-center gap-1 flex-shrink-0">
-                            {!r.declared && results.length > 1 && declaredCount < seats && (
+                            {!r.declared && results.length >= 1 && declaredCount < seats && (
                               <button
                                 onClick={() => promptCallRace(contest, r.id, r.candidate_name)}
                                 className="text-xs bg-green-100 text-green-700 hover:bg-green-200 px-2 py-1 rounded font-medium"

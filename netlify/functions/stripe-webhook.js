@@ -305,6 +305,31 @@ function getCreditsForPack(product, pack) {
   return 0
 }
 
+// Bank a raw number of profile credits (used by dossier credit packs, which
+// carry their quantity directly rather than a pack key).
+async function addProfileCredits(userId, qty) {
+  const existingUser = await getSupabaseUser(userId)
+  const existingMeta = existingUser?.user_metadata ?? {}
+  const metadata = { ...existingMeta, profile_credits: (existingMeta.profile_credits || 0) + qty }
+  const res = await fetch(
+    `${process.env.SUPABASE_URL}/auth/v1/admin/users/${userId}`,
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey:         process.env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization:  `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      body: JSON.stringify({ user_metadata: metadata }),
+    }
+  )
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Supabase profile-credits update failed (${res.status}): ${text}`)
+  }
+  return res.json()
+}
+
 async function addCreditsToUser(userId, product, pack) {
   const existingUser = await getSupabaseUser(userId)
   const existingMeta = existingUser?.user_metadata ?? {}
@@ -374,9 +399,25 @@ exports.handler = async (event) => {
           const product = session.metadata?.product
           const pack    = session.metadata?.pack
           const uid     = session.metadata?.supabase_user_id
+
+          // Dossier credit packs (buy-dossier-credits.js) carry the quantity
+          // directly in metadata.dossier_credits and bank into profile_credits.
+          if (session.metadata?.type === 'dossier_credits') {
+            const qty = parseInt(session.metadata?.dossier_credits, 10)
+            if (uid && Number.isFinite(qty) && qty > 0) {
+              await addProfileCredits(uid, qty)
+              console.log(`Dossier credits added: ${qty} for user ${uid}`)
+            } else {
+              console.warn('dossier_credits payment missing uid/qty in metadata')
+            }
+            break
+          }
+
           if (uid && product && pack) {
             await addCreditsToUser(uid, product, pack)
             console.log(`Credits added: ${product} pack ${pack} for user ${uid}`)
+          } else {
+            console.warn('credit payment missing uid/product/pack in metadata')
           }
           break
         }

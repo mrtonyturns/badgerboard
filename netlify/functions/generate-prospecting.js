@@ -210,7 +210,7 @@ Sort candidates by priority (high first, then medium, then low). Include ALL can
           name: c.name,
           party: c.party || '',
           office: c.office?.name || '',
-          district: c.office?.district_name || c.office?.district_number ? `District ${c.office.district_number}` : null,
+          district: c.office?.district_name || (c.office?.district_number ? `District ${c.office.district_number}` : null),
           status: c.status || '',
           email: c.email || null,
           phone: c.phone || null,

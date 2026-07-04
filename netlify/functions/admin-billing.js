@@ -64,7 +64,7 @@ async function getSubscription(stripe, userId) {
     subscription_id: subscription.id,
     status: subscription.status,
     plan_name: price.nickname || 'Unknown',
-    current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+    current_period_end: new Date((subscription.current_period_end ?? subscription.items?.data?.[0]?.current_period_end) * 1000).toISOString(),
     cancel_at_period_end: subscription.cancel_at_period_end,
     amount: item.price.unit_amount,
     currency: item.price.currency,
@@ -160,6 +160,11 @@ async function paymentHistory(stripe, userId) {
 }
 
 async function applyCredit(stripe, userId, amountCents, description) {
+  const cents = Math.round(Number(amountCents));
+  if (!Number.isFinite(cents) || cents === 0) {
+    throw new Error('A valid non-zero credit amount (in cents) is required');
+  }
+  amountCents = cents;
   const email = await getUserEmail(userId);
   if (!email) throw new Error('User not found');
 

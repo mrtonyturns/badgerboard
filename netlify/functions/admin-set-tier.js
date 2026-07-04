@@ -80,19 +80,20 @@ exports.handler = async (event) => {
   }
 
   try {
-    // Look up user by email (paginated — first page should cover most deployments)
-    const listRes = await fetch(
-      `${SB_URL}/auth/v1/admin/users?page=1&per_page=200`,
-      {
-        headers: {
-          apikey: SERVICE_KEY,
-          Authorization: `Bearer ${SERVICE_KEY}`,
-        },
-      }
-    )
-    const listJson = await listRes.json()
-    const users    = listJson.users || []
-    const user     = users.find(u => u.email?.toLowerCase() === email.toLowerCase())
+    // Look up user by email — page through all users so accounts beyond the
+    // first page are still found (Supabase admin list is paginated).
+    let user = null
+    const target = email.toLowerCase()
+    for (let page = 1; page <= 50 && !user; page++) {
+      const listRes = await fetch(
+        `${SB_URL}/auth/v1/admin/users?page=${page}&per_page=200`,
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }
+      )
+      const listJson = await listRes.json()
+      const users    = listJson.users || []
+      user = users.find(u => u.email?.toLowerCase() === target) || null
+      if (users.length < 200) break  // last page reached
+    }
 
     if (!user) {
       return { statusCode: 404, headers: CORS, body: JSON.stringify({ error: `No user found with email ${email}` }) }

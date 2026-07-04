@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { Users, Plus, Search, Filter, ExternalLink, Edit2, Trash2, X, Phone, Mail, Globe, Telescope, Lock, Wand2, CheckCircle, AlertCircle, Map, LayoutList, Upload, Zap } from 'lucide-react'
 import { supabase, getCandidates, getOffices, getElections, createCandidate, deleteCandidate, updateCandidate } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { getUserTier, getUserBracket, getBracketConfig, getUserPlanType, getActiveCandidateLimit, hasFeature } from '../lib/tiers'
+import { getUserTier, getUserBracket, getBracketConfig, getUserPlanType, getActiveCandidateLimit, hasFeature, ADMIN_EMAILS } from '../lib/tiers'
 import LeafletMapView from '../components/LeafletMapView'
 import MapErrorBoundary from '../components/MapErrorBoundary'
 import LoadingBar from '../components/LoadingBar'
@@ -394,9 +394,12 @@ export default function Candidates() {
   const userPlanType  = getUserPlanType(user)
   const userBracket   = getUserBracket(user)
   const bracketCfg    = getBracketConfig(userBracket)
-  const maxSlots      = userPlanType === 'candidate'
-    ? getActiveCandidateLimit(userTier)   // scout/c_monitor → 0, c_active → 1, c_campaign → 3
-    : (bracketCfg?.max ?? Infinity)       // Action Plan: bracket-based
+  const isAdmin       = user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase())
+  const maxSlots      = isAdmin
+    ? Infinity                            // admins have unlimited monitoring (matches profile-limit rule)
+    : userPlanType === 'candidate'
+      ? getActiveCandidateLimit(userTier) // scout/c_monitor → 0, c_active → 1, c_campaign → 3
+      : (bracketCfg?.max ?? Infinity)     // Action Plan: bracket-based
   const activeCount   = candidates.filter(c => c.section_timestamps?.monitoring === true).length
   const slotsLeft     = maxSlots === Infinity ? Infinity : Math.max(0, maxSlots - activeCount)
   const atLimit       = maxSlots !== Infinity && activeCount >= maxSlots

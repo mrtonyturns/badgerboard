@@ -57,6 +57,41 @@ function getUserPlan(user) {
   return PLAN_MAP[p] || (['scout', 'monitor', 'campaign', 'agency'].includes(p) ? p : 'scout')
 }
 
+// Base monthly profile allotment per plan (excludes purchased credits).
+// Dossier credit packs are a Candidate-plan feature; Action/Agency/admin are effectively unlimited.
+const MONTHLY_BASE = { scout: 1, monitor: 1, campaign: 2, agency: Infinity }
+
+// After a successful generation, consume one banked profile credit if this
+// generation went beyond the user's free monthly allotment. Safe/idempotent:
+// counts month-to-date dossiers and never drops the bank below zero.
+async function consumeProfileCreditIfOverage(user, userId, userPlan) {
+  try {
+    if (!userId) return
+    const bank = Number(user?.user_metadata?.profile_credits) || 0
+    if (bank <= 0) return
+    const base = MONTHLY_BASE[userPlan]
+    if (!Number.isFinite(base)) return  // unlimited plans never consume credits
+    const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
+    const cntRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/dossiers?generated_by=eq.${userId}&generated_at=gte.${monthStart.toISOString()}&select=id`,
+      { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
+    )
+    if (!cntRes.ok) return
+    const monthCount = (await cntRes.json()).length  // includes the one just saved
+    if (monthCount <= base) return  // still within the free monthly allotment
+    const newBank = Math.max(0, bank - 1)
+    const meta = { ...(user.user_metadata || {}), profile_credits: newBank }
+    await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
+      body: JSON.stringify({ user_metadata: meta }),
+    })
+    console.log(`[dossier-bg] Consumed 1 profile credit (bank ${bank} -> ${newBank}) for user ${userId}`)
+  } catch (e) {
+    console.warn('[dossier-bg] credit consumption skipped:', e.message)
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // RESEARCH MODES
 //
@@ -1393,6 +1428,9 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
       const saved = await saveRes.json()
       console.log(`[dossier-bg] Saved id=${saved?.[0]?.id}, sections=${countSections(content)}, changes=${!!changeSummary}, flags=${!!verificationFlags}, total=${Date.now() - startTime}ms`)
     }
+
+    // ─── Consume a purchased credit if this exceeded the free monthly allotment ─
+    await consumeProfileCreditIfOverage(user, user_id, userPlan)
 
     // ─── Dossier-ready notification email ─────────────────────────────────────
     try {
