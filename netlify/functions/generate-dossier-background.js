@@ -8,12 +8,13 @@ const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY // must be set in Netl
 const XAI_API_KEY        = process.env.XAI_API_KEY        // xAI Grok — x.ai console
 const SUPABASE_URL       = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-const CLAUDE_MODEL       = 'claude-sonnet-4-6'
-const GROK_MODEL         = 'grok-4-0709'  // Responses API — only grok-4 family supports server-side tools
+const CLAUDE_MODEL       = 'claude-sonnet-5' // latest Sonnet — Fable 5's always-on thinking is cost-prohibitive here
+const GROK_MODEL         = 'grok-4.3'  // latest Grok — Responses API w/ server-side x_search + web_search (verified 2026-07)
 
 // Admin emails — always treated as Agency tier
 const { ADMIN_EMAILS } = require('./_config')
 const { sendEmail, getNotificationPrefs } = require('./_email')
+const { fetchOfficialRecords } = require('./_official-records')
 
 // ─── Plans that may access full Section 6 ────────────────────────────────────
 const SECTION6_TIERS = ['campaign', 'agency']
@@ -128,7 +129,7 @@ async function fetchPerplexityIdentity(name, office, district, ctx, mode) {
 }
 
 // ─── News coverage — mode-aware ───────────────────────────────────────────────
-async function fetchPerplexityNews(name, office, district, ctx, mode) {
+async function fetchPerplexityNews(name, office, district, ctx, mode, localSources = '') {
   if (!PERPLEXITY_API_KEY) return null
   const ctxNote = ctx ? ` Context: ${ctx}.` : ''
   const locNote = district ? ` in ${district}` : ' in Wisconsin'
@@ -147,10 +148,10 @@ async function fetchPerplexityNews(name, office, district, ctx, mode) {
       method: 'POST', signal: ctrl.signal,
       headers: { 'Authorization': `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'sonar',
+        model: 'sonar-pro',
         messages: [
           { role: 'system', content: 'You are a Wisconsin political news researcher. For each news item, use this exact format:\n### [Exact Article Title](https://full-url.com)\n**Publication Name** · Month D, YYYY\nOne sentence summary.\n\nIf URL unknown: ### Exact Article Title\nReturn at least 10-15 items. Focus on Wisconsin local outlets. Do not fabricate articles.' },
-          { role: 'user', content: queries[mode] || queries.challenger },
+          { role: 'user', content: (queries[mode] || queries.challenger) + localSources },
         ],
         max_tokens: 2000,
       }),
@@ -196,7 +197,8 @@ async function fetchPerplexityCampaignFinance(name, office, district, ctx, mode)
   return queryPerplexity(
     'You are a Wisconsin campaign finance researcher. Return ONLY verified financial data with sources. Include dollar amounts, donor names/categories, dates, and source links.',
     queries[mode] || queries.challenger,
-    1000
+    1500,
+    'sonar-pro'
   )
 }
 
@@ -614,6 +616,7 @@ exports.handler = async (event) => {
     instagram_handle:   sanitize(candidate.instagram_handle,   80),
     officeName:         sanitize(candidate.office?.name,       150),
     districtName:       sanitize(candidate.office?.district_name, 100),
+    county:             sanitize(candidate.office?.county,        60),
     electionName:       sanitize(candidate.election?.name,     150),
   }
 
@@ -631,8 +634,21 @@ exports.handler = async (event) => {
   const mode        = getResearchMode(safe.status?.toLowerCase(), isIncumbent, !!safe.officeName)
   console.log(`[dossier-bg] Research mode: ${mode} (status=${safe.status}, incumbent=${isIncumbent}, hasOffice=${!!safe.officeName})`)
 
+  // County-specific local sources (same dataset the Events researcher uses)
+  let localSourcesNote = ''
+  try {
+    const countySources = require('./_county-sources.json')
+    const hay = `${safe.county} ${safe.districtName}`.toLowerCase()
+    const countyKey = Object.keys(countySources).find(k => hay.includes(k.toLowerCase()))
+    if (countyKey) {
+      const cs = countySources[countyKey]
+      const outlets = [...(cs.newspapers || []), ...(cs.broadcast || [])].slice(0, 8).map(o => o.split(' — ')[0]).join('; ')
+      if (outlets) localSourcesNote = ` PRIORITY LOCAL OUTLETS for ${countyKey} County (search each by name): ${outlets}.`
+    }
+  } catch (e) { /* dataset optional */ }
+
   // ─── Fire all Perplexity + Grok queries in parallel (#2, #3) ─────────────
-  const perplexityPromise   = fetchPerplexityNews(safe.name, officeLine, safe.districtName, ctx, mode)
+  const perplexityPromise   = fetchPerplexityNews(safe.name, officeLine, safe.districtName, ctx, mode, localSourcesNote)
   // fetchPerplexityIncumbent retired — fetchPerplexityPoliticalRecord (incumbent mode) covers the same ground
   const incumbentPromise    = Promise.resolve(null)
   const identityPromise     = fetchPerplexityIdentity(safe.name, officeLine, safe.districtName, ctx, mode)
@@ -642,6 +658,8 @@ exports.handler = async (event) => {
   const socialMediaPromise  = fetchPerplexitySocialMedia(safe.name, officeLine, safe.districtName, ctx, mode)
   // Grok: real-time X sentiment + breaking coverage (runs in parallel with Perplexity)
   const grokPromise         = fetchGrokXIntelligence(safe.name, officeLine, safe.districtName, safe.twitter_handle, ctx, mode)
+  // Official government records (FEC / CourtListener / LegiScan) — direct API ground truth
+  const officialPromise     = fetchOfficialRecords(safe.name, officeLine).catch(() => null)
 
   // ─── System Prompt (v4.1 structure + current legal compliance) ─────────────
   const systemPrompt = `You are a WI opposition researcher for The Bluejack Group. Build a sourced dossier using public records only. Tables over prose. Concise. Use "&" not "and" in tables.
@@ -819,10 +837,10 @@ Label all items [RESEARCH REQUIRED] unless you have a credible public record sou
   // ─── Wait for all Perplexity + Grok results in parallel ─────────────────
   let perplexityNews = null, perplexityIncumbent = null
   let identityData = null, financeData = null, politicalData = null, affiliationsData = null, socialMediaData = null
-  let grokData = null
+  let grokData = null, officialData = null
   try {
-    ;[perplexityNews, perplexityIncumbent, identityData, financeData, politicalData, affiliationsData, socialMediaData, grokData] =
-      await Promise.all([perplexityPromise, incumbentPromise, identityPromise, financePromise, politicalPromise, affiliationsPromise, socialMediaPromise, grokPromise])
+    ;[perplexityNews, perplexityIncumbent, identityData, financeData, politicalData, affiliationsData, socialMediaData, grokData, officialData] =
+      await Promise.all([perplexityPromise, incumbentPromise, identityPromise, financePromise, politicalPromise, affiliationsPromise, socialMediaPromise, grokPromise, officialPromise])
     const stats = [
       perplexityNews && `news:${perplexityNews.length}`,
       perplexityIncumbent && `incumbent:${perplexityIncumbent.length}`,
@@ -832,6 +850,7 @@ Label all items [RESEARCH REQUIRED] unless you have a credible public record sou
       affiliationsData && `affiliations:${affiliationsData.length}`,
       socialMediaData && `social:${socialMediaData.length}`,
       grokData && `grok:${grokData.length}`,
+      officialData && `official:${officialData.length}`,
     ].filter(Boolean)
     console.log(`[dossier-bg] Research results: ${stats.join(', ') || 'none'}`)
   } catch (e) {
@@ -839,6 +858,10 @@ Label all items [RESEARCH REQUIRED] unless you have a credible public record sou
   }
 
   // ─── Build context blocks injected into the user prompt ───────────────────
+  const officialContext = officialData
+    ? `\n\nOFFICIAL GOVERNMENT RECORDS (direct API data — FEC / CourtListener / LegiScan — highest reliability tier):\n${officialData}\n\nTreat FEC & LegiScan rows as [KNOWN] ground truth (they override contradictory web-search claims). CourtListener rows are NAME MATCHES — attribute only after identity confirmation.`
+    : ''
+
   const identityContext = identityData
     ? `\n\nVERIFIED IDENTITY DATA (from real-time web search — MANDATORY: use to populate IDENTITY LOCK in Section 2 and cross-reference ALL record attributions):\n${identityData}\n\nDo NOT attribute any record to this person unless the identity matches the above data.`
     : ''
@@ -955,7 +978,7 @@ Facebook: ${safe.facebook_url || 'Not listed'}
 Instagram: ${safe.instagram_handle || 'Not listed'}
 Election: ${safe.electionName || 'Unknown'}
 PARTY VERIFICATION REMINDER: Check campaign website donation links (ActBlue = Democrat, Anedot = Republican), WEC filing, & endorsements before writing anything about party. Correct if wrong & flag discrepancy.
-${identityContext}${newsContext}${incumbentContext}${politicalContext}${financeContext}${affiliationsContext}${socialMediaContext}${grokContext}
+${identityContext}${officialContext}${newsContext}${incumbentContext}${politicalContext}${financeContext}${affiliationsContext}${socialMediaContext}${grokContext}
 ---
 
 BEGIN DOSSIER. Output EXACTLY these 14 sections:
@@ -1247,10 +1270,21 @@ Rules:
     const startTime = Date.now()
 
     // ─── #18: Call Claude with automatic retry on 529 overload ─────────────
+    // Live web search: the writer fills research gaps & verifies claims itself.
+    const webSearchDirective = `
+
+LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 searches):
+1. GAPS FIRST: When the research context above is missing or thin for a section (especially Sections 4 Political Record, 5 Financial, 6 Controversies), run one targeted search before writing that section.
+2. OFFICIAL SOURCES FIRST: WI campaign finance -> site:campaignfinance.wi.gov (Wisconsin Ethics Commission CFIS); WI legislation & votes -> site:docs.legis.wisconsin.gov; election results -> site:elections.wi.gov; federal finance -> site:fec.gov.
+3. VERIFY BEFORE [KNOWN]: A high-impact claim (legal, financial, controversy) gets [KNOWN] only if backed by official records above or a verifying search.
+4. Never search for facts already provided in the research context. Never let searching prevent completing every section — if the budget runs out, write with what you have.`
+
+    const webSearchTools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }]
     const claudePayload = {
       model: CLAUDE_MODEL,
-      max_tokens: 8000,
-      system: systemPrompt,
+      max_tokens: 10000,
+      system: systemPrompt + webSearchDirective,
+      tools: webSearchTools,
       messages: [{ role: 'user', content: userPrompt }],
     }
     const response = await callClaudeWithRetry(claudePayload)
@@ -1263,7 +1297,8 @@ Rules:
     }
 
     const data = await response.json()
-    let content = data.content?.[0]?.text
+    const extractClaudeText = (d) => (d?.content || []).filter(b => b.type === 'text' && b.text).map(b => b.text).join('')
+    let content = extractClaudeText(data)
     // Strip any AI reasoning/thinking tags that should never be stored or shown to users
     if (content) {
       content = content.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
@@ -1290,10 +1325,10 @@ Rules:
     if (sectionCount < 10) {
       console.log('[dossier-bg] Too few sections — retrying with continuation prompt')
       const retryPrompt = `The dossier you just generated for ${safe.name} was cut short — only ${sectionCount} of 14 sections were included. Continue from where it was cut off and complete ALL missing sections. Start with the next missing ## SECTION header and continue through ## SECTION 14. Do not repeat sections already written.\n\nPrevious output (partial):\n${content.slice(-3000)}`
-      const retryResp = await callClaudeWithRetry({ model: CLAUDE_MODEL, max_tokens: 8000, system: systemPrompt, messages: [{ role: 'user', content: retryPrompt }] })
+      const retryResp = await callClaudeWithRetry({ model: CLAUDE_MODEL, max_tokens: 10000, system: systemPrompt + webSearchDirective, tools: webSearchTools, messages: [{ role: 'user', content: retryPrompt }] })
       if (retryResp.ok) {
         const retryData = await retryResp.json()
-        const continuation = retryData.content?.[0]?.text
+        const continuation = extractClaudeText(retryData)
         if (continuation) {
           content = content + '\n\n' + continuation
           console.log(`[dossier-bg] After continuation: ${countSections(content)} sections, ${content.length} chars`)

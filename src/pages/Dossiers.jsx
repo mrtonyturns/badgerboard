@@ -2000,7 +2000,7 @@ export default function Dossiers() {
       // because React won't have re-rendered yet after fetchData()'s setCandidates.
       const { data: fullCand } = await supabase
         .from('candidates')
-        .select('*, office:offices(id, name, level, district_name, district_number)')
+        .select('*, office:offices(id, name, level, office_type, district_name, district_number, county)')
         .eq('id', newCand.id)
         .single()
       await fetchData()

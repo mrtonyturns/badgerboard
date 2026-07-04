@@ -6,7 +6,7 @@ const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY // must be set in Netlify env vars
 const SUPABASE_URL       = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-const CLAUDE_MODEL       = 'claude-sonnet-4-6'
+const CLAUDE_MODEL       = 'claude-sonnet-5'
 
 const { ADMIN_EMAILS } = require('./_config')
 
