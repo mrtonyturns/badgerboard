@@ -36,25 +36,10 @@ CREATE POLICY "turf_assignments_owner" ON turf_assignments
     block_id IN (SELECT id FROM turf_blocks WHERE created_by = auth.uid())
   );
 
--- ─── Volunteers: invited field workers ────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS volunteers (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  coordinator_id uuid REFERENCES auth.users(id) ON DELETE CASCADE,
-  list_id uuid REFERENCES door_knock_lists(id) ON DELETE SET NULL,
-  name text NOT NULL,
-  email text,
-  phone text,
-  role text DEFAULT 'volunteer' CHECK (role IN ('volunteer','captain')),
-  invite_token text UNIQUE,
-  invite_sent_at timestamptz,
-  status text DEFAULT 'invited' CHECK (status IN ('invited','active','inactive')),
-  created_at timestamptz DEFAULT now()
-);
-
-ALTER TABLE volunteers ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "volunteers_owner" ON volunteers
-  FOR ALL USING (coordinator_id = auth.uid());
+-- NOTE: The volunteers table is defined in 20260422000002_volunteers.sql with the
+-- correct created_by column. The original block here used coordinator_id (wrong)
+-- and was removed to prevent this migration from failing. The RLS for volunteers
+-- is maintained by 20260422000006_volunteer_rls_hardening.sql.
 
 -- ─── Voter file entries ────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS voter_file_entries (

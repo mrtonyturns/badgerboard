@@ -12,6 +12,8 @@ const SUPABASE_SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY
 const RESEND_API_KEY        = process.env.RESEND_API_KEY
 const DISCLAIMER_VERSION    = '1.0'
 
+import { corsHeaders } from './_config.js'
+
 // ─── Verify Supabase JWT ──────────────────────────────────────────────────────
 async function verifyUser(authHeader) {
   if (!authHeader?.startsWith('Bearer ')) return null
@@ -123,12 +125,7 @@ async function sendAckEmail(email, acknowledgedAt) {
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 export const handler = async (event) => {
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Content-Type': 'application/json',
-  }
+  const headers = corsHeaders(event.headers?.origin || event.headers?.Origin)
 
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' }
   if (event.httpMethod !== 'POST') {
@@ -215,6 +212,10 @@ export const handler = async (event) => {
     if (!dossier_id || !section_id || !claim_text || !status) {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing required fields' }) }
     }
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!UUID.test(dossier_id) || !UUID.test(section_id)) {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid dossier_id or section_id' }) }
+    }
 
     const validStatuses = ['confirmed', 'rejected', 'needs_research']
     if (!validStatuses.includes(status)) {
@@ -263,8 +264,9 @@ export const handler = async (event) => {
   // ── get_reviews ──────────────────────────────────────────────────────────────
   if (action === 'get_reviews') {
     const { dossier_id } = body
-    if (!dossier_id) {
-      return { statusCode: 400, headers, body: JSON.stringify({ error: 'dossier_id required' }) }
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!dossier_id || !UUID_RE.test(dossier_id)) {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'valid dossier_id required' }) }
     }
 
     const { ok, data } = await supabaseQuery(

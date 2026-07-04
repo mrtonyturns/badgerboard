@@ -79,9 +79,12 @@ async function sendInvite(params, coordinatorId) {
   if (!name || !email || !list_id) {
     return { statusCode: 400, body: JSON.stringify({ error: 'name, email, list_id required' }) }
   }
+  if (!isUuid(list_id)) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'valid list_id required' }) }
+  }
 
   // Verify coordinator owns this list
-  const listRes = await sb(`/door_knock_lists?id=eq.${list_id}&created_by=eq.${coordinatorId}&select=id,name`)
+  const listRes = await sb(`/door_knock_lists?id=eq.${encodeURIComponent(list_id)}&created_by=eq.${encodeURIComponent(coordinatorId)}&select=id,name`)
   const lists = await listRes.json()
   if (!lists?.length) {
     return { statusCode: 403, body: JSON.stringify({ error: 'List not found or unauthorized' }) }
@@ -209,8 +212,11 @@ async function getVolunteer(params, authHeader) {
     return { statusCode: 400, body: JSON.stringify({ error: 'email or volunteer_id required' }) }
   }
 
+  if (volunteer_id && !isUuid(volunteer_id)) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'valid volunteer_id required' }) }
+  }
   const filter = volunteer_id
-    ? `id=eq.${volunteer_id}`
+    ? `id=eq.${encodeURIComponent(volunteer_id)}`
     : `email=eq.${encodeURIComponent(email)}`
 
   const res = await sb(`/volunteers?${filter}&select=*,list:door_knock_lists(id,name,candidate_id)`)
@@ -278,7 +284,7 @@ async function updateStats(params, authHeader) {
     status: 'active',
   }
 
-  const updateRes = await sb(`/volunteers?id=eq.${volunteer_id}`, {
+  const updateRes = await sb(`/volunteers?id=eq.${encodeURIComponent(volunteer_id)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   })
@@ -289,12 +295,12 @@ async function updateStats(params, authHeader) {
 // ─── Action: get_volunteers_for_list ─────────────────────────────────────────
 async function getVolunteersForList(params, coordinatorId) {
   const { list_id } = params
-  if (!list_id) {
-    return { statusCode: 400, body: JSON.stringify({ error: 'list_id required' }) }
+  if (!list_id || !isUuid(list_id)) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'valid list_id required' }) }
   }
 
   const res = await sb(
-    `/volunteers?list_id=eq.${list_id}&created_by=eq.${coordinatorId}&select=id,name,email,phone,role,status,doors_knocked,contacts_made,shifts_worked,last_active,avatar_color,notes&order=name.asc`
+    `/volunteers?list_id=eq.${encodeURIComponent(list_id)}&created_by=eq.${encodeURIComponent(coordinatorId)}&select=id,name,email,phone,role,status,doors_knocked,contacts_made,shifts_worked,last_active,avatar_color,notes&order=name.asc`
   )
   const volunteers = await res.json()
   return { statusCode: 200, body: JSON.stringify({ volunteers: volunteers || [] }) }
@@ -325,11 +331,11 @@ async function sendNotification(params, coordinatorId) {
 // ─── Action: delete_volunteer ─────────────────────────────────────────────────
 async function deleteVolunteer(params, coordinatorId) {
   const { volunteer_id } = params
-  if (!volunteer_id) {
-    return { statusCode: 400, body: JSON.stringify({ error: 'volunteer_id required' }) }
+  if (!volunteer_id || !isUuid(volunteer_id)) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'valid volunteer_id required' }) }
   }
 
-  await sb(`/volunteers?id=eq.${volunteer_id}&created_by=eq.${coordinatorId}`, {
+  await sb(`/volunteers?id=eq.${encodeURIComponent(volunteer_id)}&created_by=eq.${encodeURIComponent(coordinatorId)}`, {
     method: 'DELETE',
   })
 

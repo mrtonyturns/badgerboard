@@ -70,47 +70,45 @@ async function hasActiveSub(user) {
   }
 }
 
+// NON-DESTRUCTIVE: copy current entitlements from user_metadata into
+// app_metadata verbatim. This preserves everyone's existing access (the app
+// comps plans manually via admin-set-tier, so many paid users legitimately
+// have no Stripe subscription) while closing the vulnerability — going forward
+// only the service role can write app_metadata. Accounts holding a paid plan
+// with NO active Stripe subscription are flagged (not changed) for your review.
 const run = async () => {
-  console.log(`Mode: ${COMMIT ? 'COMMIT' : 'DRY RUN'}`)
+  console.log(`Mode: ${COMMIT ? 'COMMIT' : 'DRY RUN'} (preserve-and-flag)`)
   const users = await allUsers()
   console.log(`Users: ${users.length}\n`)
 
   let changed = 0
+  const flagged = []
   for (const u of users) {
     const um = u.user_metadata || {}
-    const subId = await hasActiveSub(u)
-    const active = Boolean(subId)
-    const unknown = subId === undefined   // Stripe error — don't downgrade
-
-    // Only honor a paid plan when a real subscription backs it (or Stripe was
-    // unreachable and the user already had a paid plan we shouldn't clobber).
     const paidPlan = um.plan && um.plan !== 'scout'
-    const keepPaid = paidPlan && (active || unknown)
+    const subId = paidPlan ? await hasActiveSub(u) : null
+    if (paidPlan && !subId) flagged.push(`${u.email} (${um.plan})`)
 
-    const next = {
-      ...(u.app_metadata || {}),
-      plan: keepPaid ? um.plan : 'scout',
-      plan_type: keepPaid ? (um.plan_type || (um.plan.startsWith('a_') ? 'action' : 'candidate'))
-                          : 'candidate',
-      bracket: keepPaid ? (um.bracket || undefined) : undefined,
-      billing: keepPaid ? (um.billing || undefined) : undefined,
-      payment_status: active ? 'active' : (um.payment_status === 'past_due' ? 'past_due' : undefined),
-      profile_credits: Number(um.profile_credits) > 0 ? Number(um.profile_credits) : undefined,
-      bulk_credits: Number(um.bulk_credits) > 0 ? Number(um.bulk_credits) : undefined,
-      stripe_customer_id: um.stripe_customer_id || u.app_metadata?.stripe_customer_id || undefined,
-      stripe_subscription_id: subId || um.stripe_subscription_id || undefined,
+    // Copy entitlement fields verbatim — no downgrades.
+    const next = { ...(u.app_metadata || {}) }
+    for (const k of ['plan', 'plan_type', 'bracket', 'billing', 'payment_status',
+                     'profile_credits', 'bulk_credits',
+                     'stripe_customer_id', 'stripe_subscription_id', 'downgraded_at']) {
+      if (um[k] !== undefined && um[k] !== null) next[k] = um[k]
     }
-    Object.keys(next).forEach(k => next[k] === undefined && delete next[k])
 
-    const tag = active ? '[active sub]' : unknown ? '[stripe unknown — preserved]' : '[no sub]'
-    const flag = (paidPlan && !active && !unknown) ? '  ⚠ had paid plan, NO active sub → scout' : ''
-    console.log(`${u.email}: ${um.plan || 'scout'} → ${next.plan} ${tag}${next.profile_credits ? ` +${next.profile_credits}cr` : ''}${flag}`)
-
+    console.log(`${u.email}: app_metadata.plan = ${next.plan || 'scout'}${next.profile_credits ? ` +${next.profile_credits}cr` : ''}`)
     if (COMMIT) {
       const res = await admin(`users/${u.id}`, { method: 'PUT', body: JSON.stringify({ app_metadata: next }) })
       if (!res.ok) console.error(`  ! update failed: ${res.status} ${await res.text()}`)
       else changed++
     }
+  }
+
+  if (flagged.length) {
+    console.log(`\n⚠ ${flagged.length} account(s) hold a paid plan with NO active Stripe subscription`)
+    console.log('  (preserved as-is — review whether each is a legitimate comp or a leftover/forged plan):')
+    flagged.forEach(f => console.log('   -', f))
   }
   console.log(`\n${COMMIT ? `Updated ${changed} users.` : 'Dry run complete — re-run with --commit to apply.'}`)
 }

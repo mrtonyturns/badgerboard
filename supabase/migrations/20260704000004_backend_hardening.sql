@@ -192,4 +192,82 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+-- ─── 8. volunteers: add session_token (written by verify_token action) ────────
+-- volunteer-auth.js issues a durable session_token after magic_token is consumed.
+-- Without this column the PATCH silently drops the field (Supabase ignores unknown columns).
+ALTER TABLE volunteers ADD COLUMN IF NOT EXISTS session_token TEXT;
+CREATE INDEX IF NOT EXISTS idx_volunteers_session_token ON volunteers (session_token)
+  WHERE session_token IS NOT NULL;
+
+-- ─── 9. Fix storage bucket policy helper: wrap CREATE POLICY in DO block ────────
+-- admin-setup-candidate-storage.js previously emitted bare
+-- "CREATE POLICY IF NOT EXISTS" which is not valid Postgres. The function's
+-- graceful fallback ("apply via dashboard") already handles exec_sql absence,
+-- but we can cleanly declare the storage policies here so they're in source control.
+-- Storage policies target storage.objects which lives in the storage schema.
+-- We can only create them here if the bucket already exists; if not, the
+-- admin-setup-candidate-storage function or the Supabase dashboard creates them.
+DO $$
+BEGIN
+  -- candidate-files bucket SELECT
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'candidate-files_select'
+  ) THEN
+    EXECUTE $p$
+      CREATE POLICY "candidate-files_select" ON storage.objects FOR SELECT
+      TO authenticated
+      USING (
+        bucket_id = 'candidate-files'
+        AND (storage.foldername(name))[1] = auth.uid()::text
+      )
+    $p$;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'candidate-files_insert'
+  ) THEN
+    EXECUTE $p$
+      CREATE POLICY "candidate-files_insert" ON storage.objects FOR INSERT
+      TO authenticated
+      WITH CHECK (
+        bucket_id = 'candidate-files'
+        AND (storage.foldername(name))[1] = auth.uid()::text
+      )
+    $p$;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'candidate-files_update'
+  ) THEN
+    EXECUTE $p$
+      CREATE POLICY "candidate-files_update" ON storage.objects FOR UPDATE
+      TO authenticated
+      USING (
+        bucket_id = 'candidate-files'
+        AND (storage.foldername(name))[1] = auth.uid()::text
+      )
+    $p$;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'candidate-files_delete'
+  ) THEN
+    EXECUTE $p$
+      CREATE POLICY "candidate-files_delete" ON storage.objects FOR DELETE
+      TO authenticated
+      USING (
+        bucket_id = 'candidate-files'
+        AND (storage.foldername(name))[1] = auth.uid()::text
+      )
+    $p$;
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  -- Storage schema may be restricted; these policies can be set in the Supabase dashboard
+  RAISE NOTICE 'Storage policy creation skipped: %', SQLERRM;
+END $$;
+
 COMMIT;

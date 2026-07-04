@@ -10,7 +10,11 @@
 const SUPABASE_URL     = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 
-const CORS = {
+const { corsHeaders } = require('./_config')
+
+// Public GET (share viewer) uses * — no auth, must be embeddable anywhere.
+// Authenticated POST (list/deactivate) uses origin-restricted headers.
+const PUBLIC_CORS = {
   'Access-Control-Allow-Origin':  '*',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -48,6 +52,11 @@ async function verifyUser(authHeader) {
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 exports.handler = async (event) => {
+  // POST (authenticated actions) gets origin-restricted CORS; GET (public) stays open
+  const CORS = event.httpMethod === 'POST'
+    ? corsHeaders(event.headers?.origin || event.headers?.Origin, 'GET, POST, OPTIONS')
+    : PUBLIC_CORS
+
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: CORS, body: '' }
 
   // ── GET: public dossier view ─────────────────────────────────────────────
@@ -121,10 +130,12 @@ exports.handler = async (event) => {
 
     const { action } = body
 
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
     // List shares for a dossier
     if (action === 'list') {
       const { dossier_id } = body
-      if (!dossier_id) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'dossier_id required' }) }
+      if (!dossier_id || !UUID.test(dossier_id)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'valid dossier_id required' }) }
 
       // Verify ownership
       const own = await supa('dossiers', 'GET', null, `?id=eq.${encodeURIComponent(dossier_id)}&generated_by=eq.${user.id}&select=id`)
@@ -146,7 +157,7 @@ exports.handler = async (event) => {
     // Deactivate a share
     if (action === 'deactivate') {
       const { share_id } = body
-      if (!share_id) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'share_id required' }) }
+      if (!share_id || !UUID.test(share_id)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'valid share_id required' }) }
 
       const res = await supa(
         `dossier_shares?id=eq.${encodeURIComponent(share_id)}&created_by=eq.${user.id}`,

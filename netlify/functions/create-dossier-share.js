@@ -9,15 +9,10 @@ const SUPABASE_URL     = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_U
 const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 const APP_URL          = process.env.APP_URL || 'https://www.badgerboardwi.com'
 
-const { ADMIN_EMAILS } = require('./_config')
+const { ADMIN_EMAILS, corsHeaders } = require('./_config')
 const AGENCY_PLANS = ['agency']
 
-const CORS = {
-  'Access-Control-Allow-Origin':  '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Content-Type': 'application/json',
-}
+// CORS headers are computed per-request via corsHeaders() to restrict to production origin
 
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
 async function verifyUser(authHeader) {
@@ -79,6 +74,7 @@ function calcExpiry(expiresIn) {
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 exports.handler = async (event) => {
+  const CORS = corsHeaders(event.headers?.origin || event.headers?.Origin)
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: CORS, body: '' }
   if (event.httpMethod !== 'POST') return { statusCode: 405, headers: CORS, body: JSON.stringify({ error: 'Method not allowed' }) }
 
@@ -97,7 +93,8 @@ exports.handler = async (event) => {
   }
 
   const { dossier_id, expires_in } = body
-  if (!dossier_id) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'dossier_id is required' }) }
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (!dossier_id || !UUID.test(dossier_id)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'valid dossier_id is required' }) }
   if (!['24h', '7d', '30d'].includes(expires_in)) {
     return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'expires_in must be 24h, 7d, or 30d' }) }
   }

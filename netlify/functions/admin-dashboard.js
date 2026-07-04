@@ -336,7 +336,7 @@ async function createAnnouncement(message, type, createdBy) {
 
 async function updateAnnouncement(id, updates) {
   const res = await fetch(
-    `${process.env.SUPABASE_URL}/rest/v1/announcements?id=eq.${id}`,
+    `${process.env.SUPABASE_URL}/rest/v1/announcements?id=eq.${encodeURIComponent(id)}`,
     {
       method: 'PATCH',
       headers: {
@@ -353,7 +353,7 @@ async function updateAnnouncement(id, updates) {
 
 async function deleteAnnouncement(id) {
   const res = await fetch(
-    `${process.env.SUPABASE_URL}/rest/v1/announcements?id=eq.${id}`,
+    `${process.env.SUPABASE_URL}/rest/v1/announcements?id=eq.${encodeURIComponent(id)}`,
     {
       method: 'DELETE',
       headers: {
@@ -413,7 +413,7 @@ async function getErrorLogs(showResolved = false) {
 
 async function resolveError(id) {
   const res = await fetch(
-    `${process.env.SUPABASE_URL}/rest/v1/error_logs?id=eq.${id}`,
+    `${process.env.SUPABASE_URL}/rest/v1/error_logs?id=eq.${encodeURIComponent(id)}`,
     {
       method: 'PATCH',
       headers: {
