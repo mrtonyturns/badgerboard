@@ -34,7 +34,7 @@ exports.handler = async (event) => {
 
         // de-dupe against an existing open link
         const { data: existing } = await H.sb(`account_links?action_user_id=eq.${user.id}&candidate_email=eq.${encodeURIComponent(email)}&status=in.(invited,active)&select=id,status`)
-        if (Array.isArray(existing) && existing[0]) return reply({ error: `You already have a ${existing[0].status} link with ${email}.` }, 409)
+        if (Array.isArray(existing) && existing[0]) return reply({ error: `You already have a pending or active link with ${email}.` }, 409)
 
         const invitee = await H.findUserByEmail(email)
         // unique connect code (retry a few times on the rare collision)
