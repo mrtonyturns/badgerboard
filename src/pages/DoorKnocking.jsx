@@ -1526,8 +1526,8 @@ function FollowUpQueue({ listId }) {
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
         <div style={{ fontSize:14, fontWeight:700 }}>Follow-up Queue <span style={{ background:'#fee2e2', color:'#b91c1c', borderRadius:999, padding:'2px 8px', fontSize:12, fontWeight:700, marginLeft:6 }}>{queue.length}</span></div>
         <div style={{ display:'flex', gap:6 }}>
-          <button style={{ padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer', border:'1px solid #E5E7EB', background:'#fff', color:'#374151' }}>Export List</button>
-          <button style={{ padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer', border:'none', background:'#8B0000', color:'#fff' }}>Assign All</button>
+          <button disabled title="Coming soon" style={{ padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'not-allowed', opacity:.5, border:'1px solid #E5E7EB', background:'#fff', color:'#374151' }}>Export List</button>
+          <button disabled title="Coming soon" style={{ padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'not-allowed', opacity:.5, border:'none', background:'#8B0000', color:'#fff' }}>Assign All</button>
         </div>
       </div>
       {loading ? (
@@ -1556,7 +1556,7 @@ function FollowUpQueue({ listId }) {
                   </td>
                   <td style={{ padding:'10px 14px', borderBottom:'1px solid #f3f4f6', fontSize:11, color:'#6B7280' }}>{relTime(q.created_at)}</td>
                   <td style={{ padding:'10px 14px', borderBottom:'1px solid #f3f4f6' }}>
-                    <button style={{ padding:'3px 10px', borderRadius:5, fontSize:11, fontWeight:600, cursor:'pointer', border:'none', background:'#0A1628', color:'#fff' }}>Assign →</button>
+                    <button disabled title="Coming soon" style={{ padding:'3px 10px', borderRadius:5, fontSize:11, fontWeight:600, cursor:'not-allowed', opacity:.5, border:'none', background:'#0A1628', color:'#fff' }}>Assign →</button>
                   </td>
                 </tr>
               ))}

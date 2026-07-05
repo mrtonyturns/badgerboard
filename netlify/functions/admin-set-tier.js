@@ -146,6 +146,6 @@ exports.handler = async (event) => {
     }
   } catch (err) {
     console.error('admin-set-tier error:', err.message)
-    return { statusCode: 500, headers: CORS, body: JSON.stringify({ error: err.message }) }
+    return { statusCode: 500, headers: CORS, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }
 }

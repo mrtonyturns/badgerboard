@@ -156,6 +156,6 @@ Include 5-15 candidates if available. If fewer are known, include only those wit
     return { statusCode: 200, headers, body: JSON.stringify({ candidates, mode, searchContext }) }
   } catch (err) {
     console.error('Discover candidates error:', err)
-    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message || 'Discovery failed' }) }
+    return { statusCode: 500, headers, body: JSON.stringify({ error: 'An internal error occurred' || 'Discovery failed' }) }
   }
 }

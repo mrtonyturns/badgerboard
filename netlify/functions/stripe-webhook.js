@@ -745,6 +745,6 @@ exports.handler = async (event) => {
     return { statusCode: 200, body: JSON.stringify({ received: true }) }
   } catch (err) {
     console.error('Webhook handler error:', err.message)
-    return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
+    return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }
 }

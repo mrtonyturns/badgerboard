@@ -157,6 +157,6 @@ exports.handler = async (event) => {
     }
   } catch (err) {
     console.error('delete-account error:', err.message)
-    return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
+    return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }
 }

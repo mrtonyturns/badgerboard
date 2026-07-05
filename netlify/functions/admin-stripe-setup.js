@@ -97,6 +97,16 @@ async function getOrCreatePrice(stripe, productId, amountCents, billing, nicknam
 
 // ── Main handler ─────────────────────────────────────────────────────────────
 
+
+// Constant-time secret comparison (L2): hash both sides to equal length, then
+// crypto.timingSafeEqual — a plain !== comparison leaks timing information.
+const nodeCrypto = require('crypto')
+function safeEqual(a, b) {
+  const A = nodeCrypto.createHash('sha256').update(String(a ?? '')).digest()
+  const B = nodeCrypto.createHash('sha256').update(String(b ?? '')).digest()
+  return nodeCrypto.timingSafeEqual(A, B)
+}
+
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: JSON.stringify({ error: 'POST only' }) }
@@ -109,7 +119,7 @@ export const handler = async (event) => {
 
   // Token check
   const token = process.env.ADMIN_SETUP_TOKEN
-  if (!token || body.token !== token) {
+  if (!token || !safeEqual(body.token, token)) {
     return { statusCode: 403, body: JSON.stringify({ error: 'Forbidden' }) }
   }
 

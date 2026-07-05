@@ -221,6 +221,6 @@ export const handler = async (event) => {
     }
   } catch (err) {
     console.error('Subscription update error:', err.message)
-    return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
+    return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }
 }

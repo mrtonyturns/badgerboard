@@ -273,7 +273,7 @@ export const handler = async (event) => {
       return { statusCode: 200, body: JSON.stringify({ url: session.url }) }
     } catch (err) {
       console.error('Stripe credits checkout error:', err.message)
-      return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
+      return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
     }
   }
 
@@ -307,7 +307,7 @@ export const handler = async (event) => {
       return { statusCode: 200, body: JSON.stringify({ url: session.url }) }
     } catch (err) {
       console.error('Stripe bulk credits checkout error:', err.message)
-      return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
+      return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
     }
   }
 
@@ -412,7 +412,7 @@ export const handler = async (event) => {
     console.error('Stripe checkout error:', err.message)
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: err.message }),
+      body: JSON.stringify({ error: 'An internal error occurred' }),
     }
   }
 }

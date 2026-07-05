@@ -88,7 +88,7 @@ export const handler = async (event) => {
       return { statusCode: 200, body: JSON.stringify({ success: true, promoCodes: result }) }
     } catch (err) {
       console.error('manage-coupons list error:', err.message)
-      return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
+      return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
     }
   }
 
@@ -167,7 +167,7 @@ export const handler = async (event) => {
       }
     } catch (err) {
       console.error('manage-coupons create error:', err.message)
-      return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
+      return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
     }
   }
 
@@ -183,7 +183,7 @@ export const handler = async (event) => {
       return { statusCode: 200, body: JSON.stringify({ success: true }) }
     } catch (err) {
       console.error('manage-coupons deactivate error:', err.message)
-      return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
+      return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
     }
   }
 

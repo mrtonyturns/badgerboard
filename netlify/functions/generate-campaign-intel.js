@@ -134,6 +134,6 @@ Provide:
     return { statusCode: 200, headers, body: JSON.stringify({ content }) }
   } catch (err) {
     console.error('Campaign intel error:', err)
-    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message || 'Failed to generate intel' }) }
+    return { statusCode: 500, headers, body: JSON.stringify({ error: 'An internal error occurred' || 'Failed to generate intel' }) }
   }
 }

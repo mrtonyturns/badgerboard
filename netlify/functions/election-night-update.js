@@ -42,6 +42,16 @@ function isElectionNightWindow() {
   return utcHour >= 22 || utcHour <= 9
 }
 
+
+// Constant-time secret comparison (L2): hash both sides to equal length, then
+// crypto.timingSafeEqual — a plain !== comparison leaks timing information.
+const nodeCrypto = require('crypto')
+function safeEqual(a, b) {
+  const A = nodeCrypto.createHash('sha256').update(String(a ?? '')).digest()
+  const B = nodeCrypto.createHash('sha256').update(String(b ?? '')).digest()
+  return nodeCrypto.timingSafeEqual(A, B)
+}
+
 exports.handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -60,7 +70,7 @@ exports.handler = async (event) => {
   if (isHttp) {
     const secret = process.env.ADMIN_TRIGGER_SECRET
     const provided = event.headers?.['x-admin-trigger'] || event.headers?.['X-Admin-Trigger']
-    if (!secret || provided !== secret) {
+    if (!secret || !safeEqual(provided, secret)) {
       return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authorized' }) }
     }
   }

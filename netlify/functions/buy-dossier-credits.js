@@ -101,6 +101,6 @@ export const handler = async (event) => {
     return { statusCode: 200, body: JSON.stringify({ url: session.url }) }
   } catch (err) {
     console.error('Stripe dossier credits checkout error:', err.message)
-    return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
+    return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }
 }

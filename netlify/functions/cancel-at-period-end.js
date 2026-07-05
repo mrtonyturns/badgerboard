@@ -86,6 +86,6 @@ export const handler = async (event) => {
     }
   } catch (err) {
     console.error('cancel-at-period-end error:', err.message)
-    return { statusCode: 500, body: JSON.stringify({ error: err.message }) }
+    return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }
 }

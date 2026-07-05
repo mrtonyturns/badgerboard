@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom'
 import React, { useEffect, useState, useRef } from 'react'
 import { format } from 'date-fns'
 import {
@@ -222,6 +223,7 @@ function AddToCandidatesModal({ prospects, onClose, onSuccess }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function Prospecting() {
+  const navigate = useNavigate()
   const { user } = useAuth()
   const [lists, setLists]           = useState([])
   const [selected, setSelected]     = useState(null)
@@ -453,7 +455,7 @@ export default function Prospecting() {
 
   const handleCopy = () => {
     if (!selected) return
-    navigator.clipboard.writeText(formatListAsText(selected))
+    navigator.clipboard?.writeText(formatListAsText(selected))
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -1040,7 +1042,7 @@ export default function Prospecting() {
         <AddToCandidatesModal
           prospects={selectedCandidates}
           onClose={() => setShowAddModal(false)}
-          onSuccess={() => { setShowAddModal(false); window.location.href = '/candidates' }}
+          onSuccess={() => { setShowAddModal(false); navigate('/candidates') }}
         />
       )}
     </div>

@@ -16,6 +16,16 @@ const STALE_DAYS = 6
 // Safety cap per run — prevents runaway API costs if many candidates are toggled on at once
 const MAX_REGEN_PER_RUN = 20
 
+
+// Constant-time secret comparison (L2): hash both sides to equal length, then
+// crypto.timingSafeEqual — a plain !== comparison leaks timing information.
+const nodeCrypto = require('crypto')
+function safeEqual(a, b) {
+  const A = nodeCrypto.createHash('sha256').update(String(a ?? '')).digest()
+  const B = nodeCrypto.createHash('sha256').update(String(b ?? '')).digest()
+  return nodeCrypto.timingSafeEqual(A, B)
+}
+
 export const handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -32,7 +42,7 @@ export const handler = async (event) => {
   if (isHttp) {
     const secret = process.env.ADMIN_TRIGGER_SECRET
     const provided = event.headers?.['x-admin-trigger'] || event.headers?.['X-Admin-Trigger']
-    if (!secret || provided !== secret) {
+    if (!secret || !safeEqual(provided, secret)) {
       return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authorized' }) }
     }
   }
@@ -59,7 +69,7 @@ export const handler = async (event) => {
     console.log(`[auto-regen] Found ${candidates.length} candidate(s) with active monitoring enabled`)
   } catch (e) {
     console.error('[auto-regen] Could not fetch candidates:', e.message)
-    return { statusCode: 502, headers, body: JSON.stringify({ error: e.message }) }
+    return { statusCode: 502, headers, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }
 
   if (!candidates.length) {

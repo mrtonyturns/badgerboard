@@ -518,6 +518,16 @@ const UNIQUE_OFFICES = Array.from(
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
+
+// Constant-time secret comparison (L2): hash both sides to equal length, then
+// crypto.timingSafeEqual — a plain !== comparison leaks timing information.
+const nodeCrypto = require('crypto')
+function safeEqual(a, b) {
+  const A = nodeCrypto.createHash('sha256').update(String(a ?? '')).digest()
+  const B = nodeCrypto.createHash('sha256').update(String(b ?? '')).digest()
+  return nodeCrypto.timingSafeEqual(A, B)
+}
+
 exports.handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -532,7 +542,7 @@ exports.handler = async (event) => {
   }
 
   const adminSecret = event.headers['x-admin-secret']
-  if (!adminSecret || adminSecret !== ADMIN_SECRET) {
+  if (!adminSecret || !safeEqual(adminSecret, ADMIN_SECRET)) {
     return { statusCode: 403, headers, body: JSON.stringify({ error: 'Unauthorized' }) }
   }
 
@@ -616,6 +626,6 @@ exports.handler = async (event) => {
     }
   } catch (err) {
     console.error('Seed error:', err)
-    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message || 'Seeding failed' }) }
+    return { statusCode: 500, headers, body: JSON.stringify({ error: 'An internal error occurred' || 'Seeding failed' }) }
   }
 }

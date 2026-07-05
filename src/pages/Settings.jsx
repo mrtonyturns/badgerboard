@@ -136,7 +136,7 @@ function CalendarsSection({ user }) {
     if (!value) setConnecting(null)
   }
 
-  const copy = () => { navigator.clipboard.writeText(feedUrl); setCopied(true); setTimeout(() => setCopied(false), 2000) }
+  const copy = () => { navigator.clipboard?.writeText(feedUrl); setCopied(true); setTimeout(() => setCopied(false), 2000) }
 
   const verifyConnection = async (key) => {
     setVerifying(key); setVerifyMsg(null)

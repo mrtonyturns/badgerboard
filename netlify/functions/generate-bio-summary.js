@@ -203,6 +203,6 @@ exports.handler = async (event) => {
     return { statusCode: 200, headers: HEADERS, body: JSON.stringify({ summary: summary || null }) }
   } catch (err) {
     console.error('[generate-bio-summary] Error:', err)
-    return { statusCode: 500, headers: HEADERS, body: JSON.stringify({ error: err.message }) }
+    return { statusCode: 500, headers: HEADERS, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }
 }

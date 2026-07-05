@@ -67,7 +67,7 @@ export const handler = async (event) => {
     console.error('Portal session error:', err.message)
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: err.message }),
+      body: JSON.stringify({ error: 'An internal error occurred' }),
     }
   }
 }

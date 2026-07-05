@@ -106,6 +106,6 @@ ${dossierContent.slice(0, 12000)}`
     return { statusCode: 200, headers, body: JSON.stringify({ swot }) }
   } catch (err) {
     console.error('SWOT generation error:', err)
-    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message || 'SWOT generation failed' }) }
+    return { statusCode: 500, headers, body: JSON.stringify({ error: 'An internal error occurred' || 'SWOT generation failed' }) }
   }
 }

@@ -200,7 +200,7 @@ export const handler = async (event) => {
     volunteer = await insertVolunteer(record)
   } catch (err) {
     console.error('[invite-volunteer] insert error:', err.message)
-    return { statusCode: 500, headers: CORS_HEADERS, body: JSON.stringify({ error: err.message }) }
+    return { statusCode: 500, headers: CORS_HEADERS, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }
 
   // ── Send invite email ──────────────────────────────────────────────────────

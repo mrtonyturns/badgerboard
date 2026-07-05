@@ -130,6 +130,6 @@ exports.handler = async (event) => {
     return { statusCode: 200, headers, body: JSON.stringify({ ok: true, contact: result?.contact || result }) }
   } catch (err) {
     console.error('GHL contact sync error:', err)
-    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message || 'GHL sync failed' }) }
+    return { statusCode: 500, headers, body: JSON.stringify({ error: 'An internal error occurred' || 'GHL sync failed' }) }
   }
 }
