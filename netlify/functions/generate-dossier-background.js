@@ -580,8 +580,14 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
 
-  // Test mode (no auth required) — verify API key and optionally ping Claude
+  // Test mode — ADMIN ONLY (verifies API key / pings Claude, which costs money)
   if (body.test === true) {
+    const testAuth = event.headers?.authorization || event.headers?.Authorization
+      || (typeof body.auth_header === 'string' ? body.auth_header : null)
+    const testUser = await verifyUser(testAuth)
+    if (!testUser || !ADMIN_EMAILS.includes((testUser.email || '').toLowerCase())) {
+      return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authorized' }) }
+    }
     if (!ANTHROPIC_API_KEY) {
       return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: 'ANTHROPIC_API_KEY is not set.' }) }
     }
@@ -622,8 +628,17 @@ exports.handler = async (event) => {
     return { statusCode: 500, headers, body: JSON.stringify({ error: 'ANTHROPIC_API_KEY is not configured.' }) }
   }
 
-  // Verify auth and determine plan
-  const user     = await verifyUser(event.headers?.authorization || event.headers?.Authorization)
+  // Verify auth and determine plan.
+  // The caller's JWT arrives either as a direct Authorization header or in
+  // body.auth_header (forwarded by generate-dossier.js — Netlify background
+  // invocations don't carry the client's headers). Either way it MUST verify;
+  // unauthenticated callers are rejected before any LLM spend.
+  const authHeader = event.headers?.authorization || event.headers?.Authorization
+    || (typeof body.auth_header === 'string' ? body.auth_header : null)
+  const user = await verifyUser(authHeader)
+  if (!user) {
+    return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authenticated' }) }
+  }
   const userPlan = getUserPlan(user)
   const canViewSection6 = SECTION6_TIERS.includes(userPlan)
 
