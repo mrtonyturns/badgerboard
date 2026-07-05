@@ -11,6 +11,16 @@
  *  4. Stateless — no conversation data is stored server-side.
  */
 
+// ─── Best-effort in-memory rate limiter (per warm function container) ────────
+const RATE_BUCKET = new Map()
+function rateLimited(uid, max = 20, windowMs = 60000) {
+  const now = Date.now()
+  const recent = (RATE_BUCKET.get(uid) || []).filter(t => now - t < windowMs)
+  recent.push(now)
+  RATE_BUCKET.set(uid, recent)
+  return recent.length > max
+}
+
 const SUPABASE_URL  = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 // SUPABASE_ANON_KEY is the Netlify env var; VITE_SUPABASE_ANON_KEY is the Vite
 // frontend build var — both hold the same public anon key.
@@ -138,7 +148,7 @@ export const handler = async (event) => {
 
   const { messages = [], token } = body
 
-  if (!messages.length) {
+  if (!Array.isArray(messages) || !messages.length) {
     return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: 'messages required' }) }
   }
 
@@ -157,6 +167,30 @@ export const handler = async (event) => {
 
   if (!user?.id) {
     return { statusCode: 401, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Unauthorized' }) }
+  }
+
+  // Best-effort per-user rate limit (per warm container — stops rapid-fire
+  // abuse; a durable shared limiter is a follow-up infra item).
+  if (rateLimited(user.id)) {
+    return { statusCode: 429, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Too many requests — slow down a moment' }) }
+  }
+
+  // Validate and STRIP the client-supplied messages array before forwarding
+  // to Anthropic: only role+content pass through, roles whitelisted, sizes
+  // bounded. Never forward arbitrary client JSON to the model API.
+  const cleanMessages = []
+  for (const m of messages.slice(-30)) {
+    if (!m || typeof m !== 'object') continue
+    if (m.role !== 'user' && m.role !== 'assistant') {
+      return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Invalid message role' }) }
+    }
+    if (typeof m.content !== 'string' || !m.content.trim()) {
+      return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Invalid message content' }) }
+    }
+    cleanMessages.push({ role: m.role, content: m.content.slice(0, 4000) })
+  }
+  if (!cleanMessages.length || cleanMessages[cleanMessages.length - 1].role !== 'user') {
+    return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Conversation must end with a user message' }) }
   }
 
   // ── 2. Fetch user context (RLS-enforced) ───────────────────────────────────
@@ -195,7 +229,7 @@ export const handler = async (event) => {
         model:      'claude-haiku-4-5-20251001',
         max_tokens: 400,
         system:     systemPrompt,
-        messages,
+        messages:   cleanMessages,
       }),
     })
 

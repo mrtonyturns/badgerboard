@@ -1486,6 +1486,12 @@ const DonutChart = ({ data, hoveredIndex, setHoveredIndex }) => {
   const colors = ['#cc0000', '#1a2744', '#3b82f6', '#f59e0b', '#10b981', '#8b5cf6', '#ef4444', '#6b7280']
   const total = data.reduce((sum, d) => sum + (d.cost || 0), 0)
 
+  // Guard: with no configured costs total is 0 and every slice angle becomes
+  // NaN, rendering a broken chart. Show a placeholder instead.
+  if (!(total > 0)) {
+    return <div className="text-sm text-gray-400 text-center py-10">No cost data configured yet</div>
+  }
+
   let currentAngle = 0
   const arcs = data.map((d, i) => {
     const sliceAngle = (d.cost / total) * 360
@@ -1851,7 +1857,7 @@ Please:
 3. Suggest any related issues to watch for`
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(prompt)
+    navigator.clipboard?.writeText(prompt)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -1892,6 +1898,7 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
   const [announcements, setAnnouncements] = useState([])
   const [loading, setLoading] = useState(true)
   const [showCreateForm, setShowCreateForm] = useState(false)
+  const [posting, setPosting] = useState(false)   // double-submit guard (M4)
   const [formData, setFormData] = useState({
     type: 'info',
     message: '',
@@ -1916,11 +1923,13 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
   }, [apiCall, showToast])
 
   const handleCreateAnnouncement = async () => {
+    if (posting) return
     if (!formData.message.trim()) {
       alert('Message is required')
       return
     }
 
+    setPosting(true)
     try {
       await apiCall('create_announcement', {
         type: formData.type,
@@ -1935,6 +1944,7 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
       console.error(err)
       showToast('Failed to create announcement', 'error')
     }
+    setPosting(false)
   }
 
   const handleToggleActive = async (announcementId, isActive) => {
@@ -2047,10 +2057,11 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
             </button>
             <button
               onClick={handleCreateAnnouncement}
-              className="px-4 py-2 text-white rounded-lg transition"
+              disabled={posting}
+              className="px-4 py-2 text-white rounded-lg transition disabled:opacity-50"
               style={{ backgroundColor: '#1a2744' }}
             >
-              Post Announcement
+              {posting ? 'Posting…' : 'Post Announcement'}
             </button>
           </div>
         </div>
@@ -2267,7 +2278,7 @@ function SecurityAuditTab({ session, showToast }) {
 
   const copyPrompt = () => {
     if (!generatedPrompt) return
-    navigator.clipboard.writeText(generatedPrompt).then(() => {
+    navigator.clipboard?.writeText(generatedPrompt)?.then(() => {
       setPromptCopied(true)
       showToast('Prompt copied — paste it into Claude', 'success')
       setTimeout(() => setPromptCopied(false), 2500)
@@ -2880,7 +2891,7 @@ const CouponsTab = ({ session, showToast }) => {
   }
 
   const copyCode = (code, id) => {
-    navigator.clipboard.writeText(code).then(() => {
+    navigator.clipboard?.writeText(code)?.then(() => {
       setCopiedId(id)
       setTimeout(() => setCopiedId(null), 1500)
     })

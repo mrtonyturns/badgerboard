@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { Suspense, lazy } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom'
 
 // ─── Global error boundary ────────────────────────────────────────────────────
@@ -50,31 +50,31 @@ import Layout from './components/Layout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Offices from './pages/Offices'
-import Elections from './pages/Elections'
-import GamePlan from './pages/GamePlan'
+const Elections = lazy(() => import('./pages/Elections'))  // code-split: trims the initial bundle (M1)
+const GamePlan = lazy(() => import('./pages/GamePlan'))  // code-split: trims the initial bundle (M1)
 // ElectionResults (legacy standalone page) replaced by Elections.jsx two-tab UI.
 // Redirect helper preserves bookmarked /elections/results/:id URLs.
 function ElectionResultsRedirect() {
   const { id } = useParams()
   return <Navigate to={`/elections?tab=results${id ? `&election=${id}` : ''}`} replace />
 }
-import Candidates from './pages/Candidates'
-import CandidateDetail from './pages/CandidateDetail'
-import Prospecting from './pages/Prospecting'
-import VoterLists from './pages/VoterLists'
+const Candidates = lazy(() => import('./pages/Candidates'))  // code-split: trims the initial bundle (M1)
+const CandidateDetail = lazy(() => import('./pages/CandidateDetail'))  // code-split: trims the initial bundle (M1)
+const Prospecting = lazy(() => import('./pages/Prospecting'))  // code-split: trims the initial bundle (M1)
+const VoterLists = lazy(() => import('./pages/VoterLists'))  // code-split: trims the initial bundle (M1)
 // Door Knocking parked — restore import + route to re-enable
 // import DoorKnocking from './pages/DoorKnocking'
-import CampaignConnect from './pages/CampaignConnect'
-import Dossiers from './pages/Dossiers'
+const CampaignConnect = lazy(() => import('./pages/CampaignConnect'))  // code-split: trims the initial bundle (M1)
+const Dossiers = lazy(() => import('./pages/Dossiers'))  // code-split: trims the initial bundle (M1)
 import Settings from './pages/Settings'
 import Terms from './pages/Terms'
-import Pricing from './pages/Pricing'
-import AdminDashboard from './pages/AdminDashboard'
+const Pricing = lazy(() => import('./pages/Pricing'))  // code-split: trims the initial bundle (M1)
+const AdminDashboard = lazy(() => import('./pages/AdminDashboard'))  // code-split: trims the initial bundle (M1)
 import DossierDisclaimer from './pages/DossierDisclaimer'
-import Compare from './pages/Compare'
+const Compare = lazy(() => import('./pages/Compare'))  // code-split: trims the initial bundle (M1)
 import VolunteerPortal from './pages/VolunteerPortal'
 import SharedDossier from './pages/SharedDossier'
-import Events from './pages/Events'
+const Events = lazy(() => import('./pages/Events'))  // code-split: trims the initial bundle (M1)
 import ResetPassword from './pages/ResetPassword'
 
 const ProtectedRoute = ({ children }) => {
@@ -121,6 +121,11 @@ const AppRoutes = () => {
   }
 
   return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center py-24">
+        <div className="w-10 h-10 border-4 border-brand-red border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
     <Routes>
       {/* Volunteer portal — completely separate auth, no Layout */}
       <Route path="/v" element={<VolunteerPortal />} />
@@ -164,6 +169,7 @@ const AppRoutes = () => {
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </Suspense>
   )
 }
 

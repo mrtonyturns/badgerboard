@@ -1151,6 +1151,7 @@ export default function TaskBoard() {
       {/* ══ Modals ══ */}
       {detail && (
         <TaskDetailModal
+          key={detail.id}
           task={tasks.find(t => t.id === detail.id) || detail}
           tasks={tasks} projects={projects} sections={sections} labels={labels}
           onClose={() => setDetail(null)}

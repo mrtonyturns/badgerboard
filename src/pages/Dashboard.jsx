@@ -187,7 +187,7 @@ export default function Dashboard() {
       </div>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard icon={Building2}    label="Total Offices"     value={stats.offices}    sub="Tracked statewide"     color="bg-brand-navy"    to="/offices" />
         <StatCard icon={Users}        label="Candidates"        value={stats.candidates} sub={`${stats.republicans} R · ${stats.democrats} D`} color="bg-brand-red" to="/candidates" />
         <StatCard icon={FileText}     label="Profiles Built"    value={stats.dossiers}   sub="AI-generated profiles" color="bg-blue-600"       to="/dossiers" />

@@ -213,11 +213,13 @@ export default function ElectionResultsAdmin({ showToast }) {
       .eq('contest_id', contestId)
     const totalVotes = (allRows || []).reduce((s, r) => s + (r.votes || 0), 0)
     if (totalVotes > 0 && allRows?.length) {
-      await Promise.all(allRows.map(r =>
+      const pctResults = await Promise.allSettled(allRows.map(r =>
         supabase.from('election_results').update({
           vote_pct: parseFloat(((r.votes || 0) / totalVotes * 100).toFixed(1))
         }).eq('id', r.id)
       ))
+      const pctFailed = pctResults.filter(r => r.status === 'rejected' || r.value?.error).length
+      if (pctFailed) showToast(`${pctFailed} percentage update(s) failed — refresh and retry`, 'error')
     }
 
     setSaving(false)
@@ -283,10 +285,11 @@ export default function ElectionResultsAdmin({ showToast }) {
 
   const uncallRace = async (contestId) => {
     const results = resultsMap[contestId] || []
-    await Promise.all(results.map(r =>
+    const unset = await Promise.allSettled(results.map(r =>
       supabase.from('election_results').update({ winner: false, declared: false }).eq('id', r.id)
     ))
-    showToast('Race un-called')
+    const unsetFailed = unset.filter(r => r.status === 'rejected' || r.value?.error).length
+    showToast(unsetFailed ? `Race un-called with ${unsetFailed} failure(s) — refresh to verify` : 'Race un-called')
     loadContests(selectedElection.id)
   }
 

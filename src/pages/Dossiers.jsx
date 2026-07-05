@@ -999,7 +999,7 @@ function ShareModal({ dossier, onClose }) {
   }
 
   const handleCopy = (url) => {
-    navigator.clipboard.writeText(url)
+    navigator.clipboard?.writeText(url)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -2584,6 +2584,7 @@ export default function Dossiers() {
             </div>
           ) : (
             <DossierViewer
+              key={selected.id}
               dossier={selected}
               onRegenerate={handleRegenerate}
               regenerating={generating}
