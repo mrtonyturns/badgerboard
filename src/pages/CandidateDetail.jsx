@@ -2212,7 +2212,7 @@ export default function CandidateDetail() {
       <div className="card">
         <div className="flex flex-col sm:flex-row sm:items-start gap-4">
           <div className="w-16 h-16 rounded-2xl bg-brand-red/10 text-brand-red flex items-center justify-center text-2xl font-bold flex-shrink-0">
-            {candidate.name[0]}
+            {(candidate.name || '?')[0]}
           </div>
           <div className="flex-1">
             {editing ? (

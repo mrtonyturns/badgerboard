@@ -7,6 +7,13 @@ import {
   format, differenceInDays, differenceInCalendarDays,
   isPast, isFuture, parseISO, isToday,
 } from 'date-fns'
+
+// Crash-proof parseISO (see Elections.jsx): bad/missing dates → epoch.
+const safeISO = (d) => {
+  const t = parseISO(String(d ?? ''))
+  return Number.isNaN(+t) ? new Date(0) : t
+}
+
 import {
   Target, CalendarDays, Plus, Clock, CheckCircle, Edit2, Trash2, X,
   BarChart2, AlertCircle, ChevronDown, ChevronRight, Users,
@@ -103,7 +110,7 @@ const defaultMilestoneForm = {
 
 function autoStatus(m) {
   if (m.status === 'complete' || m.status === 'skipped') return m.status
-  if (m.due_date && isPast(parseISO(m.due_date)) && !isToday(parseISO(m.due_date))) return 'overdue'
+  if (m.due_date && isPast(safeISO(m.due_date)) && !isToday(safeISO(m.due_date))) return 'overdue'
   return m.status
 }
 
@@ -118,19 +125,19 @@ function MilestoneRow({ milestone, onEdit, onDelete, onStatusChange, candidates,
   const isSkipped      = computedStatus === 'skipped'
   const isDeleting     = deleting === milestone.id
   const daysUntil = milestone.due_date
-    ? differenceInCalendarDays(parseISO(milestone.due_date), new Date())
+    ? differenceInCalendarDays(safeISO(milestone.due_date), new Date())
     : null
   const cand = candidates?.find(c => c.id === milestone.candidate_id)
 
   // Due date chip
   const dueDateChip = (() => {
     if (!milestone.due_date) return null
-    if (isComplete) return { label: format(parseISO(milestone.due_date), 'MMM d'), cls: 'text-gray-400 bg-gray-50' }
-    if (isToday(parseISO(milestone.due_date))) return { label: 'Today', cls: 'text-orange-700 bg-orange-50 font-semibold border border-orange-200' }
+    if (isComplete) return { label: format(safeISO(milestone.due_date), 'MMM d'), cls: 'text-gray-400 bg-gray-50' }
+    if (isToday(safeISO(milestone.due_date))) return { label: 'Today', cls: 'text-orange-700 bg-orange-50 font-semibold border border-orange-200' }
     if (daysUntil < 0) return { label: `${Math.abs(daysUntil)}d overdue`, cls: 'text-red-700 bg-red-50 font-semibold border border-red-200' }
     if (daysUntil <= 7)  return { label: `${daysUntil}d`, cls: 'text-orange-600 bg-orange-50 font-semibold border border-orange-200' }
     if (daysUntil <= 30) return { label: `${daysUntil}d`, cls: 'text-amber-700 bg-amber-50 border border-amber-200' }
-    return { label: format(parseISO(milestone.due_date), 'MMM d'), cls: 'text-gray-500 bg-gray-50 border border-gray-200' }
+    return { label: format(safeISO(milestone.due_date), 'MMM d'), cls: 'text-gray-500 bg-gray-50 border border-gray-200' }
   })()
 
   return (

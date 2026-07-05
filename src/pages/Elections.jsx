@@ -5,6 +5,13 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { format, differenceInDays, isPast, isFuture, parseISO, isToday } from 'date-fns'
+
+// Crash-proof parseISO: null/undefined/malformed dates → epoch (renders as
+// past) instead of Invalid Date, which crashes format() and comparisons.
+const safeISO = (d) => {
+  const t = parseISO(String(d ?? ''))
+  return Number.isNaN(+t) ? new Date(0) : t
+}
 import {
   CalendarDays, Plus, Clock, CheckCircle, Edit2, Trash2, X,
   BarChart2, AlertCircle, Radio,
@@ -67,7 +74,7 @@ export default function Elections() {
     setLoading(false)
   }
 
-  const hasTodayElection = useCallback((list) => list.some(e => isToday(parseISO(e.election_date))), [])
+  const hasTodayElection = useCallback((list) => list.some(e => isToday(safeISO(e.election_date))), [])
 
   // ── Tab helpers ─────────────────────────────────────────────────────────────
   const goToCalendar = () => setSearchParams({})
@@ -107,13 +114,13 @@ export default function Elections() {
   const currentYear = new Date().getFullYear()
   const years       = [...new Set(elections.map(e => e.year))].sort().filter(y => Number(y) >= currentYear)
   const filtered    = yearFilter ? elections.filter(e => String(e.year) === String(yearFilter)) : elections
-  const upcoming    = filtered.filter(e => isFuture(parseISO(e.election_date)))
-  const past        = filtered.filter(e => isPast(parseISO(e.election_date)))
+  const upcoming    = filtered.filter(e => isFuture(safeISO(e.election_date)))
+  const past        = filtered.filter(e => isPast(safeISO(e.election_date)))
 
   // Auto-select Results election — prefer today's, else most recent past
   const resolvedResultsId = selectedResultsId
-    || elections.find(e => isToday(parseISO(e.election_date)))?.id
-    || [...elections].filter(e => isPast(parseISO(e.election_date))).sort((a,b) => b.election_date.localeCompare(a.election_date))[0]?.id
+    || elections.find(e => isToday(safeISO(e.election_date)))?.id
+    || [...elections].filter(e => isPast(safeISO(e.election_date))).sort((a,b) => b.election_date.localeCompare(a.election_date))[0]?.id
     || null
 
   // Once elections load, push the auto-selected ID into the URL so the
@@ -121,8 +128,8 @@ export default function Elections() {
   useEffect(() => {
     if (activeTab === 'results' && !selectedResultsId && elections.length > 0) {
       const autoId =
-        elections.find(e => isToday(parseISO(e.election_date)))?.id ||
-        [...elections].filter(e => isPast(parseISO(e.election_date)))
+        elections.find(e => isToday(safeISO(e.election_date)))?.id ||
+        [...elections].filter(e => isPast(safeISO(e.election_date)))
           .sort((a, b) => b.election_date.localeCompare(a.election_date))[0]?.id
       if (autoId) setSearchParams({ tab: 'results', election: autoId })
     }
@@ -130,9 +137,9 @@ export default function Elections() {
 
   // ── Election card ───────────────────────────────────────────────────────────
   const ElectionRow = ({ election }) => {
-    const daysUntil  = differenceInDays(parseISO(election.election_date), new Date())
-    const isUpcoming = isFuture(parseISO(election.election_date))
-    const isOngoing  = isToday(parseISO(election.election_date))
+    const daysUntil  = differenceInDays(safeISO(election.election_date), new Date())
+    const isUpcoming = isFuture(safeISO(election.election_date))
+    const isOngoing  = isToday(safeISO(election.election_date))
     const colors     = TYPE_COLORS[election.type] || TYPE_COLORS.general
 
     return (
@@ -140,9 +147,9 @@ export default function Elections() {
         <div className="flex items-start gap-4">
           {/* Date block */}
           <div className={`${isUpcoming || isOngoing ? colors.bg : 'bg-gray-400'} text-white rounded-xl p-3 text-center min-w-[60px] flex-shrink-0`}>
-            <p className="text-xs font-medium opacity-80">{format(parseISO(election.election_date), 'MMM')}</p>
-            <p className="text-2xl font-bold leading-tight">{format(parseISO(election.election_date), 'd')}</p>
-            <p className="text-xs opacity-80">{format(parseISO(election.election_date), 'yyyy')}</p>
+            <p className="text-xs font-medium opacity-80">{format(safeISO(election.election_date), 'MMM')}</p>
+            <p className="text-2xl font-bold leading-tight">{format(safeISO(election.election_date), 'd')}</p>
+            <p className="text-xs opacity-80">{format(safeISO(election.election_date), 'yyyy')}</p>
           </div>
 
           {/* Info */}
@@ -212,7 +219,7 @@ export default function Elections() {
               <div>
                 <p className="text-xs text-gray-400 font-medium">Election Date</p>
                 <p className="text-sm font-semibold text-gray-900">
-                  {format(parseISO(election.election_date), 'EEEE, MMMM d, yyyy')}
+                  {format(safeISO(election.election_date), 'EEEE, MMMM d, yyyy')}
                 </p>
               </div>
             </div>
@@ -287,7 +294,7 @@ export default function Elections() {
         <>
           {/* Election night banner — quick jump to results */}
           {hasTodayElection(elections) && (() => {
-            const todayEl = elections.find(e => isToday(parseISO(e.election_date)))
+            const todayEl = elections.find(e => isToday(safeISO(e.election_date)))
             return (
               <button
                 onClick={() => goToResults(todayEl?.id)}

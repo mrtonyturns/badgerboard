@@ -252,7 +252,7 @@ export default function Dashboard() {
                   <div className="flex flex-col items-end gap-1">
                     {c.party && <span className={partyBadge(c.party)}>{c.party[0]}</span>}
                     <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge(c.status)}`}>
-                      {c.status.replace('_', ' ')}
+                      {(c.status || '').replace('_', ' ')}
                     </span>
                   </div>
                 </Link>
