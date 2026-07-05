@@ -125,6 +125,10 @@ export const handler = async (event) => {
   }
   const { district_key, district_name, area_description, district_lean, counties, force } = body
   const sourceBrief = countySourceBrief(Array.isArray(counties) ? counties : [])
+  // In-district community list (area_description = "Place1, Place2, ... (X, Y counties)").
+  // Used to fence every research + structuring prompt to the district's actual footprint.
+  const communities = (area_description || district_name).split('(')[0].trim().replace(/,\s*$/, '')
+  const countyNames = (Array.isArray(counties) && counties.length) ? counties.map(c => `${c} County`).join(', ') : null
   if (!district_key || !district_name) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'district_key, district_name required' }) }
   }
@@ -162,10 +166,30 @@ export const handler = async (event) => {
         body: JSON.stringify({
           model: 'sonar-pro',
           messages: [
-            { role: 'system', content: 'You are a Wisconsin community events researcher helping a political campaign find public events to attend. Be specific about dates, times, venues, and organizers. Include well-known annual and recurring events (county fairs, farmers markets, festivals, parades) that fall in the window based on their usual schedule even if the current-year page is sparse — note when a date is approximate. Never invent one-off events.' },
-            { role: 'user', content: `Today is ${today}. Search for upcoming public events happening in the next 60 days in and around these Wisconsin communities: ${area_description || district_name}. Search for things like "${(area_description || '').split(',')[0] || 'Wisconsin'} events calendar 2026", county fair schedules, farmers markets, summer festivals, parades, chamber of commerce calendars, county Republican and Democratic party event pages, and union events for this area. List every event you find (aim for 10-16), including recurring weekly ones (farmers markets) and annual ones whose usual dates fall in the window — mark approximate dates. ONLY include events open to the general public with no invitation, membership, or private registration required — skip private parties, members-only club events, and invite-only gatherings. For each: name, date(s), start time, venue with its STREET ADDRESS and city, organizer/host, a one-sentence description, and the event website URL if known. These communities are in ${district_name}, Wisconsin.${sourceBrief ? ` Check these county-specific sources known to publish local events:\n${sourceBrief}` : ''}` }
+            { role: 'system', content: 'You are a Wisconsin community events researcher helping a political campaign find public events where a candidate can meet voters. Your goal is VOLUME and COMPLETENESS: small events (church fish fries, service-club breakfasts, library talks, school fundraisers, board meetings) matter exactly as much as big festivals — never skip an event for being minor. Be specific about dates, times, venues, and organizers. Include well-known annual and recurring events (county fairs, farmers markets, festivals, parades) that fall in the window based on their usual schedule even if the current-year page is sparse — note when a date is approximate. Never invent one-off events. STRICT GEOGRAPHY: only report events physically held in the exact communities you are given — never events in neighboring towns or elsewhere "in the area".' },
+            { role: 'user', content: `Today is ${today}. Find upcoming public events in the next 60 days held INSIDE these Wisconsin communities of ${district_name}, and ONLY these communities: ${communities}. An event counts ONLY if its venue is physically located in one of those communities — exclude events in neighboring towns, other parts of the county, or anywhere "nearby".
+
+Run searches for EACH of the larger communities in that list (e.g. "<community> WI events calendar ${today.slice(0, 4)}", "<community> community calendar"), and cover ALL of these event types:
+- County fairs, 4-H and FFA events, dairy/farm breakfasts
+- Farmers markets (weekly), craft fairs, flea markets
+- Festivals, "fests", concerts and music-in-the-park series
+- Parades and holiday celebrations
+- Church festivals, picnics, fish fries and brat frys
+- VFW and American Legion events; Lions, Rotary, Kiwanis, Optimist club events and pancake breakfasts
+- Chamber of commerce events, ribbon cuttings, business expos
+- Library programs and public talks
+- School events open to the public (sports, plays, fundraisers, craft shows)
+- Town/village/city board, county board, and school board meetings
+- County Republican and Democratic party meetings and events; candidate town halls
+- Union and labor events
+- Charity 5Ks, runs, walks and benefit dinners
+- Car shows, tractor shows, gun and sportsmen's shows, fishing tournaments
+- Brewery/winery events, trivia and community nights
+- Senior center and community center events
+
+Aim for 25-40 events; if you find more, list more — do NOT stop at the big well-known ones. Include recurring weekly ones (one mention with its schedule) and annual ones whose usual dates fall in the window — mark approximate dates. ONLY include events open to the general public with no invitation, membership, or private registration required — skip private parties, members-only club events, and invite-only gatherings. For each: name, date(s), start time, venue with its STREET ADDRESS and city, organizer/host, a one-sentence description, and the event website URL if known.${sourceBrief ? ` Check these county-specific sources known to publish local events:\n${sourceBrief}` : ''}` }
           ],
-          max_tokens: 2500,
+          max_tokens: 4000,
         }),
       })
       if (pRes.ok) {
@@ -212,10 +236,10 @@ export const handler = async (event) => {
         body: JSON.stringify({
           model: 'sonar',
           messages: [
-            { role: 'system', content: 'You research LOCAL NEWS coverage of upcoming community events in Wisconsin. Prefer local TV stations, local newspapers, and city/chamber announcement pages. Name the outlet for every item.' },
-            { role: 'user', content: `Check local news outlets and their community/event calendars covering ${placeList.join(', ')}, Wisconsin.${sourceBrief ? ` Prioritize these county-specific sources:\n${sourceBrief}` : ' Check local TV, local papers and city weeklies, chamber and city hall announcements.'}\nWhat upcoming public events in the next 60 days have they announced or covered? For each: event name, date, time, venue with street address, city, host, one-sentence description, the OUTLET that reported it, and the article/calendar URL if available.` }
+            { role: 'system', content: 'You research LOCAL NEWS coverage of upcoming community events in Wisconsin. Prefer local TV stations, local newspapers, and city/chamber announcement pages. Name the outlet for every item. Small announcements (club breakfasts, church suppers, library programs, board meetings) are just as important as big-festival coverage. Only report events held inside the exact communities given.' },
+            { role: 'user', content: `Check local news outlets and their community/event calendars covering ${placeList.join(', ')}, Wisconsin.${sourceBrief ? ` Prioritize these county-specific sources:\n${sourceBrief}` : ' Check local TV, local papers and city weeklies, chamber and city hall announcements.'}\nWhat upcoming public events in the next 60 days have they announced or covered? Include small items too — community briefs, club and church announcements, meeting notices — not just headline events. ONLY include events whose venue is inside one of these communities: ${communities}. For each: event name, date, time, venue with street address, city, host, one-sentence description, the OUTLET that reported it, and the article/calendar URL if available. List as many as you find (15+ is great).` }
           ],
-          max_tokens: 1800,
+          max_tokens: 2500,
         }),
       })
       if (nr.ok) {
@@ -246,7 +270,7 @@ export const handler = async (event) => {
     headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: CLAUDE_MODEL,
-      max_tokens: 9000,
+      max_tokens: 16000,
       messages: [{
         role: 'user',
         content: `Convert this event research for ${district_name}, Wisconsin into strict JSON. The district's overall voter lean is ${district_lean || 'unknown'}.
@@ -282,7 +306,8 @@ Lean rules — be strict:
 - "likely_*" when strong signals put certainty at 80-99 (labor unions → likely_liberal; rural patriotic/agricultural events in heavily R areas with other signals; progressive advocacy groups → likely_liberal).
 - Everything else is "nonpartisan" (fairs, markets, chamber, civic) with certainty below 80; set score to the AREA's lean context, not the event's.
 - "score": negative = liberal, positive = conservative, drives a marker on a lean bar.
-Include EVERY event from the research that is public and has a usable date in the next ~60 days — do not drop events merely because a date is approximate (keep them, using the best-estimate date). Recurring weekly events get one entry starting at the next occurrence.
+DISTRICT BOUNDARY RULE (strict): this list is for ${district_name} ONLY. The in-district communities are: ${communities}. Include an event ONLY if its city/venue is in one of those communities. The single exception: county fairs and county-wide signature events of ${countyNames || "the district's counties"} may be included even if their venue city is not on the list. EXCLUDE everything else — an event in a neighboring town outside the list must be dropped no matter how close or how big it is. When research says an event is "near" or "in the area of" a community without naming an in-district city, drop it.
+Include EVERY in-district event from the research that is public and has a usable date in the next ~60 days — do not drop events merely because a date is approximate (keep them, using the best-estimate date), and NEVER drop an event for being small or routine (club breakfasts, fish fries, library talks, board meetings are as valuable to a campaign as festivals). There is no maximum — 25-40+ events is the expected output when the research supports it. Recurring weekly events get one entry starting at the next occurrence.
 PUBLIC-ONLY RULE: include only events open to the general public. EXCLUDE anything private, invite-only, members-only, or requiring approval to attend (private fundraisers with invitation lists, closed club meetings, school-family-only events). Free-and-open government meetings, fairs, markets, festivals, and ticketed-but-open events all count as public. Output ONLY the JSON object.
 
 Merge events found across ALL sources below and dedupe by name, keeping the fullest details for each event. SOURCE LABELING (strict): if an event appears in LOCAL NEWS RESEARCH, set source="news" and source_note to the outlet name (e.g. "Wausau Pilot & Review") — even if it also appears in web research. If an event appears only in the X posts, set source="x" and source_note to the handle (e.g. "@WausauChamber on X"). Otherwise source="web" with source_note null. Events found ONLY on X must clearly be real public events with a date — skip vague chatter, national politics, and anything that is not a local event announcement.
@@ -312,7 +337,7 @@ ${xPosts || '(none available)'}`,
   let events = (parsed.events || []).filter(e => e?.name && e?.date_start)
 
   // Thin result (search variance): one supplemental research pass, merged + deduped.
-  if (events.length < 6 && PERPLEXITY_API_KEY) {
+  if (events.length < 14 && PERPLEXITY_API_KEY) {
     try {
       const ctrl2 = new AbortController()
       setTimeout(() => ctrl2.abort(), 21000)
@@ -322,10 +347,10 @@ ${xPosts || '(none available)'}`,
         body: JSON.stringify({
           model: 'sonar-pro',
           messages: [
-            { role: 'system', content: 'You are a Wisconsin community events researcher. Only public events. Include street addresses.' },
-            { role: 'user', content: `List public community events (fairs, markets, festivals, parades, concerts, civic meetings, party events) in the next 60 days near ${area_description || district_name}, Wisconsin that are NOT in this list: ${events.map(e => e.name).join('; ') || 'none'}. Name, date, time, venue with street address, city, host, one-sentence description, URL if known.` }
+            { role: 'system', content: 'You are a Wisconsin community events researcher. Only public events. Include street addresses. Small events (fish fries, club breakfasts, library programs, board meetings) count as much as big ones. Only report events physically held inside the exact communities given.' },
+            { role: 'user', content: `List public community events in the next 60 days held INSIDE these Wisconsin communities and ONLY these communities: ${communities}. Cover the small stuff too: church fish fries and picnics, VFW/American Legion and Lions/Rotary/Kiwanis events, library programs, school events open to the public, town/village/school board meetings, county party (GOP/Dem) meetings, charity runs and benefit dinners, car/tractor/sportsmen shows, senior center events — plus fairs, markets, festivals, parades, concerts. Skip events already in this list: ${events.map(e => e.name).join('; ') || 'none'}. Find as many NEW ones as you can (15+). For each: name, date, time, venue with street address, city, host, one-sentence description, URL if known.` }
           ],
-          max_tokens: 2000,
+          max_tokens: 2500,
         }),
       })
       if (p2.ok) {
@@ -337,7 +362,7 @@ ${xPosts || '(none available)'}`,
             headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
             body: JSON.stringify({
               model: CLAUDE_MODEL, max_tokens: 6000,
-              messages: [{ role: 'user', content: `Convert to the same strict JSON schema {"events":[...]} used before (name, date_start, date_end, time, venue, address, city, host, description, category, url, lean{label,certainty,score,basis}). Public events only, next 60 days, district lean ${district_lean || 'unknown'}. Output ONLY JSON.
+              messages: [{ role: 'user', content: `Convert to the same strict JSON schema {"events":[...]} used before (name, date_start, date_end, time, venue, address, city, host, description, category, url, lean{label,certainty,score,basis}). Public events only, next 60 days, district lean ${district_lean || 'unknown'}. STRICT BOUNDARY: include ONLY events whose city is one of these in-district communities: ${communities} (county fairs of ${countyNames || "the district's counties"} also allowed). Drop events in any other town. Include every qualifying event no matter how small. Output ONLY JSON.
 
 RESEARCH:
 ${extra}` }],
@@ -360,7 +385,7 @@ ${extra}` }],
   // dates, venue, address, AND an image. Fall back to og/twitter meta tags.
   // Images are later served through the Netlify Image CDN proxy, so any
   // https URL works — but skip expiring CDNs (Facebook) that die in days.
-  const withUrls = events.filter(e => e.url).slice(0, 16)
+  const withUrls = events.filter(e => e.url).slice(0, 30)
   await Promise.all(withUrls.map(async (e) => {
     try {
       const ctrl = new AbortController()
