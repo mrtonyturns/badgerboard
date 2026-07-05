@@ -411,6 +411,7 @@ export default function Pricing() {
         setCheckoutError(null)
         // Use billingMsg-style success via checkoutError repurposed as success, or navigate to settings
         await refreshSession?.()
+        setCheckoutLoading(null)   // clear BEFORE navigating so the button never sticks
         navigate('/settings?billing=success&plan=' + (payload.plan || ''))
         return
       }
@@ -889,11 +890,15 @@ export default function Pricing() {
                       onClick={() => {
                         if (!user) { navigate('/login'); return }
                         const lk = `bulk-${pack.key}`
+                        const token = session?.access_token
                         setCheckoutLoading(lk)
                         setCheckoutError(null)
                         fetch('/.netlify/functions/create-checkout-session', {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
+                          headers: {
+                            'Content-Type': 'application/json',
+                            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                          },
                           body: JSON.stringify({ product: 'bulk_credits', pack: pack.key, userId: user.id, email: user.email }),
                         })
                           .then(r => r.json())
