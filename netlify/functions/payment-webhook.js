@@ -42,9 +42,12 @@ export const handler = async (event) => {
       return { statusCode: 200, body: JSON.stringify({ received: true, skipped: true }) };
     }
 
-    // Merge payment_status into existing metadata
+    // Merge payment_status into APP metadata — app_metadata is service-role
+    // only, so users cannot self-set payment_status (user_metadata is
+    // user-writable via supabase.auth.updateUser). All readers (AuthContext,
+    // tiers.js, admin-dashboard) already read app_metadata.payment_status.
     const updatedMetadata = {
-      ...user.user_metadata,
+      ...user.app_metadata,
       payment_status: status,
     };
 
@@ -58,7 +61,7 @@ export const handler = async (event) => {
           Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ user_metadata: updatedMetadata }),
+        body: JSON.stringify({ app_metadata: updatedMetadata }),
       }
     );
 

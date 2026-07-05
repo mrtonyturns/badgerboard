@@ -14,6 +14,33 @@ const Stripe = require('stripe')
 
 // Accounts permanently pinned to agency plan — Stripe events cannot downgrade these.
 const { ADMIN_EMAILS } = require('./_config')
+
+// ─── Webhook idempotency ─────────────────────────────────────────────────────
+// Stripe retries deliveries; without dedupe a retried checkout.session.completed
+// re-granted credits (read-modify-write on app_metadata). Insert the event ID
+// first — a unique-key conflict means it was already processed. If the table
+// doesn't exist yet (migration pending), fail open with a warning so payments
+// still process.
+async function alreadyProcessed(eventId, eventType) {
+  try {
+    const res = await fetch(`${process.env.SUPABASE_URL}/rest/v1/stripe_webhook_events`, {
+      method: 'POST',
+      headers: {
+        apikey:         process.env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization:  `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer:         'return=minimal',
+      },
+      body: JSON.stringify({ id: eventId, type: eventType }),
+    })
+    if (res.status === 409) return true
+    if (!res.ok) console.warn('[stripe-webhook] idempotency insert failed:', res.status)
+    return false
+  } catch (e) {
+    console.warn('[stripe-webhook] idempotency check failed:', e.message)
+    return false
+  }
+}
 const { sendEmail, getNotificationPrefs } = require('./_email')
 
 // New plan keys
@@ -387,6 +414,12 @@ exports.handler = async (event) => {
   }
 
   const priceMap = buildPriceMap()
+
+  // Dedupe retried deliveries BEFORE any credit/plan mutation
+  if (await alreadyProcessed(stripeEvent.id, stripeEvent.type)) {
+    console.log(`[stripe-webhook] duplicate delivery skipped: ${stripeEvent.id}`)
+    return { statusCode: 200, body: JSON.stringify({ received: true, duplicate: true }) }
+  }
 
   try {
     switch (stripeEvent.type) {
