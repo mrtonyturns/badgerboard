@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
 import { format } from 'date-fns'
+import { sanitizeHtml, escapeHtml } from '../lib/sanitize'
 import {
   FileText, Sparkles, Search, Trash2, RefreshCw, Copy, Check,
   Download, User, Newspaper, BookOpen, Target, Building2,
@@ -248,7 +249,8 @@ function mdToHtml(text, accentColor = '#2563eb') {
   })
 
   closeAll()
-  return out.join('')
+  // XSS guard: AI/markdown content must never reach the DOM unsanitized
+  return sanitizeHtml(out.join(''))
 }
 
 // ─── Build full print-ready HTML document ────────────────────────────────────
@@ -260,7 +262,7 @@ function buildPrintHtml(dossier, sections) {
   const sectionsHtml = sections.map(s => `
     <section style="page-break-inside:avoid;margin-bottom:32px;">
       <div style="border-top:3px solid #1e3a5f;padding-top:16px;margin-bottom:12px;">
-        <h2 style="font-size:1.1rem;font-weight:800;color:#1e3a5f;margin:0;">${s.label}</h2>
+        <h2 style="font-size:1.1rem;font-weight:800;color:#1e3a5f;margin:0;">${escapeHtml(s.label)}</h2>
       </div>
       ${mdToHtml(s.displayContent || s.content)}
     </section>
@@ -270,7 +272,7 @@ function buildPrintHtml(dossier, sections) {
 <html>
 <head>
   <meta charset="utf-8">
-  <title>${title}</title>
+  <title>${escapeHtml(title)}</title>
   <style>
     @page { margin: 1in; }
     * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-sizing: border-box; }
@@ -283,10 +285,10 @@ function buildPrintHtml(dossier, sections) {
 </head>
 <body>
   <div class="header">
-    <h1>${title}</h1>
+    <h1>${escapeHtml(title)}</h1>
     <div class="meta">
-      ${candidate?.office?.name ? `Office: ${candidate.office.name}` : ''}
-      ${candidate?.party ? ` · ${candidate.party}` : ''}
+      ${candidate?.office?.name ? `Office: ${escapeHtml(candidate.office.name)}` : ''}
+      ${candidate?.party ? ` · ${escapeHtml(candidate.party)}` : ''}
       ${generatedAt ? ` · Generated ${generatedAt}` : ''}
     </div>
   </div>

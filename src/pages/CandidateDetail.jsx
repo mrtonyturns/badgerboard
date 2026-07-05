@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { hasFindings } from '../lib/profileContent'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { format } from 'date-fns'
+import { sanitizeHtml } from '../lib/sanitize'
 import {
   ArrowLeft, Mail, Phone, Globe, Twitter, Facebook, Instagram,
   Building2, CalendarDays, Briefcase, Edit2, Save, X, FileText,
@@ -570,7 +571,8 @@ function mdToHtmlCD(text) {
   })
   if (inTable) out.push('</tbody></table></div>')
   if (inUl) out.push('</ul>')
-  return out.join('')
+  // XSS guard: sanitize before dangerouslySetInnerHTML
+  return sanitizeHtml(out.join(''))
 }
 
 // ── Dossier Section Content Renderer ─────────────────────────────────────────

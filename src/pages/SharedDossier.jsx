@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { filterSections } from '../lib/profileContent'
 import { useParams, Link } from 'react-router-dom'
 import { format, formatDistanceToNow } from 'date-fns'
+import { sanitizeHtml } from '../lib/sanitize'
 import {
   Sparkles, AlertTriangle, Clock, Eye, FileText, Newspaper,
   User, Vote, DollarSign, Target, Building2, Network, Share2,
@@ -150,7 +151,8 @@ function mdToHtml(text, accentColor = '#2563eb') {
     out.push(`<p style="margin:5px 0;color:#374151;font-size:0.9rem;line-height:1.75;">${applyInline(line)}</p>`)
   })
   closeAll()
-  return out.join('')
+  // XSS guard: this page is PUBLIC (no auth) — sanitize all rendered HTML
+  return sanitizeHtml(out.join(''))
 }
 
 function parseSections(content = '') {
