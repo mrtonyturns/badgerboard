@@ -334,7 +334,24 @@ ${xPosts || '(none available)'}`,
   } catch {
     return { statusCode: 502, headers, body: JSON.stringify({ error: 'Could not parse event output' }) }
   }
-  let events = (parsed.events || []).filter(e => e?.name && e?.date_start)
+  // ── Code-level guards: district boundary + past dates ─────────────────────
+  // The prompts already demand in-district-only events, but AI output can
+  // slip. This filter guarantees it. Exceptions: county fairs (category
+  // "fair") are county-wide by nature and always kept.
+  const communitySet = communities.split(',')
+    .map(c => c.trim().toLowerCase().replace(/\./g, ''))
+    .filter(c => c && c !== 'wi' && c !== 'wisconsin')
+  const inDistrict = (e) => {
+    if (!communitySet.length) return true
+    if (e.category === 'fair') return true
+    const hay = [e.city, e.venue, e.address].filter(Boolean).join(' ').toLowerCase().replace(/\./g, '')
+    return communitySet.some(c => hay.includes(c))
+  }
+  const todayIso = new Date().toISOString().slice(0, 10)
+  const notPast = (e) => String(e.date_end || e.date_start).slice(0, 10) >= todayIso
+  const applyGuards = (list) => list.filter(e => notPast(e) && inDistrict(e))
+
+  let events = applyGuards((parsed.events || []).filter(e => e?.name && e?.date_start))
 
   // Thin result (search variance): one supplemental research pass, merged + deduped.
   if (events.length < 14 && PERPLEXITY_API_KEY) {
@@ -371,7 +388,7 @@ ${extra}` }],
           if (c2.ok) {
             const cd2 = await c2.json()
             const raw2 = (cd2.content?.find(b => b.type === 'text')?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
-            const more = (JSON.parse(raw2).events || []).filter(e => e?.name && e?.date_start)
+            const more = applyGuards((JSON.parse(raw2).events || []).filter(e => e?.name && e?.date_start))
             const seen = new Set(events.map(e => e.name.toLowerCase()))
             for (const e of more) if (!seen.has(e.name.toLowerCase())) { events.push(e); seen.add(e.name.toLowerCase()) }
           }
