@@ -1792,6 +1792,10 @@ export default function Dossiers() {
   // If the context shows a generation was in progress when the page refreshed,
   // re-enter the polling loop so the page updates when the dossier lands.
   const resumeRef = useRef(false)
+  // Unmount guard for the long-running generate/bulk polling loops below —
+  // prevents setState-after-unmount and abandons polls when the page closes.
+  const aliveRef = useRef(true)
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false } }, [])
   useEffect(() => {
     if (dossierPhase !== 'generating' || !pendingCandidateId) return
     if (resumeRef.current) return   // don't double-fire in StrictMode
@@ -1940,12 +1944,13 @@ export default function Dossiers() {
       const pollStart = Date.now()
       let newDossier = null
 
-      while (Date.now() - pollStart < MAX_WAIT) {
+      while (aliveRef.current && Date.now() - pollStart < MAX_WAIT) {
         await new Promise(r => setTimeout(r, POLL_INTERVAL))
         const { data: currentDossiers } = await getDossiers(cid)
         newDossier = (currentDossiers || []).find(d => !beforeIds.has(d.id))
         if (newDossier) break
       }
+      if (!aliveRef.current) return   // page unmounted — background fn still saves
 
       if (!newDossier) {
         throw new Error('Profile generation timed out after 5 minutes. Check back shortly — it may still be saving.')
@@ -2067,12 +2072,13 @@ export default function Dossiers() {
         // Poll for new dossier (up to 5 minutes per candidate)
         const bulkPollStart = Date.now()
         let bulkNewDossier = null
-        while (Date.now() - bulkPollStart < 300000) {
+        while (aliveRef.current && Date.now() - bulkPollStart < 300000) {
           await new Promise(r => setTimeout(r, 5000))
           const { data: cur } = await getDossiers(cid)
           bulkNewDossier = (cur || []).find(d => !beforeBulkIds.has(d.id))
           if (bulkNewDossier) break
         }
+        if (!aliveRef.current) return
         if (!bulkNewDossier) throw new Error('Timed out waiting for profile')
         results.push({ name: candidate.name, status: 'success' })
       } catch (err) {

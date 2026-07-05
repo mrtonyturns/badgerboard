@@ -2,7 +2,7 @@
 // Pick one of your offices → AI researches upcoming community events in that
 // office's district, classifies each event's political lean, and lets you add
 // events to your connected calendars (personal feed) in one click.
-import React, { useEffect, useState, useMemo, useCallback } from 'react'
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import {
   CalendarDays, RefreshCw, Loader2, Sparkles, MapPin, ChevronDown,
@@ -126,6 +126,13 @@ export default function Events() {
 
   useEffect(() => { loadPlaces().then(setPlaces) }, [])
 
+  // Poll-generation counter: every new loadEvents run (or unmount) bumps it,
+  // which cancels older in-flight loops — no setState after unmount, and a
+  // slow response for a previously-selected district can never overwrite the
+  // current district's results (stale-response-wins race).
+  const pollGenRef = useRef(0)
+  useEffect(() => () => { pollGenRef.current++ }, [])
+
   const index   = useMemo(() => buildPlaceIndex(places), [places])
   const options = index[mode] || []
   const target  = options.find(o => o.key === sel) || null
@@ -138,12 +145,15 @@ export default function Events() {
   const CACHE_MS = 24 * 3600 * 1000
   const loadEvents = useCallback(async (force = false) => {
     if (!target) return
+    const gen = ++pollGenRef.current
+    const alive = () => pollGenRef.current === gen
     setLoading(true); setError(null); setPhase('Checking for cached events…')
     try {
       // 1. Cache first — shared across all users, refreshed daily
       if (!force) {
         const { data: row } = await supabase.from('district_events')
           .select('events, fetched_at').eq('district_key', target.key).maybeSingle()
+        if (!alive()) return
         if (row?.events?.length && row.fetched_at && Date.now() - new Date(row.fetched_at).getTime() < CACHE_MS) {
           setEvents(row.events); setFetchedAt(row.fetched_at); setLoading(false)
           return
@@ -163,13 +173,16 @@ export default function Events() {
           area_description: target.area || target.name,
         }),
       })
+      if (!alive()) return
       if (res.status !== 202 && !res.ok) throw new Error('Could not start event research — try again')
       setPhase('Searching for public events in your district…')
       for (let i = 0; i < 40; i++) {
         await new Promise(r => setTimeout(r, 3000))
+        if (!alive()) return
         if (i === 8) setPhase('Classifying audiences and gathering addresses…')
         const { data: row } = await supabase.from('district_events')
           .select('events, fetched_at').eq('district_key', target.key).maybeSingle()
+        if (!alive()) return
         if (row?.fetched_at && new Date(row.fetched_at).getTime() >= startedAt - 5000) {
           if (!row.events?.length) throw new Error('No public events found for this district right now — try Refresh later')
           setEvents(row.events); setFetchedAt(row.fetched_at); setLoading(false)
@@ -177,8 +190,8 @@ export default function Events() {
         }
       }
       throw new Error('Research is taking longer than expected — try Refresh in a minute')
-    } catch (e) { setError(e.message) }
-    setLoading(false)
+    } catch (e) { if (alive()) setError(e.message) }
+    if (alive()) setLoading(false)
   }, [target?.key]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // auto-load when office changes (cache-first — cheap)
