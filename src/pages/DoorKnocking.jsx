@@ -10,6 +10,7 @@ import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserPlan } from '../lib/tiers'
+import { parseCsvRows } from '../lib/csv'
 import {
   getDoorKnockCandidates, getCandidates,
   getShifts, createShift, updateShift, deleteShift,
@@ -1590,12 +1591,12 @@ function VoterFileTab({ listId }) {
     const reader = new FileReader()
     reader.onload = (ev) => {
       const text = ev.target.result
-      const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
-      if (lines.length < 2) { setImportError('CSV must have a header row and at least one data row.'); return }
-      const hdrs = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/^"|"$/g, ''))
+      const records = parseCsvRows(text).filter(r => r.some(c => c && c.trim()))
+      if (records.length < 2) { setImportError('CSV must have a header row and at least one data row.'); return }
+      const hdrs = records[0].map(h => h.trim().toLowerCase().replace(/^"|"$/g, ''))
       setHeaders(hdrs)
-      const rows = lines.slice(1).map(line => {
-        const cols = line.split(',').map(c => c.trim().replace(/^"|"$/g, ''))
+      const rows = records.slice(1).map(rawCols => {
+        const cols = rawCols.map(c => c.trim())
         const row = {}
         hdrs.forEach((h, i) => { row[h] = cols[i] || '' })
         return row

@@ -69,26 +69,20 @@ import {
   getVoterSavedLists, createVoterSavedList, updateVoterSavedList, deleteVoterSavedList,
 } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import { parseCsvRows } from '../lib/csv'
 import LoadingBar from '../components/LoadingBar'
 
 // ─── CSV parser ───────────────────────────────────────────────────────────────
 function parseCSV(text) {
-  const lines = text.trim().split('\n')
-  if (lines.length < 2) return []
-  const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase())
+  // parseCsvRows handles quoted commas, escaped quotes, embedded newlines,
+  // and CRLF — the old header split(',') broke on quoted headers and left
+  // \r on the last column of every CRLF row.
+  const records = parseCsvRows(text)
+  if (records.length < 2) return []
+  const headers = records[0].map(h => h.trim().replace(/^"|"$/g, '').toLowerCase())
 
-  return lines.slice(1).filter(l => l.trim()).map(line => {
-    // Handle quoted fields with commas
-    const cols = []
-    let inQuote = false, cur = ''
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i]
-      if (ch === '"') { inQuote = !inQuote }
-      else if (ch === ',' && !inQuote) { cols.push(cur.trim()); cur = '' }
-      else { cur += ch }
-    }
-    cols.push(cur.trim())
-
+  return records.slice(1).filter(r => r.some(c => c && c.trim())).map(rawCols => {
+    const cols = rawCols.map(c => c.trim())
     const row = {}
     headers.forEach((h, i) => { row[h] = cols[i] || '' })
 
@@ -236,6 +230,7 @@ export default function VoterLists() {
   const [savedLists, setSavedLists]       = useState([])
   const [loading, setLoading]             = useState(false)
   const [uploading, setUploading]         = useState(false)
+  const [error, setError]                 = useState(null)   // was referenced but never defined — crashed the failure path
   const [uploadProgress, setUploadProgress] = useState(null) // { done, total } chunks
   const [viewMode, setViewMode]           = useState('table') // 'table' | 'map'
   const [searchVoter, setSearchVoter]     = useState('')
@@ -418,7 +413,7 @@ export default function VoterLists() {
     const cols = ['full_name','address','city','zip','county','ward','state_assembly_district','state_senate_district','congressional_district','party']
     const header = cols.join(',')
     const rows = filteredVoters.map(v =>
-      cols.map(c => `"${(v[c] || '').replace(/"/g, '""')}"`).join(',')
+      cols.map(c => `"${String(v[c] ?? '').replace(/"/g, '""')}"`).join(',')
     )
     const csv = [header, ...rows].join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
@@ -432,6 +427,12 @@ export default function VoterLists() {
   return (
     <div className="space-y-6">
       <LoadingBar loading={loading} />
+      {error && (
+        <div className="flex items-center justify-between bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-2.5">
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600 font-bold ml-3">✕</button>
+        </div>
+      )}
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
