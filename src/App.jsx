@@ -160,7 +160,7 @@ const AppRoutes = () => {
         <Route path="campaign-connect" element={<CampaignConnect />} />
         <Route path="settings" element={<Settings />} />
         <Route path="plans" element={<Pricing />} />
-        <Route path="admin" element={<AdminDashboard />} />
+        <Route path="admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

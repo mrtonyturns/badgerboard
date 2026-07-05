@@ -313,6 +313,21 @@ async function sendNotification(params, coordinatorId) {
     return { statusCode: 400, body: JSON.stringify({ error: 'list_id and title required' }) }
   }
 
+  // IDOR guard: the coordinator must own the list (same check as sendInvite)
+  const ownRes = await sb(`/door_knock_lists?id=eq.${encodeURIComponent(list_id)}&created_by=eq.${encodeURIComponent(coordinatorId)}&select=id`)
+  const ownRows = await ownRes.json()
+  if (!Array.isArray(ownRows) || ownRows.length === 0) {
+    return { statusCode: 403, body: JSON.stringify({ error: 'Not authorized for this list' }) }
+  }
+  // If targeting one volunteer, they must belong to that list and coordinator
+  if (volunteer_id) {
+    const vRes = await sb(`/volunteers?id=eq.${encodeURIComponent(volunteer_id)}&list_id=eq.${encodeURIComponent(list_id)}&created_by=eq.${encodeURIComponent(coordinatorId)}&select=id`)
+    const vRows = await vRes.json()
+    if (!Array.isArray(vRows) || vRows.length === 0) {
+      return { statusCode: 403, body: JSON.stringify({ error: 'Volunteer not in your list' }) }
+    }
+  }
+
   const res = await sb('/volunteer_notifications', {
     method: 'POST',
     body: JSON.stringify({
