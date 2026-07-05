@@ -1,45 +1,46 @@
 -- ============================================================
 -- Candidate Notes & Files — Storage bucket RLS policies
+-- (Rewritten July 2026 remediation, bug D3)
 -- ============================================================
--- Notes and file metadata are stored in the existing `candidates.notes`
--- column as a JSON string (no schema change needed for notes).
--- This migration only adds storage policies for the `candidate-files` bucket.
+-- The original version used CREATE POLICY IF NOT EXISTS, which is NOT valid
+-- Postgres syntax — the migration errored and never created anything (so no
+-- orphan "candidate_files_*" policies exist anywhere).
 --
--- Run AFTER creating the bucket via the admin-setup-candidate-storage function
--- OR apply directly in Supabase dashboard > Storage > Policies.
--- ============================================================
-
--- Storage RLS: users can only access files under their own userId prefix
+-- backend_hardening (20260704000004 §9) later installed the working policies
+-- under the names candidate-files_select / _insert / _update / _delete.
+-- Those names are authoritative; this file now guard-creates the SAME set so
+-- fresh environments converge with production and re-runs are no-ops.
+--
 -- Path structure: {userId}/{candidateId}/{filename}
 
-CREATE POLICY IF NOT EXISTS "candidate_files_insert"
-ON storage.objects FOR INSERT
-TO authenticated
-WITH CHECK (
-  bucket_id = 'candidate-files'
-  AND (storage.foldername(name))[1] = auth.uid()::text
-);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_policies
+    WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'candidate-files_select') THEN
+    CREATE POLICY "candidate-files_select" ON storage.objects FOR SELECT
+      TO authenticated
+      USING (bucket_id = 'candidate-files' AND (storage.foldername(name))[1] = auth.uid()::text);
+  END IF;
 
-CREATE POLICY IF NOT EXISTS "candidate_files_select"
-ON storage.objects FOR SELECT
-TO authenticated
-USING (
-  bucket_id = 'candidate-files'
-  AND (storage.foldername(name))[1] = auth.uid()::text
-);
+  IF NOT EXISTS (SELECT FROM pg_policies
+    WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'candidate-files_insert') THEN
+    CREATE POLICY "candidate-files_insert" ON storage.objects FOR INSERT
+      TO authenticated
+      WITH CHECK (bucket_id = 'candidate-files' AND (storage.foldername(name))[1] = auth.uid()::text);
+  END IF;
 
-CREATE POLICY IF NOT EXISTS "candidate_files_update"
-ON storage.objects FOR UPDATE
-TO authenticated
-USING (
-  bucket_id = 'candidate-files'
-  AND (storage.foldername(name))[1] = auth.uid()::text
-);
+  IF NOT EXISTS (SELECT FROM pg_policies
+    WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'candidate-files_update') THEN
+    CREATE POLICY "candidate-files_update" ON storage.objects FOR UPDATE
+      TO authenticated
+      USING (bucket_id = 'candidate-files' AND (storage.foldername(name))[1] = auth.uid()::text)
+      WITH CHECK (bucket_id = 'candidate-files' AND (storage.foldername(name))[1] = auth.uid()::text);
+  END IF;
 
-CREATE POLICY IF NOT EXISTS "candidate_files_delete"
-ON storage.objects FOR DELETE
-TO authenticated
-USING (
-  bucket_id = 'candidate-files'
-  AND (storage.foldername(name))[1] = auth.uid()::text
-);
+  IF NOT EXISTS (SELECT FROM pg_policies
+    WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'candidate-files_delete') THEN
+    CREATE POLICY "candidate-files_delete" ON storage.objects FOR DELETE
+      TO authenticated
+      USING (bucket_id = 'candidate-files' AND (storage.foldername(name))[1] = auth.uid()::text);
+  END IF;
+END $$;

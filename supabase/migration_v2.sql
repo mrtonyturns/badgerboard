@@ -56,6 +56,11 @@ CREATE TABLE IF NOT EXISTS voter_lists (
 CREATE TABLE IF NOT EXISTS voters (
   id                       UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
   voter_list_id            UUID REFERENCES voter_lists(id) ON DELETE CASCADE,
+  -- Authoritative ownership column (reconciled July 2026): every later RLS
+  -- policy (20260422000003/4, migration_v5, backend_hardening backfill+index)
+  -- assumes voters.created_by exists. 004_voter_and_incumbent_tables.sql
+  -- defines it too; this definition matches it exactly.
+  created_by               UUID REFERENCES auth.users(id),
   first_name               TEXT,
   last_name                TEXT,
   full_name                TEXT,

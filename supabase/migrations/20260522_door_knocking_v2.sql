@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS turf_blocks (
 ALTER TABLE turf_blocks ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "turf_blocks_owner" ON turf_blocks
-  FOR ALL USING (created_by = auth.uid());
+  FOR ALL USING (created_by = auth.uid())
+  WITH CHECK (created_by = auth.uid());
 
 -- ─── Turf assignments: volunteer → block mapping ─────────────────────────────
 CREATE TABLE IF NOT EXISTS turf_assignments (
@@ -33,6 +34,9 @@ ALTER TABLE turf_assignments ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "turf_assignments_owner" ON turf_assignments
   FOR ALL USING (
+    block_id IN (SELECT id FROM turf_blocks WHERE created_by = auth.uid())
+  )
+  WITH CHECK (
     block_id IN (SELECT id FROM turf_blocks WHERE created_by = auth.uid())
   );
 
@@ -59,4 +63,5 @@ CREATE TABLE IF NOT EXISTS voter_file_entries (
 ALTER TABLE voter_file_entries ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "voter_file_entries_owner" ON voter_file_entries
-  FOR ALL USING (created_by = auth.uid());
+  FOR ALL USING (created_by = auth.uid())
+  WITH CHECK (created_by = auth.uid());
