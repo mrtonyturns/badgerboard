@@ -240,6 +240,7 @@ export default function Candidates() {
       const { count } = await supabase
         .from('candidates')
         .select('id', { count: 'exact', head: true })
+        .eq('created_by', user.id)
       if ((count ?? 0) >= 2) {
         setModalError('The free Scout plan is limited to 2 candidates. Upgrade your plan to add more.')
         setTotalCandidateCount(count ?? 0)
@@ -1398,6 +1399,7 @@ export default function Candidates() {
                       const { count } = await supabase
                         .from('candidates')
                         .select('id', { count: 'exact', head: true })
+                        .eq('created_by', user.id)
                       const currentCount = count ?? 0
                       slotsRemaining = Math.max(0, SCOUT_CANDIDATE_LIMIT - currentCount)
                       if (slotsRemaining === 0) {
