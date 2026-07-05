@@ -695,7 +695,7 @@ export function VolunteerManager({ listId, session }) {
     try {
       const { data, error } = await supabase
         .from('volunteers')
-        .select('id, name, email, phone, role, status, magic_token, created_at, doors_knocked, contacts_made, avatar_color')
+        .select('id, name, email, phone, role, status, created_at, doors_knocked, contacts_made, avatar_color')
         .eq('list_id', listId)
         .order('created_at', { ascending: false })
       if (error) throw error
