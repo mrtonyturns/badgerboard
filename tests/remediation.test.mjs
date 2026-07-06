@@ -99,5 +99,41 @@ console.log('F2 — enforceRateLimit (mocked Postgres counter)')
   shared.serviceClient = realServiceClient
 }
 
+// ─── F3: checkout input validation → 400 before any Stripe call ──────────────
+console.log('F3 — create-checkout-session validation')
+{
+  process.env.SUPABASE_URL = 'https://example.supabase.co'
+  process.env.SUPABASE_ANON_KEY = 'anon'
+  process.env.STRIPE_SECRET_KEY = 'sk_test_dummy_never_called'
+  const realFetch = global.fetch
+  let stripeCalled = false
+  global.fetch = async (url, opts) => {
+    const u = String(url)
+    if (u.includes('/auth/v1/user')) {
+      return { ok: true, json: async () => ({ id: '11111111-1111-4111-8111-111111111111', email: 'x@y.z' }) }
+    }
+    if (u.includes('stripe.com')) { stripeCalled = true }
+    return { ok: false, status: 500, json: async () => ({}), text: async () => '' }
+  }
+  const { handler: checkout } = await import('../netlify/functions/create-checkout-session.js')
+  const post = (body) => checkout({ httpMethod: 'POST', headers: { authorization: 'Bearer tok' }, body: JSON.stringify(body) })
+
+  t('400 on missing plan',               (await post({ billing: 'monthly' })).statusCode === 400)
+  t('400 on unknown plan',               (await post({ plan: 'platinum', billing: 'monthly' })).statusCode === 400)
+  t('400 on free plan (scout)',          (await post({ plan: 'scout', billing: 'monthly' })).statusCode === 400)
+  t('400 on bad billing period',         (await post({ plan: 'c_monitor', billing: 'weekly' })).statusCode === 400)
+  t('400 on action plan without bracket',(await post({ plan: 'a_active', billing: 'monthly' })).statusCode === 400)
+  t('400 on unknown bracket',            (await post({ plan: 'a_active', bracket: 'b999', billing: 'monthly' })).statusCode === 400)
+  t('400 on enterprise bracket (no Stripe price)', (await post({ plan: 'a_active', bracket: 'ent', billing: 'monthly' })).statusCode === 400)
+  t('400 on legacy plan without bracket',(await post({ plan: 'agency', billing: 'monthly' })).statusCode === 400)
+  t('no Stripe API call was made for any invalid input', stripeCalled === false)
+
+  const { handler: buyCredits } = await import('../netlify/functions/buy-dossier-credits.js')
+  const postPack = (body) => buyCredits({ httpMethod: 'POST', headers: { authorization: 'Bearer tok' }, body: JSON.stringify(body) })
+  t('buy-dossier-credits: 400 on invalid pack', (await postPack({ pack: 7 })).statusCode === 400)
+  t('buy-dossier-credits: 400 on missing pack', (await postPack({})).statusCode === 400)
+  global.fetch = realFetch
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
