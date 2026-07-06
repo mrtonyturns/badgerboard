@@ -1,7 +1,25 @@
 // error-log.js — records client-side errors.
-// Hardened: requires a valid Supabase JWT and derives user_id from the verified
-// token (never from the request body), preventing anonymous log-flooding and
-// spoofed attribution through this service-role-key writer.
+// Contract (see tests/full.test.js Suite 15):
+//   - POST is accepted WITHOUT authentication (pre-auth / login-page errors
+//     must be reportable) and always returns 200 {logged:true}.
+//   - A POST missing error_message is silently ignored (200, no DB write).
+//   - GET → 405.
+// Hardening kept from the earlier pass:
+//   - user_id comes ONLY from a verified JWT when one is supplied — never from
+//     the request body — so attribution cannot be spoofed.
+//   - All stored fields are length-clipped.
+//   - Best-effort per-IP flood guard: anonymous bursts are silently dropped
+//     (still 200 — this is a fire-and-forget log endpoint).
+
+const FLOOD_BUCKET = new Map()
+function floodGuard(ip, max = 10, windowMs = 60000) {
+  const now = Date.now()
+  const recent = (FLOOD_BUCKET.get(ip) || []).filter(t => now - t < windowMs)
+  recent.push(now)
+  if (FLOOD_BUCKET.size > 5000) FLOOD_BUCKET.clear() // cap memory
+  FLOOD_BUCKET.set(ip, recent)
+  return recent.length > max
+}
 
 export const handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') {
@@ -14,22 +32,26 @@ export const handler = async (event) => {
   const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
   const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  // ── Require a verified caller ───────────────────────────────────────────────
-  const authHeader = event.headers?.authorization || event.headers?.Authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
-    return { statusCode: 401, body: JSON.stringify({ error: 'Not authenticated' }) };
-  }
+  // ── Optional auth: attribute the log to a user only if the token verifies ──
+  // (Unauthenticated posts are accepted — pre-auth errors must be loggable.)
   let userId = null;
-  try {
-    const authRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${authHeader.slice(7)}` },
-    });
-    if (!authRes.ok) return { statusCode: 401, body: JSON.stringify({ error: 'Invalid token' }) };
-    userId = (await authRes.json())?.id || null;
-  } catch {
-    return { statusCode: 401, body: JSON.stringify({ error: 'Auth check failed' }) };
+  const authHeader = event.headers?.authorization || event.headers?.Authorization;
+  if (authHeader?.startsWith('Bearer ')) {
+    try {
+      const authRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+        headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${authHeader.slice(7)}` },
+      });
+      if (authRes.ok) userId = (await authRes.json())?.id || null;
+    } catch { /* unattributed */ }
   }
-  if (!userId) return { statusCode: 401, body: JSON.stringify({ error: 'Invalid token' }) };
+
+  // Best-effort flood guard — silently drop (still 200) on anonymous bursts.
+  const ip = event.headers?.['x-nf-client-connection-ip']
+    || (event.headers?.['x-forwarded-for'] || '').split(',')[0].trim()
+    || 'unknown';
+  if (!userId && floodGuard(ip)) {
+    return { statusCode: 200, body: JSON.stringify({ logged: true }) };
+  }
 
   try {
     const body = JSON.parse(event.body || '{}');

@@ -174,5 +174,47 @@ console.log('F4 — tier gates (403 for under-tier)')
   global.fetch = realFetch
 }
 
+// ─── F5: error-log endpoint contract ─────────────────────────────────────────
+console.log('F5 — error-log contract')
+{
+  process.env.SUPABASE_URL = 'https://example.supabase.co'
+  process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-dummy'
+  const realFetch = global.fetch
+  let inserts = []
+  global.fetch = async (url, opts) => {
+    const u = String(url)
+    if (u.includes('/auth/v1/user')) {
+      const tok = (opts?.headers?.Authorization || '')
+      if (tok.includes('good-token')) return { ok: true, json: async () => ({ id: '33333333-3333-4333-8333-333333333333' }) }
+      return { ok: false, status: 401, json: async () => ({}) }
+    }
+    if (u.includes('/rest/v1/error_logs')) {
+      inserts.push(JSON.parse(opts.body))
+      return { ok: true, text: async () => '' }
+    }
+    return { ok: false, status: 500, text: async () => '' }
+  }
+  const { handler: errorLog } = await import('../netlify/functions/error-log.js')
+
+  const r1 = await errorLog({ httpMethod: 'POST', headers: {}, body: JSON.stringify({ error_message: 'boom' }) })
+  t('unauthenticated POST with message → 200 {logged:true}', r1.statusCode === 200 && JSON.parse(r1.body).logged === true)
+  t('unauthenticated write recorded with null user_id', inserts.length === 1 && inserts[0].user_id === null && inserts[0].error_message === 'boom')
+
+  inserts = []
+  const r2 = await errorLog({ httpMethod: 'POST', headers: {}, body: JSON.stringify({ component: 'X' }) })
+  t('POST missing error_message → 200, NO write', r2.statusCode === 200 && JSON.parse(r2.body).logged === true && inserts.length === 0)
+
+  inserts = []
+  const r3 = await errorLog({ httpMethod: 'POST', headers: { authorization: 'Bearer good-token' }, body: JSON.stringify({ error_message: 'authed' }) })
+  t('verified token attributes user_id', r3.statusCode === 200 && inserts[0]?.user_id === '33333333-3333-4333-8333-333333333333')
+
+  const r4 = await errorLog({ httpMethod: 'POST', headers: { authorization: 'Bearer bad' }, body: JSON.stringify({ error_message: 'x' }) })
+  t('bad token still 200 (unattributed), never 401', r4.statusCode === 200)
+
+  const r5 = await errorLog({ httpMethod: 'GET', headers: {} })
+  t('GET → 405', r5.statusCode === 405)
+  global.fetch = realFetch
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
