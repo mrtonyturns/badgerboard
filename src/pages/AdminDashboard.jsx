@@ -1448,8 +1448,8 @@ const AICostsTab = ({ apiCall, showToast }) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {[...costs].sort((a, b) => (b.cost || 0) - (a.cost || 0)).map((c, i) => (
-                    <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                  {[...costs].sort((a, b) => (b.cost || 0) - (a.cost || 0)).map((c) => (
+                    <tr key={`${c.label}|${c.model || ''}`} className="border-b border-gray-100 hover:bg-gray-50">
                       <td className="px-4 py-3 font-medium text-gray-900">{c.label}</td>
                       <td className="px-4 py-3 text-gray-500 text-xs font-mono">{c.model || '—'}</td>
                       <td className="px-4 py-3 text-gray-600">{c.count !== null ? c.count.toLocaleString() : <span className="text-gray-400 italic">fixed estimate</span>}</td>

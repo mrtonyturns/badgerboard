@@ -2514,8 +2514,8 @@ export default function CandidateDetail() {
                   </div>
                 </div>
                 <div className="space-y-2 max-h-72 overflow-y-auto">
-                  {aiSuggested.records.map((rec, idx) => (
-                    <div key={idx} className="bg-white rounded-lg border border-blue-200 p-3 flex items-start gap-3">
+                  {aiSuggested.records.map((rec) => (
+                    <div key={`${rec.record_type}|${rec.title}|${rec.date || ''}`} className="bg-white rounded-lg border border-blue-200 p-3 flex items-start gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap mb-0.5">
                           <span className="text-xs font-bold text-gray-800 capitalize bg-gray-100 px-2 py-0.5 rounded">{rec.record_type}</span>

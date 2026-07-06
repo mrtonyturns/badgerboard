@@ -670,8 +670,8 @@ export default function Prospecting() {
                 {visibleCandidates.length === 0 ? (
                   <p className="text-sm text-gray-400 text-center py-8">No entries in this view</p>
                 ) : (
-                  visibleCandidates.map((c, i) => (
-                    <div key={i} className="p-4 rounded-xl border border-gray-200 hover:border-brand-red/30 hover:bg-brand-red/5 transition-all">
+                  visibleCandidates.map((c) => (
+                    <div key={c.id || `${c.name || c.candidate_name || 'entry'}|${c.email || c.phone || ''}`} className="p-4 rounded-xl border border-gray-200 hover:border-brand-red/30 hover:bg-brand-red/5 transition-all">
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
