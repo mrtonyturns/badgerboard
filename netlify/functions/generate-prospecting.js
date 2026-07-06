@@ -3,6 +3,10 @@
 // ANTHROPIC_API_KEY must be set in Netlify environment variables
 
 const { enforceRateLimit } = require('./_rate-limit')
+const { ADMIN_EMAILS } = require('./_config')
+const { PLAN_CONFIG } = require('../../src/lib/tiers.js')
+// Tier gating — prospecting is an Action-plan entitlement (tiers.js features.prospecting)
+const PROSPECTING_PLANS = Object.keys(PLAN_CONFIG).filter(k => PLAN_CONFIG[k]?.features?.prospecting)
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const SUPABASE_URL      = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
@@ -56,6 +60,14 @@ exports.handler = async (event) => {
   const caller = await authRes.json()
   if (!caller?.id) {
     return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid or expired token' }) }
+  }
+
+  // ── Tier check — Action plan (prospecting entitlement) required ───────────────
+  const callerPlan = ADMIN_EMAILS.includes(caller.email?.toLowerCase())
+    ? 'a_campaign'
+    : ((caller?.app_metadata?.plan || 'scout').toLowerCase())
+  if (!PROSPECTING_PLANS.includes(callerPlan)) {
+    return { statusCode: 403, headers, body: JSON.stringify({ error: 'Action plan required for AI prospecting.' }) }
   }
 
   // ── Durable per-user rate limit ───────────────────────────────────────────────

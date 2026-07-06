@@ -135,5 +135,44 @@ console.log('F3 — create-checkout-session validation')
   global.fetch = realFetch
 }
 
+// ─── F4: server-side tier gating on AI endpoints ─────────────────────────────
+console.log('F4 — tier gates (403 for under-tier)')
+{
+  process.env.SUPABASE_URL = 'https://example.supabase.co'
+  process.env.SUPABASE_ANON_KEY = 'anon'
+  process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-dummy'
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  const realFetch = global.fetch
+  let mockPlan = 'c_monitor'
+  global.fetch = async (url) => {
+    const u = String(url)
+    if (u.includes('/auth/v1/user')) {
+      return { ok: true, status: 200, json: async () => ({ id: '22222222-2222-4222-8222-222222222222', email: 'user@example.com', app_metadata: { plan: mockPlan } }) }
+    }
+    return { ok: false, status: 500, json: async () => ({}), text: async () => 'mock-fail', headers: { get: () => null } }
+  }
+  const call = async (mod, body = {}) => {
+    const { handler } = await import(mod)
+    return handler({ httpMethod: 'POST', headers: { authorization: 'Bearer tok' }, body: JSON.stringify(body) })
+  }
+
+  mockPlan = 'c_monitor'
+  t('discover-candidates 403 for c_monitor', (await call('../netlify/functions/discover-candidates.js', { mode: 'county', county: 'Dane' })).statusCode === 403)
+  t('autofill-candidate 403 for c_monitor',  (await call('../netlify/functions/autofill-candidate.js', { name: 'X' })).statusCode === 403)
+  t('generate-campaign-intel 403 for c_monitor', (await call('../netlify/functions/generate-campaign-intel.js', { candidate: { name: 'X' } })).statusCode === 403)
+  t('generate-prospecting 403 for c_monitor', (await call('../netlify/functions/generate-prospecting.js', { listName: 'x' })).statusCode === 403)
+  t('classify-csv-prospects 403 for c_monitor', (await call('../netlify/functions/classify-csv-prospects.js', { prospects: [{ name: 'A' }] })).statusCode === 403)
+
+  mockPlan = 'c_active'
+  t('generate-prospecting 403 even for c_active (action-plan entitlement)', (await call('../netlify/functions/generate-prospecting.js', { listName: 'x' })).statusCode === 403)
+  const rDisc = await call('../netlify/functions/discover-candidates.js', { mode: 'county', county: 'Dane' })
+  t('discover-candidates passes tier gate for c_active (not 401/403)', rDisc.statusCode !== 403 && rDisc.statusCode !== 401)
+
+  mockPlan = 'a_monitor'
+  const rPros = await call('../netlify/functions/generate-prospecting.js', { listName: 'x' })
+  t('generate-prospecting passes tier gate for a_monitor (not 401/403)', rPros.statusCode !== 403 && rPros.statusCode !== 401)
+  global.fetch = realFetch
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

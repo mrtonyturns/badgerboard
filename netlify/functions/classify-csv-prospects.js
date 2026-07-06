@@ -13,8 +13,11 @@ const SUPABASE_URL      = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_
 const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
 const MODEL             = 'claude-haiku-4-5-20251001'
 
-// Tier gating — only Campaign+ plans can use AI prospect classification
-const CAMPAIGN_PLUS = ['campaign', 'agency', 'c_active', 'c_campaign', 'a_monitor', 'a_active', 'a_campaign']
+// Tier gating — CSV prospect classification is part of Prospecting, an
+// Action-plan entitlement (tiers.js features.prospecting — single source of truth).
+const { PLAN_CONFIG } = require('../../src/lib/tiers.js')
+const { ADMIN_EMAILS } = require('./_config')
+const PROSPECTING_PLANS = Object.keys(PLAN_CONFIG).filter(k => PLAN_CONFIG[k]?.features?.prospecting)
 
 const HEADERS = {
   'Access-Control-Allow-Origin':  '*',
@@ -153,10 +156,13 @@ exports.handler = async (event) => {
     return { statusCode: 401, headers: HEADERS, body: JSON.stringify({ error: 'Unauthorized' }) }
   }
 
-  // Tier gate — prospecting classification requires Campaign or Agency plan
-  const plan = (user.app_metadata?.plan || 'scout').toLowerCase()
-  if (!CAMPAIGN_PLUS.includes(plan)) {
-    return { statusCode: 403, headers: HEADERS, body: JSON.stringify({ error: 'Campaign or Agency plan required for AI prospect classification.' }) }
+  // Tier gate — prospecting classification requires an Action plan (matches the
+  // tiers.js 'prospecting' entitlement and the Prospecting page UI gate)
+  const plan = ADMIN_EMAILS.includes((user.email || '').toLowerCase())
+    ? 'a_campaign'
+    : (user.app_metadata?.plan || 'scout').toLowerCase()
+  if (!PROSPECTING_PLANS.includes(plan)) {
+    return { statusCode: 403, headers: HEADERS, body: JSON.stringify({ error: 'Action plan required for AI prospect classification.' }) }
   }
 
   let body
