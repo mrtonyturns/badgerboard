@@ -2,6 +2,8 @@
 // Reads a candidate's latest dossier and asks Claude to extract bills, votes,
 // acts, regulations, and legal events for auto-populating the Incumbent Record.
 
+import { enforceRateLimit } from './_rate-limit.js'
+
 export const handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -27,6 +29,10 @@ export const handler = async (event) => {
   if (!authRes.ok) return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid token' }) }
   const uid = (await authRes.json())?.id
   if (!uid) return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid token' }) }
+
+  // ── Durable per-user rate limit ─────────────────────────────────────────────
+  const limited = await enforceRateLimit(uid, 'research-incumbent', headers)
+  if (limited) return limited
 
   // ── Parse body ──────────────────────────────────────────────────────────────
   let body

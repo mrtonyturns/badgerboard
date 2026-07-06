@@ -3,6 +3,8 @@
 // using Perplexity (web research) + Claude (structuring), then caches the result
 // in district_intel so the AI cost is paid once per district.
 
+import { enforceRateLimit } from './_rate-limit.js'
+
 export const handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -27,6 +29,12 @@ export const handler = async (event) => {
     headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${authHeader.slice(7)}` },
   })
   if (!authRes.ok) return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid token' }) }
+  const uid = (await authRes.json())?.id
+  if (!uid) return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid token' }) }
+
+  // ── Durable per-user rate limit ─────────────────────────────────────────────
+  const limited = await enforceRateLimit(uid, 'research-district-history', headers)
+  if (limited) return limited
 
   let body
   try { body = JSON.parse(event.body || '{}') } catch {

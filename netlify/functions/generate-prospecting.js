@@ -2,6 +2,7 @@
 // Calls Claude API to build and enrich a prospecting list of candidates
 // ANTHROPIC_API_KEY must be set in Netlify environment variables
 
+const { enforceRateLimit } = require('./_rate-limit')
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const SUPABASE_URL      = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
@@ -52,6 +53,14 @@ exports.handler = async (event) => {
   if (!authRes.ok) {
     return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid or expired token' }) }
   }
+  const caller = await authRes.json()
+  if (!caller?.id) {
+    return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid or expired token' }) }
+  }
+
+  // ── Durable per-user rate limit ───────────────────────────────────────────────
+  const limited = await enforceRateLimit(caller.id, 'generate-prospecting', headers)
+  if (limited) return limited
   // ─────────────────────────────────────────────────────────────────────────────
 
   let body

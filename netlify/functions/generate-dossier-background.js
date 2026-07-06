@@ -3,6 +3,7 @@
 // Combined prompt: v4.1 structure (14 sections, tables) + legal compliance additions.
 // ANTHROPIC_API_KEY + SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY must be set.
 
+const { enforceRateLimit } = require('./_rate-limit')
 const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY // must be set in Netlify env vars
 const XAI_API_KEY        = process.env.XAI_API_KEY        // xAI Grok — x.ai console
@@ -641,6 +642,10 @@ exports.handler = async (event) => {
   }
   const userPlan = getUserPlan(user)
   const canViewSection6 = SECTION6_TIERS.includes(userPlan)
+
+  // ── Durable per-user rate limit (defense in depth if invoked directly) ─────
+  const limited = await enforceRateLimit(user.id, 'generate-dossier-background', headers)
+  if (limited) return limited
 
   const { candidate } = body
   if (!candidate || typeof candidate !== 'object') {

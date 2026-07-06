@@ -7,6 +7,7 @@
  * Returns:   { summary: string }
  */
 
+const { enforceRateLimit } = require('./_rate-limit')
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const SUPABASE_URL      = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
@@ -166,6 +167,10 @@ exports.handler = async (event) => {
   if (!user) {
     return { statusCode: 401, headers: HEADERS, body: JSON.stringify({ error: 'Unauthorized' }) }
   }
+
+  // ── Durable per-user rate limit ─────────────────────────────────────────────
+  const limited = await enforceRateLimit(user.id, 'generate-bio-summary', HEADERS)
+  if (limited) return limited
 
   let body
   try { body = JSON.parse(event.body || '{}') } catch {

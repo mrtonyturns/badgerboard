@@ -2,6 +2,7 @@
 // Lightweight synchronous trigger — validates auth, fires background function, returns immediately.
 // The real work happens in generate-dossier-background.js (no timeout, saves to Supabase).
 
+const { enforceRateLimit } = require('./_rate-limit')
 const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY // must be set in Netlify env vars
 const SUPABASE_URL       = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
@@ -106,6 +107,10 @@ exports.handler = async (event) => {
     return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authenticated' }) }
   }
   const userPlan = getUserPlan(user)
+
+  // ── Durable per-user rate limit ───────────────────────────────────────────────
+  const limited = await enforceRateLimit(user.id, 'generate-dossier', headers)
+  if (limited) return limited
 
   // Determine the background function URL from trusted env var (never user-controlled headers)
   const siteUrl = process.env.URL || process.env.SITE_URL || 'https://www.badgerboardwi.com'

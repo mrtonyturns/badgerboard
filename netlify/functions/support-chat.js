@@ -11,15 +11,7 @@
  *  4. Stateless — no conversation data is stored server-side.
  */
 
-// ─── Best-effort in-memory rate limiter (per warm function container) ────────
-const RATE_BUCKET = new Map()
-function rateLimited(uid, max = 20, windowMs = 60000) {
-  const now = Date.now()
-  const recent = (RATE_BUCKET.get(uid) || []).filter(t => now - t < windowMs)
-  recent.push(now)
-  RATE_BUCKET.set(uid, recent)
-  return recent.length > max
-}
+import { enforceRateLimit } from './_rate-limit.js'
 
 const SUPABASE_URL  = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 // SUPABASE_ANON_KEY is the Netlify env var; VITE_SUPABASE_ANON_KEY is the Vite
@@ -169,11 +161,10 @@ export const handler = async (event) => {
     return { statusCode: 401, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Unauthorized' }) }
   }
 
-  // Best-effort per-user rate limit (per warm container — stops rapid-fire
-  // abuse; a durable shared limiter is a follow-up infra item).
-  if (rateLimited(user.id)) {
-    return { statusCode: 429, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Too many requests — slow down a moment' }) }
-  }
+  // Durable, cross-instance per-user rate limit (Postgres-backed, fails open
+  // if the limiter table is unavailable).
+  const limited = await enforceRateLimit(user.id, 'support-chat', CORS_HEADERS)
+  if (limited) return limited
 
   // Validate and STRIP the client-supplied messages array before forwarding
   // to Anthropic: only role+content pass through, roles whitelisted, sizes

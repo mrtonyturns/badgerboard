@@ -2,6 +2,7 @@
 // Generates focused campaign intelligence for a specific candidate
 // ANTHROPIC_API_KEY must be set in Netlify environment variables
 
+const { enforceRateLimit } = require('./_rate-limit')
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const SUPABASE_URL      = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
@@ -55,6 +56,10 @@ exports.handler = async (event) => {
   if (!CAMPAIGN_PLUS.includes(plan)) {
     return { statusCode: 403, headers, body: JSON.stringify({ error: 'Campaign plan or higher required.' }) }
   }
+
+  // ── Durable per-user rate limit ───────────────────────────────────────────────
+  const limited = await enforceRateLimit(caller.id, 'generate-campaign-intel', headers)
+  if (limited) return limited
   // ─────────────────────────────────────────────────────────────────────────────
 
   let body
