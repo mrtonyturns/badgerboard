@@ -102,7 +102,21 @@ async function createTestUser(email, password) {
 }
 
 async function deleteTestUser(id) {
-  await adminFetch(`/auth/v1/admin/users/${id}`, { method: 'DELETE' })
+  // Some tables (e.g. door_knock_lists.created_by) have FKs to auth.users
+  // WITHOUT ON DELETE CASCADE, which makes the auth-admin delete 500 and
+  // silently leaves an orphaned @badger-test.invalid account behind.
+  // Clear this user's rows in those tables first, then delete — and verify.
+  const FK_BLOCKERS = [['door_knock_lists', 'created_by']]
+  for (const [table, col] of FK_BLOCKERS) {
+    await adminFetch(`/rest/v1/${table}?${col}=eq.${id}`, { method: 'DELETE' }).catch(() => {})
+  }
+  const res = await adminFetch(`/auth/v1/admin/users/${id}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const err = await res.text().catch(() => '')
+    console.log(`  \x1b[33m⚠ cleanup: failed to delete user ${id}: ${err.slice(0, 160)}\x1b[0m`)
+    return false
+  }
+  return true
 }
 
 async function signIn(email, password) {
@@ -197,8 +211,8 @@ async function setup() {
 
 async function teardown() {
   console.log('\n\x1b[1m\x1b[33m⚙  Cleaning up test users…\x1b[0m')
-  if (userAId) { await deleteTestUser(userAId); console.log(`  Deleted: ${USER_A.email}`) }
-  if (userBId) { await deleteTestUser(userBId); console.log(`  Deleted: ${USER_B.email}`) }
+  if (userAId) { (await deleteTestUser(userAId)) && console.log(`  Deleted: ${USER_A.email}`) }
+  if (userBId) { (await deleteTestUser(userBId)) && console.log(`  Deleted: ${USER_B.email}`) }
 }
 
 async function runTests() {
