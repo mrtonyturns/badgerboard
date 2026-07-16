@@ -88,7 +88,10 @@ export default function Broadside() {
       if (qErr || !data?.content) throw qErr || new Error('Dossier has no content')
       const cp = iframeRef.current?.contentWindow?.ControversyPrep
       if (!cp?.loadDossier) throw new Error('Module not ready')
-      cp.loadDossier(data.content)
+      // The module's name-sniffing regex can grab a stray "subject:" line from
+      // deep in the markdown — prepend the known candidate name so it wins.
+      const name = (data.title || '').replace(/^.*?[—-]\s*/, '').trim()
+      cp.loadDossier(name ? `Candidate: ${name}\n\n${data.content}` : data.content)
       setLoadedTitle(data.title || 'Dossier')
     } catch (e) {
       console.error('[Broadside] dossier load failed:', e)
