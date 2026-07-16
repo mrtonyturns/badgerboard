@@ -41,6 +41,18 @@ export default function Broadside() {
     return () => { alive = false }
   }, [user?.id])
 
+  // ── Keep the module's proxy token fresh (JWTs expire ~hourly; a long
+  //    sparring session would otherwise silently degrade to templates) ─────────
+  useEffect(() => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'TOKEN_REFRESHED' && session?.access_token) {
+        const cp = iframeRef.current?.contentWindow?.ControversyPrep
+        if (cp?.configureProxy) cp.configureProxy({ token: session.access_token })
+      }
+    })
+    return () => sub?.subscription?.unsubscribe()
+  }, [])
+
   // ── Wire the module to the server-side proxies once the iframe loads ────────
   const handleFrameLoad = useCallback(async () => {
     try {

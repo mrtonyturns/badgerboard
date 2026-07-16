@@ -1907,7 +1907,9 @@ window.ControversyPrep={
     if(!cfg.token) return;
     PROXY_CONFIG.enabled=true; PROXY_CONFIG.token=cfg.token;
     if(cfg.brainMode) BRAIN_CONFIG.mode=cfg.brainMode;
-    Voice = new ProxyVoice({voiceId:cfg.voiceId||VOICE_CONFIG.cartesia.voiceId});
+    /* token refreshes re-call this mid-session — don't orphan playing audio */
+    if(!(Voice instanceof ProxyVoice)) Voice = new ProxyVoice({voiceId:cfg.voiceId||VOICE_CONFIG.cartesia.voiceId});
+    else if(cfg.voiceId) Voice.cfg.voiceId=cfg.voiceId;
     const sv=document.getElementById('stVoice'); if(sv) sv.textContent=Voice.name;
     const sb=document.getElementById('stBrain'); if(sb) sb.textContent=brainLabel();
   },
