@@ -659,6 +659,12 @@ html[data-theme="dark"] .lamp{box-shadow:0 1px 0 rgba(255,255,255,.15), inset 0 
    we integrate into the app, upgrade to their WebSocket streaming API
    for the full latency win.
    ===================================================================== */
+/* Badger Board: this module runs inside the app's iframe. A direct top-level
+   visit on the production domain bounces to the authed /broadside route. */
+if(window.top===window.self && /badgerboardwi\.com$/.test(location.hostname)){
+  location.replace('/broadside');
+}
+
 const VOICE_CONFIG = {
   provider: 'cartesia',           // Cartesia is THE engine; browser is the keyless fallback
   cartesia: {

@@ -75,7 +75,7 @@
 
 # BROADSIDE module — embedded in an iframe by the app itself (same origin only).
 [[headers]]
-  for = "/broadside.html"
+  for = "/broadside-app.html"
   [headers.values]
     Content-Security-Policy = "frame-ancestors 'self'"
 

@@ -123,7 +123,7 @@ export default function Broadside() {
       {/* The module */}
       <iframe
         ref={iframeRef}
-        src="/broadside.html"
+        src="/broadside-app.html"
         title="Broadside — controversy sparring"
         onLoad={handleFrameLoad}
         allow="microphone; autoplay"
