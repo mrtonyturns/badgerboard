@@ -33,6 +33,9 @@ const RATE_LIMITS = {
   'generate-prospecting':        { perMinute: 6,  perDay: 60  },
   'autofill-candidate':          { perMinute: 10, perDay: 100 },
   'generate-bio-summary':        { perMinute: 10, perDay: 100 },
+  // BROADSIDE sparring sessions are rapid-fire spoken lines — higher per-minute
+  'broadside-brain':             { perMinute: 40, perDay: 800 },
+  'broadside-voice':             { perMinute: 40, perDay: 800 },
 }
 
 const DEFAULT_LIMITS = { perMinute: 10, perDay: 100 }

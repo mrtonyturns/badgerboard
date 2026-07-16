@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Building2, CalendarDays, Target, Users, ListChecks,
   FileText, Settings, LogOut, Menu, X, ChevronRight, Bell,
   User, CreditCard, Shield, ChevronDown, Tag, DoorOpen, UserCheck,
-  ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink, Users2,
+  ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink, Users2, Swords,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import BluejackLogo from './BluejackLogo'
@@ -40,10 +40,19 @@ import AnnouncementBanner from './AnnouncementBanner'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.15.2'
+const APP_VERSION = 'v1.16.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.16.0',
+    date: 'July 16, 2026',
+    changes: [
+      'BROADSIDE (admin beta): AI opposition sparring — a voice-based opponent attacks with your dossier\u2019s vulnerabilities so you can take the hit before it\u2019s real',
+      'Broadside AI + voice calls run through server-side proxies — no API keys in the browser',
+      'Load any Profiler dossier straight into a sparring session',
+    ],
+  },
   {
     version: 'v1.15.2',
     date: 'May 18, 2026',
@@ -158,6 +167,7 @@ const navItems = [
   { to: '/voter-lists', icon: UserCheck,       label: 'Voter Lists'   },
   { to: '/profiler',    icon: FileText,        label: 'Profiler'      },
   { to: '/compare',     icon: Scale,           label: 'Compare'       },
+  { to: '/broadside',   icon: Swords,          label: 'Broadside',     badge: 'Beta', adminOnly: true },
   { to: '/events',      icon: CalendarDays,    label: 'Events',        badge: 'New' },
   { to: '/campaign-connect', icon: Users2,     label: 'Campaign Connect' },
   // Door Knocking hidden from UI (feature parked — restore this line to re-enable)
@@ -252,11 +262,11 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, onNavigate, onSignOut, ti
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">AI Tools</p>
-        {navItems.slice(4, 8).map(item => (
+        {navItems.slice(4, 9).filter(item => !item.adminOnly || isAdmin).map(item => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">Outreach</p>
-        {navItems.slice(8, 10).map(item => (
+        {navItems.slice(9, 11).map(item => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         {/* Field Ops group hidden (Door Knocking parked) — restore with the nav item to re-enable

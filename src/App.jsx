@@ -75,6 +75,7 @@ const Compare = lazy(() => import('./pages/Compare'))  // code-split: trims the 
 import VolunteerPortal from './pages/VolunteerPortal'
 import SharedDossier from './pages/SharedDossier'
 const Events = lazy(() => import('./pages/Events'))  // code-split: trims the initial bundle (M1)
+const Broadside = lazy(() => import('./pages/Broadside'))  // code-split: admin-only beta
 import ResetPassword from './pages/ResetPassword'
 
 const ProtectedRoute = ({ children }) => {
@@ -165,6 +166,7 @@ const AppRoutes = () => {
         <Route path="campaign-connect" element={<CampaignConnect />} />
         <Route path="settings" element={<Settings />} />
         <Route path="plans" element={<Pricing />} />
+        <Route path="broadside" element={<AdminRoute><Broadside /></AdminRoute>} />
         <Route path="admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

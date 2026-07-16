@@ -67,10 +67,17 @@
     # HSTS — force HTTPS for 1 year (no preload until both domains have valid certs)
     Strict-Transport-Security = "max-age=31536000"
     # Disable sensitive browser features
-    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), bluetooth=()"
+    # microphone=(self) — required by BROADSIDE voice sparring (same-origin only)
+    Permissions-Policy = "camera=(), microphone=(self), geolocation=(), payment=(), usb=(), bluetooth=()"
     # Content Security Policy
     # tiles.openfreemap.org + worker-src blob: added for MapLibre GL JS turf builder
-    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://server.arcgisonline.com https://images.squarespace-cdn.com https://*.tile.openstreetmap.org https://cdnjs.cloudflare.com https://www.google.com https://icons.duckduckgo.com https://tiles.openfreemap.org; connect-src 'self' https://server.arcgisonline.com https://*.supabase.co https://api.anthropic.com https://api.stripe.com https://*.tile.openstreetmap.org https://tiles.openfreemap.org https://elections.wi.gov; worker-src blob: 'self'; frame-src https://js.stripe.com https://hooks.stripe.com; object-src 'none'; base-uri 'self'; form-action 'self';"
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://server.arcgisonline.com https://images.squarespace-cdn.com https://*.tile.openstreetmap.org https://cdnjs.cloudflare.com https://www.google.com https://icons.duckduckgo.com https://tiles.openfreemap.org; connect-src 'self' https://server.arcgisonline.com https://*.supabase.co https://api.anthropic.com https://api.stripe.com https://*.tile.openstreetmap.org https://tiles.openfreemap.org https://elections.wi.gov; worker-src blob: 'self'; frame-src 'self' https://js.stripe.com https://hooks.stripe.com; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self';"
+
+# BROADSIDE module — embedded in an iframe by the app itself (same origin only).
+[[headers]]
+  for = "/broadside.html"
+  [headers.values]
+    Content-Security-Policy = "frame-ancestors 'self'"
 
 # API functions — tighten CORS to the production domain only
 [[headers]]
