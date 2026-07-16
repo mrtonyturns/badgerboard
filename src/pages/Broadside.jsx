@@ -31,11 +31,12 @@ export default function Broadside() {
   useEffect(() => {
     let alive = true
     ;(async () => {
-      const { data } = await supabase
+      const { data, error: qErr } = await supabase
         .from('dossiers')
-        .select('id, title, created_at')
-        .order('created_at', { ascending: false })
+        .select('id, title, generated_at')
+        .order('generated_at', { ascending: false })
         .limit(50)
+      if (qErr) console.error('[Broadside] dossier list failed:', qErr)
       if (alive && data) setDossiers(data)
     })()
     return () => { alive = false }

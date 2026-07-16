@@ -264,7 +264,7 @@ function Workspace({ link, onBack, flash }) {
     catch (e) { flash(e.message, true) }
   }, [cuid, flash])
   useEffect(() => { load(); (async () => {
-    const { data } = await supabase.from('dossiers').select('id,title,created_at').order('created_at', { ascending: false }).limit(50)
+    const { data } = await supabase.from('dossiers').select('id,title,generated_at').order('generated_at', { ascending: false }).limit(50)
     setMyDossiers(data || [])
   })() }, [load])
 
