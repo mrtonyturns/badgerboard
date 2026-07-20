@@ -777,9 +777,21 @@ class ProxyVoice {
       const blob = await r.blob();
       this.audio = new Audio(URL.createObjectURL(blob));
       this.audio.playbackRate = rate;
-      this.audio.onplay = ()=>onStart&&onStart();
+      let started=false;
+      this.audio.onplay = ()=>{ started=true; onStart&&onStart(); };
       this.audio.onended = ()=>onEnd&&onEnd();
-      this.audio.play();
+      /* watchdog: if playback never actually starts (blocked/broken media
+         pipeline), don't hang the session — fall back to browser TTS */
+      const el=this.audio;
+      setTimeout(()=>{
+        if(!started && this.audio===el){
+          console.warn('Voice proxy audio never started — browser voice fallback');
+          try{ el.pause(); }catch(_){}
+          this.audio=null;
+          new BrowserVoice().speak(text,{rate,onStart,onEnd});
+        }
+      },6000);
+      this.audio.play().catch(()=>{});
     }catch(e){
       console.warn('Voice proxy failed, falling back to browser voice', e);
       new BrowserVoice().speak(text,{rate,onStart,onEnd});
@@ -1912,6 +1924,7 @@ window.ControversyPrep={
     else if(cfg.voiceId) Voice.cfg.voiceId=cfg.voiceId;
     const sv=document.getElementById('stVoice'); if(sv) sv.textContent=Voice.name;
     const sb=document.getElementById('stBrain'); if(sb) sb.textContent=brainLabel();
+    try{ log('SYSTEM','Badger Board connected — opponent brain and Cartesia voice run through secure server proxies. Ignore any key-setup notes above.','sys'); }catch(_){}
   },
   start:()=>startSession(),
   end:()=>endSession(false),
