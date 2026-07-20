@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { Outlet, NavLink, useNavigate, Link } from 'react-router-dom'
+import { Outlet, NavLink, useNavigate, useLocation, Link } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, CalendarDays, Target, Users, ListChecks,
   FileText, Settings, LogOut, Menu, X, ChevronRight, Bell,
@@ -620,6 +620,9 @@ function SupportChatWidget() {
 // ─── Layout ───────────────────────────────────────────────────────────────────
 export default function Layout() {
   const { user, signOut, isAdmin } = useAuth()
+  // Full-bleed routes own the whole content area (no padding, no outer scroll)
+  const { pathname } = useLocation()
+  const fullBleed = pathname.startsWith('/broadside')
   const navigate           = useNavigate()
   const [sidebarOpen, setSidebarOpen]   = useState(false)
   const [profileOpen, setProfileOpen]   = useState(false)
@@ -798,9 +801,9 @@ export default function Layout() {
         <OfflineBanner />
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto relative">
+        <main className={`flex-1 relative ${fullBleed ? 'overflow-hidden' : 'overflow-y-auto'}`}>
           <PaymentLockOverlay>
-            <div className="p-4 md:p-6 lg:p-8">
+            <div className={fullBleed ? 'h-full' : 'p-4 md:p-6 lg:p-8'}>
               <Outlet />
             </div>
           </PaymentLockOverlay>

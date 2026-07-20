@@ -102,9 +102,9 @@ export default function Broadside() {
   }, [])
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8rem)] md:h-[calc(100vh-7rem)]">
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-3 px-4 py-3 bg-brand-navy rounded-t-xl">
+    <div className="flex flex-col h-full">
+      {/* Toolbar — flush strip between the app header and the module */}
+      <div className="flex flex-wrap items-center gap-3 px-4 md:px-6 py-2.5 bg-brand-navy flex-shrink-0">
         <div className="flex items-center gap-2 text-white">
           <Swords className="w-5 h-5 text-brand-red" />
           <span className="font-bold tracking-wide">BROADSIDE</span>
@@ -143,7 +143,8 @@ export default function Broadside() {
         title="Broadside — controversy sparring"
         onLoad={handleFrameLoad}
         allow="microphone; autoplay"
-        className="flex-1 w-full border-0 rounded-b-xl bg-white"
+        className="flex-1 min-h-0 w-full border-0"
+        style={{ background: '#F4F5F7' }}
       />
     </div>
   )

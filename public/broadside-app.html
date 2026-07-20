@@ -43,6 +43,11 @@ body{
   padding:24px 12px 60px;
 }
 
+/* ---------- EMBEDDED MODE (inside Badger Board) ---------- */
+body.embedded{padding:14px 16px 20px;min-height:100vh}
+body.embedded .layout{max-width:none}
+body.embedded .layout .plugin{max-width:none}
+
 /* ---------- MODULE SCENE (the lit room) ---------- */
 .plugin{
   width:100%;max-width:1080px;
@@ -664,6 +669,8 @@ html[data-theme="dark"] .lamp{box-shadow:0 1px 0 rgba(255,255,255,.15), inset 0 
 if(window.top===window.self && /badgerboardwi\.com$/.test(location.hostname)){
   location.replace('/broadside');
 }
+/* embedded mode: fill the app's content area edge to edge */
+if(window.top!==window.self) document.body.classList.add('embedded');
 
 const VOICE_CONFIG = {
   provider: 'cartesia',           // Cartesia is THE engine; browser is the keyless fallback
