@@ -1,7 +1,32 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Swords, FileText, ChevronDown, Loader2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+
+/**
+ * Extract structured attack vectors from a Profiler dossier's markdown.
+ * The module's native JSON shape ({name, controversies:[{topic,detail}]})
+ * beats its text-sniffing parser: no misread names, no junk vectors.
+ * Falls back to raw text (module parser) when structure can't be found.
+ */
+function dossierToStructured(title, content) {
+  const name = (title || '').replace(/^.*?[—-]\s*/, '').trim() || 'the candidate'
+  const secRe = /(?:^|\n)#{1,4}[^\n]*(?:CONTROVERS|VULNERAB|WEAKNESS|OPPOSITION|RED FLAG|LIABILIT)[^\n]*\n([\s\S]*?)(?=\n#{1,4}\s|$)/gi
+  const items = []
+  for (const m of content.matchAll(secRe)) {
+    for (const line of m[1].split('\n')) {
+      const t = line.trim().replace(/^[-*•]\s*|^\d+[.)]\s*/, '')
+      if (t.length < 20 || /^#{1,4}\s/.test(line.trim())) continue
+      // topic: bolded lead or first clause; detail: the full line, cleaned
+      const bold = t.match(/^\*\*(.+?)\*\*/)
+      const clean = t.replace(/\*\*/g, '').replace(/\[(KNOWN|CONFIRMED|LIKELY|VERIFY|RESEARCH REQUIRED)\]/g, '').trim()
+      const topic = (bold ? bold[1] : clean.split(/[:.—–]/)[0]).slice(0, 60).trim()
+      if (clean.length >= 25) items.push({ topic, detail: clean.slice(0, 500) })
+    }
+  }
+  return items.length >= 2 ? { name, controversies: items.slice(0, 20) } : null
+}
 
 /**
  * BROADSIDE — "Take the hit before it's real."
@@ -19,6 +44,9 @@ import { useAuth } from '../contexts/AuthContext'
  */
 export default function Broadside() {
   const { user } = useAuth()
+  const [searchParams] = useSearchParams()
+  const deepLinkId = searchParams.get('dossier')
+  const deepLinkFired = useRef(false)
   const iframeRef = useRef(null)
   const [frameReady, setFrameReady] = useState(false)
   const [dossiers, setDossiers] = useState([])
@@ -72,6 +100,15 @@ export default function Broadside() {
     }
   }, [])
 
+  // ── Deep link: /broadside?dossier=<id> auto-loads (from "Spar" in Profiler) ──
+  useEffect(() => {
+    if (frameReady && deepLinkId && !deepLinkFired.current) {
+      deepLinkFired.current = true
+      loadDossier(deepLinkId)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frameReady, deepLinkId])
+
   // ── Pipe a Profiler dossier into the module ─────────────────────────────────
   const loadDossier = useCallback(async (id) => {
     setSelectedId(id)
@@ -88,10 +125,15 @@ export default function Broadside() {
       if (qErr || !data?.content) throw qErr || new Error('Dossier has no content')
       const cp = iframeRef.current?.contentWindow?.ControversyPrep
       if (!cp?.loadDossier) throw new Error('Module not ready')
-      // The module's name-sniffing regex can grab a stray "subject:" line from
-      // deep in the markdown — prepend the known candidate name so it wins.
-      const name = (data.title || '').replace(/^.*?[—-]\s*/, '').trim()
-      cp.loadDossier(name ? `Candidate: ${name}\n\n${data.content}` : data.content)
+      // Prefer structured extraction (clean vectors); fall back to raw text
+      // with the candidate name pinned so the module's regex can't misread it.
+      cp.setDossierMeta?.({ id: data.id, title: data.title })
+      const structured = dossierToStructured(data.title, data.content)
+      if (structured) cp.loadDossier(structured)
+      else {
+        const name = (data.title || '').replace(/^.*?[—-]\s*/, '').trim()
+        cp.loadDossier(name ? `Candidate: ${name}\n\n${data.content}` : data.content)
+      }
       setLoadedTitle(data.title || 'Dossier')
     } catch (e) {
       console.error('[Broadside] dossier load failed:', e)

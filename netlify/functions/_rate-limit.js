@@ -36,6 +36,7 @@ const RATE_LIMITS = {
   // BROADSIDE sparring sessions are rapid-fire spoken lines — higher per-minute
   'broadside-brain':             { perMinute: 40, perDay: 800 },
   'broadside-voice':             { perMinute: 40, perDay: 800 },
+  'broadside-debrief':           { perMinute: 3,  perDay: 60  },
 }
 
 const DEFAULT_LIMITS = { perMinute: 10, perDay: 100 }

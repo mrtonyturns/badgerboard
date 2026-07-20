@@ -648,7 +648,8 @@ html[data-theme="dark"] .lamp{box-shadow:0 1px 0 rgba(255,255,255,.15), inset 0 
   <div class="typed-fallback" id="typedFallback">
     <input type="text" id="typedInput" placeholder="Mic unavailable — type response, hit Enter">
   </div>
-  <div class="file-note">Nothing leaves this page — parsing is 100% local.</div>
+  <button class="dbtn" id="btnSkipMic" style="display:none;margin-top:8px">Skip mic — type responses instead</button>
+  <div class="file-note">Files are parsed locally in your browser; sparring lines are generated through Badger Board’s secure servers.</div>
   <input type="file" id="fileInput" accept=".txt,.md,.json,.pdf" style="display:none">
 </aside>
 </div><!-- /layout -->
@@ -671,6 +672,16 @@ if(window.top===window.self && /badgerboardwi\.com$/.test(location.hostname)){
 }
 /* embedded mode: fill the app's content area edge to edge */
 if(window.top!==window.self) document.body.classList.add('embedded');
+/* observability: surface module errors to the app's error log (fire & forget) */
+window.addEventListener('error',ev=>{
+  try{
+    if(!/badgerboardwi\.com$/.test(location.hostname)) return;
+    fetch('/.netlify/functions/error-log',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({error_message:String(ev.message||'broadside error').slice(0,500),
+        error_stack:String((ev.error&&ev.error.stack)||'').slice(0,1500),
+        component:'broadside-module', url:location.pathname})});
+  }catch(_){}
+});
 
 const VOICE_CONFIG = {
   provider: 'cartesia',           // Cartesia is THE engine; browser is the keyless fallback
@@ -734,11 +745,13 @@ class ElevenLabsVoice {
 }
 
 class CartesiaVoice {
-  constructor(cfg){ this.cfg=cfg; this.name='CARTESIA'; this.audio=null; }
+  constructor(cfg){ this.cfg=cfg; this.name='CARTESIA'; this.audio=null; this.ctrl=null; }
   async speak(text,{voiceId,rate=1,onStart,onEnd}={}){
     try{
+      if(this.ctrl) this.ctrl.abort();
+      this.ctrl=new AbortController();
       const r = await fetch('https://api.cartesia.ai/tts/bytes',{
-        method:'POST',
+        method:'POST', signal:this.ctrl.signal,
         headers:{
           'X-API-Key':this.cfg.apiKey,
           'Cartesia-Version':this.cfg.version,
@@ -759,23 +772,38 @@ class CartesiaVoice {
       this.audio.onended = ()=>onEnd&&onEnd();
       this.audio.play();
     }catch(e){
+      if(e && e.name==='AbortError') return;
       console.warn('Cartesia failed, falling back to browser voice', e);
       new BrowserVoice().speak(text,{rate,onStart,onEnd});
     }
   }
   setRate(r){ if(this.audio) this.audio.playbackRate=r; }
-  stop(){ if(this.audio){ this.audio.pause(); this.audio=null; } }
+  stop(){ if(this.ctrl){ this.ctrl.abort(); this.ctrl=null; } if(this.audio){ this.audio.pause(); this.audio=null; } }
 }
 
 /* Badger Board proxy voice — same audio path as CartesiaVoice but the key
    stays server-side. 503 (no key configured) → browser TTS fallback. */
+const REACTION_CACHE=new Map();   // voiceId|text -> blob URL (instant latency mask)
 class ProxyVoice {
-  constructor(cfg={}){ this.cfg=cfg; this.name='CARTESIA'; this.audio=null; this.disabled=false; }
+  constructor(cfg={}){ this.cfg=cfg; this.name='CARTESIA'; this.audio=null; this.disabled=false; this.ctrl=null; }
   async speak(text,{voiceId,rate=1,onStart,onEnd}={}){
     if(this.disabled) return new BrowserVoice().speak(text,{rate,onStart,onEnd});
+    // cached clip (reaction sounds) -> play instantly, no network
+    const ck=(voiceId||this.cfg.voiceId)+'|'+text;
+    if(REACTION_CACHE.has(ck)){
+      this.stop();
+      const a=new Audio(REACTION_CACHE.get(ck));
+      a.playbackRate=rate; a.onplay=()=>onStart&&onStart(); a.onended=()=>onEnd&&onEnd();
+      this.audio=a; a.play().catch(()=>{});
+      return;
+    }
     try{
+      // cancel any in-flight TTS fetch — hammering Next/Repeat must not
+      // stack a skipped attack's audio over the current one
+      if(this.ctrl) this.ctrl.abort();
+      this.ctrl=new AbortController();
       const r = await fetch(PROXY_CONFIG.voiceUrl,{
-        method:'POST',
+        method:'POST', signal:this.ctrl.signal,
         headers:{'Authorization':'Bearer '+PROXY_CONFIG.token,'Content-Type':'application/json'},
         body:JSON.stringify({transcript:text, voiceId:voiceId||this.cfg.voiceId})
       });
@@ -800,12 +828,13 @@ class ProxyVoice {
       },6000);
       this.audio.play().catch(()=>{});
     }catch(e){
+      if(e && e.name==='AbortError') return;   // superseded turn — stay silent
       console.warn('Voice proxy failed, falling back to browser voice', e);
       new BrowserVoice().speak(text,{rate,onStart,onEnd});
     }
   }
   setRate(r){ if(this.audio) this.audio.playbackRate=r; }
-  stop(){ if(this.audio){ this.audio.pause(); this.audio=null; } }
+  stop(){ if(this.ctrl){ this.ctrl.abort(); this.ctrl=null; } if(this.audio){ this.audio.pause(); this.audio=null; } }
 }
 
 /* =====================================================================
@@ -821,7 +850,9 @@ class ProxyVoice {
 const PROXY_CONFIG={
   enabled:false, token:'',
   brainUrl:'/.netlify/functions/broadside-brain',
-  voiceUrl:'/.netlify/functions/broadside-voice'
+  voiceUrl:'/.netlify/functions/broadside-voice',
+  debriefUrl:'/.netlify/functions/broadside-debrief',
+  dossierMeta:null      // {id,title} set by the host app on load
 };
 const BRAIN_CONFIG={
   apiKey:'',
@@ -847,8 +878,10 @@ HARD RULES:
 - Max ${directive.maxWords} words. Punchy, like a real debate soundbite — never a paragraph.
 - ONLY use facts from the CASE FILE below. NEVER invent accusations, numbers, or events not in it. If you need a specific, use one from the file.
 - You are the attacker; do not coach or break character.
-${directive.rattled?'- You are RATTLED: shorter, choppier, a filler or false start is fine.':''}`;
-    const ctx=transcript.slice(-8).map(t=>`${t.who==='oppo'?'You':'Trainee'}: ${t.text}`).join('\n');
+${directive.rattled?'- You are RATTLED: shorter, choppier, a filler or false start is fine.':''}
+${directive.floored?'- You are FLOORED — the trainee has dismantled you all session. Concede ground or retreat defensively first; no full-confidence zingers.':''}
+- If the trainee contradicts or softens something they said earlier in RECENT EXCHANGE, quote their earlier words back at them.`;
+    const ctx=transcript.slice(-12).map(t=>`${t.who==='oppo'?'You':'Trainee'}: ${t.text}`).join('\n');
     const usr=`CASE FILE (the trainee's vulnerabilities — your only ammunition):
 ${dossier.items.map(i=>'- '+i.detail).join('\n')}
 
@@ -916,7 +949,8 @@ function parseDossier(raw){
   if(!raw) return null;
   if(raw[0]==='{' || raw[0]==='['){
     try{
-      const j = JSON.parse(raw);
+      let j = JSON.parse(raw);
+      if(Array.isArray(j)) j={controversies:j};   // bare [{topic,detail}] arrays are valid
       const name = j.name || j.candidate || 'the candidate';
       const list = (j.controversies||j.vulnerabilities||j.attacks||[]).map(c=>({
         topic: c.topic||c.title||'this issue',
@@ -990,7 +1024,9 @@ const FOLLOWUPS = {
   short:[`That's it? Your opponent gets thirty seconds on this and you gave me one sentence. Expand.`,
          `Too thin. Give me the full explanation a reporter would actually accept.`],
   good:[`Fine. But here's the follow-up they'll ask:`,
-        `Okay — decent answer. But you won't get off that easy:`]
+        `Okay — decent answer. But you won't get off that easy:`],
+  filler:[`Was that an answer or a warm-up? All I heard was um and you know. Say it clean this time.`,
+          `If you stumble through it like that on stage, the clip writes itself. One more time — crisp.`]
 };
 const pick = a => a[Math.floor(Math.random()*a.length)];
 
@@ -1227,7 +1263,13 @@ function buildAttack(item,intensity){
   if(themes.length && Math.random()<0.3 && !themes.includes(item.topic)){
     tag+=' It\'s the same pattern I keep pointing to: '+pick(themes)+'.';
   }
-  return smartJoin(pick(P.lead[tier]), body) + tag;
+  // length budget: real soundbites aren't 80-word monologues — shed optional
+  // layers (tag/callback, then lead) until the attack fits
+  const wc=t=>t.trim().split(/\s+/).filter(Boolean).length;
+  let out=smartJoin(pick(P.lead[tier]), body)+tag;
+  if(wc(out)>42) out=smartJoin(pick(P.lead[tier]), body);
+  if(wc(out)>42) out=body;
+  return out;
 }
 /* =====================================================================
    VERBAL TIC DETECTOR — context-aware, not a naive word list.
@@ -1291,9 +1333,13 @@ function analyzeResponse(text,pressure){
   const tics=analyzeFillers(text);
   const fillers=tics.total;
   let verdict='good';
-  if(words.length<10) verdict='short';
-  else if(/\b(never|not true|false|lie|fake|didn'?t happen|no idea)\b/i.test(text) ) verdict='deny';
+  // deny FIRST -- "Not true." must hit the deny follow-ups, not classify as short
+  if(/\b(never|not true|false|lie|fake|didn'?t happen|no idea)\b/i.test(text)) verdict='deny';
+  else if(words.length<10) verdict='short';
   else if(!/\b(because|responsib|accountab|learned|fixed|amended|paid|apolog|context|fact|record|explain)\b/i.test(text) && words.length<25) verdict='dodge';
+  // filler-density check -- an answer drowning in tics is NOT a good answer
+  const density=words.length?fillers/words.length:0;
+  if(verdict==='good' && (fillers>=6 || (words.length>=15 && density>0.12))) verdict='filler';
   const pressChance = pressure/10;
   const shouldPress = verdict!=='good' ? Math.random() < (0.4+0.6*pressChance) : Math.random() < (0.25*pressChance);
   return {verdict,fillers,ticMap:tics.found,shouldPress,words:words.length};
@@ -1305,7 +1351,7 @@ function topTics(tally,n){
 const $=id=>document.getElementById(id);
 const screenEl=$('screen'), hintEl=$('hint');
 let dossier=null, queue=[], current=null, followupsUsed=0;
-let running=false, listening=false;
+let running=false, listening=false, micSkipped=false;
 let stats={attacks:0,fillers:0,responseTimes:[],tally:{}};
 let responseStart=0;
 
@@ -1408,7 +1454,7 @@ function renderIntensity(){
   let dragging=false,startX=0,startY=0,startVal=5,startSpin=0;
   sphere.addEventListener('pointerdown',e=>{
     dragging=true;startX=e.clientX;startY=e.clientY;startVal=intensity;startSpin=spin;
-    sphere.setPointerCapture(e.pointerId);
+    try{ sphere.setPointerCapture(e.pointerId); }catch(_){/* Safari SVG */}
   });
   sphere.addEventListener('pointermove',e=>{
     if(!dragging)return;
@@ -1418,6 +1464,7 @@ function renderIntensity(){
     spin=startSpin+(e.clientX-startX)/90;
   });
   sphere.addEventListener('pointerup',()=>dragging=false);
+  sphere.addEventListener('pointercancel',()=>dragging=false);
   window.addEventListener('resize',sizeSplatter);
   sizeSplatter(); renderIntensity();
 })();
@@ -1425,7 +1472,7 @@ function renderIntensity(){
 (function initBeadDrag(){
   const hit=$('ringBeadHit'), stage=document.querySelector('.sphere-stage');
   let dragging=false;
-  hit.addEventListener('pointerdown',e=>{ dragging=true; hit.setPointerCapture(e.pointerId); e.stopPropagation(); });
+  hit.addEventListener('pointerdown',e=>{ dragging=true; try{ hit.setPointerCapture(e.pointerId); }catch(_){/* Safari SVG */} e.stopPropagation(); });
   hit.addEventListener('pointermove',e=>{
     if(!dragging) return;
     const r=stage.getBoundingClientRect();
@@ -1540,7 +1587,7 @@ function startListening(){
     wrapTimer=setTimeout(()=>{ if(listening) setHint('Wrap it up — you’re past the answer window. A real opponent is about to cut in.'); },R.overtime-15000);
     overtimeTimer=setTimeout(()=>{ if(listening) attemptInterject(); },R.overtime);
   }
-  if(!SR){ $('typedFallback').style.display='flex'; $('typedInput').focus(); return; }
+  if(!SR || micSkipped){ $('typedFallback').style.display='flex'; $('typedInput').focus(); return; }
   recog=new SR(); recog.continuous=true; recog.interimResults=true; recog.lang='en-US';
   recog.onresult=e=>{
     let interim='';
@@ -1613,7 +1660,7 @@ function endUserTurn(){
   coachFeedback(text,a);
   // Layer 1: composure damage from clean hits
   const q=scoreAnswer(text,a);
-  setComposure(composure-(q>=50?Math.round(q/4):2));
+  setComposure(composure-(q>=50?Math.round(q/6):1));  // slower decay — floor should take sustained work
   // Layer 2: reciprocity mirroring (±1 notch, decays)
   if(isCounterAttack(text)||isHostile(text)) mirror=1.5; else mirror*=0.5;
   // Layer 3: user counter-attacked → dodge engine (with beat of silence if it stung)
@@ -1637,7 +1684,7 @@ function endUserTurn(){
     let fallback, instr;
     if(a.verdict==='good'){ fallback=pick(FOLLOWUPS.good)+' '+buildFollowupQuestion(); instr='The trainee gave a decent answer — press with one sharp follow-up they can\'t dodge.'; }
     else { fallback=smartJoin(pick(persona().followLead), pick(FOLLOWUPS[a.verdict]));
-      instr=a.verdict==='dodge'?'The trainee dodged — call out the non-answer and re-ask directly.':a.verdict==='deny'?'The trainee denied it — push back hard, it\'s documented in the case file.':'The trainee gave a thin, one-line answer — demand they actually explain.'; }
+      instr=a.verdict==='dodge'?'The trainee dodged — call out the non-answer and re-ask directly.':a.verdict==='deny'?'The trainee denied it — push back hard, it\'s documented in the case file.':a.verdict==='filler'?'The trainee stumbled through a filler-heavy answer — needle the hesitation and re-ask crisply.':'The trainee gave a thin, one-line answer — demand they actually explain.'; }
     deliver({instruction:instr+' Stay on the current topic.', item:current}, fallback);
   } else nextAttack();
 }
@@ -1655,6 +1702,22 @@ function buildFollowupQuestion(){
 let turnToken=0;
 const newTurn=()=>++turnToken;
 const REACTIONS=['Hm.','Mm.','Okay—','Right.','Ha—','Well—','Sure.'];
+/* pre-fetch the persona's reaction clips so the latency mask is instant */
+async function primeReactions(){
+  try{
+    if(!PROXY_CONFIG.enabled || !(Voice instanceof ProxyVoice)) return;
+    const vid=oppoVoiceId(persona())||'';
+    for(const t of REACTIONS.slice(0,4)){
+      const ck=vid+'|'+t;
+      if(REACTION_CACHE.has(ck)) continue;
+      const r=await fetch(PROXY_CONFIG.voiceUrl,{method:'POST',
+        headers:{'Authorization':'Bearer '+PROXY_CONFIG.token,'Content-Type':'application/json'},
+        body:JSON.stringify({transcript:t, voiceId:vid||undefined})});
+      if(!r.ok) return;                       // budget/limit — stop priming quietly
+      REACTION_CACHE.set(ck, URL.createObjectURL(await r.blob()));
+    }
+  }catch(_){}
+}
 function playReaction(){                    // instant sound masks Brain latency
   const P=persona();
   try{ Voice.speak(pick(REACTIONS),{rate:getRate()*P.rateMul,pitch:P.pitch,voiceId:oppoVoiceId(P)}); }catch(e){}
@@ -1665,6 +1728,9 @@ function playReaction(){                    // instant sound masks Brain latency
 async function deliver(directive,fallbackText){
   const myTurn=newTurn();
   directive.rattled=composure<40;
+  directive.floored=composure<=15;
+  // floored opponent visibly gives ground before anything else
+  if(directive.floored && Math.random()<0.6) fallbackText=pick(CONCESSIONS)+' '+fallbackText;
   directive.maxWords=directive.maxWords||(directive.rattled?24:34);
   let text=null;
   if(Brain.enabled){
@@ -1714,13 +1780,49 @@ async function startSession(){
   $('btnStart').disabled=true; $('btnNext').disabled=false; $('btnRepeat').disabled=false; $('btnEnd').disabled=false;
   queue=[...dossier.items].sort(()=>Math.random()-.5);
   stats={attacks:0,fillers:0,responseTimes:[],tally:{}}; updateStats();
-  transcript.length=0;
+  transcript.length=0; sessionReported=false;
   // Layer 2: fix the message triangle — 3 themes this opponent hammers all session
   themes=queue.slice(0,3).map(i=>i.topic.slice(0,45).replace(/[,.;:]$/,''));
   mirror=0; setComposure(85);
   log('SYSTEM',`Session armed — ${queue.length} attack vectors loaded for ${dossier.name}. Intensity ${getIntensity()}, Pressure ${getPressure()}. Opponent brain: ${brainLabel()}.`,'sys');
-  await initMicMeter();
+  // mic setup is visible and skippable — an unanswered permission prompt must
+  // never look like a dead session
+  micSkipped=false;
+  setState('MIC CHECK'); setHint('Allow the microphone prompt — or skip to typed responses.');
+  const skipBtn=$('btnSkipMic');
+  let skipResolve; const skipped=new Promise(res=>{ skipResolve=res; });
+  if(skipBtn){ skipBtn.style.display='inline-block'; skipBtn.onclick=()=>skipResolve('skip'); }
+  const got=await Promise.race([initMicMeter(), skipped]);
+  if(skipBtn) skipBtn.style.display='none';
+  if(got==='skip'){ micSkipped=true; log('SYSTEM','Typed mode — answer in the text box and hit Enter.','sys'); }
+  if(!running) return;                        // ended while waiting on the prompt
+  primeReactions();                           // warm the reaction-clip cache (fire & forget)
   nextAttack();
+}
+let sessionReported=false;
+async function requestDebrief(){
+  if(!PROXY_CONFIG.enabled || sessionReported || stats.attacks<1) return;
+  sessionReported=true;
+  const rt=stats.responseTimes;
+  const payload={
+    transcript: transcript.slice(-40),
+    stats:{ attacks:stats.attacks,
+            avgResponse: rt.length?+(rt.reduce((a,b)=>a+b,0)/rt.length).toFixed(1):0,
+            fillers:stats.fillers,
+            topTics: topTics(stats.tally,3) },
+    dossierName: PROXY_CONFIG.dossierMeta?.title || (dossier&&dossier.name) || null,
+    dossierId: PROXY_CONFIG.dossierMeta?.id || null
+  };
+  log('SYSTEM','Writing your report card…','sys');
+  try{
+    const r=await fetch(PROXY_CONFIG.debriefUrl,{method:'POST',
+      headers:{'Authorization':'Bearer '+PROXY_CONFIG.token,'content-type':'application/json'},
+      body:JSON.stringify(payload)});
+    if(!r.ok) throw new Error('debrief '+r.status);
+    const j=await r.json();
+    log('COACH · SESSION REPORT', j.debrief.replace(/\*\*/g,''), 'sys');
+    if(!j.saved) log('SYSTEM','(Report card not saved to history — session storage not yet enabled on the server.)','sys');
+  }catch(e){ log('SYSTEM','Report card unavailable this session ('+e.message+').','sys'); }
 }
 function endSession(complete){
   running=false; newTurn(); stopListening(); Voice.stop(); aiTalking=false;
@@ -1732,6 +1834,7 @@ function endSession(complete){
   const avg=rt.length?(rt.reduce((a,b)=>a+b,0)/rt.length).toFixed(1):'0';
   const worst=Object.keys(stats.tally).length?` Biggest tics: ${topTics(stats.tally,3)}.`:'';
   log('SYSTEM',(complete?'All attack vectors exhausted. ':'Session ended. ')+`Debrief: ${stats.attacks} attacks faced, avg response ${avg}s, ${stats.fillers} tics & fillers.`+worst,'sys');
+  requestDebrief();
 }
 
 $('btnStart').onclick=startSession;
@@ -1933,6 +2036,8 @@ window.ControversyPrep={
     const sb=document.getElementById('stBrain'); if(sb) sb.textContent=brainLabel();
     try{ log('SYSTEM','Badger Board connected — opponent brain and Cartesia voice run through secure server proxies. Ignore any key-setup notes above.','sys'); }catch(_){}
   },
+  /* host app: tell the module which Profiler dossier is loaded (report cards) */
+  setDossierMeta(meta){ PROXY_CONFIG.dossierMeta = meta && meta.id ? {id:meta.id, title:meta.title||null} : null; },
   start:()=>startSession(),
   end:()=>endSession(false),
   setVoiceProvider(provider,cfg){ VOICE_CONFIG.provider=provider; if(cfg&&VOICE_CONFIG[provider]) Object.assign(VOICE_CONFIG[provider],cfg); location.reload(); },

@@ -40,10 +40,20 @@ import AnnouncementBanner from './AnnouncementBanner'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.16.0'
+const APP_VERSION = 'v1.17.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.17.0',
+    date: 'July 16, 2026',
+    changes: [
+      'Broadside now fills the entire page and ends every session with an AI-written report card (message discipline, pivots, trap avoidance) quoting your actual answers',
+      'Sharper coaching: filler-heavy answers get pressed, flat denials trigger the deny follow-ups, and a worn-down opponent visibly concedes ground',
+      'Snappier feel: instant reaction sounds, no overlapping audio on Next/Repeat, attacks capped at soundbite length',
+      'Spar button on every Profiler dossier jumps straight into a session; mic setup is now visible and skippable (typed mode)',
+    ],
+  },
   {
     version: 'v1.16.0',
     date: 'July 16, 2026',
@@ -167,7 +177,7 @@ const navItems = [
   { to: '/voter-lists', icon: UserCheck,       label: 'Voter Lists'   },
   { to: '/profiler',    icon: FileText,        label: 'Profiler'      },
   { to: '/compare',     icon: Scale,           label: 'Compare'       },
-  { to: '/broadside',   icon: Swords,          label: 'Broadside',     badge: 'Beta', adminOnly: true },
+  { to: '/broadside',   icon: Swords,          label: 'Broadside',     badge: 'Beta', adminOnly: true, webOnly: true },
   { to: '/events',      icon: CalendarDays,    label: 'Events',        badge: 'New' },
   { to: '/campaign-connect', icon: Users2,     label: 'Campaign Connect' },
   // Door Knocking hidden from UI (feature parked — restore this line to re-enable)
@@ -262,7 +272,7 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, onNavigate, onSignOut, ti
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">AI Tools</p>
-        {navItems.slice(4, 9).filter(item => !item.adminOnly || isAdmin).map(item => (
+        {navItems.slice(4, 9).filter(item => (!item.adminOnly || isAdmin) && !(item.webOnly && isNativeApp())).map(item => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">Outreach</p>

@@ -1347,6 +1347,7 @@ function GenerationStrip({ startedAt, candidateName }) {
 }
 
 function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan }) {
+  const { isAdmin } = useAuth()
   const [showEmpty, setShowEmpty] = useState(false)
   const [expanded, setExpanded]   = useState(false)
   const allSections = parseSections(dossier.content)
@@ -1448,6 +1449,16 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0 ml-3 flex-wrap justify-end" style={{ ['--tw-ring-color']: 'transparent' }}>
+          {isAdmin && (
+            <Link
+              to={`/broadside?dossier=${dossier.id}`}
+              className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold bg-brand-red text-white hover:bg-red-700 transition-all"
+              title="Spar on this profile in Broadside (Beta)"
+            >
+              <Swords className="w-3.5 h-3.5" />
+              Spar
+            </Link>
+          )}
           <button
             onClick={() => setExpanded(v => !v)}
             className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold bg-white/10 text-white hover:bg-white/20 transition-all"
