@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Swords, FileText, ChevronDown, Loader2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -18,7 +17,6 @@ function dossierToStructured(title, content) {
     for (const line of m[1].split('\n')) {
       const t = line.trim().replace(/^[-*•]\s*|^\d+[.)]\s*/, '')
       if (t.length < 20 || /^#{1,4}\s/.test(line.trim())) continue
-      // topic: bolded lead or first clause; detail: the full line, cleaned
       const bold = t.match(/^\*\*(.+?)\*\*/)
       const clean = t.replace(/\*\*/g, '').replace(/\[(KNOWN|CONFIRMED|LIKELY|VERIFY|RESEARCH REQUIRED)\]/g, '').trim()
       const topic = (bold ? bold[1] : clean.split(/[:.—–]/)[0]).slice(0, 60).trim()
@@ -30,15 +28,10 @@ function dossierToStructured(title, content) {
 
 /**
  * BROADSIDE — "Take the hit before it's real."
- * AI opposition sparring: an AI opponent attacks the candidate out loud with
- * their own vulnerabilities (from Profiler dossiers); they answer by voice.
- *
- * The module itself is the self-contained /broadside.html (public/), embedded
- * in a same-origin iframe for style/script isolation. This page:
- *   1. passes the caller's Supabase JWT into the module so its LLM + TTS calls
- *      route through the broadside-brain / broadside-voice Netlify proxies
- *      (no API keys in the browser), and
- *   2. lets the user pipe any of their Profiler dossiers straight in.
+ * The self-contained module (public/broadside-app.html) owns the whole page in
+ * a same-origin iframe. This wrapper only: (1) hands the module the caller's
+ * JWT so AI + voice route through the server-side proxies, and (2) feeds the
+ * module's Intel Intake panel the user's Profiler dossier list.
  *
  * ADMIN-ONLY BETA — route is wrapped in AdminRoute (see App.jsx).
  */
@@ -50,12 +43,9 @@ export default function Broadside() {
   const iframeRef = useRef(null)
   const [frameReady, setFrameReady] = useState(false)
   const [dossiers, setDossiers] = useState([])
-  const [selectedId, setSelectedId] = useState('')
-  const [loadingDossier, setLoadingDossier] = useState(false)
-  const [loadedTitle, setLoadedTitle] = useState(null)
   const [error, setError] = useState(null)
 
-  // ── Dossier list (RLS-scoped, same pattern as CampaignConnect) ──────────────
+  // ── Dossier list (RLS-scoped) ────────────────────────────────────────────────
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -70,8 +60,7 @@ export default function Broadside() {
     return () => { alive = false }
   }, [user?.id])
 
-  // ── Keep the module's proxy token fresh (JWTs expire ~hourly; a long
-  //    sparring session would otherwise silently degrade to templates) ─────────
+  // ── Keep the module's proxy token fresh (JWTs expire ~hourly) ───────────────
   useEffect(() => {
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'TOKEN_REFRESHED' && session?.access_token) {
@@ -82,7 +71,33 @@ export default function Broadside() {
     return () => sub?.subscription?.unsubscribe()
   }, [])
 
-  // ── Wire the module to the server-side proxies once the iframe loads ────────
+  // ── Load a dossier into the module (used by picker + deep link) ─────────────
+  const loadDossier = useCallback(async (id) => {
+    if (!id) return
+    setError(null)
+    try {
+      const { data, error: qErr } = await supabase
+        .from('dossiers')
+        .select('id, title, content')
+        .eq('id', id)
+        .single()
+      if (qErr || !data?.content) throw qErr || new Error('Dossier has no content')
+      const cp = iframeRef.current?.contentWindow?.ControversyPrep
+      if (!cp?.loadDossier) throw new Error('Module not ready')
+      cp.setDossierMeta?.({ id: data.id, title: data.title })
+      const structured = dossierToStructured(data.title, data.content)
+      if (structured) cp.loadDossier(structured)
+      else {
+        const name = (data.title || '').replace(/^.*?[—-]\s*/, '').trim()
+        cp.loadDossier(name ? `Candidate: ${name}\n\n${data.content}` : data.content)
+      }
+    } catch (e) {
+      console.error('[Broadside] dossier load failed:', e)
+      setError('Could not load that dossier into Broadside.')
+    }
+  }, [])
+
+  // ── Wire the module once the iframe loads ────────────────────────────────────
   const handleFrameLoad = useCallback(async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -100,85 +115,28 @@ export default function Broadside() {
     }
   }, [])
 
-  // ── Deep link: /broadside?dossier=<id> auto-loads (from "Spar" in Profiler) ──
+  // ── Feed the module's Intel Intake picker ────────────────────────────────────
+  useEffect(() => {
+    if (!frameReady || !dossiers.length) return
+    const cp = iframeRef.current?.contentWindow?.ControversyPrep
+    cp?.setDossierPicker?.({ items: dossiers, onPick: loadDossier })
+  }, [frameReady, dossiers, loadDossier])
+
+  // ── Deep link: /broadside?dossier=<id> (from "Spar" in Profiler) ─────────────
   useEffect(() => {
     if (frameReady && deepLinkId && !deepLinkFired.current) {
       deepLinkFired.current = true
       loadDossier(deepLinkId)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frameReady, deepLinkId])
-
-  // ── Pipe a Profiler dossier into the module ─────────────────────────────────
-  const loadDossier = useCallback(async (id) => {
-    setSelectedId(id)
-    setLoadedTitle(null)
-    if (!id) return
-    setLoadingDossier(true)
-    setError(null)
-    try {
-      const { data, error: qErr } = await supabase
-        .from('dossiers')
-        .select('id, title, content')
-        .eq('id', id)
-        .single()
-      if (qErr || !data?.content) throw qErr || new Error('Dossier has no content')
-      const cp = iframeRef.current?.contentWindow?.ControversyPrep
-      if (!cp?.loadDossier) throw new Error('Module not ready')
-      // Prefer structured extraction (clean vectors); fall back to raw text
-      // with the candidate name pinned so the module's regex can't misread it.
-      cp.setDossierMeta?.({ id: data.id, title: data.title })
-      const structured = dossierToStructured(data.title, data.content)
-      if (structured) cp.loadDossier(structured)
-      else {
-        const name = (data.title || '').replace(/^.*?[—-]\s*/, '').trim()
-        cp.loadDossier(name ? `Candidate: ${name}\n\n${data.content}` : data.content)
-      }
-      setLoadedTitle(data.title || 'Dossier')
-    } catch (e) {
-      console.error('[Broadside] dossier load failed:', e)
-      setError('Could not load that dossier into Broadside.')
-    } finally {
-      setLoadingDossier(false)
-    }
-  }, [])
+  }, [frameReady, deepLinkId, loadDossier])
 
   return (
     <div className="flex flex-col h-full">
-      {/* Toolbar — flush strip between the app header and the module */}
-      <div className="flex flex-wrap items-center gap-3 px-4 md:px-6 py-2.5 bg-brand-navy flex-shrink-0">
-        <div className="flex items-center gap-2 text-white">
-          <Swords className="w-5 h-5 text-brand-red" />
-          <span className="font-bold tracking-wide">BROADSIDE</span>
-          <span className="hidden sm:inline text-white/40 text-xs italic">Take the hit before it&apos;s real.</span>
-          <span className="text-xs bg-white/15 text-white px-1.5 py-0.5 rounded-full">Beta</span>
+      {error && (
+        <div className="bg-red-700 text-white text-xs font-semibold px-4 py-1.5 flex-shrink-0">
+          {error}
         </div>
-        <div className="ml-auto flex items-center gap-2">
-          {loadedTitle && (
-            <span className="hidden md:flex items-center gap-1.5 text-xs text-white/60">
-              <FileText className="w-3.5 h-3.5" /> Loaded: {loadedTitle}
-            </span>
-          )}
-          {loadingDossier && <Loader2 className="w-4 h-4 text-white/60 animate-spin" />}
-          <div className="relative">
-            <select
-              value={selectedId}
-              onChange={e => loadDossier(e.target.value)}
-              disabled={!frameReady}
-              className="appearance-none bg-white/10 text-white text-sm rounded-lg pl-3 pr-8 py-1.5 border border-white/15 focus:outline-none focus:border-brand-red disabled:opacity-50 max-w-56"
-            >
-              <option value="" className="text-gray-900">Load a Profiler dossier…</option>
-              {dossiers.map(d => (
-                <option key={d.id} value={d.id} className="text-gray-900">{d.title || 'Untitled dossier'}</option>
-              ))}
-            </select>
-            <ChevronDown className="w-4 h-4 text-white/50 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-          </div>
-        </div>
-        {error && <p className="w-full text-xs text-red-300 -mt-1">{error}</p>}
-      </div>
-
-      {/* The module */}
+      )}
       <iframe
         ref={iframeRef}
         src="/broadside-app.html"
