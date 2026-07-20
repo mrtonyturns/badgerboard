@@ -2080,7 +2080,7 @@ window.ControversyPrep={
             inp=document.getElementById('profilerSearch'),
             box=document.getElementById('profilerResults');
       if(!wrap||!inp||!box||!cfg||!Array.isArray(cfg.items)||!cfg.items.length) return;
-      const items=cfg.items.map(d=>({id:String(d.id), title:String(d.title||'Untitled dossier')}));
+      const items=cfg.items.map(d=>({id:String(d.id), title:String(d.label||d.title||'Untitled dossier')}));
       const esc=t=>t.replace(/&/g,'&amp;').replace(/</g,'&lt;');
       let active=-1, shown=[];
       const close=()=>{ box.style.display='none'; active=-1; };

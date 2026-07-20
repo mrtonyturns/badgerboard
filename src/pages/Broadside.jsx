@@ -119,7 +119,14 @@ export default function Broadside() {
   useEffect(() => {
     if (!frameReady || !dossiers.length) return
     const cp = iframeRef.current?.contentWindow?.ControversyPrep
-    cp?.setDossierPicker?.({ items: dossiers, onPick: loadDossier })
+    const items = dossiers.map(d => ({
+      id: d.id,
+      title: d.title,
+      label: d.generated_at
+        ? `${d.title || 'Untitled dossier'} · ${new Date(d.generated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+        : d.title,
+    }))
+    cp?.setDossierPicker?.({ items, onPick: loadDossier })
   }, [frameReady, dossiers, loadDossier])
 
   // ── Deep link: /broadside?dossier=<id> (from "Spar" in Profiler) ─────────────
