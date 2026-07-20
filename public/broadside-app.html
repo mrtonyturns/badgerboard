@@ -242,7 +242,9 @@ html[data-theme="dark"] .ring-svg .track{stroke:rgba(255,255,255,.12)}
 .sphere-val{font-size:12px;font-weight:700;color:var(--ink-soft);margin-top:2px}
 
 /* transport pills under sphere */
-.transport{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:14px}
+.transport{display:flex;flex-direction:column;gap:10px;align-items:center;margin-top:14px}
+.transport-row{display:flex;gap:10px;width:340px;max-width:100%}
+.transport-row .tbtn{flex:1;padding-left:0;padding-right:0;text-align:center}
 .tbtn{
   font-family:var(--font);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;
   color:#eef1f6;
@@ -600,10 +602,12 @@ html[data-theme="dark"] .lamp{box-shadow:0 1px 0 rgba(255,255,255,.15), inset 0 
       <div class="sphere-val" id="valIntensity">5 / 10 — drag the sphere</div>
 
       <div class="transport">
-        <button class="tbtn primary" id="btnStart">Start</button>
-        <button class="tbtn" id="btnNext" disabled>Next</button>
-        <button class="tbtn" id="btnRepeat" disabled>Repeat</button>
-        <button class="tbtn" id="btnEnd" disabled>End</button>
+        <div class="transport-row"><button class="tbtn primary" id="btnStart">Start</button></div>
+        <div class="transport-row">
+          <button class="tbtn" id="btnNext" disabled>Next</button>
+          <button class="tbtn" id="btnRepeat" disabled>Repeat</button>
+          <button class="tbtn" id="btnEnd" disabled>End</button>
+        </div>
       </div>
       <div class="hint" id="hint"></div>
     </div>
