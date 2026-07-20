@@ -272,7 +272,7 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, onNavigate, onSignOut, ti
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">AI Tools</p>
-        {navItems.slice(4, 9).filter(item => (!item.adminOnly || isAdmin) && !(item.webOnly && isNativeApp())).map(item => (
+        {navItems.slice(4, 9).filter(item => (!item.adminOnly || isAdmin) && !(item.webOnly && isNativeApp)).map(item => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">Outreach</p>
