@@ -393,15 +393,28 @@ html[data-theme="dark"] .comp-track{box-shadow:0 1px 0 rgba(255,255,255,.1), ins
   border:1px solid #2a3a54;background:#16233c;color:#eef1f6;flex:1;
 }
 .dbtn.red{background:linear-gradient(180deg,var(--red-bright),var(--red));border-color:#4d0000}
-#profilerPick{margin:0 0 12px}
-.profiler-select{
-  appearance:none;-webkit-appearance:none;width:100%;
-  font-family:var(--font);font-size:12px;font-weight:700;letter-spacing:.02em;
+#profilerPick{margin:0 0 12px;position:relative}
+.profiler-search{
+  width:100%;font-family:var(--font);font-size:12px;font-weight:700;letter-spacing:.02em;
   color:#eef1f6;background:
-    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8" viewBox="0 0 14 9"><path d="M1 1l6 6 6-6" fill="none" stroke="%23dfe5ee" stroke-width="2" stroke-linecap="round"/></svg>') no-repeat right 14px center,#16233c;
-  border:1px solid #2a3a54;border-radius:10px;padding:11px 34px 11px 12px;cursor:pointer;
+    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="%238b98ad" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>') no-repeat 12px center,#16233c;
+  border:1px solid #2a3a54;border-radius:10px;padding:11px 12px 11px 34px;
 }
-.profiler-select:hover{filter:brightness(1.2)}
+.profiler-search::placeholder{color:#8b98ad;font-weight:600}
+.profiler-search:focus{outline:none;border-color:#c41e1e}
+#profilerResults{
+  position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:60;display:none;
+  background:#101c31;border:1px solid #2a3a54;border-radius:10px;
+  max-height:230px;overflow-y:auto;box-shadow:0 12px 28px rgba(0,0,0,.5);
+}
+.pr-item{
+  padding:9px 12px;font-size:12px;font-weight:600;color:#dfe5ee;cursor:pointer;
+  border-bottom:1px solid rgba(255,255,255,.05);
+}
+.pr-item:last-child{border-bottom:none}
+.pr-item b{color:#ff6b6b;font-weight:800}
+.pr-item:hover,.pr-item.active{background:#1d2c47}
+.pr-empty{padding:10px 12px;font-size:11px;color:#8b98ad;font-style:italic}
 .dbtn:hover{filter:brightness(1.15)}
 .file-note{font-size:9.5px;color:#5a6a84;letter-spacing:.05em;text-align:center}
 .loaded-pill{
@@ -644,9 +657,8 @@ html[data-theme="dark"] .lamp{box-shadow:0 1px 0 rgba(255,255,255,.15), inset 0 
     <h2>INTEL <span>INTAKE</span></h2>
   </div>
   <div id="profilerPick" style="display:none">
-    <select id="selProfilerDossier" class="profiler-select">
-      <option value="">Choose a Profiler dossier…</option>
-    </select>
+    <input type="text" id="profilerSearch" class="profiler-search" placeholder="Choose a dossier — type to search…" autocomplete="off" spellcheck="false">
+    <div id="profilerResults"></div>
   </div>
   <div class="dropzone" id="dropzone">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -2056,19 +2068,53 @@ window.ControversyPrep={
     const sb=document.getElementById('stBrain'); if(sb) sb.textContent=brainLabel();
     try{ log('SYSTEM','Badger Board connected — opponent brain and Cartesia voice run through secure server proxies. Ignore any key-setup notes above.','sys'); }catch(_){}
   },
-  /* host app: populate the in-dock Profiler dossier picker.
+  /* host app: populate the in-dock Profiler dossier picker (searchable).
      cfg = { items:[{id,title}], onPick:(id)=>void } */
   setDossierPicker(cfg){
     try{
-      const wrap=document.getElementById('profilerPick'), sel=document.getElementById('selProfilerDossier');
-      if(!wrap||!sel||!cfg||!Array.isArray(cfg.items)||!cfg.items.length) return;
-      sel.innerHTML='<option value="">Choose a Profiler dossier…</option>'+
-        cfg.items.map(d=>`<option value="${String(d.id)}">${String(d.title||'Untitled dossier').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</option>`).join('');
-      sel.onchange=()=>{
-        if(!sel.value || typeof cfg.onPick!=='function') return;
+      const wrap=document.getElementById('profilerPick'),
+            inp=document.getElementById('profilerSearch'),
+            box=document.getElementById('profilerResults');
+      if(!wrap||!inp||!box||!cfg||!Array.isArray(cfg.items)||!cfg.items.length) return;
+      const items=cfg.items.map(d=>({id:String(d.id), title:String(d.title||'Untitled dossier')}));
+      const esc=t=>t.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+      let active=-1, shown=[];
+      const close=()=>{ box.style.display='none'; active=-1; };
+      const pick=it=>{
+        inp.value=it.title; close();
         log('SYSTEM','Pulling that profile from Badger Board…','sys');
-        cfg.onPick(sel.value);
+        if(typeof cfg.onPick==='function') cfg.onPick(it.id);
       };
+      const render=()=>{
+        const q=inp.value.trim().toLowerCase();
+        shown=q?items.filter(it=>it.title.toLowerCase().includes(q)):items.slice(0,50);
+        if(!shown.length){ box.innerHTML='<div class="pr-empty">No dossiers match “'+esc(inp.value.trim())+'”</div>'; }
+        else{
+          box.innerHTML=shown.map((it,i)=>{
+            let label=esc(it.title);
+            if(q){
+              const j=it.title.toLowerCase().indexOf(q);
+              if(j>-1) label=esc(it.title.slice(0,j))+'<b>'+esc(it.title.slice(j,j+q.length))+'</b>'+esc(it.title.slice(j+q.length));
+            }
+            return '<div class="pr-item'+(i===active?' active':'')+'" data-i="'+i+'">'+label+'</div>';
+          }).join('');
+        }
+        box.style.display='block';
+      };
+      inp.oninput=()=>{ active=-1; render(); };
+      inp.onfocus=()=>render();
+      inp.onkeydown=e=>{
+        if(box.style.display==='none' && (e.key==='ArrowDown'||e.key==='Enter')){ render(); return; }
+        if(e.key==='ArrowDown'){ e.preventDefault(); active=Math.min(active+1,shown.length-1); render(); }
+        else if(e.key==='ArrowUp'){ e.preventDefault(); active=Math.max(active-1,0); render(); }
+        else if(e.key==='Enter'){ e.preventDefault(); if(shown.length===1) pick(shown[0]); else if(active>=0&&shown[active]) pick(shown[active]); }
+        else if(e.key==='Escape'){ close(); inp.blur(); }
+      };
+      box.onmousedown=e=>{             // mousedown beats the input's blur
+        const el=e.target.closest('.pr-item'); if(!el) return;
+        e.preventDefault(); pick(shown[+el.dataset.i]);
+      };
+      document.addEventListener('mousedown',e=>{ if(!wrap.contains(e.target)) close(); });
       wrap.style.display='block';
     }catch(_){}
   },
