@@ -1269,6 +1269,12 @@ function buildAttack(item,intensity){
   let out=smartJoin(pick(P.lead[tier]), body)+tag;
   if(wc(out)>42) out=smartJoin(pick(P.lead[tier]), body);
   if(wc(out)>42) out=body;
+  if(wc(out)>42){
+    // last resort: cut at the final sentence end inside the first 42 words
+    const cut=out.trim().split(/\s+/).slice(0,42).join(' ');
+    const m=cut.match(/^[\s\S]*[.?!]/);
+    out=m?m[0]:cut+'…';
+  }
   return out;
 }
 /* =====================================================================
