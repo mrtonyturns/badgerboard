@@ -405,6 +405,34 @@ async function updateSupabasePaymentStatus(supabaseUserId, paymentStatus) {
   return res.json()
 }
 
+// ── Webhook signing secret resolution ────────────────────────────────────────
+// Prefers the STRIPE_WEBHOOK_SECRET env var. Falls back to the app_secrets
+// table (RLS enabled with NO policies → readable only by the service role).
+// Cached per container so the DB is hit once per cold start.
+let _cachedWebhookSecret = null
+async function getWebhookSecret() {
+  if (process.env.STRIPE_WEBHOOK_SECRET) return process.env.STRIPE_WEBHOOK_SECRET
+  if (_cachedWebhookSecret) return _cachedWebhookSecret
+  try {
+    const res = await fetch(
+      `${process.env.SUPABASE_URL}/rest/v1/app_secrets?key=eq.stripe_webhook_secret&select=value`,
+      {
+        headers: {
+          apikey:        process.env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+      }
+    )
+    if (!res.ok) return null
+    const rows = await res.json()
+    _cachedWebhookSecret = rows?.[0]?.value || null
+    return _cachedWebhookSecret
+  } catch (err) {
+    console.error('[stripe-webhook] secret lookup failed:', err.message)
+    return null
+  }
+}
+
 async function findSupabaseUserByEmail(email) {
   const res = await fetch(
     `${process.env.SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(email)}`,
@@ -496,12 +524,18 @@ exports.handler = async (event) => {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
   const sig    = event.headers['stripe-signature']
 
+  const webhookSecret = await getWebhookSecret()
+  if (!webhookSecret) {
+    console.error('[stripe-webhook] No signing secret available (env STRIPE_WEBHOOK_SECRET or app_secrets row missing)')
+    return { statusCode: 500, body: 'Webhook not configured' }
+  }
+
   let stripeEvent
   try {
     stripeEvent = stripe.webhooks.constructEvent(
       event.body,
       sig,
-      process.env.STRIPE_WEBHOOK_SECRET
+      webhookSecret
     )
   } catch (err) {
     console.error('Webhook signature verification failed:', err.message)
