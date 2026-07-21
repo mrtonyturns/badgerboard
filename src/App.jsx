@@ -44,6 +44,7 @@ class ErrorBoundary extends React.Component {
   }
 }
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { isBetaActive } from './lib/tiers'
 import { supabaseConfigured } from './lib/supabase'
 import { DossierStatusProvider } from './contexts/DossierStatusContext'
 import Layout from './components/Layout'
@@ -110,6 +111,20 @@ const AdminRoute = ({ children }) => {
   return children
 }
 
+// Beta route — admins always; beta-mode users while the global switch is on (v1.18)
+const BetaRoute = ({ children }) => {
+  const { user, isAdmin, loading } = useAuth()
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-brand-navy flex items-center justify-center">
+        <div className="w-12 h-12 border-4 border-brand-red border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
+  if (!isAdmin && !isBetaActive(user)) return <Navigate to="/" replace />
+  return children
+}
+
 const AppRoutes = () => {
   const { user, loading } = useAuth()
 
@@ -166,7 +181,7 @@ const AppRoutes = () => {
         <Route path="campaign-connect" element={<CampaignConnect />} />
         <Route path="settings" element={<Settings />} />
         <Route path="plans" element={<Pricing />} />
-        <Route path="broadside" element={<AdminRoute><Broadside /></AdminRoute>} />
+        <Route path="broadside" element={<BetaRoute><Broadside /></BetaRoute>} />
         <Route path="admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

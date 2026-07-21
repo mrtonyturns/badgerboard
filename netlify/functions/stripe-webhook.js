@@ -171,19 +171,28 @@ function planType(plan) {
 }
 
 // Build a reverse map: Stripe price ID → { plan, plan_type, bracket, billing }
-// Scans all STRIPE_PRICE_* env vars at startup.
+//
+// v1.18 pricing update: BOTH the env var (new/raised price IDs, set after
+// running admin-stripe-setup) AND the baked-in legacy IDs above are mapped.
+// Grandfathered founder-rate subscriptions keep renewing on the old price IDs,
+// so their webhook events must keep resolving forever — never remove the
+// baked-in map.
 function buildPriceMap() {
   const map = {}
   const billingKeys = [['M', 'monthly'], ['Q', 'quarterly'], ['A', 'annual'], ['S', 'semiannual']]
 
+  const addBoth = (envKey, entry) => {
+    const legacyId = STRIPE_PRICES[envKey]
+    const envId    = process.env[envKey]
+    if (legacyId) map[legacyId] = entry
+    if (envId && envId !== legacyId) map[envId] = entry
+  }
+
   // Candidate plans (no bracket): STRIPE_PRICE_C_MONITOR_M, etc.
   for (const plan of CANDIDATE_PLANS) {
     for (const [billingKey, billing] of billingKeys) {
-      const envKey  = `STRIPE_PRICE_${plan.toUpperCase()}_${billingKey}`
-      const priceId = STRIPE_PRICES[envKey]
-      if (priceId) {
-        map[priceId] = { plan, plan_type: 'candidate', bracket: null, billing }
-      }
+      const envKey = `STRIPE_PRICE_${plan.toUpperCase()}_${billingKey}`
+      addBoth(envKey, { plan, plan_type: 'candidate', bracket: null, billing })
     }
   }
 
@@ -191,11 +200,8 @@ function buildPriceMap() {
   for (const plan of ACTION_PLANS) {
     for (const bracket of VALID_BRACKETS) {
       for (const [billingKey, billing] of billingKeys) {
-        const envKey  = `STRIPE_PRICE_${plan.toUpperCase()}_${bracket.toUpperCase()}_${billingKey}`
-        const priceId = STRIPE_PRICES[envKey]
-        if (priceId) {
-          map[priceId] = { plan, plan_type: 'action', bracket, billing }
-        }
+        const envKey = `STRIPE_PRICE_${plan.toUpperCase()}_${bracket.toUpperCase()}_${billingKey}`
+        addBoth(envKey, { plan, plan_type: 'action', bracket, billing })
       }
     }
   }
@@ -204,11 +210,8 @@ function buildPriceMap() {
   for (const plan of LEGACY_PLANS) {
     for (const bracket of VALID_BRACKETS) {
       for (const [billingKey, billing] of billingKeys) {
-        const envKey  = `STRIPE_PRICE_${plan.toUpperCase()}_${bracket.toUpperCase()}_${billingKey}`
-        const priceId = STRIPE_PRICES[envKey]
-        if (priceId) {
-          map[priceId] = { plan, plan_type: 'action', bracket, billing }
-        }
+        const envKey = `STRIPE_PRICE_${plan.toUpperCase()}_${bracket.toUpperCase()}_${billingKey}`
+        addBoth(envKey, { plan, plan_type: 'action', bracket, billing })
       }
     }
   }

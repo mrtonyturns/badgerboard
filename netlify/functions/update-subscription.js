@@ -179,7 +179,7 @@ export const handler = async (event) => {
   }
 
   const priceKey = getPriceKey(plan, bracket || null, billing)
-  const priceId  = STRIPE_PRICES[priceKey] || process.env[priceKey]
+  const priceId  = process.env[priceKey] || STRIPE_PRICES[priceKey]  // env-first: v1.18 raised prices override baked-in founder-era IDs
   if (!priceId) {
     return { statusCode: 500, body: JSON.stringify({ error: `Price not configured: ${priceKey}` }) }
   }

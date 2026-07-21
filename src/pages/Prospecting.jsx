@@ -526,7 +526,7 @@ export default function Prospecting() {
         feature="Outreach Prospecting"
         hook="Stop guessing who to target. Campaign plan generates AI-filtered candidate lists sorted by race competitiveness, party, office, and district — ready to export and act on."
         plan="Campaign"
-        price="from $69/mo"
+        price="from $89/mo"
         benefits={[
           'AI-generated prospecting lists with custom filters',
           'Filter by party, office type, district, competitiveness',

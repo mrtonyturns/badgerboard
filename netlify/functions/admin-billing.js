@@ -225,6 +225,7 @@ async function updatePlan(stripe, userId, plan, bracket) {
 
   // ── 2. Also update Stripe subscription if one exists (paid plans) ──────────
   // Free/scout users have no Stripe sub — we still succeed after the metadata update above.
+  if (!stripe) return { updated: true, stripe: 'not_configured' };
   const FREE_PLANS = ['scout', 'free'];
   if (FREE_PLANS.includes(plan?.toLowerCase())) {
     // Downgrading to free: cancel Stripe sub at period end if one exists
@@ -254,7 +255,14 @@ async function updatePlan(stripe, userId, plan, bracket) {
     return { updated: true, stripe: 'no_active_subscription' };
   }
 
-  const priceKey = `STRIPE_PRICE_${plan.toUpperCase()}_${(bracket || 'b1').toUpperCase()}_M`;
+  // Candidate-plan price keys have no bracket segment (STRIPE_PRICE_C_ACTIVE_M);
+  // Action-plan keys do (STRIPE_PRICE_A_ACTIVE_B1_M). The old code always
+  // appended the bracket, producing keys like STRIPE_PRICE_C_ACTIVE_B1_M that
+  // don't exist — so candidate-plan changes silently never synced to Stripe.
+  const CANDIDATE_PLAN_KEYS = ['c_monitor', 'c_active', 'c_campaign'];
+  const priceKey = CANDIDATE_PLAN_KEYS.includes(plan.toLowerCase())
+    ? `STRIPE_PRICE_${plan.toUpperCase()}_M`
+    : `STRIPE_PRICE_${plan.toUpperCase()}_${(bracket || 'b1').toUpperCase()}_M`;
   const priceId = process.env[priceKey];
   if (!priceId) {
     // Price not configured — metadata was updated but Stripe not synced
@@ -331,13 +339,24 @@ export const handler = async (event) => {
     return { statusCode: 401, body: JSON.stringify({ error: 'Unauthorized' }) };
   }
 
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+  // Degrade gracefully when Stripe isn't configured: metadata-backed actions
+  // still work, and read actions report the gap instead of 500ing on every
+  // account (the old behavior behind the admin panel's "Failed to load billing
+  // data" / "everyone Past Due" symptoms).
+  const stripeKey = process.env.STRIPE_SECRET_KEY;
+  const stripe = stripeKey ? new Stripe(stripeKey) : null;
 
   try {
     const { action, ...params } = JSON.parse(event.body || '{}');
 
+    const STRIPE_REQUIRED = ['cancel_subscription', 'retry_invoice', 'portal_link', 'apply_credit', 'grant_trial'];
+    if (!stripe && STRIPE_REQUIRED.includes(action)) {
+      return { statusCode: 503, body: JSON.stringify({ error: 'Stripe is not configured (STRIPE_SECRET_KEY missing)' }) };
+    }
+
     switch (action) {
       case 'get_subscription': {
+        if (!stripe) return { statusCode: 200, body: JSON.stringify({ subscription: null, stripe_unavailable: true }) };
         const result = await getSubscription(stripe, params.user_id);
         return { statusCode: 200, body: JSON.stringify(result) };
       }
@@ -358,6 +377,7 @@ export const handler = async (event) => {
       }
 
       case 'payment_history': {
+        if (!stripe) return { statusCode: 200, body: JSON.stringify({ invoices: [], stripe_unavailable: true }) };
         const result = await paymentHistory(stripe, params.user_id);
         return { statusCode: 200, body: JSON.stringify(result) };
       }

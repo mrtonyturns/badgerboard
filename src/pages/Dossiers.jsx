@@ -598,7 +598,7 @@ function Section6Upsell({ content }) {
           >
             Upgrade to Unlock →
           </Link>
-          <p className="text-xs text-gray-400 mt-3">Campaign from $69/mo · Agency from $119/mo</p>
+          <p className="text-xs text-gray-400 mt-3">Action plans from $89/mo</p>
         </div>
       </div>
     </div>
@@ -2323,7 +2323,7 @@ export default function Dossiers() {
                   feature="Profile Generation"
                   hook={`You've used your ${effectiveProfileLimit} profile${effectiveProfileLimit === 1 ? '' : 's'} this month. Research firms charge $500–$2,000 for a single candidate profile. Upgrading your plan gives you more.`}
                   plan="Campaign"
-                  price="from $69/mo"
+                  price="from $89/mo"
                   benefits={[
                     'More profiles per month — upgrade your active candidate tier',
                     'Automated weekly refresh for active candidates',

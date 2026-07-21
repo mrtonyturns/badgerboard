@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import { ADMIN_EMAILS } from '../lib/tiers'
+import { ADMIN_EMAILS, setGlobalBetaEnabled } from '../lib/tiers'
 
 const AuthContext = createContext({})
 
@@ -83,6 +83,29 @@ export const AuthProvider = ({ children }) => {
 
     return () => subscription.unsubscribe()
   }, [])
+
+  // ── Global beta switch (v1.18) ─────────────────────────────────────────────
+  // Fetch app_settings.beta_mode_enabled once per session and push it into the
+  // tiers resolver. While ON, users with app_metadata.beta_mode get full access;
+  // flipping it OFF drops every beta user straight back to trial/paid/Scout.
+  // Missing table/row (migration not yet run) defaults to ON.
+  const [globalBetaEnabled, setGlobalBetaState] = useState(true)
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'beta_mode_enabled')
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return
+        const enabled = error ? true : data?.value !== 'off'
+        setGlobalBetaEnabled(enabled)   // tiers.js module-level flag (drives resolver)
+        setGlobalBetaState(enabled)     // context state (drives admin UI)
+      })
+    return () => { cancelled = true }
+  }, [user])
 
   // Force-refresh the session to pick up metadata changes (plan, bracket, payment_status, etc.)
   // Can be awaited by callers that want to know if the refresh succeeded.
@@ -178,6 +201,7 @@ export const AuthProvider = ({ children }) => {
     session,
     loading,
     isAdmin,
+    globalBetaEnabled,
     isPaymentLocked,
     isDowngradeLocked,
     downgradedAt,

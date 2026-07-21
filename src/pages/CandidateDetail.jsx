@@ -20,7 +20,10 @@ import {
 } from '../lib/supabase'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { getUserTier, hasFeature } from '../lib/tiers'
+import {
+  getUserTier, hasFeature, getUserPlanType, getUserBracket,
+  getBracketConfig, getActiveCandidateLimit, ADMIN_EMAILS,
+} from '../lib/tiers'
 import LoadingBar from '../components/LoadingBar'
 
 const PARTIES   = ['Republican','Democrat','Independent','Libertarian','Green','Constitution','Nonpartisan','Other']
@@ -2168,6 +2171,30 @@ export default function CandidateDetail() {
     if (!canMonitor) return
     setMonitorSaving(true)
     const newVal = !isMonitored
+
+    // ── Slot-limit enforcement (mirrors Candidates.jsx) ─────────────────────
+    // Candidate Plan: fixed slots per tier. Action Plan: hard cap = bracket max.
+    // Activations beyond the limit are blocked here too, so this second toggle
+    // can't bypass the cap enforced on the Candidates page.
+    if (newVal) {
+      const isAdmin = user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase())
+      if (!isAdmin) {
+        const maxSlots = getUserPlanType(user) === 'candidate'
+          ? getActiveCandidateLimit(userTier)
+          : (getBracketConfig(getUserBracket(user))?.max ?? Infinity)
+        if (maxSlots !== Infinity) {
+          const { count, error: countErr } = await supabase
+            .from('candidates')
+            .select('id', { count: 'exact', head: true })
+            .contains('section_timestamps', { monitoring: true })
+          if (!countErr && count >= maxSlots) {
+            setMonitorSaving(false)
+            window.alert(`All ${maxSlots} active candidate slot${maxSlots === 1 ? '' : 's'} on your plan ${maxSlots === 1 ? 'is' : 'are'} in use. Upgrade your plan or bracket on the Plans page to monitor more candidates.`)
+            return
+          }
+        }
+      }
+    }
     const prevTimestamps = candidate.section_timestamps
     const newTimestamps = {
       ...(candidate.section_timestamps || {}),

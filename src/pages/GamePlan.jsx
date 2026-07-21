@@ -29,6 +29,9 @@ import {
 import ElectionResultsBoard from './ElectionResultsBoard'
 import LoadingBar from '../components/LoadingBar'
 import TaskBoard from '../components/TaskBoard'
+import UpgradePrompt from '../components/UpgradePrompt'
+import { useAuth } from '../contexts/AuthContext'
+import { getUserPlan, hasFeature, PLAN_CONFIG } from '../lib/tiers'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -723,8 +726,13 @@ function ElectionRow({ election, onEdit, onDelete, deleting, onViewResults, onVi
 // Main GamePlan component
 // ─────────────────────────────────────────────────────────────────────────────
 export default function GamePlan() {
+  const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = searchParams.get('tab') || 'milestones'
+
+  // ── Plan gate — Game Plan unlocks at Monitor (locked on Scout) ────────────
+  const userPlan = getUserPlan(user)
+  const gamePlanUnlocked = hasFeature(userPlan, 'gameplan')
 
   const _rawElection = searchParams.get('election')
   const selectedResultsId = (_rawElection && _rawElection !== 'null' && _rawElection !== 'undefined')
@@ -955,6 +963,33 @@ export default function GamePlan() {
   // ─────────────────────────────────────────────────────────────────────────
   // Render
   // ─────────────────────────────────────────────────────────────────────────
+
+  // Locked state — Scout doesn't include Game Plan (unlocks at Monitor)
+  if (!gamePlanUnlocked) {
+    return (
+      <div className="space-y-5">
+        <div className="flex items-center gap-4">
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">Game Plan</h1>
+            <p className="text-gray-400 text-sm mt-0.5">Campaign tasks &amp; election calendar</p>
+          </div>
+        </div>
+        <UpgradePrompt
+          feature="Game Plan"
+          hook="Winning campaigns run on a plan — milestones, filing deadlines, voter contact, fundraising, and GOTV in one timeline. Unlock it in 60 seconds."
+          plan={PLAN_CONFIG.c_monitor.name}
+          price={PLAN_CONFIG.c_monitor.price}
+          benefits={[
+            'Full campaign milestone timeline with phases',
+            'Election calendar & filing deadline tracking',
+            'Task board with quick-add and progress tracking',
+            'Plus full AI profiles, CSV import & social links',
+          ]}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-5">
       <LoadingBar loading={loading} />

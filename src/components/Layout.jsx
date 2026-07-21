@@ -9,7 +9,7 @@ import {
 import { useAuth } from '../contexts/AuthContext'
 import BluejackLogo from './BluejackLogo'
 import BadgerBoardLogo from './BadgerBoardLogo'
-import { getUserTier, getTierConfig } from '../lib/tiers'
+import { getUserTier, getTierConfig, isBetaActive } from '../lib/tiers'
 import { isNativeApp } from '../lib/native'
 
 // ── Offline banner ─────────────────────────────────────────────────────────────
@@ -40,10 +40,22 @@ import AnnouncementBanner from './AnnouncementBanner'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.17.0'
+const APP_VERSION = 'v1.18.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.18.0',
+    date: 'July 21, 2026',
+    changes: [
+      'New pricing: Candidate plans now $79 / $119 / $189 and Action brackets updated — existing subscribers keep their founder rate',
+      'Campaign plan now includes 6 AI profiles per month (up from 4)',
+      'Free 30/60/90-day trial giveaways: admins can grant full plan access with no card; accounts return to Scout automatically when the trial ends',
+      'Beta mode: per-user and platform-wide switches that unlock every feature (including Broadside) while enabled',
+      'Game Plan now unlocks at Monitor — Scout shows it locked with an upgrade path',
+      'Action plans: active-candidate monitoring is now hard-capped at your bracket size with a one-click bracket upgrade prompt',
+    ],
+  },
   {
     version: 'v1.17.0',
     date: 'July 16, 2026',
@@ -177,7 +189,7 @@ const navItems = [
   { to: '/voter-lists', icon: UserCheck,       label: 'Voter Lists'   },
   { to: '/profiler',    icon: FileText,        label: 'Profiler'      },
   { to: '/compare',     icon: Scale,           label: 'Compare'       },
-  { to: '/broadside',   icon: Swords,          label: 'Broadside',     badge: 'Beta', adminOnly: true, webOnly: true },
+  { to: '/broadside',   icon: Swords,          label: 'Broadside',     badge: 'Beta', betaOnly: true, webOnly: true },
   { to: '/events',      icon: CalendarDays,    label: 'Events',        badge: 'New' },
   { to: '/campaign-connect', icon: Users2,     label: 'Campaign Connect' },
   // Door Knocking hidden from UI (feature parked — restore this line to re-enable)
@@ -251,7 +263,7 @@ function ChangelogPopover({ onClose }) {
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 // Also module-level. Receives everything it needs via props.
-const Sidebar = React.memo(function Sidebar({ isAdmin, onNavigate, onSignOut, tierConfig }) {
+const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, onNavigate, onSignOut, tierConfig }) {
   const [showChangelog, setShowChangelog] = useState(false)
   return (
     <div className="flex flex-col h-full bg-brand-navy">
@@ -272,7 +284,11 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, onNavigate, onSignOut, ti
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">AI Tools</p>
-        {navItems.slice(4, 9).filter(item => (!item.adminOnly || isAdmin) && !(item.webOnly && isNativeApp)).map(item => (
+        {navItems.slice(4, 9).filter(item =>
+          (!item.adminOnly || isAdmin) &&
+          (!item.betaOnly || isAdmin || isBeta) &&
+          !(item.webOnly && isNativeApp)
+        ).map(item => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">Outreach</p>
@@ -668,6 +684,7 @@ export default function Layout() {
       <aside className="hidden md:flex md:flex-col w-64 flex-shrink-0">
         <Sidebar
           isAdmin={isAdmin}
+          isBeta={isBetaActive(user)}
           onNavigate={onNavigate}
           onSignOut={handleSignOut}
           tierConfig={tierConfig}
@@ -681,6 +698,7 @@ export default function Layout() {
           <div className="relative flex flex-col w-72 max-w-xs">
             <Sidebar
               isAdmin={isAdmin}
+              isBeta={isBetaActive(user)}
               onNavigate={onNavigate}
               onSignOut={handleSignOut}
               tierConfig={tierConfig}

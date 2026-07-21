@@ -49,6 +49,11 @@ async function getAllUsers() {
       bracket: u.app_metadata?.bracket || null,
       payment_status: u.app_metadata?.payment_status || null,
       email_confirmed: !!u.email_confirmed_at,
+      // v1.18 access layers (trials + beta)
+      trial_plan: u.app_metadata?.trial_plan || null,
+      trial_bracket: u.app_metadata?.trial_bracket || null,
+      trial_ends_at: u.app_metadata?.trial_ends_at || null,
+      beta_mode: u.app_metadata?.beta_mode === true,
     }))
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 }

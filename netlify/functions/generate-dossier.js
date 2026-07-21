@@ -27,9 +27,12 @@ async function verifyUser(authHeader) {
   return await res.json()
 }
 
-function getUserPlan(user) {
+async function getUserPlan(user) {
   if (!user) return 'scout'
   if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'agency'
+  // v1.18: resolve through the shared entitlement layer (beta + trials)
+  const resolved = (await require('./_entitlements').resolveEntitlement(user)).plan
+  user = { ...user, app_metadata: { ...(user.app_metadata || {}), plan: resolved } }
   const p = user?.app_metadata?.plan
   // Normalize new-format plan keys introduced in v1.14 pricing overhaul
   const PLAN_MAP = {
@@ -106,7 +109,7 @@ exports.handler = async (event) => {
   if (!user) {
     return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authenticated' }) }
   }
-  const userPlan = getUserPlan(user)
+  const userPlan = await getUserPlan(user)
 
   // ── Durable per-user rate limit ───────────────────────────────────────────────
   const limited = await enforceRateLimit(user.id, 'generate-dossier', headers)

@@ -65,7 +65,7 @@ exports.handler = async (event) => {
   // ── Tier check — Action plan (prospecting entitlement) required ───────────────
   const callerPlan = ADMIN_EMAILS.includes(caller.email?.toLowerCase())
     ? 'a_campaign'
-    : ((caller?.app_metadata?.plan || 'scout').toLowerCase())
+    : (await require('./_entitlements').resolveEntitlement(caller)).plan  // v1.18: honors beta + trials
   if (!PROSPECTING_PLANS.includes(callerPlan)) {
     return { statusCode: 403, headers, body: JSON.stringify({ error: 'Action plan required for AI prospecting.' }) }
   }

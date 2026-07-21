@@ -45,17 +45,21 @@ async function verifyUser(authHeader) {
 }
 
 // ─── Determine user plan from metadata ───────────────────────────────────────
-function getUserPlan(user) {
+// v1.18: resolves through the shared entitlement layer first (admin > beta >
+// trial > paid), then normalizes to this function's legacy internal buckets.
+const { resolveEntitlement } = require('./_entitlements')
+
+async function getUserPlan(user) {
   if (!user) return 'scout'
   if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'agency'
-  const p = user?.app_metadata?.plan
+  const { plan } = await resolveEntitlement(user)
   // Normalize new-format plan keys introduced in v1.14 pricing overhaul
   const PLAN_MAP = {
     c_monitor: 'monitor',  a_monitor: 'monitor',
     c_active:  'campaign', a_active:  'campaign',
     c_campaign:'campaign', a_campaign:'agency',
   }
-  return PLAN_MAP[p] || (['scout', 'monitor', 'campaign', 'agency'].includes(p) ? p : 'scout')
+  return PLAN_MAP[plan] || (['scout', 'monitor', 'campaign', 'agency'].includes(plan) ? plan : 'scout')
 }
 
 // Base monthly profile allotment per plan (excludes purchased credits).
@@ -640,7 +644,7 @@ exports.handler = async (event) => {
   if (!user) {
     return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authenticated' }) }
   }
-  const userPlan = getUserPlan(user)
+  const userPlan = await getUserPlan(user)
   const canViewSection6 = SECTION6_TIERS.includes(userPlan)
 
   // ── Durable per-user rate limit (defense in depth if invoked directly) ─────

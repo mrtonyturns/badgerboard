@@ -93,6 +93,23 @@ const AdminDashboard = () => {
     [session?.access_token]
   )
 
+  // Trials + beta mode (v1.18) — admin-manage-access function
+  const accessCall = useCallback(
+    async (action, params = {}) => {
+      const res = await fetch('/.netlify/functions/admin-manage-access', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({ action, ...params }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      return res.json()
+    },
+    [session?.access_token]
+  )
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -140,7 +157,7 @@ const AdminDashboard = () => {
       <div className="max-w-7xl mx-auto px-6 py-8">
         {activeTab === 'health' && <PlatformHealthTab apiCall={apiCall} showToast={showToast} onNavigate={setActiveTab} />}
         {activeTab === 'accounts' && <AccountManagementTab apiCall={apiCall} showToast={showToast} user={user} />}
-        {activeTab === 'billing' && <BillingPlansTab billingCall={billingCall} apiCall={apiCall} showToast={showToast} />}
+        {activeTab === 'billing' && <BillingPlansTab billingCall={billingCall} apiCall={apiCall} accessCall={accessCall} showToast={showToast} />}
         {activeTab === 'ai-costs' && <AICostsTab apiCall={apiCall} showToast={showToast} />}
         {activeTab === 'errors' && <ErrorLogsTab apiCall={apiCall} showToast={showToast} />}
         {activeTab === 'elections' && <ElectionResultsAdmin showToast={showToast} />}
@@ -576,16 +593,30 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-gray-600">{u.plan || 'Free'}</td>
+                  <td className="px-4 py-3 text-gray-600">
+                    {u.plan || 'Free'}
+                    {u.beta_mode && (
+                      <span className="ml-1.5 px-1.5 py-0.5 bg-indigo-100 text-indigo-800 text-[10px] rounded-full font-semibold align-middle">Beta</span>
+                    )}
+                    {u.trial_plan && u.trial_ends_at && Date.parse(u.trial_ends_at) > Date.now() && (
+                      <span className="ml-1.5 px-1.5 py-0.5 bg-purple-100 text-purple-800 text-[10px] rounded-full font-semibold align-middle">Trial</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
+                    {/* payment_status is only set once Stripe has reported something.
+                        null/undefined = no billing problem → show Active (fixes the
+                        every-account-shows-Past-Due bug: the old code read u.status,
+                        a field the API never returned). */}
                     <span
                       className={`px-2 py-1 text-xs rounded-full font-medium ${
-                        u.status === 'active'
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-amber-100 text-amber-800'
+                        u.payment_status === 'past_due'
+                          ? 'bg-amber-100 text-amber-800'
+                          : u.payment_status === 'inactive'
+                            ? 'bg-gray-100 text-gray-600'
+                            : 'bg-green-100 text-green-800'
                       }`}
                     >
-                      {u.status === 'active' ? 'Active' : 'Past Due'}
+                      {u.payment_status === 'past_due' ? 'Past Due' : u.payment_status === 'inactive' ? 'Cancelled' : 'Active'}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-gray-600">{new Date(u.created_at).toLocaleDateString()}</td>
@@ -855,12 +886,13 @@ const NotesModal = ({ user, onAddNote, onClose }) => {
 }
 
 // TAB 3: Billing & Plans
-const BillingPlansTab = ({ billingCall, apiCall, showToast }) => {
+const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
   const [users, setUsers] = useState([])
   const [selectedUser, setSelectedUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [subscriptionData, setSubscriptionData] = useState(null)
   const [paymentHistory, setPaymentHistory] = useState([])
+  const [globalBeta, setGlobalBeta] = useState(null)   // null = loading
 
   const [modals, setModals] = useState({
     applyCredit: false,
@@ -882,18 +914,27 @@ const BillingPlansTab = ({ billingCall, apiCall, showToast }) => {
     }
 
     fetch()
-  }, [apiCall, showToast])
+    // Global beta switch state (best-effort)
+    accessCall('get_global_beta')
+      .then(r => setGlobalBeta(Boolean(r?.enabled)))
+      .catch(() => setGlobalBeta(true))
+  }, [apiCall, accessCall, showToast])
 
   const handleSelectUser = async (u) => {
+    // Always open the detail panel — Stripe data is supplementary. A user with
+    // no Stripe customer (free/trial/beta) or a missing Stripe key must not
+    // block the panel (this was the old "Failed to load billing data" bug).
+    setSelectedUser(u)
+    setSubscriptionData({ subscription: null })
+    setPaymentHistory([])
     try {
       const data = await billingCall('get_subscription', { user_id: u.id })
-      setSelectedUser(u)
       setSubscriptionData(data)
       const history = await billingCall('payment_history', { user_id: u.id })
       setPaymentHistory(history?.invoices || [])
     } catch (err) {
       console.error(err)
-      showToast('Failed to load billing data', 'error')
+      showToast('Stripe billing data unavailable for this account', 'error')
     }
   }
 
@@ -966,18 +1007,96 @@ const BillingPlansTab = ({ billingCall, apiCall, showToast }) => {
     }
   }
 
-  const handleGrantTrial = async (days) => {
-    if (!window.confirm(`Grant ${days}-day free trial to ${selectedUser.email}?`)) return
+  // ── Trials + beta (v1.18 internal entitlements — no card, no Stripe) ──────
+  const [trialPlan, setTrialPlan]       = useState('c_campaign')
+  const [trialBracket, setTrialBracket] = useState('b1')
+  const [accessBusy, setAccessBusy]     = useState(false)
+
+  const refreshSelectedUser = async () => {
     try {
-      await billingCall('grant_trial', { user_id: selectedUser.id, days })
-      const data = await billingCall('get_subscription', { user_id: selectedUser.id })
-      setSubscriptionData(data)
-      showToast(`${days}-day trial granted`)
+      const data = await apiCall('users')
+      const list = Array.isArray(data) ? data : (data?.users || [])
+      setUsers(list)
+      const updated = list.find(x => x.id === selectedUser?.id)
+      if (updated) setSelectedUser(updated)
+    } catch { /* list refresh is best-effort */ }
+  }
+
+  const handleGrantTrial = async (days) => {
+    const planLabel = trialPlan.startsWith('a_') ? `${trialPlan} (${trialBracket})` : trialPlan
+    if (!window.confirm(`Grant ${selectedUser.email} a free ${days}-day ${planLabel} trial? No card required — they auto-return to Scout when it ends.`)) return
+    setAccessBusy(true)
+    try {
+      await accessCall('grant_trial', {
+        user_id: selectedUser.id,
+        plan:    trialPlan,
+        bracket: trialPlan.startsWith('a_') ? trialBracket : undefined,
+        days,
+      })
+      await refreshSelectedUser()
+      showToast(`${days}-day ${planLabel} trial granted`)
     } catch (err) {
       console.error(err)
       showToast('Failed to grant trial', 'error')
+    } finally {
+      setAccessBusy(false)
     }
   }
+
+  const handleRevokeTrial = async () => {
+    if (!window.confirm(`End ${selectedUser.email}'s trial now? They immediately drop back to their paid plan or Scout.`)) return
+    setAccessBusy(true)
+    try {
+      await accessCall('revoke_trial', { user_id: selectedUser.id })
+      await refreshSelectedUser()
+      showToast('Trial revoked')
+    } catch (err) {
+      console.error(err)
+      showToast('Failed to revoke trial', 'error')
+    } finally {
+      setAccessBusy(false)
+    }
+  }
+
+  const handleToggleUserBeta = async () => {
+    const enabling = !(selectedUser?.beta_mode === true)
+    if (!window.confirm(enabling
+      ? `Turn beta mode ON for ${selectedUser.email}? They get every feature (including Broadside) while it's on.`
+      : `Turn beta mode OFF for ${selectedUser.email}? They immediately drop back to their paid plan or Scout.`)) return
+    setAccessBusy(true)
+    try {
+      await accessCall('set_beta', { user_id: selectedUser.id, enabled: enabling })
+      await refreshSelectedUser()
+      showToast(`Beta mode ${enabling ? 'enabled' : 'disabled'} for ${selectedUser.email}`)
+    } catch (err) {
+      console.error(err)
+      showToast('Failed to update beta mode', 'error')
+    } finally {
+      setAccessBusy(false)
+    }
+  }
+
+  const handleToggleGlobalBeta = async () => {
+    const enabling = !globalBeta
+    if (!window.confirm(enabling
+      ? 'Turn the GLOBAL beta switch ON? Users with the per-user beta flag regain full access.'
+      : 'Turn the GLOBAL beta switch OFF? Every beta user immediately loses beta access and drops to their paid plan or Scout.')) return
+    setAccessBusy(true)
+    try {
+      await accessCall('set_global_beta', { enabled: enabling })
+      setGlobalBeta(enabling)
+      showToast(`Global beta mode ${enabling ? 'ON' : 'OFF'}`)
+    } catch (err) {
+      console.error(err)
+      showToast('Failed to update global beta switch', 'error')
+    } finally {
+      setAccessBusy(false)
+    }
+  }
+
+  // Active trial info for the selected user (from Supabase metadata via users list)
+  const selTrialEndsAt = selectedUser?.trial_ends_at ? Date.parse(selectedUser.trial_ends_at) : null
+  const selTrialActive = Boolean(selectedUser?.trial_plan && selTrialEndsAt && selTrialEndsAt > Date.now())
 
   if (loading) {
     return <Spinner />
@@ -1015,11 +1134,17 @@ const BillingPlansTab = ({ billingCall, apiCall, showToast }) => {
             {/* Subscription Details */}
             <div className="bg-white rounded-lg shadow p-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Subscription Details</h3>
+              {!subscriptionData.subscription_id && (
+                <p className="text-sm text-gray-500 mb-4">
+                  No active Stripe subscription — this account is on {selectedUser.plan && selectedUser.plan !== 'scout' ? `plan “${selectedUser.plan}” via admin/manual assignment` : 'the free Scout plan'}
+                  {selTrialActive ? ' with an active free trial' : ''}{selectedUser.beta_mode ? ' and has beta mode on' : ''}.
+                </p>
+              )}
               <div className="space-y-3 mb-6">
                 <div className="flex justify-between">
                   <span className="text-gray-600">Status</span>
                   <span className={`font-medium ${subscriptionData.status === 'active' ? 'text-green-600' : 'text-amber-600'}`}>
-                    {subscriptionData.status}
+                    {subscriptionData.status || '—'}
                   </span>
                 </div>
                 <div className="flex justify-between">
@@ -1063,29 +1188,123 @@ const BillingPlansTab = ({ billingCall, apiCall, showToast }) => {
               </div>
             </div>
 
-            {/* Free Trial Management */}
+            {/* Free Trial Management (v1.18 — internal entitlement, no card) */}
             <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Free Trial</h3>
-              <p className="text-sm text-gray-600 mb-4">Grant this user a free trial period. Their card will be charged automatically when the trial ends.</p>
-              <div className="flex flex-wrap gap-2">
-                {[7, 30, 90].map(days => (
-                  <button
-                    key={days}
-                    onClick={() => handleGrantTrial(days)}
-                    className="px-4 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition font-medium"
-                  >
-                    {days}-Day Trial
-                  </button>
-                ))}
-              </div>
-              {subscriptionData?.trial_end && (
-                <div className="mt-3 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+              <h3 className="text-lg font-semibold text-gray-900 mb-1">Free Trial Giveaway</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Grant full access to any plan — no card required. When the trial ends the account
+                automatically returns to {`the user's paid plan or free Scout`}, and their data stays intact.
+              </p>
+
+              {selTrialActive ? (
+                <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg flex items-center justify-between gap-3 flex-wrap">
                   <p className="text-sm text-purple-900 font-medium">
-                    Trial active — ends {new Date(subscriptionData.trial_end).toLocaleDateString()}
-                    {' '}({Math.max(0, Math.ceil((new Date(subscriptionData.trial_end) - new Date()) / 86400000))} days remaining)
+                    Trial active: <strong>{selectedUser.trial_plan}</strong>
+                    {selectedUser.trial_bracket ? ` (${selectedUser.trial_bracket})` : ''} — ends{' '}
+                    {new Date(selTrialEndsAt).toLocaleDateString()}{' '}
+                    ({Math.max(1, Math.ceil((selTrialEndsAt - Date.now()) / 86400000))} days left)
                   </p>
+                  <button
+                    onClick={handleRevokeTrial}
+                    disabled={accessBusy}
+                    className="px-3 py-1.5 bg-red-700 text-white text-xs font-semibold rounded hover:bg-red-800 transition disabled:opacity-50"
+                  >
+                    End trial now
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap gap-3">
+                    <select
+                      value={trialPlan}
+                      onChange={(e) => setTrialPlan(e.target.value)}
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    >
+                      <option value="c_monitor">Monitor (Candidate)</option>
+                      <option value="c_active">Active (Candidate)</option>
+                      <option value="c_campaign">Campaign (Candidate)</option>
+                      <option value="a_monitor">Monitor (Action)</option>
+                      <option value="a_active">Active (Action)</option>
+                      <option value="a_campaign">Campaign (Action)</option>
+                    </select>
+                    {trialPlan.startsWith('a_') && (
+                      <select
+                        value={trialBracket}
+                        onChange={(e) => setTrialBracket(e.target.value)}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      >
+                        <option value="b1">1 candidate</option>
+                        <option value="b2_5">2–5 candidates</option>
+                        <option value="b6">6–10 candidates</option>
+                        <option value="b11">11–25 candidates</option>
+                        <option value="b26">26–50 candidates</option>
+                        <option value="b51">51–100 candidates</option>
+                      </select>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {[30, 60, 90].map(days => (
+                      <button
+                        key={days}
+                        onClick={() => handleGrantTrial(days)}
+                        disabled={accessBusy}
+                        className="px-4 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition font-medium disabled:opacity-50"
+                      >
+                        {days}-Day Free Trial
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
+            </div>
+
+            {/* Beta Mode (v1.18) */}
+            <div className="bg-white rounded-lg shadow p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-1">Beta Mode</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Beta users get <strong>every feature</strong> (top plan + Broadside) while their flag AND the
+                global switch are on. Turning either off drops them straight back to their paid plan or Scout.
+              </p>
+
+              <div className="flex items-center justify-between gap-3 p-3 border border-gray-200 rounded-lg mb-3">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">This user: {selectedUser.email}</p>
+                  <p className="text-xs text-gray-500">
+                    {selectedUser?.beta_mode === true
+                      ? (globalBeta === false ? 'Flag ON — but global switch is OFF, so no beta access right now' : 'Beta access active')
+                      : 'No beta access'}
+                  </p>
+                </div>
+                <button
+                  onClick={handleToggleUserBeta}
+                  disabled={accessBusy}
+                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition disabled:opacity-50 ${
+                    selectedUser?.beta_mode === true
+                      ? 'bg-red-700 text-white hover:bg-red-800'
+                      : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                  }`}
+                >
+                  {selectedUser?.beta_mode === true ? 'Turn beta OFF' : 'Turn beta ON'}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 p-3 border border-amber-200 bg-amber-50 rounded-lg">
+                <div>
+                  <p className="text-sm font-semibold text-amber-900">Global beta switch (all users)</p>
+                  <p className="text-xs text-amber-700">
+                    {globalBeta === null ? 'Loading…' : globalBeta ? 'ON — per-user flags are honored' : 'OFF — all beta access suspended platform-wide'}
+                  </p>
+                </div>
+                <button
+                  onClick={handleToggleGlobalBeta}
+                  disabled={accessBusy || globalBeta === null}
+                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition disabled:opacity-50 ${
+                    globalBeta ? 'bg-red-700 text-white hover:bg-red-800' : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                  }`}
+                >
+                  {globalBeta ? 'Turn global beta OFF' : 'Turn global beta ON'}
+                </button>
+              </div>
             </div>
 
             {/* Payment History */}
@@ -1238,14 +1457,14 @@ const ApplyCreditModal = ({ onSave, onClose }) => {
 const PLAN_FAMILIES = {
   candidate: [
     { key: 'scout',      label: 'Scout',    price: 'Free',       desc: '1 lite profile' },
-    { key: 'c_monitor',  label: 'Monitor',  price: '$59/mo',     desc: '1 full profile/mo' },
-    { key: 'c_active',   label: 'Active',   price: '$89/mo',     desc: '2 profiles/mo, compare, intel' },
-    { key: 'c_campaign', label: 'Campaign', price: '$139/mo',    desc: '4 profiles/mo, 2 seats, weekly auto-refresh' },
+    { key: 'c_monitor',  label: 'Monitor',  price: '$79/mo',     desc: '1 full profile/mo' },
+    { key: 'c_active',   label: 'Active',   price: '$119/mo',    desc: '2 profiles/mo, compare, intel' },
+    { key: 'c_campaign', label: 'Campaign', price: '$189/mo',    desc: '6 profiles/mo, 2 seats, weekly auto-refresh' },
   ],
   action: [
-    { key: 'a_monitor',  label: 'Monitor',  price: 'From $69/mo',  desc: '15 profiles/mo, prospecting, offices' },
-    { key: 'a_active',   label: 'Active',   price: 'From $119/mo', desc: '30 profiles/mo, 2 seats, compare' },
-    { key: 'a_campaign', label: 'Campaign', price: 'From $159/mo', desc: '50 profiles/mo, unlimited seats, bulk profiler' },
+    { key: 'a_monitor',  label: 'Monitor',  price: 'From $89/mo',  desc: '1 profile per candidate/mo, prospecting, offices' },
+    { key: 'a_active',   label: 'Active',   price: 'From $149/mo', desc: '2 profiles per candidate/mo, 2 seats, compare' },
+    { key: 'a_campaign', label: 'Campaign', price: 'From $219/mo', desc: '4 profiles per candidate/mo, unlimited seats, bulk profiler' },
   ],
 }
 

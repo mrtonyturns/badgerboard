@@ -160,7 +160,7 @@ exports.handler = async (event) => {
   // tiers.js 'prospecting' entitlement and the Prospecting page UI gate)
   const plan = ADMIN_EMAILS.includes((user.email || '').toLowerCase())
     ? 'a_campaign'
-    : (user.app_metadata?.plan || 'scout').toLowerCase()
+    : (await require('./_entitlements').resolveEntitlement(user)).plan  // v1.18: honors beta + trials
   if (!PROSPECTING_PLANS.includes(plan)) {
     return { statusCode: 403, headers: HEADERS, body: JSON.stringify({ error: 'Action plan required for AI prospect classification.' }) }
   }

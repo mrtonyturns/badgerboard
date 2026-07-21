@@ -25,9 +25,12 @@ async function verifyUser(authHeader) {
   return await res.json()
 }
 
-function getUserPlan(user) {
+async function getUserPlan(user) {
   if (!user) return 'scout'
   if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'agency'
+  // v1.18: resolve through the shared entitlement layer (beta + trials)
+  const resolved = (await require('./_entitlements').resolveEntitlement(user)).plan
+  user = { ...user, app_metadata: { ...(user.app_metadata || {}), plan: resolved } }
   const p = user?.app_metadata?.plan
   // Normalize v1.14 plan keys so Action-plan (a_campaign) users aren't misread as scout.
   const PLAN_MAP = {
@@ -81,7 +84,7 @@ exports.handler = async (event) => {
   // Auth
   const user = await verifyUser(event.headers?.authorization || event.headers?.Authorization)
   if (!user) return { statusCode: 401, headers: CORS, body: JSON.stringify({ error: 'Unauthorized' }) }
-  const plan = getUserPlan(user)
+  const plan = await getUserPlan(user)
   if (!AGENCY_PLANS.includes(plan)) {
     return { statusCode: 403, headers: CORS, body: JSON.stringify({ error: 'Shareable links are available on the Agency plan only.' }) }
   }

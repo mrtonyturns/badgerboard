@@ -10,6 +10,7 @@ import { supabase } from '../lib/supabase'
 import {
   getUserPlan, getUserBracket, getPlanConfig, getBracketConfig,
   PLAN_CONFIG, MONTHLY_PRICES, getProfileLimit, getEffectiveProfileLimit,
+  getEntitlementSource, getActiveTrial,
 } from '../lib/tiers'
 import { isNativeApp } from '../lib/native'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -302,6 +303,8 @@ export default function Settings() {
   const planConfig   = getPlanConfig(userPlan) || getPlanConfig('scout')
   const bracketCfg   = getBracketConfig(userBracket)
   const dossierLimit = getEffectiveProfileLimit(user)
+  const entSource    = getEntitlementSource(user)   // admin | beta | trial | paid | free
+  const activeTrial  = getActiveTrial(user)
 
   // Live monthly price for current plan+bracket
   const currentPrice = (() => {
@@ -754,16 +757,38 @@ export default function Settings() {
 
           <div className="flex items-center justify-between gap-4 mb-4">
             <div>
-              <p className="text-2xl font-black text-gray-900">{planConfig.name}</p>
+              <p className="text-2xl font-black text-gray-900 flex items-center gap-2">
+                {planConfig.name}
+                {entSource === 'beta' && (
+                  <span className="text-[10px] font-bold uppercase tracking-wide bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full">Beta access</span>
+                )}
+                {entSource === 'trial' && activeTrial && (
+                  <span className="text-[10px] font-bold uppercase tracking-wide bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
+                    Free trial · {activeTrial.daysLeft}d left
+                  </span>
+                )}
+              </p>
               {userPlan !== 'scout' && ['a_monitor','a_active','a_campaign','monitor','campaign','agency'].includes(userPlan) && (
                 <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
                   <Users className="w-3.5 h-3.5" />
                   {bracketCfg.label} active candidates
                 </p>
               )}
+              {entSource === 'trial' && activeTrial && (
+                <p className="text-xs text-purple-700 mt-1">
+                  Trial ends {new Date(activeTrial.endsAt).toLocaleDateString()} — you'll move to the free Scout plan automatically.
+                </p>
+              )}
+              {entSource === 'beta' && (
+                <p className="text-xs text-indigo-700 mt-1">
+                  Full access while the beta program is on — no charge.
+                </p>
+              )}
             </div>
             <div className="text-right flex-shrink-0">
-              {currentPrice ? (
+              {entSource === 'beta' || entSource === 'trial' ? (
+                <p className="text-xl font-black text-gray-400">Free</p>
+              ) : currentPrice ? (
                 <>
                   <p className="text-3xl font-black text-brand-red leading-none">
                     ${currentPrice}

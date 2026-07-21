@@ -203,7 +203,7 @@ function FAQItem({ q, a }) {
 const C_FEATURES = [
   { section: 'AI Profiles',
     rows: [
-      { label: 'Profiles per month',          scout: 'Lite (1×)', c_monitor: '1',    c_active: '2',    c_campaign: '4'    },
+      { label: 'Profiles per month',          scout: 'Lite (1×)', c_monitor: '1',    c_active: '2',    c_campaign: '6'    },
       { label: 'Full 14-section report',      scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'A la carte credit packs',     scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Campaign Intelligence briefs',scout: false,       c_monitor: false,  c_active: true,   c_campaign: true   },
@@ -215,7 +215,7 @@ const C_FEATURES = [
     rows: [
       { label: 'Dashboard',                   scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Active candidate slots',      scout: '0',         c_monitor: '0',    c_active: '1',    c_campaign: '3'    },
-      { label: 'Game Plan',                   scout: '1 only',    c_monitor: true,   c_active: true,   c_campaign: true   },
+      { label: 'Game Plan',                   scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Compare tool',                scout: false,       c_monitor: false,  c_active: true,   c_campaign: true   },
       { label: 'CSV bulk import',             scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Social media links',          scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
@@ -306,6 +306,7 @@ const C_CARD_FEATURES = {
   ],
   c_monitor: [
     '1 full AI profile per month',
+    'Game Plan',
     'CSV import & social links',
     'A la carte credit packs',
   ],
@@ -316,7 +317,7 @@ const C_CARD_FEATURES = {
     'Compare tool',
   ],
   c_campaign: [
-    '4 profiles per month',
+    '6 profiles per month',
     '3 active candidate slots',
     'Weekly auto-refresh',
     '2 user seats',

@@ -257,7 +257,7 @@ export const handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: `Invalid pack "${pack}". Must be one of: ${VALID_CREDIT_PACKS.join(', ')}` }) }
     }
     const envKey  = `STRIPE_PRICE_CREDITS_${pack.toUpperCase()}`
-    const priceId = STRIPE_PRICES[envKey] || process.env[envKey]
+    const priceId = process.env[envKey] || STRIPE_PRICES[envKey]  // env-first: v1.18 raised prices override baked-in founder-era IDs
     if (!priceId) {
       return {
         statusCode: 500,
@@ -291,7 +291,7 @@ export const handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: `Invalid bulk pack "${pack}". Must be one of: ${VALID_BULK_CREDIT_PACKS.join(', ')}` }) }
     }
     const envKey  = `STRIPE_PRICE_BULK_CREDITS_${pack.toUpperCase()}`
-    const priceId = STRIPE_PRICES[envKey] || process.env[envKey]
+    const priceId = process.env[envKey] || STRIPE_PRICES[envKey]  // env-first: v1.18 raised prices override baked-in founder-era IDs
     if (!priceId) {
       return {
         statusCode: 500,
@@ -351,7 +351,7 @@ export const handler = async (event) => {
   }
 
   const envKey  = getPriceEnvKey(plan, bracket || null, billing)
-  const priceId = STRIPE_PRICES[envKey] || process.env[envKey]
+  const priceId = process.env[envKey] || STRIPE_PRICES[envKey]  // env-first: v1.18 raised prices override baked-in founder-era IDs
 
   if (!priceId) {
     return {

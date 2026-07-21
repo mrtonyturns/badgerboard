@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams, useNavigate } from 'react-router-dom'
 import { Users, Plus, Search, Filter, ExternalLink, Edit2, Trash2, X, Phone, Mail, Globe, Telescope, Lock, Wand2, CheckCircle, AlertCircle, Map, LayoutList, Upload, Zap } from 'lucide-react'
 import { supabase, getCandidates, getOffices, getElections, createCandidate, deleteCandidate, updateCandidate } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
@@ -89,6 +89,7 @@ const defaultForm = {
 export default function Candidates() {
   const { user, session } = useAuth()
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const preFilterOfficeId = searchParams.get('officeId') || ''
 
   const [candidates, setCandidates]             = useState([])
@@ -546,11 +547,21 @@ export default function Candidates() {
                 {maxSlots === Infinity
                   ? `${activeCount} candidate${activeCount !== 1 ? 's' : ''} active — unlimited slots`
                   : atLimit
-                    ? `All ${maxSlots} slot${maxSlots !== 1 ? 's' : ''} used — deactivate one to add another`
+                    ? userPlanType === 'action'
+                      ? `All ${maxSlots} slots used — upgrade your bracket to monitor more candidates`
+                      : `All ${maxSlots} slot${maxSlots !== 1 ? 's' : ''} used — deactivate one to add another`
                     : `${activeCount} of ${maxSlots} slot${maxSlots !== 1 ? 's' : ''} used — ${slotsLeft} remaining`}
               </span>
               {maxSlots !== Infinity && (
                 <span className="text-xs text-gray-400 ml-3 whitespace-nowrap">{activeCount}/{maxSlots}</span>
+              )}
+              {atLimit && userPlanType === 'action' && (
+                <button
+                  onClick={() => navigate('/plans')}
+                  className="ml-3 flex-shrink-0 text-xs font-bold px-2.5 py-1 rounded-lg bg-brand-red text-white hover:bg-red-700 transition-all whitespace-nowrap"
+                >
+                  Upgrade bracket
+                </button>
               )}
             </div>
             {maxSlots !== Infinity && (
