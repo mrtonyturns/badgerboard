@@ -6,6 +6,7 @@
 // the client gets a 202 immediately and polls the district_events cache row.
 
 import COUNTY_SOURCES from './_county-sources.json'
+import { matchPartisanSignals } from './_partisan-signals.js'
 
 const CACHE_HOURS = 24
 
@@ -301,11 +302,12 @@ Schema — an array "events":
     }
   ]
 }
-Lean rules — be strict:
-- "confirmed_*" ONLY when the HOST is explicitly partisan (party organizations, partisan candidate events): certainty 100.
-- "likely_*" when strong signals put certainty at 80-99 (labor unions → likely_liberal; rural patriotic/agricultural events in heavily R areas with other signals; progressive advocacy groups → likely_liberal).
-- Everything else is "nonpartisan" (fairs, markets, chamber, civic) with certainty below 80; set score to the AREA's lean context, not the event's.
-- "score": negative = liberal, positive = conservative, drives a marker on a lean bar.
+Lean rules — use this SIGNAL HIERARCHY (strongest evidence wins; cite the tier you used in "basis"):
+- TIER 1 (registered partisan entity → "confirmed_*", certainty 100): the host is a party organization (county/state Republican or Democratic party, party caucus, Young/College partisan clubs), a candidate committee, or the event is a partisan candidate's own campaign event. These orgs are registered with the FEC or the Wisconsin Ethics Commission's campaign-finance system.
+- TIER 2 (documented partisan alignment → "likely_*", certainty 80-99): labor unions and labor federations (AFSCME, SEIU, WEAC, AFL-CIO, trades councils → likely_liberal — union event infrastructure like Mobilize/ActBlue is Democratic-side); ideological advocacy organizations with a known side (Americans for Prosperity, Moms for Liberty, Right to Life → likely_conservative; Indivisible, Citizen Action, Planned Parenthood advocacy, conservation voter groups → likely_liberal). If the host lobbies Wisconsin government, weigh its known issue positions.
+- TIER 3 (no org-level signal → "nonpartisan", certainty below 80): fairs, farmers markets, chambers of commerce, service clubs (Lions/Rotary/Kiwanis/Optimist), VFW/Legion, churches, libraries, schools, government meetings. The League of Women Voters is legally NONPARTISAN — never mark it partisan. For Tier 3, set "score" to the AREA's voter-lean context (who will be in the crowd), not the event itself.
+- "score": negative = liberal, positive = conservative, drives a marker on a lean bar. Calibrate: confirmed ±85-100, likely ±55-80, nonpartisan-in-leaning-area ±10-45, truly neutral 0.
+- "basis" must name the signal used, e.g. "T1: county party host", "T2: union host (AFSCME)", "T3: civic host, R+8 area crowd". Never guess a partisan label from the event NAME alone (a "Freedom Fest" is not conservative without a partisan host).
 DISTRICT BOUNDARY RULE (strict): this list is for ${district_name} ONLY. The in-district communities are: ${communities}. Include an event ONLY if its city/venue is in one of those communities. The single exception: county fairs and county-wide signature events of ${countyNames || "the district's counties"} may be included even if their venue city is not on the list. EXCLUDE everything else — an event in a neighboring town outside the list must be dropped no matter how close or how big it is. When research says an event is "near" or "in the area of" a community without naming an in-district city, drop it.
 Include EVERY in-district event from the research that is public and has a usable date in the next ~60 days — do not drop events merely because a date is approximate (keep them, using the best-estimate date), and NEVER drop an event for being small or routine (club breakfasts, fish fries, library talks, board meetings are as valuable to a campaign as festivals). There is no maximum — 25-40+ events is the expected output when the research supports it. Recurring weekly events get one entry starting at the next occurrence.
 PUBLIC-ONLY RULE: include only events open to the general public. EXCLUDE anything private, invite-only, members-only, or requiring approval to attend (private fundraisers with invitation lists, closed club meetings, school-family-only events). Free-and-open government meetings, fairs, markets, festivals, and ticketed-but-open events all count as public. Output ONLY the JSON object.
@@ -395,6 +397,86 @@ ${extra}` }],
         }
       }
     } catch (e) { console.warn('[district-events] supplemental pass skipped:', e.message) }
+  }
+
+  // ── Lean hardening pass 1: deterministic partisan-signal lexicon ───────────
+  // (v1.18.1) The curated Wisconsin org lexicon (_partisan-signals.js) overrides
+  // the LLM's lean whenever the HOST matches a known partisan (or legally
+  // nonpartisan) organization. Deterministic > generative for known entities:
+  // the LLM can miss a county party or mislabel the League of Women Voters,
+  // the regex table cannot.
+  for (const e of events) {
+    const sig = matchPartisanSignals(e.host) || matchPartisanSignals(e.name)
+    if (!sig) continue
+    if (sig.tier === 3) {
+      // Known civic org: force nonpartisan LABEL but keep the LLM's area-crowd score
+      if (e.lean?.label !== 'nonpartisan') {
+        e.lean = { label: 'nonpartisan', certainty: sig.certainty, score: e.lean?.score ?? 0, basis: `T3: known nonpartisan civic org` }
+      }
+    } else if (e.lean?.label !== sig.label || (e.lean?.certainty ?? 0) < sig.certainty) {
+      e.lean = { label: sig.label, certainty: sig.certainty, score: sig.score, basis: `T${sig.tier}: known partisan org match (${e.host || e.name})` }
+    }
+  }
+
+  // ── Lean hardening pass 2: registry verification for uncertain named hosts ─
+  // (v1.18.1) Hosts the lexicon doesn't know and the LLM wasn't sure about get
+  // one batched Perplexity check against the verified public registries:
+  // Wisconsin's campaign-finance registrant search (campaignfinance.wi.gov),
+  // Mobilize (progressive event infrastructure), ActBlue's public directory,
+  // and Wisconsin's Eye on Lobbying. This is the research-verified multi-signal
+  // approach: registry match = high precision; platform presence = high recall
+  // on the left side; absence everywhere = genuine nonpartisan confidence.
+  const uncertain = events.filter(e =>
+    e.host &&
+    !matchPartisanSignals(e.host) &&
+    ['party', 'labor', 'civic', 'other'].includes(e.category) &&
+    (e.lean?.certainty ?? 0) < 90
+  ).slice(0, 15)
+  if (uncertain.length && PERPLEXITY_API_KEY) {
+    try {
+      const ctrlV = new AbortController()
+      setTimeout(() => ctrlV.abort(), 30000)
+      const hostList = [...new Set(uncertain.map(e => e.host))]
+      const vRes = await fetch('https://api.perplexity.ai/chat/completions', {
+        method: 'POST', signal: ctrlV.signal,
+        headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'sonar',
+          messages: [
+            { role: 'system', content: 'You verify the political affiliation of Wisconsin organizations using public records. For each organization, check: (1) is it a registered campaign-finance committee or conduit in Wisconsin (campaignfinance.wi.gov registrant search) or with the FEC; (2) does it appear on Mobilize (mobilize.us — Democratic/progressive event platform) or in ActBlue’s public directory (Democratic-side fundraising); (3) does it use WinRed (Republican-side fundraising); (4) is it a registered Wisconsin lobbying principal (lobbying.wi.gov) and what issues does it lobby on; (5) do news reports document endorsements of or by partisan candidates. Answer strictly from evidence; say "no partisan signal found" when that is the truth.' },
+            { role: 'user', content: `For each of these organizations that host community events in ${countyNames || district_name}, Wisconsin, report any partisan affiliation evidence and its source, one line each. Organizations:\n${hostList.map((h, i) => `${i + 1}. ${h}`).join('\n')}` }
+          ],
+          max_tokens: 1500,
+        }),
+      })
+      if (vRes.ok) {
+        const vd = await vRes.json()
+        const verification = vd.choices?.[0]?.message?.content
+        if (verification) {
+          const c3 = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: CLAUDE_MODEL, max_tokens: 2000,
+              messages: [{ role: 'user', content: `Based on this verification research about Wisconsin organizations, output STRICT JSON {"hosts":[{"host": "<exact name from list>", "label": "confirmed_conservative"|"likely_conservative"|"nonpartisan"|"likely_liberal"|"confirmed_liberal", "certainty": 0-100, "score": -100 to 100, "basis": "signal + source, e.g. 'registered WI committee' or 'on Mobilize/ActBlue' or 'no partisan signal in registries'"}]}. Rules: registered party/candidate committee = confirmed (certainty 100); Mobilize/ActBlue presence = likely_liberal (85-95); WinRed presence = likely_conservative (85-95); lobbying registration alone is NOT partisan — use its documented issue positions; explicit "no partisan signal found" = nonpartisan with certainty 75. Only include hosts where the research supports a judgment. Output ONLY JSON.\n\nHOSTS:\n${hostList.join('\n')}\n\nVERIFICATION RESEARCH:\n${verification}` }],
+            }),
+          })
+          if (c3.ok) {
+            const cd3 = await c3.json()
+            const raw3 = (cd3.content?.find(b => b.type === 'text')?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
+            const verdicts = JSON.parse(raw3).hosts || []
+            const vMap = new Map(verdicts.map(v => [String(v.host).toLowerCase(), v]))
+            for (const e of events) {
+              const v = e.host && vMap.get(String(e.host).toLowerCase())
+              if (v && (v.certainty ?? 0) > (e.lean?.certainty ?? 0)) {
+                e.lean = { label: v.label, certainty: v.certainty, score: v.score, basis: `Registry check: ${v.basis}` }
+              }
+            }
+            console.log(`[district-events] registry verification updated ${verdicts.length}/${hostList.length} hosts`)
+          }
+        }
+      }
+    } catch (e) { console.warn('[district-events] registry verification skipped:', e.message) }
   }
 
   // ── Image + detail enrichment (JSON-LD Event > og:image > twitter:image) ───
