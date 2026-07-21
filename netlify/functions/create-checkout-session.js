@@ -491,7 +491,10 @@ export const handler = async (event) => {
       // Badger Board branding on the checkout page
       custom_text: {
         submit: {
-          message: 'You\'ll be charged immediately. Cancel anytime from your account settings.',
+          message: 'You\'ll be charged immediately. Cancel or change plans anytime from your account settings — no contracts, no cancellation fees.',
+        },
+        after_submit: {
+          message: 'CAMPAIGNS MADE SIMPLE. Real-time candidate intelligence, voter outreach, and campaign tools built for Wisconsin — powered by The Bluejack Group.',
         },
       },
 
