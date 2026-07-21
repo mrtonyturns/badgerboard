@@ -243,7 +243,7 @@ const A_FEATURES = [
   },
   { section: 'Candidate Tools',
     rows: [
-      { label: 'Active candidates',           a_monitor: 'By bracket',   a_active: 'By bracket',     a_campaign: 'By bracket'   },
+      { label: 'Active candidates (hard cap)', a_monitor: 'Up to bracket size', a_active: 'Up to bracket size', a_campaign: 'Up to bracket size' },
       { label: 'Multi-Candidate Game Plan',   a_monitor: true,           a_active: true,             a_campaign: true           },
       { label: 'Compare tool',                a_monitor: false,          a_active: true,             a_campaign: true           },
       { label: 'Prospecting lists',           a_monitor: true,           a_active: true,             a_campaign: true           },
@@ -275,6 +275,14 @@ const FAQS = [
     a: 'An active candidate is someone flagged for continuous monitoring. They appear on your dashboard, count toward your bracket on the Action Plan, and on eligible tiers receive a fresh AI profile every Friday. Candidate Plan has fixed active candidate slots (0, 1, or 3 depending on tier).',
   },
   {
+    q: 'How many candidates can I monitor on the Action Plan?',
+    a: "Exactly as many as your bracket covers — the bracket is a hard cap. On the 2–5 bracket you can have up to 5 active candidates, on the 6–10 bracket up to 10, and so on. When every slot is in use, activating another candidate requires upgrading your bracket (which takes effect immediately) or deactivating someone first.",
+  },
+  {
+    q: 'Which plans include the Game Plan?',
+    a: 'Game Plan — the campaign milestone timeline, election calendar, and task board — is included on every paid plan, starting with Monitor. The free Scout plan does not include Game Plan.',
+  },
+  {
     q: "What's in a full AI profile?",
     a: "Each profile is a 14-section report covering news coverage, biography, political timeline, voting record, campaign finance, controversies, policy positions, organizational affiliations, political network, social media, digital presence, media strategy, attack and defense vectors, and verification flags.",
   },
@@ -289,6 +297,14 @@ const FAQS = [
   {
     q: 'What are bulk profile credits?',
     a: 'Bulk credits enable the Bulk Profiler — a tool that generates profiles for a CSV list of candidates at once. Each run consumes bulk credits. Your monthly pool (1–4 profiles per candidate depending on tier) is separate and cannot be used for bulk runs.',
+  },
+  {
+    q: 'Do you offer free trials?',
+    a: 'Yes — we grant 30, 60, and 90-day full-access trials, no credit card required. When a trial ends, your account moves to the free Scout plan automatically and every candidate, profile, and list you built stays intact. Contact us to request one.',
+  },
+  {
+    q: 'What is beta mode?',
+    a: 'Selected accounts get beta access: every feature on the platform — including tools still in testing like Broadside — free of charge while the beta program is running. When beta access ends, the account returns to its regular plan or free Scout, with all data preserved.',
   },
   {
     q: 'What happens to my data if I cancel?',
@@ -674,7 +690,7 @@ export default function Pricing() {
                   current={userPlan === pk && userPlanType === 'candidate'}
                   loading={checkoutLoading}
                   onSelect={(key) => checkout({ plan: key, billing }, key)}
-                  note={pk === 'scout' ? 'Includes a lite profile — biography and political record sections visible.' : null}
+                  note={pk === 'scout' ? 'Includes a lite profile — biography and political record sections visible. Game Plan, Compare, full 14-section profiles, and CSV import unlock on paid plans.' : null}
                 />
               )
             })}
@@ -752,6 +768,10 @@ export default function Pricing() {
               onSelect:    (key) => checkout({ plan: key, billing }, key),
             }))}
           />
+          <p className="text-xs text-gray-400 mt-3 text-center">
+            Prospecting lists and the Offices section are exclusive to the Action Plan.
+            Game Plan unlocks at Monitor. Active-candidate slots are a hard limit — deactivate a candidate or upgrade to add more.
+          </p>
         </>
       )}
 
@@ -941,6 +961,10 @@ export default function Pricing() {
               }
             })}
           />
+          <p className="text-xs text-gray-400 mt-3 text-center">
+            Your bracket is a hard cap on active candidates — when every slot is in use, upgrade your bracket
+            (instant) or deactivate a candidate to free a slot. Bulk Profiler requires bulk credits, purchased separately.
+          </p>
         </>
       )}
 
