@@ -3,7 +3,7 @@
  * Server-side proxy for BROADSIDE's Cartesia TTS — keeps CARTESIA_API_KEY out
  * of the browser (handoff priority #1). Returns MP3 bytes (base64).
  *
- * ADMIN-ONLY BETA: gated with requireAdmin while Broadside is admin-only.
+ * PLAN-GATED (v1.18.2): requireBroadside — paid plans, beta users, and admins.
  *
  * POST body: { transcript: string, voiceId?: string }
  * Returns:   audio/mpeg bytes (isBase64Encoded), or 503 { error:'voice-not-configured' }
@@ -12,7 +12,7 @@
  * Voice IDs are whitelisted server-side to the three shipped personas.
  */
 
-const { json, requireAdmin } = require('./_shared')
+const { json, requireBroadside } = require('./_shared')
 const { enforceRateLimit } = require('./_rate-limit')
 
 const CARTESIA_API_KEY = process.env.CARTESIA_API_KEY
@@ -37,7 +37,7 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: HEADERS, body: '' }
   if (event.httpMethod !== 'POST')    return json(405, { error: 'Method not allowed' }, HEADERS)
 
-  const auth = await requireAdmin(event)
+  const auth = await requireBroadside(event)
   if (auth.errorResponse) return { ...auth.errorResponse, headers: { ...HEADERS, ...auth.errorResponse.headers } }
   const { user } = auth
 

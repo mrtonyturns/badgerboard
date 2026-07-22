@@ -4,13 +4,13 @@
  * campaign rubric, quoting the trainee's actual answers as evidence.
  * Saves to broadside_sessions when the table exists (fails soft otherwise).
  *
- * ADMIN-ONLY BETA — same gate as the other broadside endpoints.
+ * PLAN-GATED (v1.18.2): requireBroadside — paid plans, beta users, and admins.
  *
  * POST body: { transcript:[{who,text}], stats:{}, dossierName?, dossierId? }
  * Returns:   { debrief: string, saved: boolean }
  */
 
-const { json, requireAdmin, serviceClient } = require('./_shared')
+const { json, requireBroadside, serviceClient } = require('./_shared')
 const { enforceRateLimit } = require('./_rate-limit')
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
@@ -41,7 +41,7 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: HEADERS, body: '' }
   if (event.httpMethod !== 'POST')    return json(405, { error: 'Method not allowed' }, HEADERS)
 
-  const auth = await requireAdmin(event)
+  const auth = await requireBroadside(event)
   if (auth.errorResponse) return { ...auth.errorResponse, headers: { ...HEADERS, ...auth.errorResponse.headers } }
   const { user } = auth
 

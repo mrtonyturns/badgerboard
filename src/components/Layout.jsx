@@ -40,10 +40,18 @@ import AnnouncementBanner from './AnnouncementBanner'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.18.0'
+const APP_VERSION = 'v1.18.2'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.18.2',
+    date: 'July 21, 2026',
+    changes: [
+      'Broadside is out of beta: now included with every paid plan (Monitor and up, both plan families)',
+      'Events: smarter political-lean identification — known Wisconsin organizations are classified deterministically and uncertain hosts are checked against public campaign-finance, lobbying, and fundraising registries',
+    ],
+  },
   {
     version: 'v1.18.0',
     date: 'July 21, 2026',
@@ -189,7 +197,7 @@ const navItems = [
   { to: '/voter-lists', icon: UserCheck,       label: 'Voter Lists'   },
   { to: '/profiler',    icon: FileText,        label: 'Profiler'      },
   { to: '/compare',     icon: Scale,           label: 'Compare'       },
-  { to: '/broadside',   icon: Swords,          label: 'Broadside',     badge: 'Beta', betaOnly: true, webOnly: true },
+  { to: '/broadside',   icon: Swords,          label: 'Broadside',     feature: 'broadside', webOnly: true },
   { to: '/events',      icon: CalendarDays,    label: 'Events',        badge: 'New' },
   { to: '/campaign-connect', icon: Users2,     label: 'Campaign Connect' },
   // Door Knocking hidden from UI (feature parked — restore this line to re-enable)
@@ -286,7 +294,9 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, onNavigate, onSig
         <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">AI Tools</p>
         {navItems.slice(4, 9).filter(item =>
           (!item.adminOnly || isAdmin) &&
-          (!item.betaOnly || isAdmin || isBeta) &&
+          // Plan-feature gate (v1.18.2): beta users and admins resolve to the top
+          // plan via getUserTier, so tierConfig covers paid + beta + admin.
+          (!item.feature || isAdmin || isBeta || tierConfig?.features?.[item.feature]) &&
           !(item.webOnly && isNativeApp)
         ).map(item => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />

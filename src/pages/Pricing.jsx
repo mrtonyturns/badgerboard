@@ -208,6 +208,7 @@ const C_FEATURES = [
       { label: 'A la carte credit packs',     scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Campaign Intelligence briefs',scout: false,       c_monitor: false,  c_active: true,   c_campaign: true   },
       { label: 'AI candidate discovery',      scout: false,       c_monitor: false,  c_active: true,   c_campaign: true   },
+      { label: 'Broadside — AI opposition sparring', scout: false, c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Weekly auto-refresh',         scout: false,       c_monitor: false,  c_active: false,  c_campaign: true   },
     ],
   },
@@ -237,6 +238,7 @@ const A_FEATURES = [
       { label: 'Profiles per month',          a_monitor: '1 per candidate', a_active: '2 per candidate', a_campaign: '4 per candidate' },
       { label: 'Campaign Intelligence briefs',a_monitor: true,           a_active: true,             a_campaign: true           },
       { label: 'AI candidate discovery',      a_monitor: true,           a_active: true,             a_campaign: true           },
+      { label: 'Broadside — AI opposition sparring', a_monitor: true,    a_active: true,             a_campaign: true           },
       { label: 'Weekly auto-refresh',         a_monitor: false,          a_active: true,             a_campaign: true           },
       { label: 'Bulk Profiler (CSV runs)',     a_monitor: false,          a_active: false,            a_campaign: 'With credits' },
     ],
@@ -304,7 +306,7 @@ const FAQS = [
   },
   {
     q: 'What is beta mode?',
-    a: 'Selected accounts get beta access: every feature on the platform — including tools still in testing like Broadside — free of charge while the beta program is running. When beta access ends, the account returns to its regular plan or free Scout, with all data preserved.',
+    a: 'Selected accounts get beta access: every feature on the platform, free of charge, while the beta program is running. When beta access ends, the account returns to its regular plan or free Scout, with all data preserved.',
   },
   {
     q: 'What happens to my data if I cancel?',

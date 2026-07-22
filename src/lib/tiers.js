@@ -38,6 +38,7 @@ export const CANDIDATE_PLAN_CONFIG = {
       socialLinks:        false,
       weeklyProfile:      false,
       creditPacks:        false,
+      broadside:          false,  // paid-plan feature (v1.18.2)
     },
     unlocks: [],
     nextUnlocks: [
@@ -73,6 +74,7 @@ export const CANDIDATE_PLAN_CONFIG = {
       socialLinks:        true,
       weeklyProfile:      false,
       creditPacks:        true,
+      broadside:          true,   // v1.18.2: included in all paid plans
     },
     unlocks: [
       'Full AI profile generation',
@@ -113,6 +115,7 @@ export const CANDIDATE_PLAN_CONFIG = {
       socialLinks:        true,
       weeklyProfile:      false,
       creditPacks:        true,
+      broadside:          true,   // v1.18.2: included in all paid plans
     },
     unlocks: [
       '2 profiles / month',
@@ -154,6 +157,7 @@ export const CANDIDATE_PLAN_CONFIG = {
       socialLinks:        true,
       weeklyProfile:      true,
       creditPacks:        true,
+      broadside:          true,   // v1.18.2: included in all paid plans
     },
     unlocks: [
       '6 profiles / month',
@@ -197,6 +201,7 @@ export const ACTION_PLAN_CONFIG = {
       socialLinks:        true,
       weeklyProfile:      false,
       bulkCredits:        false,
+      broadside:          true,   // v1.18.2: included in all paid plans
     },
     unlocks: [
       'Prospecting',
@@ -238,6 +243,7 @@ export const ACTION_PLAN_CONFIG = {
       socialLinks:        true,
       weeklyProfile:      true,
       bulkCredits:        false,
+      broadside:          true,   // v1.18.2: included in all paid plans
     },
     unlocks: [
       '2 profiles per candidate / month',
@@ -280,6 +286,7 @@ export const ACTION_PLAN_CONFIG = {
       socialLinks:        true,
       weeklyProfile:      true,
       bulkCredits:        true,
+      broadside:          true,   // v1.18.2: included in all paid plans
     },
     unlocks: [
       '4 profiles per candidate / month',

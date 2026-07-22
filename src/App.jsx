@@ -44,7 +44,7 @@ class ErrorBoundary extends React.Component {
   }
 }
 import { AuthProvider, useAuth } from './contexts/AuthContext'
-import { isBetaActive } from './lib/tiers'
+import { isBetaActive, hasFeature, getUserPlan } from './lib/tiers'
 import { supabaseConfigured } from './lib/supabase'
 import { DossierStatusProvider } from './contexts/DossierStatusContext'
 import Layout from './components/Layout'
@@ -111,8 +111,10 @@ const AdminRoute = ({ children }) => {
   return children
 }
 
-// Beta route — admins always; beta-mode users while the global switch is on (v1.18)
-const BetaRoute = ({ children }) => {
+// Feature route — plan-feature gate (v1.18.2). Admins and beta-mode users pass
+// automatically because getUserPlan resolves them to the top plan; paid plans
+// pass via their feature flag in tiers.js.
+const FeatureRoute = ({ feature, children }) => {
   const { user, isAdmin, loading } = useAuth()
   if (loading) {
     return (
@@ -121,7 +123,7 @@ const BetaRoute = ({ children }) => {
       </div>
     )
   }
-  if (!isAdmin && !isBetaActive(user)) return <Navigate to="/" replace />
+  if (!isAdmin && !isBetaActive(user) && !hasFeature(getUserPlan(user), feature)) return <Navigate to="/" replace />
   return children
 }
 
@@ -181,7 +183,7 @@ const AppRoutes = () => {
         <Route path="campaign-connect" element={<CampaignConnect />} />
         <Route path="settings" element={<Settings />} />
         <Route path="plans" element={<Pricing />} />
-        <Route path="broadside" element={<BetaRoute><Broadside /></BetaRoute>} />
+        <Route path="broadside" element={<FeatureRoute feature="broadside"><Broadside /></FeatureRoute>} />
         <Route path="admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
