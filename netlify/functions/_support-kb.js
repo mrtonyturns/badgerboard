@@ -62,6 +62,7 @@ Execution:
 1. Pick any district — statewide, congressional, state senate, assembly. Search the dropdown.
 2. First generation takes about a minute. Then it is cached for the week. Refresh button forces a new read.
 3. You get: Top 4 issues ranked with why. Approval estimate. Vote-share projection. A confidence indicator with a margin on every figure.
+3a. Vote-share respects the calendar. Before a contested primary: each party's field is shown separately — candidates only compete inside their own primary — with the November general outlook below. Once nominees are set: a straight general head-to-head.
 4. Read the label: AI-Estimated. Not a scientific poll. It is modeled from news, past results, public polling, and social signal — sources listed at the bottom. Use it to aim your attention. Do not use it to bet the campaign. When it matters, field a real poll.
 Availability: beta testers only.
 

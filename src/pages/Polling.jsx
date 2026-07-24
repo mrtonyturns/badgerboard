@@ -261,35 +261,76 @@ export default function Polling() {
             </div>
           </div>
 
-          {/* Vote share */}
-          <div className="card">
-            <div className="flex items-center justify-between mb-1">
-              <h2 className="text-sm font-bold text-gray-900">Vote-Share Projection</h2>
-              <AiTag />
-            </div>
-            <p className="text-xs text-gray-500 mb-4">If the election were held today</p>
-            <div className="space-y-3">
-              {(snapshot.vote_share || []).map((v, i) => (
-                <div key={i}>
-                  <div className="flex items-baseline justify-between mb-1">
-                    <span className="text-sm font-bold text-gray-800">
-                      {v.candidate}
-                      {v.party && v.party !== 'None' && <span className="text-xs font-semibold text-gray-400 ml-2">{v.party}</span>}
-                    </span>
-                    <span className="text-sm font-black tabular-nums" style={{ color: PARTY_COLOR[v.party] || '#334155' }}>{v.pct}%</span>
+          {/* Vote share — primaries segregated by party until the primary is
+              decided; general head-to-head once nominees are set (v1.23) */}
+          {(() => {
+            const raw = snapshot.vote_share
+            const vs = Array.isArray(raw) ? { phase: 'general', general: raw, primaries: [] } : (raw || { phase: 'general', general: [], primaries: [] })
+            const isPrimary = vs.phase === 'primary' && (vs.primaries || []).length > 0
+            const general = vs.general || []
+
+            const Bars = ({ rows, colorFor }) => (
+              <div className="space-y-3">
+                {rows.map((v, i) => (
+                  <div key={i}>
+                    <div className="flex items-baseline justify-between mb-1">
+                      <span className="text-sm font-bold text-gray-800">
+                        {v.candidate}
+                        {v.party && v.party !== 'None' && <span className="text-xs font-semibold text-gray-400 ml-2">{v.party}</span>}
+                      </span>
+                      <span className="text-sm font-black tabular-nums" style={{ color: colorFor(v) }}>{v.pct}%</span>
+                    </div>
+                    <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-full rounded-full" style={{ width: `${Math.min(100, v.pct)}%`, background: colorFor(v) }} />
+                    </div>
                   </div>
-                  <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div className="h-full rounded-full" style={{ width: `${Math.min(100, v.pct)}%`, background: PARTY_COLOR[v.party] || '#64748B' }} />
-                  </div>
+                ))}
+              </div>
+            )
+
+            return (
+              <div className="card">
+                <div className="flex items-center justify-between mb-1">
+                  <h2 className="text-sm font-bold text-gray-900">Vote-Share Projection</h2>
+                  <AiTag />
                 </div>
-              ))}
-            </div>
-            {band && (
-              <p className="text-[11px] text-gray-400 font-semibold mt-4">
-                Margin ±{snapshot.confidence.margin_pts} pts ({band.label.toLowerCase()}) applies to every figure above.
-              </p>
-            )}
-          </div>
+                <p className="text-xs text-gray-500 mb-4">
+                  {isPrimary ? 'Primary fields shown per party — candidates only compete within their own primary' : 'If the election were held today'}
+                </p>
+
+                {isPrimary && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
+                    {vs.primaries.map((p, i) => (
+                      <div key={i} className="rounded-xl border p-4" style={{ borderColor: `${PARTY_COLOR[p.party] || '#64748B'}40`, background: `${PARTY_COLOR[p.party] || '#64748B'}08` }}>
+                        <p className="text-xs font-extrabold uppercase tracking-wider mb-3" style={{ color: PARTY_COLOR[p.party] || '#334155' }}>
+                          {p.party} primary
+                        </p>
+                        <Bars
+                          rows={p.candidates}
+                          colorFor={(v) => v.candidate === 'Undecided' ? '#94A3B8' : (PARTY_COLOR[p.party] || '#64748B')}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {general.length > 0 && (
+                  <div className={isPrimary ? 'mt-4 pt-4 border-t border-gray-100' : ''}>
+                    {isPrimary && (
+                      <p className="text-xs font-extrabold uppercase tracking-wider text-gray-500 mb-3">November general outlook</p>
+                    )}
+                    <Bars rows={general} colorFor={(v) => PARTY_COLOR[v.party] || '#64748B'} />
+                  </div>
+                )}
+
+                {band && (
+                  <p className="text-[11px] text-gray-400 font-semibold mt-4">
+                    Margin ±{snapshot.confidence.margin_pts} pts ({band.label.toLowerCase()}) applies to every figure above.
+                  </p>
+                )}
+              </div>
+            )
+          })()}
 
           {/* Sources */}
           {(snapshot.sources || []).length > 0 && (
