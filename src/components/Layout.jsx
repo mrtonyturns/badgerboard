@@ -197,7 +197,7 @@ const navItems = [
   { to: '/voter-lists', icon: UserCheck,       label: 'Voter Lists'   },
   { to: '/profiler',    icon: FileText,        label: 'Profiler'      },
   { to: '/compare',     icon: Scale,           label: 'Compare',       badge: 'Beta' },
-  { to: '/broadside',   icon: Swords,          label: 'Broadside',     feature: 'broadside', webOnly: true },
+  { to: '/broadside',   icon: Swords,          label: 'Broadside',     feature: 'broadside', webOnly: true, badge: 'Beta' },
   { to: '/polling',     icon: BarChart2,       label: 'Polling',       badge: 'Beta', betaOnly: true },
   { to: '/events',      icon: CalendarDays,    label: 'Events',        badge: 'New' },
   { to: '/campaign-connect', icon: Users2,     label: 'Campaign Connect' },
