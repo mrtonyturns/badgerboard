@@ -78,7 +78,8 @@ export default function NotificationCenter() {
 
   const unread = announcements.filter(a => !readIds.has(a.id))
 
-  // Opening the panel marks everything as read
+  // Opening the panel marks everything as read (and clears any active popup —
+  // the inbox and the toast occupy the same corner)
   const openPanel = () => {
     setOpen(o => {
       if (!o) {
@@ -86,6 +87,8 @@ export default function NotificationCenter() {
         announcements.forEach(a => next.add(a.id))
         setReadIds(next)
         saveSet(READ_KEY, next)
+        clearTimeout(toastTimerRef.current)
+        setToast(null)
       }
       return !o
     })
@@ -103,7 +106,7 @@ export default function NotificationCenter() {
   // Fires whether the announcement arrived live (poll) or was waiting when the
   // user opened the app — the toasted-set check makes both paths one-shot.
   useEffect(() => {
-    if (toast) return  // one at a time; next candidate shows after this closes
+    if (toast || open) return  // one at a time; never pop while the inbox is open
     const toasted = loadSet(TOAST_KEY)
     const candidate = announcements.find(a => a.type === 'success' && !toasted.has(a.id))
     if (!candidate) return
@@ -112,7 +115,7 @@ export default function NotificationCenter() {
     setToast(candidate)
     toastTimerRef.current = setTimeout(() => setToast(null), TOAST_MS)
     return () => clearTimeout(toastTimerRef.current)
-  }, [announcements, toast])
+  }, [announcements, toast, open])
 
   const dismissToast = useCallback(() => {
     clearTimeout(toastTimerRef.current)
