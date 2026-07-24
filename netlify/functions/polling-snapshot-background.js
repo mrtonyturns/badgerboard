@@ -632,15 +632,35 @@ function averageVoteShares(estimates, prior) {
 // any candidate that appears in both runs is held within maxDelta points of
 // where they were, and each list is renormalized. Candidates who are new, or
 // who have dropped out since, are unconstrained — genuine news still lands.
-function clampList(rows, priorRows, maxDelta) {
+//
+// v1.26.2 — the hard clamp alone was not enough. It bounds a runaway but passes
+// everything inside the band through at full strength, so a model re-rolling a
+// candidate by 10 points still showed up as a 5-point jump between two
+// refreshes taken minutes apart. Each run is now BLENDED toward the baseline
+// first (new = prior + alpha × (estimate − prior)) and clamped second. Alpha is
+// how much of a single run's disagreement we believe: a real 3-model median
+// earns more than a 2-model mean, which earns more than one synthesis pass,
+// and a stale baseline earns steadily less as it ages. Noise gets damped in
+// proportion to how noisy the source is; a genuine sustained move still
+// arrives, just over two refreshes instead of jumping.
+function clampList(rows, priorRows, maxDelta, alpha = 1) {
   if (!Array.isArray(priorRows) || !priorRows.length) return rows
+  const a = Math.min(1, Math.max(0, alpha))
   const prior = new Map(priorRows.map(p => [nameKey(p.candidate), typeof p.pct === 'number' ? p.pct : null]))
   const adjusted = rows.map(r => {
     const p = prior.get(nameKey(r.candidate))
     if (p == null) return r                                  // new name — let it stand
-    return { ...r, pct: Math.min(p + maxDelta, Math.max(p - maxDelta, r.pct)) }
+    const blended = p + a * (r.pct - p)
+    return { ...r, pct: Math.round(Math.min(p + maxDelta, Math.max(p - maxDelta, blended))) }
   })
-  return stabilizeRank(normalize100(adjusted), prior)
+  // Exact ties are common once numbers are smoothed and rounded. Break them by
+  // the previous run's order rather than by whatever order the model happened
+  // to emit, so a tie never silently demotes the candidate who was ahead.
+  const out = normalize100(adjusted)
+  const und = (r) => (/undecided/i.test(r.candidate) ? 1 : 0)
+  out.sort((x, y) => und(x) - und(y) || y.pct - x.pct
+    || ((prior.get(nameKey(y.candidate)) ?? -1) - (prior.get(nameKey(x.candidate)) ?? -1)))
+  return stabilizeRank(out, prior)
 }
 
 // Rank hysteresis: when the top two are inside the dead-heat band the ordering
@@ -678,17 +698,17 @@ function dropZeroed(vs) {
   return vs
 }
 
-function anchorVoteShare(vs, prior, maxDelta) {
+function anchorVoteShare(vs, prior, maxDelta, alpha = 1) {
   if (!vs || !prior?.vote_share || prior.vote_share.phase !== vs.phase) return vs
   const pv = prior.vote_share
   if (Array.isArray(vs.primaries)) {
     for (const grp of vs.primaries) {
       const pg = (pv.primaries || []).find(p => p.party === grp.party)
-      if (pg) grp.candidates = clampList(grp.candidates, pg.candidates, maxDelta)
+      if (pg) grp.candidates = clampList(grp.candidates, pg.candidates, maxDelta, alpha)
     }
   }
   if (Array.isArray(vs.general) && vs.general.length && Array.isArray(pv.general) && pv.general.length) {
-    vs.general = clampList(vs.general, pv.general, maxDelta)
+    vs.general = clampList(vs.general, pv.general, maxDelta, alpha)
   }
   return vs
 }
@@ -806,11 +826,18 @@ export const handler = async (event) => {
     //    within maxDelta points of where they were; new entrants and dropouts
     //    are unconstrained. Intel widens the band so a campaign's own data can
     //    actually move its candidate — but not re-rank the whole field.
+    //    How much of this run we believe (alpha) tracks how good the read is:
+    //    a true 3-model median > a 2-model mean > a single synthesis pass. Fresh
+    //    intel buys responsiveness, and an aging baseline steadily surrenders
+    //    authority so a week-old snapshot never pins a moving race.
+    const evidence = ensembleUsed ? validEstimates.length : 1
     const maxDelta = 8 + (intel ? 4 : 0) + Math.min(10, prior?.ageDays || 0)
+    const alpha = Math.min(1, (evidence >= 3 ? 0.6 : evidence === 2 ? 0.45 : 0.35)
+      + (intel ? 0.15 : 0) + 0.05 * (prior?.ageDays || 0))
     snapshot.vote_share = dropZeroed(snapshot.vote_share)
     if (prior) {
       const before = JSON.stringify(snapshot.vote_share)
-      snapshot.vote_share = anchorVoteShare(snapshot.vote_share, prior, maxDelta)
+      snapshot.vote_share = anchorVoteShare(snapshot.vote_share, prior, maxDelta, alpha)
       const vErr = validateVoteShare(snapshot.vote_share)
       if (vErr) { console.warn(`[polling-bg] anchoring broke validation (${vErr}) — reverting`); snapshot.vote_share = JSON.parse(before) }
     }
@@ -824,7 +851,7 @@ export const handler = async (event) => {
       snapshot.confidence.note = `${String(snapshot.confidence.note || '').replace(/\s*$/, '')} Models disagreed by up to ${Math.round(spread)} pts on this field, which widens the margin.`.trim().slice(0, 400)
     }
 
-    console.log(`[polling-bg] ${district} ensemble: ${validEstimates.length}/3 valid, used=${ensembleUsed}, spread=${Math.round(spread)}, anchored=${!!prior} (Δ≤${maxDelta}, prior ${prior?.ageDays ?? '-'}d)`)
+    console.log(`[polling-bg] ${district} ensemble: ${validEstimates.length}/3 valid (${estLabel || 'none'}), used=${ensembleUsed}, spread=${Math.round(spread)}, anchored=${!!prior} (Δ≤${maxDelta}, α=${alpha.toFixed(2)}, prior ${prior?.ageDays ?? '-'}d)`)
 
     // Sources: prefer structured citations; else pull URLs out of the research text
     const hostOf = (u) => String(u || '').replace(/^https?:\/\/(www\.)?/, '').split('/')[0]
