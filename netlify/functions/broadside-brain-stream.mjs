@@ -10,13 +10,72 @@
  * Returns:   text/event-stream (Anthropic SSE passthrough)
  */
 
-import shared from './_shared.js'
-import rateLimit from './_rate-limit.js'
+// NOTE: deliberately avoids _shared.js/_rate-limit.js — they require
+// @supabase/supabase-js, which Netlify's v2 (.mjs) bundler does not inline.
+// Everything here is plain fetch. _config/_entitlements/_ai-usage are
+// fetch-only helpers and bundle cleanly.
+import config from './_config.js'
+import entitlements from './_entitlements.js'
 import aiUsage from './_ai-usage.js'
 
-const { requireBroadside } = shared
-const { enforceRateLimit } = rateLimit
+const { ADMIN_EMAILS } = config
+const { resolveEntitlement } = entitlements
 const { logAiUsage } = aiUsage
+
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
+const SUPABASE_ANON = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
+const BROADSIDE_PLANS = ['c_monitor', 'c_active', 'c_campaign', 'a_monitor', 'a_active', 'a_campaign']
+
+async function verifyUser(token) {
+  if (!token) return null
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { apikey: SUPABASE_ANON, Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) return null
+  return res.json()
+}
+
+/** Same gate as _shared.requireBroadside, fetch-only. */
+async function requireBroadsideFetch(token) {
+  const user = await verifyUser(token)
+  if (!user?.id) return { error: jsonRes(401, { error: 'Invalid or expired token' }) }
+  if (ADMIN_EMAILS.includes((user.email || '').toLowerCase())) return { user }
+  const { plan } = await resolveEntitlement(user)
+  if (!BROADSIDE_PLANS.includes(plan)) {
+    return { error: jsonRes(403, { error: 'Broadside is included with paid Badger Board plans. Upgrade to unlock it.' }) }
+  }
+  return { user }
+}
+
+/** Same durable limiter as _rate-limit.js (bump_rate_limit RPC), fetch-only.
+    Fails open by design — cost control, not auth. */
+async function rateLimitFetch(userId) {
+  const limits = { perMinute: 40, perDay: 800 }   // broadside-brain budget
+  try {
+    const now = Date.now()
+    const minuteStartMs = Math.floor(now / 60000) * 60000
+    const d = new Date(now)
+    const dayStartMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/bump_rate_limit`, {
+      method: 'POST',
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        p_user_id: userId,
+        p_endpoint: 'broadside-brain',
+        p_minute_start: new Date(minuteStartMs).toISOString(),
+        p_day_start: new Date(dayStartMs).toISOString(),
+      }),
+    })
+    if (!res.ok) return null
+    const data = await res.json()
+    const row = Array.isArray(data) ? data[0] : data
+    if (!row) return null
+    if (row.day_count > limits.perDay) return jsonRes(429, { error: 'Daily limit for this feature reached. It resets at midnight UTC.' })
+    if (row.minute_count > limits.perMinute) return jsonRes(429, { error: 'Too many requests — please slow down a moment.' })
+    return null
+  } catch { return null }
+}
 
 const MODELS = {
   quality: 'claude-sonnet-5',
@@ -36,14 +95,14 @@ export default async (req) => {
   if (req.method === 'OPTIONS') return new Response('', { status: 204, headers: CORS })
   if (req.method !== 'POST')    return jsonRes(405, { error: 'Method not allowed' })
 
-  // Adapt the Fetch Request to the classic-event shape _shared expects
-  const event = { headers: { authorization: req.headers.get('authorization') || '' } }
-  const auth = await requireBroadside(event)
-  if (auth.errorResponse) return jsonRes(auth.errorResponse.statusCode, JSON.parse(auth.errorResponse.body))
+  const authHeader = req.headers.get('authorization') || ''
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+  const auth = await requireBroadsideFetch(token)
+  if (auth.error) return auth.error
   const { user } = auth
 
-  const limited = await enforceRateLimit(user.id, 'broadside-brain', {})
-  if (limited) return jsonRes(429, JSON.parse(limited.body))
+  const limited = await rateLimitFetch(user.id)
+  if (limited) return limited
 
   if (!process.env.ANTHROPIC_API_KEY) return jsonRes(503, { error: 'brain-not-configured' })
 
