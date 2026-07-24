@@ -14,9 +14,22 @@ import { useAuth } from '../contexts/AuthContext'
 import LoadingBar from '../components/LoadingBar'
 import SearchableSelect from '../components/SearchableSelect'
 
+// Categorical palette — validated (dataviz six checks, light surface):
+// R red / D blue / I amber / Other teal; Undecided is a deliberate neutral,
+// and every slice is direct-labeled in the ranking beside the donut.
 const PARTY_COLOR = {
-  Republican: '#B91C1C', Democrat: '#1D4ED8', Independent: '#7C3AED',
-  Other: '#64748B', None: '#94A3B8',
+  Republican: '#B91C1C', Democrat: '#1D4ED8', Independent: '#B45309',
+  Other: '#0D9488', None: '#94A3B8',
+}
+
+// shade steps for same-party primary fields (rank order, dark → light)
+function shadeFor(hex, i, n) {
+  if (n <= 1) return hex
+  const f = 1 - (i / Math.max(1, n - 1)) * 0.52   // 1 → 0.48
+  const c = parseInt(hex.slice(1), 16)
+  const ch = (v) => Math.round(v * f + 246 * (1 - f))
+  const r = ch((c >> 16) & 255), g = ch((c >> 8) & 255), b = ch(c & 255)
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`
 }
 const BAND_STYLE = {
   high:     { label: 'High confidence',     cls: 'bg-green-100 text-green-800' },
@@ -37,6 +50,116 @@ const AiTag = () => (
     <Sparkles style={{ width: 9, height: 9 }} /> AI-Estimated
   </span>
 )
+
+// ── Animated vote-share donut (v1.24.2) ─────────────────────────────────────
+// A sweep-in donut with hover focus and a staggered ranked legend beside it.
+// Respects prefers-reduced-motion (jumps straight to the final state).
+function useAnimProgress(key, dur = 1100) {
+  const [t, setT] = useState(0)
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) { setT(1); return }
+    let raf, start
+    const step = (ts) => {
+      if (start === undefined) start = ts
+      const p = Math.min(1, (ts - start) / dur)
+      setT(1 - Math.pow(1 - p, 3))            // ease-out cubic
+      if (p < 1) raf = requestAnimationFrame(step)
+    }
+    setT(0)
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [key, dur])
+  return t
+}
+
+function DonutChart({ slices, t, hover, setHover, centerTop, centerBottom }) {
+  const cx = 90, cy = 90, r = 64, stroke = 26
+  const C = 2 * Math.PI * r
+  const total = slices.reduce((a, x) => a + (x.pct || 0), 0) || 100
+  const GAP = 2.5                              // surface gap between slices
+  let acc = 0
+  const segs = slices.map((x, i) => { const start = acc / total; acc += (x.pct || 0); return { ...x, start, frac: (x.pct || 0) / total, i } })
+  const hovered = hover != null ? segs[hover] : null
+  return (
+    <svg viewBox="0 0 180 180" className="w-40 h-40 sm:w-44 sm:h-44 flex-shrink-0 select-none" role="img" aria-label="Vote share projection">
+      <g transform="rotate(-90 90 90)">
+        {segs.map(seg => {
+          const sweep = Math.max(0, Math.min(seg.frac, t - seg.start))   // clockwise wipe
+          const len = Math.max(0, sweep * C - GAP)
+          if (len <= 0) return null
+          const dim = hover != null && hover !== seg.i
+          return (
+            <circle key={seg.i} cx={cx} cy={cy} r={r} fill="none"
+              stroke={seg.color}
+              strokeWidth={hover === seg.i ? stroke + 6 : stroke}
+              strokeDasharray={`${len} ${Math.max(1, C - len)}`}
+              strokeDashoffset={-(seg.start * C) - GAP / 2}
+              opacity={dim ? 0.3 : 1}
+              style={{ transition: 'stroke-width .18s ease, opacity .18s ease', cursor: 'pointer' }}
+              onMouseEnter={() => setHover(seg.i)}
+              onMouseLeave={() => setHover(null)}
+            />
+          )
+        })}
+      </g>
+      <text x="90" y="86" textAnchor="middle" style={{ font: '800 21px system-ui, sans-serif', fill: '#111827', opacity: Math.min(1, t * 1.6) }}>
+        {hovered ? `${Math.round(hovered.pct)}%` : centerTop}
+      </text>
+      <text x="90" y="104" textAnchor="middle" style={{ font: '700 9px system-ui, sans-serif', fill: '#9CA3AF', letterSpacing: '.07em', opacity: Math.min(1, t * 1.6) }}>
+        {(hovered ? hovered.label : centerBottom || '').toUpperCase().slice(0, 24)}
+      </text>
+    </svg>
+  )
+}
+
+function DonutRanking({ slices, t, hover, setHover }) {
+  let rank = 0
+  return (
+    <div className="flex-1 min-w-0 space-y-1.5 w-full">
+      {slices.map((x, i) => {
+        const isUnd = /undecided/i.test(x.label)
+        if (!isUnd) rank += 1
+        const shown = t > 0.1 + i * 0.09
+        const active = hover === i
+        return (
+          <div key={i}
+            onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
+            className={`flex items-center gap-2.5 rounded-lg px-2 py-1.5 -mx-2 cursor-pointer ${active ? 'bg-gray-50' : ''}`}
+            style={{
+              opacity: shown ? (hover != null && !active ? 0.4 : 1) : 0,
+              transform: shown ? 'translateX(0)' : 'translateX(14px)',
+              transition: 'opacity .45s ease, transform .45s ease, background .15s ease',
+            }}>
+            {isUnd
+              ? <span className="w-5 h-5 flex-shrink-0" />
+              : <span className="w-5 h-5 rounded-md text-[10px] font-black flex items-center justify-center flex-shrink-0 bg-gray-900 text-white">{rank}</span>}
+            <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: x.color }} />
+            <span className={`text-sm truncate ${isUnd ? 'text-gray-400 font-semibold' : 'font-bold text-gray-800'}`}>
+              {x.label}
+              {x.party && x.party !== 'None' && <span className="text-[10px] font-semibold text-gray-400 ml-1.5">{x.party}</span>}
+            </span>
+            <span className="ml-auto pl-2 text-sm font-black tabular-nums text-gray-900">{Math.round(x.pct * t)}%</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function DonutGroup({ slices, animKey }) {
+  const [hover, setHover] = useState(null)
+  const t = useAnimProgress(animKey)
+  const leader = slices.find(x => !/undecided/i.test(x.label)) || slices[0]
+  const leadName = leader ? (leader.label.includes('(') ? leader.label.split('(')[0] : leader.label).trim().split(/\s+/).slice(-1)[0] : ''
+  return (
+    <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-7">
+      <DonutChart slices={slices} t={t} hover={hover} setHover={setHover}
+        centerTop={leader ? `${Math.round(leader.pct * t)}%` : ''}
+        centerBottom={leader ? `${leadName} leads` : ''} />
+      <DonutRanking slices={slices} t={t} hover={hover} setHover={setHover} />
+    </div>
+  )
+}
 
 export default function Polling() {
   const { user } = useAuth()
@@ -252,32 +375,31 @@ export default function Polling() {
             </div>
           </div>
 
-          {/* Vote share — primaries segregated by party until the primary is
-              decided; general head-to-head once nominees are set (v1.23) */}
+          {/* Vote share — animated donut with ranked legend (v1.24.2).
+              Primaries segregated per party until decided; general
+              head-to-head once nominees are set. */}
           {(() => {
             const raw = snapshot.vote_share
             const vs = Array.isArray(raw) ? { phase: 'general', general: raw, primaries: [] } : (raw || { phase: 'general', general: [], primaries: [] })
             const isPrimary = vs.phase === 'primary' && (vs.primaries || []).length > 0
             const general = vs.general || []
-
-            const Bars = ({ rows, colorFor }) => (
-              <div className="space-y-3">
-                {rows.map((v, i) => (
-                  <div key={i}>
-                    <div className="flex items-baseline justify-between mb-1">
-                      <span className="text-sm font-bold text-gray-800">
-                        {v.candidate}
-                        {v.party && v.party !== 'None' && <span className="text-xs font-semibold text-gray-400 ml-2">{v.party}</span>}
-                      </span>
-                      <span className="text-sm font-black tabular-nums" style={{ color: colorFor(v) }}>{v.pct}%</span>
-                    </div>
-                    <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
-                      <div className="h-full rounded-full" style={{ width: `${Math.min(100, v.pct)}%`, background: colorFor(v) }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )
+            const sortSlices = (rows) => {
+              const und = rows.filter(r => /undecided/i.test(r.candidate))
+              const rest = rows.filter(r => !/undecided/i.test(r.candidate)).sort((a, b) => b.pct - a.pct)
+              return [...rest, ...und]
+            }
+            const primarySlices = (p) => {
+              const rows = sortSlices(p.candidates)
+              const named = rows.filter(r => !/undecided/i.test(r.candidate))
+              return rows.map(r => /undecided/i.test(r.candidate)
+                ? { label: 'Undecided', pct: r.pct, color: PARTY_COLOR.None }
+                : { label: r.candidate, pct: r.pct, color: shadeFor(PARTY_COLOR[p.party] || PARTY_COLOR.Other, named.indexOf(r), named.length) })
+            }
+            const generalSlices = sortSlices(general).map(r => ({
+              label: r.candidate, party: /undecided/i.test(r.candidate) ? null : r.party, pct: r.pct,
+              color: /undecided/i.test(r.candidate) ? PARTY_COLOR.None : (PARTY_COLOR[r.party] || PARTY_COLOR.Other),
+            }))
+            const baseKey = `${district}-${snapshot.generated_at || ''}`
 
             return (
               <div className="card">
@@ -285,37 +407,36 @@ export default function Polling() {
                   <h2 className="text-sm font-bold text-gray-900">Vote-Share Projection</h2>
                   <AiTag />
                 </div>
-                <p className="text-xs text-gray-500 mb-4">
+                <p className="text-xs text-gray-500 mb-5">
                   {isPrimary ? 'Primary fields shown per party — candidates only compete within their own primary' : 'If the election were held today'}
                 </p>
 
                 {isPrimary && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-2">
                     {vs.primaries.map((p, i) => (
-                      <div key={i} className="rounded-xl border p-4" style={{ borderColor: `${PARTY_COLOR[p.party] || '#64748B'}40`, background: `${PARTY_COLOR[p.party] || '#64748B'}08` }}>
-                        <p className="text-xs font-extrabold uppercase tracking-wider mb-3" style={{ color: PARTY_COLOR[p.party] || '#334155' }}>
+                      <div key={i} className="rounded-xl border p-4 sm:p-5" style={{ borderColor: `${PARTY_COLOR[p.party] || '#64748B'}40`, background: `${PARTY_COLOR[p.party] || '#64748B'}08` }}>
+                        <p className="text-xs font-extrabold uppercase tracking-wider mb-4" style={{ color: PARTY_COLOR[p.party] || '#334155' }}>
                           {p.party} primary
                         </p>
-                        <Bars
-                          rows={p.candidates}
-                          colorFor={(v) => v.candidate === 'Undecided' ? '#94A3B8' : (PARTY_COLOR[p.party] || '#64748B')}
-                        />
+                        <DonutGroup slices={primarySlices(p)} animKey={`${baseKey}-p-${p.party}`} />
                       </div>
                     ))}
                   </div>
                 )}
 
-                {general.length > 0 && (
-                  <div className={isPrimary ? 'mt-4 pt-4 border-t border-gray-100' : ''}>
+                {generalSlices.length > 0 && (
+                  <div className={isPrimary ? 'mt-5 pt-5 border-t border-gray-100' : ''}>
                     {isPrimary && (
-                      <p className="text-xs font-extrabold uppercase tracking-wider text-gray-500 mb-3">November general outlook</p>
+                      <p className="text-xs font-extrabold uppercase tracking-wider text-gray-500 mb-4">November general outlook</p>
                     )}
-                    <Bars rows={general} colorFor={(v) => PARTY_COLOR[v.party] || '#64748B'} />
+                    <div className={isPrimary ? 'max-w-xl' : 'max-w-2xl'}>
+                      <DonutGroup slices={generalSlices} animKey={`${baseKey}-g`} />
+                    </div>
                   </div>
                 )}
 
                 {band && (
-                  <p className="text-[11px] text-gray-400 font-semibold mt-4">
+                  <p className="text-[11px] text-gray-400 font-semibold mt-5">
                     Margin ±{snapshot.confidence.margin_pts} pts ({band.label.toLowerCase()}) applies to every figure above.
                   </p>
                 )}
