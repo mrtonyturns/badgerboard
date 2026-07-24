@@ -394,24 +394,48 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
     setSelected(newSelected)
   }
 
-  const handleBulkAction = async (action) => {
-    if (!window.confirm(`Are you sure you want to ${action} for ${selected.size} user(s)?`)) return
+  // Audit fix (#19): every handler below used to call actions the backend
+  // never implemented (bulk_*, update_user_email, change_user_password,
+  // lock_payment, get_user_activity, add_user_note) or send params the backend
+  // doesn't read (send_reset with user_id instead of email) — all of them
+  // 400'd while the UI toasted success. Aligned with the implemented actions:
+  // update_user / send_reset(email) / toggle_payment(user_id, lock) /
+  // user_activity / add_note.
 
+  const emailForUser = (userId) => users.find(u => u.id === userId)?.email || null
+
+  const handleBulkAction = async (action) => {
+    if (!window.confirm(`Are you sure you want to ${action.replace('_', ' ')} for ${selected.size} user(s)?`)) return
+
+    const ids = Array.from(selected)
+    let ok = 0, failed = 0
+    for (const uid of ids) {
+      try {
+        if (action === 'lock_payment')        await apiCall('toggle_payment', { user_id: uid, lock: true })
+        else if (action === 'unlock_payment') await apiCall('toggle_payment', { user_id: uid, lock: false })
+        else if (action === 'send_reset') {
+          const email = emailForUser(uid)
+          if (!email) throw new Error('no email')
+          await apiCall('send_reset', { email })
+        } else throw new Error(`Unknown bulk action: ${action}`)
+        ok++
+      } catch (err) {
+        console.error(`[bulk ${action}] ${uid}:`, err)
+        failed++
+      }
+    }
+    setSelected(new Set())
     try {
-      await apiCall(`bulk_${action}`, { user_ids: Array.from(selected) })
-      setSelected(new Set())
       const data = await apiCall('users')
       setUsers(Array.isArray(data) ? data : (data?.users || []))
-      showToast(`Bulk action completed`)
-    } catch (err) {
-      console.error(err)
-      showToast('Action failed', 'error')
-    }
+    } catch {}
+    if (failed) showToast(`${ok} succeeded, ${failed} FAILED — check console`, 'error')
+    else showToast(`Bulk action completed for ${ok} user(s)`)
   }
 
   const handleEditEmail = async (userId, newEmail) => {
     try {
-      await apiCall('update_user_email', { user_id: userId, new_email: newEmail })
+      await apiCall('update_user', { user_id: userId, email: newEmail })
       const data = await apiCall('users')
       setUsers(Array.isArray(data) ? data : (data?.users || []))
       setModals({ ...modals, editEmail: null })
@@ -424,7 +448,7 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
 
   const handleChangePassword = async (userId, newPassword) => {
     try {
-      await apiCall('change_user_password', { user_id: userId, new_password: newPassword })
+      await apiCall('update_user', { user_id: userId, password: newPassword })
       setModals({ ...modals, changePassword: null })
       showToast('Password changed')
     } catch (err) {
@@ -436,7 +460,9 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
   const handleSendReset = async (userId) => {
     if (!window.confirm('Send password reset email?')) return
     try {
-      await apiCall('send_reset', { user_id: userId })
+      const email = emailForUser(userId)
+      if (!email) throw new Error('User email not found')
+      await apiCall('send_reset', { email })
       showToast('Reset email sent')
     } catch (err) {
       console.error(err)
@@ -447,7 +473,7 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
   const handleTogglePaymentLock = async (userId, isLocked) => {
     if (!window.confirm(`${isLocked ? 'Unlock' : 'Lock'} payment for this user?`)) return
     try {
-      await apiCall(isLocked ? 'unlock_payment' : 'lock_payment', { user_id: userId })
+      await apiCall('toggle_payment', { user_id: userId, lock: !isLocked })
       const data = await apiCall('users')
       setUsers(Array.isArray(data) ? data : (data?.users || []))
       showToast(`Payment ${isLocked ? 'unlocked' : 'locked'}`)
@@ -463,8 +489,9 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
     } else {
       try {
         if (!activityData[userId]) {
-          const data = await apiCall('get_user_activity', { user_id: userId })
-          setActivityData({ ...activityData, [userId]: (Array.isArray(data) ? data : []).slice(0, 20) })
+          const data = await apiCall('user_activity', { user_id: userId })
+          const rows = Array.isArray(data) ? data : (data?.activity || [])
+          setActivityData({ ...activityData, [userId]: rows.slice(0, 20) })
         }
         setExpandedActivity(userId)
       } catch (err) {
@@ -476,7 +503,7 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
 
   const handleAddNote = async (userId, noteText) => {
     try {
-      await apiCall('add_user_note', { user_id: userId, note: noteText })
+      await apiCall('add_note', { user_id: userId, note: noteText })
       setModals({ ...modals, notes: null })
       showToast('Note added')
     } catch (err) {
@@ -2185,9 +2212,10 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
 
   const handleToggleActive = async (announcementId, isActive) => {
     try {
-      await apiCall('toggle_announcement', {
-        announcement_id: announcementId,
-        active: !isActive,
+      // Audit fix (#19): backend action is update_announcement with {id, is_active}
+      await apiCall('update_announcement', {
+        id: announcementId,
+        is_active: !isActive,
       })
       const data = await apiCall('announcements')
       setAnnouncements(Array.isArray(data) ? data : (data?.announcements || []))
@@ -2202,7 +2230,7 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
     if (!window.confirm('Delete this announcement?')) return
 
     try {
-      await apiCall('delete_announcement', { announcement_id: announcementId })
+      await apiCall('delete_announcement', { id: announcementId })
       const data = await apiCall('announcements')
       setAnnouncements(Array.isArray(data) ? data : (data?.announcements || []))
       showToast('Announcement deleted')
@@ -2316,14 +2344,14 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
               </span>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => handleToggleActive(announcement.id, announcement.active)}
+                  onClick={() => handleToggleActive(announcement.id, announcement.is_active)}
                   className={`px-3 py-1 text-xs rounded font-medium transition ${
-                    announcement.active
+                    announcement.is_active
                       ? 'bg-green-100 text-green-800 hover:bg-green-200'
                       : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
                   }`}
                 >
-                  {announcement.active ? 'Active' : 'Inactive'}
+                  {announcement.is_active ? 'Active' : 'Inactive'}
                 </button>
               </div>
             </div>

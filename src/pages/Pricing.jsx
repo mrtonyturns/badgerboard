@@ -391,6 +391,32 @@ export default function Pricing() {
   const userPlan          = user ? getUserPlan(user)     : null
   const userPlanType      = user ? getUserPlanType(user) : null
   const userBracket       = user ? getUserBracket(user)  : null
+  const userBilling       = (user?.app_metadata?.billing) || 'monthly'
+
+  // Audit fix (#12): "current" must mean plan AND bracket AND billing period
+  // all match. The old plan-key-only check disabled the CTA for bracket
+  // upgrades and billing switches — the only self-serve path to
+  // update-subscription — showing subscribers a dead "Current plan" button.
+  const BILLING_LABELS = { monthly: 'monthly', quarterly: 'quarterly', semiannual: 'semi-annual', annual: 'annual' }
+  const candidateCardState = (pk, selBilling) => {
+    const samePlan = userPlan === pk && userPlanType === 'candidate'
+    if (!samePlan) return { current: false, ctaLabel: null }
+    if (pk === 'scout') return { current: true, ctaLabel: null }
+    const current = selBilling === userBilling
+    return { current, ctaLabel: current ? null : `Switch to ${BILLING_LABELS[selBilling] || selBilling} billing` }
+  }
+  const actionCardState = (pk, selBracket, selBilling) => {
+    const samePlan = userPlan === pk && userPlanType === 'action'
+    if (!samePlan) return { current: false, ctaLabel: null }
+    const current = selBracket === (userBracket || 'b1') && selBilling === userBilling
+    if (current) return { current: true, ctaLabel: null }
+    return {
+      current: false,
+      ctaLabel: selBracket !== (userBracket || 'b1')
+        ? 'Change bracket'
+        : `Switch to ${BILLING_LABELS[selBilling] || selBilling} billing`,
+    }
+  }
 
   const [tab,             setTab]             = useState(userPlanType === 'action' ? 'action' : 'candidate')
   const [billing,         setBilling]         = useState('monthly')
@@ -476,7 +502,7 @@ export default function Pricing() {
   const PlanCard = ({
     planKey, name, basePrice, highlighted,
     features, current, onSelect, note, isEnt, loading,
-    profilesPerMo, userSeats,
+    profilesPerMo, userSeats, ctaLabel,
   }) => {
     const effectivePrice = basePrice != null ? cEffective(basePrice) : (isEnt ? null : aEffective(planKey))
     const bSub = basePrice != null
@@ -563,6 +589,7 @@ export default function Pricing() {
             : isCurrent   ? 'Current plan'
             : isEnt       ? 'Contact sales'
             : planKey === 'scout' ? 'Get started free'
+            : ctaLabel    ? ctaLabel
             : user        ? 'Switch plan'
             : 'Get started'}
         </button>
@@ -681,6 +708,7 @@ export default function Pricing() {
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
             {CANDIDATE_PLAN_ORDER.map(pk => {
               const plan = CANDIDATE_PLAN_CONFIG[pk]
+              const cardState = candidateCardState(pk, billing)
               return (
                 <PlanCard
                   key={pk}
@@ -689,7 +717,8 @@ export default function Pricing() {
                   basePrice={plan.monthlyPrice}
                   highlighted={pk === 'c_active'}
                   features={C_CARD_FEATURES[pk]}
-                  current={userPlan === pk && userPlanType === 'candidate'}
+                  current={cardState.current}
+                  ctaLabel={cardState.ctaLabel}
                   loading={checkoutLoading}
                   onSelect={(key) => checkout({ plan: key, billing }, key)}
                   note={pk === 'scout' ? 'Includes a lite profile — biography and political record sections visible. Game Plan, Compare, full 14-section profiles, and CSV import unlock on paid plans.' : null}
@@ -764,7 +793,7 @@ export default function Pricing() {
               label:       CANDIDATE_PLAN_CONFIG[pk].name,
               price:       pk === 'scout' ? 'Free' : `$${cEffective(CANDIDATE_PLAN_CONFIG[pk].monthlyPrice)}`,
               highlighted: pk === 'c_active',
-              current:     userPlan === pk && userPlanType === 'candidate',
+              current:     candidateCardState(pk, billing).current,
               loading:     checkoutLoading,
               isEnt:       false,
               onSelect:    (key) => checkout({ plan: key, billing }, key),
@@ -815,7 +844,8 @@ export default function Pricing() {
                   basePrice={null}
                   highlighted={pk === 'a_active'}
                   features={A_CARD_FEATURES[pk]}
-                  current={userPlan === pk && userPlanType === 'action'}
+                  current={actionCardState(pk, bracket, billing).current}
+                  ctaLabel={actionCardState(pk, bracket, billing).ctaLabel}
                   loading={checkoutLoading}
                   isEnt={bracket === 'ent'}
                   onSelect={(key) => checkout({ plan: key, bracket, billing }, key)}
@@ -956,7 +986,7 @@ export default function Pricing() {
                 label:       ACTION_PLAN_CONFIG[pk].name,
                 price:       bracket === 'ent' ? 'Custom' : eff != null ? `$${eff}` : '—',
                 highlighted: pk === 'a_active',
-                current:     userPlan === pk && userPlanType === 'action',
+                current:     actionCardState(pk, bracket, billing).current,
                 loading:     checkoutLoading,
                 isEnt:       bracket === 'ent',
                 onSelect:    (key) => checkout({ plan: key, bracket, billing }, key),

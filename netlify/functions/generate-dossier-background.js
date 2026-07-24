@@ -29,6 +29,41 @@ function sanitize(val, maxLen = 200) {
     .trim()
 }
 
+// ─── Internal trigger support (audit fix #11) ────────────────────────────────
+// The weekly auto-regenerate cron cannot present a user JWT (GoTrue rejects a
+// raw service-role key), so it authenticates with the shared trigger secret.
+const nodeCrypto = require('crypto')
+function safeEqual(a, b) {
+  const A = nodeCrypto.createHash('sha256').update(String(a ?? '')).digest()
+  const B = nodeCrypto.createHash('sha256').update(String(b ?? '')).digest()
+  return nodeCrypto.timingSafeEqual(A, B)
+}
+
+// Resolve the OWNING user of a candidate (candidates.created_by → auth user)
+// so internally-triggered regenerations gate Sections 6/13 by the owner's real
+// plan instead of falling back to the Scout teaser.
+async function getCandidateOwner(candidateId) {
+  try {
+    if (!candidateId) return null
+    const cRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/candidates?id=eq.${encodeURIComponent(candidateId)}&select=created_by`,
+      { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
+    )
+    if (!cRes.ok) return null
+    const rows = await cRes.json()
+    const ownerId = rows?.[0]?.created_by
+    if (!ownerId) return null
+    const uRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${ownerId}`, {
+      headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
+    })
+    if (!uRes.ok) return null
+    return await uRes.json()
+  } catch (e) {
+    console.warn('[dossier-bg] getCandidateOwner failed:', e.message)
+    return null
+  }
+}
+
 // ─── Verify Supabase JWT and return user ──────────────────────────────────────
 async function verifyUser(authHeader) {
   if (!authHeader?.startsWith('Bearer ')) return null
@@ -663,27 +698,55 @@ exports.handler = async (event) => {
   // body.auth_header (forwarded by generate-dossier.js — Netlify background
   // invocations don't carry the client's headers). Either way it MUST verify;
   // unauthenticated callers are rejected before any LLM spend.
-  const authHeader = event.headers?.authorization || event.headers?.Authorization
-    || (typeof body.auth_header === 'string' ? body.auth_header : null)
-  const user = await verifyUser(authHeader)
-  if (!user) {
-    return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authenticated' }) }
+  // ── Internal trigger path (audit fix #11) ──────────────────────────────────
+  // The weekly auto-regenerate cron used to authenticate with the raw
+  // service-role key, which verifyUser() rejects — every run 401'd (invisibly,
+  // because Netlify answers background invocations with 202 before the handler
+  // runs) and the paid weekly refresh was silently dead since July 5. Internal
+  // calls now carry the shared trigger secret; section gating resolves from
+  // the candidate's OWNER, and quota/rate-limit/credits are skipped (the cron
+  // caps its own batch and saves with generated_by = null).
+  const internalSecret = process.env.ADMIN_TRIGGER_SECRET
+  const providedInternal = event.headers?.['x-internal-trigger'] || event.headers?.['X-Internal-Trigger']
+    || (typeof body.internal_trigger === 'string' ? body.internal_trigger : null)
+  const isInternalTrigger = Boolean(internalSecret && providedInternal && safeEqual(providedInternal, internalSecret))
+
+  let user = null
+  if (isInternalTrigger) {
+    user = await getCandidateOwner(body.candidate_id)
+    if (!user) console.warn('[dossier-bg] Internal trigger: no owner resolved — gating by top plan (monitored candidate)')
+  } else {
+    const authHeader = event.headers?.authorization || event.headers?.Authorization
+      || (typeof body.auth_header === 'string' ? body.auth_header : null)
+    user = await verifyUser(authHeader)
+    if (!user) {
+      return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authenticated' }) }
+    }
   }
-  const entitlement = await getUserEntitlement(user)
+
+  // Monitoring/weekly refresh is a paid feature — if the owner can't be
+  // resolved on an internal run, keep the previously-generated depth rather
+  // than overwriting a paying user's dossier with the Scout upsell teaser.
+  const entitlement = isInternalTrigger && !user
+    ? { plan: 'a_campaign', bracket: 'ent' }
+    : await getUserEntitlement(user)
   const userPlan = toLegacyBucket(entitlement.plan)
   const canViewSection6 = SECTION6_TIERS.includes(userPlan)
-  const isAdminCaller = ADMIN_EMAILS.includes(user.email?.toLowerCase())
+  const isAdminCaller = !isInternalTrigger && ADMIN_EMAILS.includes(user?.email?.toLowerCase())
 
   // ── Durable per-user rate limit (defense in depth if invoked directly) ─────
-  const limited = await enforceRateLimit(user.id, 'generate-dossier-background', headers)
-  if (limited) return limited
+  if (!isInternalTrigger) {
+    const limited = await enforceRateLimit(user.id, 'generate-dossier-background', headers)
+    if (limited) return limited
+  }
 
   // ── Audit fix (#1): server-side monthly profile-limit enforcement ──────────
   // Previously only the client checked the limit — a direct POST to this
   // endpoint generated unlimited profiles (each a multi-dollar LLM spend) on
   // any plan, including free Scout. Enforce base allotment + banked credits
-  // here, before any research queries fire.
-  if (!isAdminCaller) {
+  // here, before any research queries fire. Internal (cron) runs are exempt:
+  // they save with generated_by = null and never count toward the quota.
+  if (!isAdminCaller && !isInternalTrigger) {
     try {
       const base = getMonthlyBase(entitlement.plan, entitlement.bracket)
       if (Number.isFinite(base)) {
@@ -1382,7 +1445,10 @@ Rules:
 - status_notes: required if verified_status is not null. One sentence citing the specific evidence (source + date).`
 
   const { candidate_id } = body
-  const user_id = user?.id || null  // Use verified user ID, not body (frontend doesn't send it)
+  // Verified user ID, never from the body. Internal (cron) runs save with
+  // null so auto-regenerated dossiers stay excluded from the monthly quota
+  // count and never consume purchased credits.
+  const user_id = isInternalTrigger ? null : (user?.id || null)
 
   try {
     const perplexityCount = [perplexityNews, identityData, financeData, politicalData, affiliationsData, perplexityIncumbent, socialMediaData].filter(Boolean).length
@@ -1518,7 +1584,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     // ─── Dossier-ready notification email ─────────────────────────────────────
     try {
       const prefs = await getNotificationPrefs(user_id)
-      if (prefs.dossier_ready && user?.email) {
+      if (user_id && prefs.dossier_ready && user?.email) {
         const officeNote = officeLine && officeLine !== 'Unknown Office' ? ` (${officeLine})` : ''
         await sendEmail({
           to: user.email,

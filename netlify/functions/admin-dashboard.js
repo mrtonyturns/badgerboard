@@ -246,8 +246,12 @@ async function togglePayment(userId, lock) {
   if (!res.ok) throw new Error('Failed to fetch user');
   const user = await res.json();
 
+  // Audit fix (#19): payment_status must live in APP metadata — every reader
+  // (AuthContext, tiers.js, payment-webhook, stripe-webhook) checks
+  // app_metadata.payment_status. The old user_metadata write made admin
+  // lock/unlock a silent no-op, and user_metadata is end-user writable anyway.
   const updatedMetadata = {
-    ...user.user_metadata,
+    ...user.app_metadata,
     payment_status: lock ? 'past_due' : 'active',
   };
 
@@ -260,7 +264,7 @@ async function togglePayment(userId, lock) {
         Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ user_metadata: updatedMetadata }),
+      body: JSON.stringify({ app_metadata: updatedMetadata }),
     }
   );
   if (!updateRes.ok) throw new Error('Failed to update payment status');

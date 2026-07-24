@@ -128,11 +128,19 @@ export const handler = async (event) => {
   console.log(`[auto-regen] Queuing ${batch.length} of ${toRegenerate.length} stale candidates for regeneration`)
 
   // ── 4. Trigger background dossier generation for each ───────────────────────
-  // Calling generate-dossier-background with the service key as auth means verifyUser()
-  // returns null → generated_by is saved as null → dossier is excluded from monthly quota
-  // counts (which filter generated_by IS NOT NULL). No quota tokens consumed.
-  //
-  // we use the service key directly (it is accepted as a valid JWT by the auth check in that function).
+  // Audit fix (#11): the old code sent the raw service-role key as a Bearer
+  // token, which verifyUser() (GoTrue) REJECTS — every trigger 401'd inside the
+  // background handler while the platform-level 202 made this cron log
+  // "queued ✓". The paid weekly refresh was silently dead. Internal triggers
+  // now authenticate with ADMIN_TRIGGER_SECRET (sent in both header and body
+  // for robustness); the background function resolves the candidate OWNER's
+  // plan for section gating and saves with generated_by = null so no quota or
+  // credits are consumed.
+  const INTERNAL_SECRET = process.env.ADMIN_TRIGGER_SECRET
+  if (!INTERNAL_SECRET) {
+    console.error('[auto-regen] ADMIN_TRIGGER_SECRET is not set — internal triggers would 401. Aborting.')
+    return { statusCode: 500, headers, body: JSON.stringify({ error: 'ADMIN_TRIGGER_SECRET not configured' }) }
+  }
   const results = []
 
   for (const candidate of batch) {
@@ -144,12 +152,13 @@ export const handler = async (event) => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+            'x-internal-trigger': INTERNAL_SECRET,
           },
           body: JSON.stringify({
             candidate_id: candidate.id,
             candidate: candidate,
             auto_regenerated: true,
+            internal_trigger: INTERNAL_SECRET,
           }),
         }
       )

@@ -9,7 +9,7 @@ import {
   BarChart2, Plus, Edit2, Trash2, Trophy, ChevronDown, ChevronUp,
   CheckCircle2, X, MapPin, Users, Radio, ExternalLink, AlertTriangle,
 } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import { supabase, adminElections } from '../lib/supabase'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const OFFICE_TYPES = [
@@ -147,9 +147,12 @@ export default function ElectionResultsAdmin({ showToast }) {
       seats:           parseInt(contestForm.seats) || 1,
     }
 
+    // Audit fix (#13): RLS blocks direct client writes to election tables —
+    // updates silently matched 0 rows. All writes now go through the
+    // admin-verified service-role function, which checks affected rows.
     const { error } = contestModal === 'add'
-      ? await supabase.from('election_contests').insert(payload)
-      : await supabase.from('election_contests').update(payload).eq('id', contestModal.id)
+      ? await adminElections('save_contest', { data: payload })
+      : await adminElections('save_contest', { id: contestModal.id, data: payload })
 
     setSaving(false)
     if (error) { showToast('Save failed: ' + error.message, 'error'); return }
@@ -161,7 +164,7 @@ export default function ElectionResultsAdmin({ showToast }) {
   const deleteContest = async (id) => {
     if (!window.confirm('Delete this contest and all its candidate results?')) return
     setDeleting(id)
-    const { error } = await supabase.from('election_contests').delete().eq('id', id)
+    const { error } = await adminElections('delete_contest', { id })
     setDeleting(null)
     if (error) { showToast('Delete failed: ' + error.message, 'error'); return }
     showToast('Contest deleted')
@@ -200,27 +203,13 @@ export default function ElectionResultsAdmin({ showToast }) {
       declared:       resultForm.declared,
     }
 
-    const { data: savedRow, error } = !resultModal.result
-      ? await supabase.from('election_results').insert(payload).select().single()
-      : await supabase.from('election_results').update(payload).eq('id', resultModal.result.id).select().single()
+    // Audit fix (#13): service-role write; vote_pct recalculation for the whole
+    // contest happens server-side in the same action.
+    const { error } = !resultModal.result
+      ? await adminElections('save_result', { data: payload })
+      : await adminElections('save_result', { id: resultModal.result.id, data: payload })
 
     if (error) { setSaving(false); showToast('Save failed: ' + error.message, 'error'); return }
-
-    // Auto-recalculate vote_pct for all candidates in this contest
-    const { data: allRows } = await supabase
-      .from('election_results')
-      .select('id, votes')
-      .eq('contest_id', contestId)
-    const totalVotes = (allRows || []).reduce((s, r) => s + (r.votes || 0), 0)
-    if (totalVotes > 0 && allRows?.length) {
-      const pctResults = await Promise.allSettled(allRows.map(r =>
-        supabase.from('election_results').update({
-          vote_pct: parseFloat(((r.votes || 0) / totalVotes * 100).toFixed(1))
-        }).eq('id', r.id)
-      ))
-      const pctFailed = pctResults.filter(r => r.status === 'rejected' || r.value?.error).length
-      if (pctFailed) showToast(`${pctFailed} percentage update(s) failed — refresh and retry`, 'error')
-    }
 
     setSaving(false)
     showToast(!resultModal.result ? 'Candidate added' : 'Result updated')
@@ -231,7 +220,7 @@ export default function ElectionResultsAdmin({ showToast }) {
   const deleteResult = async (id) => {
     if (!window.confirm('Remove this candidate result?')) return
     setDeleting(id)
-    const { error } = await supabase.from('election_results').delete().eq('id', id)
+    const { error } = await adminElections('delete_result', { id })
     setDeleting(null)
     if (error) { showToast('Delete failed: ' + error.message, 'error'); return }
     showToast('Result removed')
@@ -248,48 +237,28 @@ export default function ElectionResultsAdmin({ showToast }) {
 
   const confirmCallRace = async () => {
     if (!callConfirm) return
-    const { contestId, candidateId, seats } = callConfirm
+    const { contestId, candidateId, candidateName, seats } = callConfirm
     const results = resultsMap[contestId] || []
-    // Mark this candidate as winner+declared; leave others untouched (multi-seat allows multiple winners)
-    await supabase.from('election_results').update({ winner: true, declared: true }).eq('id', candidateId)
-    // If this fills the last seat, optionally mark all remaining non-winners as declared=false, winner=false
-    const newWinnerCount = results.filter(r => r.declared || r.id === candidateId).length
+    // Audit fix (#13): the old direct update silently matched 0 rows under RLS
+    // — on election night "declared winner" toasted success while the live
+    // board never changed. Service-role write with affected-row verification;
+    // officeholder sync happens server-side in the same action.
+    const { error } = await adminElections('call_race', {
+      result_id: candidateId,
+      contest_id: contestId,
+      candidate_name: candidateName,
+    })
     setCallConfirm(null)
+    if (error) { showToast('Call failed: ' + error.message + ' — the board was NOT updated', 'error'); return }
+    const newWinnerCount = results.filter(r => r.declared || r.id === candidateId).length
     showToast(newWinnerCount >= seats ? `All ${seats} seat${seats > 1 ? 's' : ''} called` : 'Candidate declared winner')
     loadContests(selectedElection.id)
-
-    // Best-effort: keep offices.current_officeholder in sync so the Offices page
-    // "previous office holders" history always shows who currently holds the seat.
-    // Single-seat races only — multi-seat bodies don't map to one officeholder.
-    try {
-      if ((seats || 1) === 1) {
-        const contest = contests.find(c => c.id === contestId)
-        const winnerName = callConfirm.candidateName
-        if (contest?.office && winnerName) {
-          const { data: matches } = await supabase
-            .from('offices')
-            .select('id, name')
-            .ilike('name', `%${contest.office}%`)
-            .limit(2)
-          if (matches?.length === 1) {
-            await supabase.from('offices')
-              .update({ current_officeholder: winnerName })
-              .eq('id', matches[0].id)
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('[ElectionResultsAdmin] officeholder sync skipped:', err)
-    }
   }
 
   const uncallRace = async (contestId) => {
-    const results = resultsMap[contestId] || []
-    const unset = await Promise.allSettled(results.map(r =>
-      supabase.from('election_results').update({ winner: false, declared: false }).eq('id', r.id)
-    ))
-    const unsetFailed = unset.filter(r => r.status === 'rejected' || r.value?.error).length
-    showToast(unsetFailed ? `Race un-called with ${unsetFailed} failure(s) — refresh to verify` : 'Race un-called')
+    const { error } = await adminElections('uncall_race', { contest_id: contestId })
+    if (error) { showToast('Un-call failed: ' + error.message, 'error'); return }
+    showToast('Race un-called')
     loadContests(selectedElection.id)
   }
 
@@ -298,10 +267,7 @@ export default function ElectionResultsAdmin({ showToast }) {
 
   const updatePrecincts = async (contestId) => {
     const { rptg, total } = precEdit[contestId] || {}
-    const { error } = await supabase.from('election_contests').update({
-      precincts_rptg:  parseInt(rptg)  || 0,
-      precincts_total: parseInt(total) || 0,
-    }).eq('id', contestId)
+    const { error } = await adminElections('update_precincts', { contest_id: contestId, rptg, total })
     if (error) { showToast('Update failed: ' + error.message, 'error'); return }
     showToast('Precincts updated')
     loadContests(selectedElection.id)

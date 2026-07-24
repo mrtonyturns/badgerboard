@@ -105,13 +105,13 @@ async function retryInvoice(stripe, userId) {
   const customer = await findCustomer(stripe, email);
   if (!customer) throw new Error('Customer not found');
 
-  const invoices = await stripe.invoices.list({
-    customer: customer.id,
-    status: ['open', 'uncollectible'],
-    limit: 1,
-  });
-
-  const invoice = invoices.data[0];
+  // Audit fix (#19): Stripe's invoices.list takes a SINGLE status string —
+  // passing an array threw on every call, so "Retry invoice" never worked.
+  // Check 'open' first (retryable), then fall back to 'uncollectible'.
+  let invoice = (await stripe.invoices.list({ customer: customer.id, status: 'open', limit: 1 })).data[0]
+  if (!invoice) {
+    invoice = (await stripe.invoices.list({ customer: customer.id, status: 'uncollectible', limit: 1 })).data[0]
+  }
   if (!invoice) throw new Error('No open invoices found');
 
   await stripe.invoices.pay(invoice.id);
