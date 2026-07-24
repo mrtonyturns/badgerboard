@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation, Link } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, CalendarDays, Target, Users, ListChecks,
-  FileText, Settings, LogOut, Menu, X, ChevronRight, Bell,
+  FileText, Settings, LogOut, Menu, X, ChevronRight,
   User, CreditCard, Shield, ChevronDown, Tag, DoorOpen, UserCheck,
   ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink, Users2, Swords,
 } from 'lucide-react'
@@ -36,7 +36,7 @@ function OfflineBanner() {
     </div>
   )
 }
-import AnnouncementBanner from './AnnouncementBanner'
+import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
@@ -741,15 +741,8 @@ export default function Layout() {
             {/* Dossier generation status indicator */}
             <DossierStatusIndicator />
 
-            <button
-              type="button"
-              disabled
-              title="Notifications — coming soon"
-              aria-label="Notifications (coming soon)"
-              className="relative p-2 rounded-lg opacity-40 cursor-not-allowed"
-            >
-              <Bell className="w-4 h-4 text-gray-500" />
-            </button>
+            {/* v1.19.2: all announcements land here; success ones also pop up 10s */}
+            <NotificationCenter />
 
             {/* Profile dropdown */}
             <div className="relative" ref={profileRef}>
@@ -831,9 +824,6 @@ export default function Layout() {
             </div>
           </div>
         </header>
-
-        {/* Announcement banner (above page content) */}
-        <AnnouncementBanner />
 
         {/* Offline indicator */}
         <OfflineBanner />
