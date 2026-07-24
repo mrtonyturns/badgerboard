@@ -89,16 +89,16 @@ function buildEmailHtml(userFirst, entries, weekLabel) {
   }).join('')
 
   return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Weekly monitoring digest</title></head>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Weekly Active Monitoring digest</title></head>
 <body style="margin:0;padding:0;background:#f6f6f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;">
   <div style="display:none;max-height:0;overflow:hidden;">What happened with your monitored candidates this week</div>
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#f6f6f6;padding:26px 14px;"><tr><td align="center">
     <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
-      <tr><td style="background:#000000;padding:14px 34px;border-radius:10px 10px 0 0;">
-        <img src="${APP_URL}/badger-board-logo.png" alt="Badger Board" width="120" style="display:block;max-width:120px;height:auto;border:0;" />
+      <tr><td style="background-color:#0A1628;background:linear-gradient(135deg,#0A1628 0%,#16273f 55%,#1E3A5F 100%);padding:22px 34px;border-radius:10px 10px 0 0;" align="center">
+        <img src="${APP_URL}/badger-board-logo.png" alt="Badger Board" width="150" style="display:block;margin:0 auto;max-width:150px;height:auto;border:0;" />
       </td></tr>
       <tr><td style="padding:24px 34px 6px;">
-        <h1 style="margin:0 0 6px;font-size:19px;font-weight:800;color:#111827;">Your weekly monitoring digest</h1>
+        <h1 style="margin:0 0 6px;font-size:19px;font-weight:800;color:#111827;">Weekly Active Monitoring digest</h1>
         <p style="margin:0 0 22px;font-size:13.5px;color:#6b7280;line-height:1.6;">${userFirst ? `Hi ${esc(userFirst)} &mdash; here&rsquo;s` : 'Here&rsquo;s'} what happened with ${entries.length === 1 ? esc(entries[0].candidate.name) : `your ${entries.length} monitored candidates`} for the week of ${esc(weekLabel)}.</p>
         ${index}
         ${sections}
@@ -202,7 +202,7 @@ exports.handler = async (event) => {
       body: JSON.stringify({
         from: 'Badger Board <noreply@noreply.badgerboardwi.com>',  // Resend-verified domain (same as _email.js)
         to: email,
-        subject: `Weekly monitoring digest — ${entries.length === 1 ? entries[0].candidate.name : `${entries.length} candidates`} · ${weekLabel}`,
+        subject: `Weekly Active Monitoring digest — ${entries.length === 1 ? entries[0].candidate.name : `${entries.length} candidates`} · ${weekLabel}`,
         html,
       }),
     })
