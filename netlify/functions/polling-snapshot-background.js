@@ -533,7 +533,7 @@ function normalize100(rows) {
 // a quorum of models named them (which drops one model's hallucinated entrant
 // instead of diluting everyone else), and their number is the median of the
 // models that did — so one outlier estimate can no longer swing the ranking.
-function combineLists(lists, withParty) {
+function combineLists(lists, withParty, priorKeys) {
   const n = lists.length
   const acc = new Map()  // key → { candidate, party, vals[] }
   for (const list of lists) {
@@ -550,10 +550,22 @@ function combineLists(lists, withParty) {
       if (!a.party && c.party) a.party = c.party
     }
   }
-  // Quorum: with 3 models require 2; with 2 models a single mention stands
-  // (there's no majority to appeal to). Undecided always survives.
-  const quorum = n >= 3 ? 2 : 1
-  const kept = [...acc.values()].filter(a => a.vals.length >= quorum || /undecided/i.test(a.candidate))
+  // Quorum. With 3 models require 2 — that outvotes one model's stale or
+  // invented entrant. With only 2 models there is no majority to appeal to, so
+  // the previous run's field breaks the tie instead: a name only one of the two
+  // models listed is kept ONLY if it was already in the baseline. That keeps a
+  // real candidate one model happened to omit, while a withdrawn candidate the
+  // baseline has already dropped (Kell Bales came back at 7% this way) needs
+  // both models to agree before he returns. With no baseline at all, or a
+  // single model, every name stands. Undecided always survives.
+  const known = priorKeys instanceof Set ? priorKeys : null
+  const survives = (a) => {
+    if (/undecided/i.test(a.candidate)) return true
+    if (n >= 3) return a.vals.length >= 2
+    if (n === 2) return a.vals.length >= 2 || !known || known.has(nameKey(a.candidate))
+    return true
+  }
+  const kept = [...acc.values()].filter(survives)
   const rows = (kept.length ? kept : [...acc.values()]).map(a => ({
     candidate: a.candidate,
     ...(withParty ? { party: a.party || 'Other' } : {}),
@@ -582,8 +594,11 @@ function ensembleSpread(lists) {
   return worst
 }
 
-function averageVoteShares(estimates) {
+const keySet = (rows) => new Set((Array.isArray(rows) ? rows : []).map(r => nameKey(r.candidate)))
+
+function averageVoteShares(estimates, prior) {
   if (!estimates.length) return null
+  const pv = prior?.vote_share || null
   // Phase: majority vote (ties → primary, the safer pre-August default)
   const primaryVotes = estimates.filter(e => e.phase === 'primary').length
   const phase = primaryVotes * 2 >= estimates.length ? 'primary' : 'general'
@@ -595,14 +610,15 @@ function averageVoteShares(estimates) {
     for (const party of parties) {
       const lists = estimates.map(e => (e.primaries || []).find(p => p.party === party)?.candidates).filter(Boolean)
       if (lists.length) {
-        out.primaries.push({ party, candidates: combineLists(lists, false) })
+        const pg = (pv?.primaries || []).find(p => p.party === party)
+        out.primaries.push({ party, candidates: combineLists(lists, false, pg ? keySet(pg.candidates) : null) })
         spread = Math.max(spread, ensembleSpread(lists))
       }
     }
   }
   const genLists = estimates.map(e => e.general).filter(g => Array.isArray(g) && g.length)
   if (genLists.length) {
-    out.general = combineLists(genLists, true)
+    out.general = combineLists(genLists, true, pv?.general?.length ? keySet(pv.general) : null)
     spread = Math.max(spread, ensembleSpread(genLists))
   }
   out._spread = spread
@@ -777,7 +793,7 @@ export const handler = async (event) => {
     let ensembleUsed = false
     let spread = 0
     if (validEstimates.length >= 2) {
-      const averaged = averageVoteShares(validEstimates)
+      const averaged = averageVoteShares(validEstimates, prior)
       if (averaged) {
         spread = averaged._spread || 0
         delete averaged._spread
