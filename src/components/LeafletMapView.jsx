@@ -126,10 +126,14 @@ const DISTRICT_LAYERS = {
   ussenate: {
     color: '#0e7490',
     sources: [{
-      url: '/geodata/wi-outline.geojson',
-      style:      { color: '#0e7490', weight: 2.5, opacity: 0.85, fillOpacity: 0.10, fillColor: '#0e7490' },
-      hoverStyle: { fillOpacity: 0.20 },
-      selectStyle:{ fillOpacity: 0.35 },
+      // v1.23.7: clean dissolved statewide polygon (union of the 33 senate
+      // districts, islands kept, zero interior slivers). The old
+      // wi-outline.geojson had 110 leftover interior hole-rings from a bad
+      // dissolve that rendered as broken dashes across the state.
+      url: '/geodata/wi-statewide.geojson',
+      style:      { color: '#0e7490', weight: 2,   opacity: 0.85, fillOpacity: 0.15, fillColor: '#0e7490' },
+      hoverStyle: { fillOpacity: 0.25 },
+      selectStyle:{ fillOpacity: 0.52 },
       sublabel: 'U.S. Senate — Statewide',
     }],
   },
