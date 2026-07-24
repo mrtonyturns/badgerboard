@@ -354,7 +354,37 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
     editEmail: null,
     changePassword: null,
     notes: null,
+    deleteAccount: null,
   })
+  const [deleteConfirmText, setDeleteConfirmText] = useState('')
+  const [deletingAccount, setDeletingAccount] = useState(false)
+
+  // v1.21.1: admin account deletion — routes through the existing
+  // delete-account function (cancels ALL Stripe subscriptions first, refuses
+  // to orphan billing, blocks admin accounts server-side).
+  const handleDeleteAccount = async () => {
+    const target = modals.deleteAccount
+    if (!target || deletingAccount) return
+    setDeletingAccount(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/.netlify/functions/delete-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ userId: target.id }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || 'Deletion failed')
+      setUsers(prev => prev.filter(u => u.id !== target.id))
+      setModals({ ...modals, deleteAccount: null })
+      setDeleteConfirmText('')
+      showToast(`Account ${target.email} permanently deleted`)
+    } catch (err) {
+      console.error(err)
+      showToast(`Delete failed: ${err.message} — account NOT deleted`, 'error')
+    }
+    setDeletingAccount(false)
+  }
 
   useEffect(() => {
     const fetch = async () => {
@@ -695,6 +725,13 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
                       >
                         <StickyNote className="w-4 h-4" />
                       </button>
+                      <button
+                        onClick={() => setModals({ ...modals, deleteAccount: u })}
+                        className="p-1 text-red-600 hover:bg-red-50 rounded transition"
+                        title="Delete account"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -755,6 +792,50 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
           onAddNote={(noteText) => handleAddNote(modals.notes.id, noteText)}
           onClose={() => setModals({ ...modals, notes: null })}
         />
+      )}
+
+      {/* Delete Account Modal — type the email to confirm */}
+      {modals.deleteAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <Trash2 className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-900">Permanently delete account</h3>
+                <p className="text-xs text-gray-500">{modals.deleteAccount.email}</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 leading-relaxed mb-3">
+              This cancels <strong>every Stripe subscription</strong> on the account, then permanently deletes the user and their data. It cannot be undone. If billing can&apos;t be cancelled, the deletion is aborted automatically.
+            </p>
+            <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+              Type the account email to confirm:
+            </label>
+            <input
+              value={deleteConfirmText}
+              onChange={(e) => setDeleteConfirmText(e.target.value)}
+              placeholder={modals.deleteAccount.email}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-600 mb-4"
+            />
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => { setModals({ ...modals, deleteAccount: null }); setDeleteConfirmText('') }}
+                className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteAccount}
+                disabled={deletingAccount || deleteConfirmText.trim().toLowerCase() !== (modals.deleteAccount.email || '').toLowerCase()}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {deletingAccount ? 'Deleting…' : 'Delete permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

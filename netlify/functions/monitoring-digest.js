@@ -58,71 +58,54 @@ function snapshotOf(content) {
 }
 
 function buildEmailHtml(userFirst, entries, weekLabel) {
-  // entries: [{ candidate: {id, name}, digest, snapshot, generatedAt }]
-  const tabBar = entries.map(e =>
-    `<a href="#cand-${slug(e.candidate.name)}" style="display:inline-block;background:#f3f4f6;border:1px solid #e5e7eb;color:#111827;font-weight:700;font-size:12px;text-decoration:none;padding:7px 14px;border-radius:999px;margin:0 6px 8px 0;">${esc(e.candidate.name)}</a>`
-  ).join('')
+  // v1.21.1 redesign: plain, personal, minimal — reads like a staffer's memo,
+  // not a template. No pill chips, no color-coded badges; simple type,
+  // hairline rules, and the red "View full update" button per candidate.
+  const CAT_LABEL = { news: 'News', social: 'Social', podcast: 'Podcast/TV', controversy: 'Controversy', polling: 'Polling', endorsement: 'Endorsement', other: 'Update' }
 
-  const sections = entries.map(e => {
+  const index = entries.length > 1
+    ? `<p style="margin:0 0 26px;font-size:13px;color:#6b7280;">In this digest: ${entries.map(e => `<a href="#cand-${slug(e.candidate.name)}" style="color:#8B0000;text-decoration:none;font-weight:600;">${esc(e.candidate.name)}</a>`).join(' &nbsp;&middot;&nbsp; ')}</p>`
+    : ''
+
+  const sections = entries.map((e, idx) => {
     const d = e.digest || {}
-    const items = (d.items || []).map(i => {
-      const cat = CATEGORY_META[i.category] || CATEGORY_META.other
-      return `<tr>
-        <td style="padding:7px 10px 7px 0;vertical-align:top;white-space:nowrap;">
-          <span style="display:inline-block;background:${cat.bg};color:${cat.color};font-size:10px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;padding:3px 9px;border-radius:999px;">${cat.label}</span>
-        </td>
-        <td style="padding:7px 0;vertical-align:top;">
-          <div style="font-size:13.5px;font-weight:700;color:#111827;line-height:1.35;">${esc(i.title)}</div>
-          ${i.note ? `<div style="font-size:12.5px;color:#6b7280;line-height:1.45;margin-top:2px;">${esc(i.note)}</div>` : ''}
+    const items = (d.items || []).map(i =>
+      `<tr>
+        <td style="padding:5px 0;font-size:13.5px;color:#374151;line-height:1.55;">
+          <span style="color:#9ca3af;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;">${esc(CAT_LABEL[i.category] || 'Update')}</span>
+          &nbsp; <span style="font-weight:600;color:#111827;">${esc(i.title)}</span>${i.note ? ` &mdash; ${esc(i.note)}` : ''}
         </td>
       </tr>`
-    }).join('')
+    ).join('')
 
     const deepLink = `${APP_URL}/profiler?candidate=${encodeURIComponent(e.candidate.id)}&section=section-1`
     return `
-    <table id="cand-${slug(e.candidate.name)}" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;margin:0 0 18px;">
-      <tr><td style="padding:20px 22px;">
-        <div style="font-size:17px;font-weight:900;color:#111827;">${esc(e.candidate.name)}</div>
-        ${e.snapshot ? `<div style="font-size:12.5px;color:#6b7280;line-height:1.5;margin-top:4px;">${esc(e.snapshot)}</div>` : ''}
-        <div style="background:#fef2f2;border-left:3px solid #b91c1c;border-radius:0 10px 10px 0;padding:11px 14px;margin:14px 0;">
-          <div style="font-size:10px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#b91c1c;margin-bottom:4px;">This week</div>
-          <div style="font-size:13.5px;color:#1f2937;line-height:1.55;">${esc(d.summary || 'No significant new developments detected this week.')}</div>
-        </div>
-        ${items ? `<table width="100%" cellpadding="0" cellspacing="0">${items}</table>` : ''}
-        <div style="margin-top:14px;">
-          <a href="${deepLink}" style="display:inline-block;background:#8B0000;color:#ffffff;font-weight:800;font-size:13px;text-decoration:none;padding:11px 22px;border-radius:10px;">View full update &rarr;</a>
-        </div>
-      </td></tr>
-    </table>`
+      <div id="cand-${slug(e.candidate.name)}" style="${idx > 0 ? 'border-top:1px solid #e5e7eb;margin-top:28px;padding-top:26px;' : ''}">
+        <h2 style="margin:0 0 10px;font-size:16px;font-weight:800;color:#111827;">${esc(e.candidate.name)}</h2>
+        <p style="margin:0 0 12px;font-size:14px;color:#374151;line-height:1.65;">${esc(d.summary || 'No significant new developments this week.')}</p>
+        ${items ? `<table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 14px;">${items}</table>` : ''}
+        <a href="${deepLink}" style="display:inline-block;background:#8B0000;color:#ffffff;font-weight:700;font-size:13px;text-decoration:none;padding:10px 20px;border-radius:8px;">View full update &rarr;</a>
+      </div>`
   }).join('')
 
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Weekly monitoring digest</title></head>
-<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <div style="display:none;max-height:0;overflow:hidden;">Your weekly candidate monitoring digest — ${esc(weekLabel)}</div>
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:28px 14px;"><tr><td align="center">
-    <table width="620" cellpadding="0" cellspacing="0" style="max-width:620px;width:100%;">
-      <tr>
-        <td style="background:#8B0000;height:4px;border-radius:4px 4px 0 0;width:33%"></td>
-        <td style="background:#ffffff;height:4px;width:34%"></td>
-        <td style="background:#1e40af;height:4px;border-radius:4px 4px 0 0;width:33%"></td>
-      </tr>
-      <tr><td colspan="3" style="background:#000000;padding:18px 32px;text-align:center;">
-        <img src="${APP_URL}/badger-board-logo.png" alt="Badger Board" width="180" style="display:block;margin:0 auto;max-width:180px;height:auto;border:0" />
+<body style="margin:0;padding:0;background:#f6f6f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;">
+  <div style="display:none;max-height:0;overflow:hidden;">What happened with your monitored candidates this week</div>
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f6f6f6;padding:26px 14px;"><tr><td align="center">
+    <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+      <tr><td style="background:#000000;padding:14px 34px;border-radius:10px 10px 0 0;">
+        <img src="${APP_URL}/badger-board-logo.png" alt="Badger Board" width="120" style="display:block;max-width:120px;height:auto;border:0;" />
       </td></tr>
-      <tr><td colspan="3" style="background:#ffffff;padding:26px 26px 8px;border-radius:0 0 14px 14px;">
-        <h1 style="margin:0 0 6px;font-size:20px;font-weight:900;color:#111827;">Weekly monitoring digest</h1>
-        <p style="margin:0 0 16px;font-size:13px;color:#6b7280;line-height:1.55;">
-          ${userFirst ? `Hi ${esc(userFirst)}, here&rsquo;s` : 'Here&rsquo;s'} what happened with your ${entries.length === 1 ? 'monitored candidate' : `${entries.length} monitored candidates`} for the week of ${esc(weekLabel)}. Jump to a candidate:
-        </p>
-        <div style="margin-bottom:18px;">${tabBar}</div>
+      <tr><td style="padding:24px 34px 6px;">
+        <h1 style="margin:0 0 6px;font-size:19px;font-weight:800;color:#111827;">Your weekly monitoring digest</h1>
+        <p style="margin:0 0 22px;font-size:13.5px;color:#6b7280;line-height:1.6;">${userFirst ? `Hi ${esc(userFirst)} &mdash; here&rsquo;s` : 'Here&rsquo;s'} what happened with ${entries.length === 1 ? esc(entries[0].candidate.name) : `your ${entries.length} monitored candidates`} for the week of ${esc(weekLabel)}.</p>
+        ${index}
         ${sections}
-        <p style="color:#9ca3af;font-size:11px;line-height:1.5;margin:8px 0 18px;">
-          Profiles refresh automatically every Monday for candidates with Active Monitoring turned on. AI-generated from public sources &mdash; verify before use. Manage monitoring from each candidate&rsquo;s profile.
+        <p style="color:#9ca3af;font-size:11px;line-height:1.55;margin:30px 0 26px;border-top:1px solid #f3f4f6;padding-top:14px;">
+          Profiles refresh automatically every Monday for candidates with Active Monitoring on. AI-generated from public sources &mdash; verify before use.<br/>
+          &copy; ${new Date().getFullYear()} The Bluejack Group &middot; <a href="${APP_URL}" style="color:#9ca3af;">badgerboardwi.com</a>
         </p>
-      </td></tr>
-      <tr><td colspan="3" style="padding:16px 0;text-align:center;">
-        <p style="color:#9ca3af;font-size:11px;margin:0;">&copy; ${new Date().getFullYear()} The Bluejack Group &nbsp;&middot;&nbsp; <a href="${APP_URL}" style="color:#9ca3af;">badgerboardwi.com</a></p>
       </td></tr>
     </table>
   </td></tr></table>
