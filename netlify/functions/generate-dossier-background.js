@@ -4,6 +4,7 @@
 // ANTHROPIC_API_KEY + SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY must be set.
 
 const { enforceRateLimit } = require('./_rate-limit')
+const { logAiUsage } = require('./_ai-usage')
 const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY // must be set in Netlify env vars
 const XAI_API_KEY        = process.env.XAI_API_KEY        // xAI Grok — x.ai console
@@ -525,6 +526,8 @@ async function runVerificationPass(content, candidateName) {
     })
     if (!res.ok) return null
     const d = await res.json()
+    logAiUsage({ endpoint: 'profiler', provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
+      inputTokens: d?.usage?.input_tokens || 0, outputTokens: d?.usage?.output_tokens || 0 })
     const flags = d.content?.[0]?.text?.trim()
     return (flags && flags !== 'NO FLAGS') ? flags : null
   } catch (e) { console.error('[dossier-bg] Verification pass failed:', e.message); return null }
@@ -1059,6 +1062,18 @@ Label all items [RESEARCH REQUIRED] unless you have a credible public record sou
   try {
     ;[perplexityNews, perplexityIncumbent, identityData, financeData, politicalData, affiliationsData, socialMediaData, grokData, officialData] =
       await Promise.all([perplexityPromise, incumbentPromise, identityPromise, financePromise, politicalPromise, affiliationsPromise, socialMediaPromise, grokPromise, officialPromise])
+
+    // v1.20: cost metering — one row per successful research call. Perplexity's
+    // per-request search fee dominates its token cost, so these are flat-fee
+    // estimates (marked estimated=true); Grok includes server-side search tools.
+    {
+      const uid = user?.id || null
+      const pplxSuccesses = [perplexityNews, identityData, financeData, politicalData, affiliationsData, socialMediaData].filter(Boolean).length
+      for (let i = 0; i < pplxSuccesses; i++) {
+        logAiUsage({ userId: uid, endpoint: 'profiler', provider: 'perplexity', model: 'sonar-pro', flatUsd: 0.004, estimated: true })
+      }
+      if (grokData) logAiUsage({ userId: uid, endpoint: 'profiler', provider: 'xai', model: GROK_MODEL, flatUsd: 0.03, estimated: true })
+    }
     const stats = [
       perplexityNews && `news:${perplexityNews.length}`,
       perplexityIncumbent && `incumbent:${perplexityIncumbent.length}`,
@@ -1518,6 +1533,9 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     }
 
     const data = await response.json()
+    // v1.20: real cost metering — main writer call with actual token counts
+    logAiUsage({ userId: user_id, endpoint: 'profiler', provider: 'anthropic', model: CLAUDE_MODEL,
+      inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
     const extractClaudeText = (d) => (d?.content || []).filter(b => b.type === 'text' && b.text).map(b => b.text).join('')
     let content = extractClaudeText(data)
     // Strip any AI reasoning/thinking tags that should never be stored or shown to users
@@ -1549,6 +1567,8 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
       const retryResp = await callClaudeWithRetry({ model: CLAUDE_MODEL, max_tokens: 12000, system: systemPrompt + webSearchDirective, tools: webSearchTools, messages: [{ role: 'user', content: retryPrompt }] })
       if (retryResp.ok) {
         const retryData = await retryResp.json()
+        logAiUsage({ userId: user_id, endpoint: 'profiler', provider: 'anthropic', model: CLAUDE_MODEL,
+          inputTokens: retryData?.usage?.input_tokens || 0, outputTokens: retryData?.usage?.output_tokens || 0 })
         const continuation = extractClaudeText(retryData)
         if (continuation) {
           content = content + '\n\n' + continuation

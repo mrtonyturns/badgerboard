@@ -977,24 +977,41 @@ export default function TaskBoard() {
 
       {/* ══ Sidebar ══ */}
       <aside className="w-56 flex-shrink-0 bg-gray-50/80 border-r border-gray-200 p-3 hidden md:flex flex-col gap-0.5 overflow-y-auto">
-        {/* Campaign Connect plan switcher */}
+        {/* Campaign Connect — Candidates section (v1.20): action-plan users
+            with active links see each connected candidate here and can open
+            their plan. Tasks added while a candidate's plan is open are
+            written to THAT candidate's account (owner_id = candidate,
+            created_by = manager) and appear for them instantly. */}
         {planOwners.length > 1 && (
-          <div className="mb-2">
-            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider px-3 mb-1">Viewing plan</label>
-            <select
-              value={activePlan?.id || ''}
-              onChange={(e) => switchPlan(e.target.value)}
-              className="w-full text-xs font-medium border border-gray-200 rounded-lg px-2 py-1.5 bg-white truncate"
-            >
-              {planOwners.map(o => (
-                <option key={o.id} value={o.id}>{o.self ? 'My plan' : o.label}</option>
-              ))}
-            </select>
+          <div className="mb-3">
+            <div className="px-3 mb-1">
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Candidates</span>
+            </div>
+            {planOwners.map(o => {
+              const isActive = activePlan?.id === o.id
+              return (
+                <button key={o.id} onClick={() => switchPlan(o.id)}
+                  className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-sm transition-colors text-left min-w-0
+                    ${isActive ? 'bg-brand-red/10 text-brand-red font-medium' : 'text-gray-700 hover:bg-gray-100'}`}
+                  title={o.self ? 'Your own plan' : `${o.label} — ${o.canEdit ? 'can add & manage tasks' : 'view only'}`}>
+                  {o.self
+                    ? <Inbox className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
+                    : <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-extrabold text-white flex-shrink-0 ${isActive ? 'bg-brand-red' : 'bg-brand-navy/70'}`}>
+                        {(o.label || '?')[0].toUpperCase()}
+                      </span>}
+                  <span className="flex-1 truncate">{o.self ? 'My plan' : o.label}</span>
+                  {!o.self && !o.canEdit && <span className="text-[9px] text-gray-400 uppercase">view</span>}
+                </button>
+              )
+            })}
             {activePlan && !activePlan.self && (
-              <p className="px-1 mt-1 text-[10px] text-gray-400">
-                Connected candidate {activePlan.canEdit ? '· can manage' : '· view only'}
+              <p className="px-3 mt-1.5 text-[10px] leading-snug text-brand-red/80 bg-brand-red/5 rounded-lg py-1.5">
+                Viewing {activePlan.label}&apos;s plan — {activePlan.canEdit
+                  ? 'tasks you add appear on their account.'
+                  : 'view only.'}
               </p>
             )}
+            <div className="border-b border-gray-200 mt-3" />
           </div>
         )}
         {[

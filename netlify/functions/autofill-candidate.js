@@ -5,6 +5,7 @@
 // ANTHROPIC_API_KEY must be set in Netlify environment variables
 
 const { enforceRateLimit } = require('./_rate-limit')
+const { logAiUsage } = require('./_ai-usage')
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const SUPABASE_URL      = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
@@ -146,6 +147,7 @@ Additional rules:
     }
 
     const data    = await response.json()
+    logAiUsage({ userId: caller?.id, endpoint: 'candidates', provider: 'anthropic', model: MODEL, inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
     const rawText = ((data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')) || '{}'
 
     let fields = {}

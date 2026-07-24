@@ -2,6 +2,7 @@
 // Reads a candidate's latest dossier and asks Claude to generate a SWOT analysis.
 
 import { enforceRateLimit } from './_rate-limit.js'
+import { logAiUsage } from './_ai-usage.js'
 
 export const handler = async (event) => {
   const headers = {
@@ -91,6 +92,7 @@ ${dossierContent.slice(0, 12000)}`
     }
 
     const data = await aiRes.json()
+    logAiUsage({ userId: uid, endpoint: 'campaign-intel', provider: 'anthropic', model: 'claude-opus-4-8', inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
     let text = data.content?.[0]?.text || ''
 
     // Strip markdown code fences if present

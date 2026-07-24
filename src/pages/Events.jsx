@@ -6,9 +6,10 @@ import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import {
   CalendarDays, RefreshCw, Loader2, Sparkles, MapPin, ChevronDown,
-  Check, X, Settings as SettingsIcon, ExternalLink,
+  Check, X, Settings as SettingsIcon, ExternalLink, Users, CheckSquare, Square,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { getUserPlanType } from '../lib/tiers'
 import { eventImage } from '../lib/imageProxy'
 
 let _placesCache = null
@@ -123,6 +124,27 @@ export default function Events() {
   const [added, setAdded]             = useState({})     // event name → true
   const [toast, setToast]             = useState(null)
   const [places, setPlaces]           = useState(null)
+
+  // ── Campaign Connect: push events to connected candidates (Action plans) ────
+  const isAction = getUserPlanType(user) === 'action'
+  const [connectedCands, setConnectedCands] = useState([])   // [{ id, email }]
+  const [selectMode, setSelectMode]         = useState(false)
+  const [selectedEvents, setSelectedEvents] = useState({})   // event name → event obj
+  const [candPicker, setCandPicker]         = useState(null) // { events: [ev] } | null
+  const [candChecked, setCandChecked]       = useState({})   // candidate id → bool
+  const [pushing, setPushing]               = useState(false)
+
+  useEffect(() => {
+    if (!isAction || !user?.id) return
+    supabase.from('account_links')
+      .select('candidate_user_id, candidate_email')
+      .eq('action_user_id', user.id)
+      .eq('status', 'active')
+      .not('candidate_user_id', 'is', null)
+      .then(({ data }) => {
+        setConnectedCands((data || []).map(l => ({ id: l.candidate_user_id, email: l.candidate_email })))
+      })
+  }, [isAction, user?.id])
 
   useEffect(() => { loadPlaces().then(setPlaces) }, [])
 
@@ -265,6 +287,51 @@ export default function Events() {
     setPickerEvent(null)
   }
 
+  // ── push to candidate calendars (Campaign Connect) ─────────────────────────
+  const openCandPicker = (evs) => {
+    const init = {}
+    connectedCands.forEach(c => { init[c.id] = connectedCands.length === 1 })
+    setCandChecked(init)
+    setCandPicker({ events: evs })
+  }
+
+  const toggleSelectEvent = (ev) => {
+    setSelectedEvents(prev => {
+      const next = { ...prev }
+      if (next[ev.name]) delete next[ev.name]
+      else next[ev.name] = ev
+      return next
+    })
+  }
+
+  const confirmCandPush = async () => {
+    const candidateIds = Object.keys(candChecked).filter(id => candChecked[id])
+    if (!candidateIds.length || !candPicker?.events?.length) return
+    setPushing(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/.netlify/functions/campaign-connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ action: 'push_events', candidate_user_ids: candidateIds, events: candPicker.events }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || 'Could not add events')
+      const nEv = candPicker.events.length, nCand = candidateIds.length
+      setToast(`Added ${nEv} event${nEv > 1 ? 's' : ''} to ${nCand} candidate calendar${nCand > 1 ? 's' : ''}`)
+      setTimeout(() => setToast(null), 4000)
+      setCandPicker(null)
+      setSelectedEvents({})
+      setSelectMode(false)
+    } catch (e) {
+      setToast(`Could not add: ${e.message}`)
+      setTimeout(() => setToast(null), 4000)
+    }
+    setPushing(false)
+  }
+
+  const selectedList = Object.values(selectedEvents)
+
   const leanMarkerPos = (lean) => {
     const score = Math.max(-100, Math.min(100, lean?.score ?? 0))
     return 50 + score * 0.44
@@ -345,6 +412,27 @@ export default function Events() {
                 {label}
               </button>
             ))}
+            {isAction && connectedCands.length > 0 && (
+              <button onClick={() => { setSelectMode(m => !m); setSelectedEvents({}) }}
+                className={`text-xs font-bold px-3 py-1.5 rounded-full border-2 transition-colors flex items-center gap-1.5 ${selectMode ? 'bg-brand-red border-brand-red text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                <CheckSquare className="w-3.5 h-3.5" /> {selectMode ? 'Cancel selection' : 'Select multiple'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* bulk-selection action bar */}
+      {selectMode && selectedList.length > 0 && (
+        <div className="sticky top-2 z-40 flex items-center gap-3 bg-brand-navy text-white rounded-2xl px-5 py-3 shadow-2xl">
+          <CheckSquare className="w-4 h-4 flex-shrink-0" />
+          <span className="text-sm font-bold">{selectedList.length} event{selectedList.length > 1 ? 's' : ''} selected</span>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={() => setSelectedEvents({})} className="text-xs font-bold text-white/60 hover:text-white px-2 py-1.5">Clear</button>
+            <button onClick={() => openCandPicker(selectedList)}
+              className="flex items-center gap-1.5 bg-brand-red hover:bg-red-700 text-white text-xs font-extrabold px-4 py-2 rounded-xl transition-colors">
+              <Users className="w-3.5 h-3.5" /> Add to candidate calendars
+            </button>
           </div>
         </div>
       )}
@@ -379,13 +467,28 @@ export default function Events() {
             const pill = LEAN_PILL[lean.label] || LEAN_PILL.nonpartisan
             const day = new Date(ev.date_start + 'T12:00:00')
             const isAdded = added[ev.name]
+            const isSelected = Boolean(selectedEvents[ev.name])
             return (
-              <div key={`${ev.name}-${i}`} className="bg-white rounded-2xl overflow-hidden border-2 border-transparent hover:border-brand-red transition-all shadow-sm hover:shadow-lg hover:-translate-y-0.5">
+              <div key={`${ev.name}-${i}`}
+                onClick={selectMode ? () => toggleSelectEvent(ev) : undefined}
+                className={`bg-white rounded-2xl overflow-hidden border-2 transition-all shadow-sm hover:shadow-lg hover:-translate-y-0.5 ${
+                  selectMode
+                    ? `cursor-pointer ${isSelected ? 'border-brand-red ring-2 ring-brand-red/30' : 'border-gray-200 hover:border-brand-red/50'}`
+                    : 'border-transparent hover:border-brand-red'
+                }`}>
                 <div className="h-28 relative flex items-center justify-center" style={ev.image
                   ? { backgroundImage: `linear-gradient(rgba(10,22,40,0.08), rgba(10,22,40,0.35)), url(${eventImage(ev.image)})`, backgroundSize: 'cover', backgroundPosition: 'center' }
                   : { backgroundImage: `${PATTERN}, ${cat.art}` }}>
                   {!ev.image && <span style={{ fontSize: 38, filter: 'drop-shadow(0 3px 6px rgba(0,0,0,0.35))' }}>{cat.emoji}</span>}
-                  <span className="absolute top-2.5 left-2.5 text-[10px] font-extrabold uppercase tracking-wide text-white px-2.5 py-1 rounded-full" style={{ background: cat.color }}>{cat.label}</span>
+                  {/* multi-select checkbox — upper corner */}
+                  {selectMode && (
+                    <span className="absolute top-2.5 left-2.5 w-6 h-6 rounded-md bg-white shadow-lg flex items-center justify-center">
+                      {isSelected
+                        ? <CheckSquare className="w-4.5 h-4.5 text-brand-red" style={{ width: 18, height: 18 }} />
+                        : <Square className="w-4.5 h-4.5 text-gray-300" style={{ width: 18, height: 18 }} />}
+                    </span>
+                  )}
+                  <span className={`absolute top-2.5 text-[10px] font-extrabold uppercase tracking-wide text-white px-2.5 py-1 rounded-full ${selectMode ? 'left-10' : 'left-2.5'}`} style={{ background: cat.color }}>{cat.label}</span>
                   <div className="absolute top-2.5 right-2.5 bg-white rounded-lg px-2.5 py-1.5 text-center shadow-lg">
                     <div className="text-base font-black text-brand-red leading-none">{day.getDate()}</div>
                     <div className="text-[9px] font-extrabold text-gray-400 uppercase tracking-wide">{day.toLocaleDateString('en-US', { month: 'short' })}</div>
@@ -416,12 +519,18 @@ export default function Events() {
                     </div>
                   </div>
 
-                  <div className="mt-3 flex gap-2">
-                    <button onClick={() => handleAdd(ev)} disabled={isAdded}
-                      className={`flex-1 text-[13px] font-extrabold py-2.5 rounded-xl transition-colors ${isAdded ? 'bg-green-100 text-green-700' : 'bg-brand-red text-white hover:bg-red-800'}`}>
+                  <div className="mt-3 flex gap-2" onClick={e => selectMode && e.stopPropagation()}>
+                    <button onClick={() => handleAdd(ev)} disabled={isAdded || selectMode}
+                      className={`flex-1 text-[13px] font-extrabold py-2.5 rounded-xl transition-colors ${isAdded ? 'bg-green-100 text-green-700' : 'bg-brand-red text-white hover:bg-red-800'} ${selectMode ? 'opacity-40' : ''}`}>
                       {isAdded ? '✓ Added to calendar' : '＋ Add to calendar'}
                     </button>
-                    {ev.url && (
+                    {isAction && connectedCands.length > 0 && !selectMode && (
+                      <button onClick={() => openCandPicker([ev])} title="Add to a connected candidate's calendar"
+                        className="flex items-center gap-1 px-3 rounded-xl border-2 border-brand-navy/20 text-brand-navy text-[12px] font-extrabold hover:border-brand-navy hover:bg-brand-navy hover:text-white transition-colors whitespace-nowrap">
+                        <Users className="w-3.5 h-3.5" /> Candidate
+                      </button>
+                    )}
+                    {ev.url && !selectMode && (
                       <a href={ev.url} target="_blank" rel="noreferrer" title="Event website"
                         className="w-10 rounded-xl border-2 border-gray-200 flex items-center justify-center text-gray-400 hover:text-brand-red hover:border-brand-red">
                         <ExternalLink className="w-4 h-4" />
@@ -497,6 +606,53 @@ export default function Events() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* candidate calendar picker (Campaign Connect) */}
+      {candPicker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => !pushing && setCandPicker(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-gray-100 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-extrabold text-gray-900 flex items-center gap-2">
+                  <Users className="w-4 h-4 text-brand-navy" /> Add to candidate calendars
+                </h3>
+                <p className="text-xs text-gray-400 font-semibold mt-0.5">
+                  {candPicker.events.length === 1
+                    ? `${candPicker.events[0].name} · ${fmtDate(candPicker.events[0])}`
+                    : `${candPicker.events.length} events selected`}
+                </p>
+              </div>
+              <button onClick={() => !pushing && setCandPicker(null)} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="max-h-72 overflow-y-auto">
+              {connectedCands.map(c => (
+                <label key={c.id} className="flex items-center gap-3 px-5 py-3 border-b border-gray-50 cursor-pointer hover:bg-red-50/40">
+                  <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-navy to-slate-700 flex items-center justify-center text-white text-sm font-black">
+                    {(c.email || '?')[0].toUpperCase()}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-extrabold text-gray-900 truncate">{c.email}</div>
+                    <div className="text-[11px] text-gray-400 font-semibold">Connected via Campaign Connect</div>
+                  </div>
+                  <input type="checkbox" className="w-4 h-4 accent-brand-red"
+                    checked={!!candChecked[c.id]}
+                    onChange={e => setCandChecked(p => ({ ...p, [c.id]: e.target.checked }))} />
+                </label>
+              ))}
+            </div>
+            <div className="p-5">
+              <p className="text-[11px] text-gray-400 font-semibold mb-3">
+                Events land on each selected candidate's Badger Board calendar feed and flow into their connected Google/Apple/Outlook calendars.
+              </p>
+              <button onClick={confirmCandPush} disabled={pushing || !Object.values(candChecked).some(Boolean)}
+                className="w-full bg-brand-red text-white text-sm font-extrabold py-3 rounded-xl disabled:opacity-40 flex items-center justify-center gap-2">
+                {pushing && <Loader2 className="w-4 h-4 animate-spin" />}
+                {pushing ? 'Adding…' : `Add ${candPicker.events.length > 1 ? `${candPicker.events.length} events` : 'event'} to ${Object.values(candChecked).filter(Boolean).length || ''} calendar${Object.values(candChecked).filter(Boolean).length !== 1 ? 's' : ''}`}
+              </button>
+            </div>
           </div>
         </div>
       )}

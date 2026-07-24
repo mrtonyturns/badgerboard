@@ -11,6 +11,7 @@
  */
 
 const { json, requireBroadside, serviceClient } = require('./_shared')
+const { logAiUsage } = require('./_ai-usage')
 const { enforceRateLimit } = require('./_rate-limit')
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
@@ -90,6 +91,7 @@ Write the report card now.`
     clearTimeout(to)
     if (!r.ok) throw new Error('anthropic ' + r.status)
     const j = await r.json()
+    logAiUsage({ userId: null, endpoint: 'broadside', provider: 'anthropic', model: MODEL, inputTokens: j?.usage?.input_tokens || 0, outputTokens: j?.usage?.output_tokens || 0 })
     debrief = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
     if (!debrief) throw new Error('empty debrief')
   } catch (e) {

@@ -4,6 +4,7 @@
 // in district_intel so the AI cost is paid once per district.
 
 import crypto from 'crypto'
+import { logAiUsage } from './_ai-usage.js'
 import { enforceRateLimit } from './_rate-limit.js'
 import { ADMIN_EMAILS } from './_config.js'
 
@@ -130,6 +131,7 @@ export const handler = async (event) => {
       })
       if (pRes.ok) {
         const pData = await pRes.json()
+        logAiUsage({ userId: uid, endpoint: 'district-intel', provider: 'perplexity', model: 'sonar', inputTokens: pData?.usage?.prompt_tokens || 0, outputTokens: pData?.usage?.completion_tokens || 0 })
         research = pData.choices?.[0]?.message?.content || null
       }
     } catch (e) { console.warn('[district-history] Perplexity failed:', e.message) }
@@ -182,6 +184,7 @@ ${research}`,
     return { statusCode: 502, headers, body: JSON.stringify({ error: 'Structuring failed', detail: t.slice(0, 200) }) }
   }
   const cData = await claudeRes.json()
+  logAiUsage({ userId: uid, endpoint: 'district-intel', provider: 'anthropic', model: CLAUDE_MODEL, inputTokens: cData?.usage?.input_tokens || 0, outputTokens: cData?.usage?.output_tokens || 0 })
   let history
   try {
     const raw = (cData.content?.find(b => b.type === 'text')?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()

@@ -15,6 +15,7 @@
  */
 
 const { json, requireBroadside } = require('./_shared')
+const { logAiUsage } = require('./_ai-usage')
 const { enforceRateLimit } = require('./_rate-limit')
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
@@ -79,6 +80,7 @@ exports.handler = async (event) => {
       return json(502, { error: 'brain-upstream-error' }, HEADERS)
     }
     const j = await r.json()
+    logAiUsage({ userId: null, endpoint: 'broadside', provider: 'anthropic', model: 'claude-opus-4-8', inputTokens: j?.usage?.input_tokens || 0, outputTokens: j?.usage?.output_tokens || 0 })
     const text = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join(' ').trim()
     if (!text) return json(502, { error: 'brain-empty' }, HEADERS)
     return json(200, { text }, HEADERS)

@@ -156,6 +156,52 @@ exports.handler = async (event) => {
         return reply({ ok: true, permissions: merged })
       }
 
+      // ── Action pushes events onto connected candidates' calendars (v1.20) ───
+      // { candidate_user_ids: [uuid], events: [eventObj] } — each event lands
+      // in each candidate's calendar_feed_items (their connected Google/Apple/
+      // Outlook feeds pick it up). Requires an ACTIVE link to every target.
+      case 'push_events': {
+        const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+        const candidateIds = [...new Set((Array.isArray(body.candidate_user_ids) ? body.candidate_user_ids : []).filter(id => UUID.test(id)))].slice(0, 50)
+        const rawEvents = (Array.isArray(body.events) ? body.events : []).slice(0, 25)
+        if (!candidateIds.length) return reply({ error: 'Select at least one connected candidate.' }, 400)
+        if (!rawEvents.length) return reply({ error: 'Select at least one event.' }, 400)
+
+        // Whitelist event fields — never store arbitrary client payloads
+        const clean = (ev) => ({
+          name:        String(ev.name || '').slice(0, 200),
+          date_start:  String(ev.date_start || '').slice(0, 10),
+          date_end:    ev.date_end ? String(ev.date_end).slice(0, 10) : null,
+          time:        ev.time ? String(ev.time).slice(0, 40) : null,
+          venue:       ev.venue ? String(ev.venue).slice(0, 200) : null,
+          address:     ev.address ? String(ev.address).slice(0, 250) : null,
+          city:        ev.city ? String(ev.city).slice(0, 100) : null,
+          description: ev.description ? String(ev.description).slice(0, 1000) : null,
+          url:         ev.url ? String(ev.url).slice(0, 500) : null,
+          category:    ev.category ? String(ev.category).slice(0, 50) : null,
+          pushed_by:   user.email || user.id,   // provenance shown nowhere yet but auditable
+        })
+        const events = rawEvents.map(clean).filter(ev => ev.name && /^\d{4}-\d{2}-\d{2}$/.test(ev.date_start))
+        if (!events.length) return reply({ error: 'No valid events to add (name and date required).' }, 400)
+
+        // Verify an ACTIVE link to every requested candidate
+        const { data: links } = await H.sb(`account_links?action_user_id=eq.${user.id}&status=eq.active&candidate_user_id=in.(${candidateIds.map(enc).join(',')})&select=candidate_user_id,candidate_email`)
+        const linked = new Map((Array.isArray(links) ? links : []).map(l => [l.candidate_user_id, l.candidate_email]))
+        const unlinked = candidateIds.filter(id => !linked.has(id))
+        if (unlinked.length) return reply({ error: 'You can only add events for candidates with an active Campaign Connect link.' }, 403)
+
+        const rows = []
+        for (const cid of candidateIds) {
+          for (const ev of events) rows.push({ user_id: cid, event: ev, reminder_minutes: 60 })
+        }
+        const ins = await H.sb('calendar_feed_items', 'POST', rows, { Prefer: 'return=minimal' })
+        if (!ins.ok) {
+          console.error('[campaign-connect] push_events insert failed:', ins.status, JSON.stringify(ins.data).slice(0, 300))
+          return reply({ error: 'Could not add the events — please try again.' }, 500)
+        }
+        return reply({ ok: true, added: rows.length, candidates: candidateIds.length, events: events.length })
+      }
+
       default:
         return reply({ error: 'Unknown action.' }, 400)
     }

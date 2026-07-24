@@ -96,6 +96,8 @@ function extractEventMeta(html, pageUrl) {
   return out
 }
 
+import { logAiUsage } from './_ai-usage.js'
+
 export const handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -217,6 +219,7 @@ Aim for 25-40 events; if you find more, list more — do NOT stop at the big wel
       })
       if (pRes.ok) {
         const pData = await pRes.json()
+        logAiUsage({ userId: authUser?.id, endpoint: 'events', provider: 'perplexity', model: 'sonar-pro', inputTokens: pData?.usage?.prompt_tokens || 0, outputTokens: pData?.usage?.completion_tokens || 0 })
         research = pData.choices?.[0]?.message?.content || null
       }
     } catch (e) { console.warn('[district-events] Perplexity failed:', e.message) }
@@ -267,6 +270,7 @@ Aim for 25-40 events; if you find more, list more — do NOT stop at the big wel
       })
       if (nr.ok) {
         const nd = await nr.json()
+        logAiUsage({ userId: authUser?.id, endpoint: 'events', provider: 'perplexity', model: 'sonar-pro', inputTokens: nd?.usage?.prompt_tokens || 0, outputTokens: nd?.usage?.completion_tokens || 0 })
         newsResearch = nd.choices?.[0]?.message?.content || null
       }
     } catch (e) { console.warn('[district-events] news pass skipped:', e.message) }
@@ -346,6 +350,7 @@ ${xPosts || '(none available)'}`,
     return { statusCode: 502, headers, body: JSON.stringify({ error: 'Event structuring failed' }) }
   }
   const cData = await claudeRes.json()
+  logAiUsage({ userId: authUser?.id, endpoint: 'events', provider: 'anthropic', model: CLAUDE_MODEL, inputTokens: cData?.usage?.input_tokens || 0, outputTokens: cData?.usage?.output_tokens || 0 })
   let parsed
   try {
     const raw = (cData.content?.find(b => b.type === 'text')?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
@@ -391,6 +396,7 @@ ${xPosts || '(none available)'}`,
       })
       if (p2.ok) {
         const d2 = await p2.json()
+        logAiUsage({ userId: authUser?.id, endpoint: 'events', provider: 'perplexity', model: 'sonar-pro', inputTokens: d2?.usage?.prompt_tokens || 0, outputTokens: d2?.usage?.completion_tokens || 0 })
         const extra = d2.choices?.[0]?.message?.content
         if (extra) {
           const c2 = await fetch('https://api.anthropic.com/v1/messages', {
@@ -406,6 +412,7 @@ ${extra}` }],
           })
           if (c2.ok) {
             const cd2 = await c2.json()
+            logAiUsage({ userId: authUser?.id, endpoint: 'events', provider: 'anthropic', model: CLAUDE_MODEL, inputTokens: cd2?.usage?.input_tokens || 0, outputTokens: cd2?.usage?.output_tokens || 0 })
             const raw2 = (cd2.content?.find(b => b.type === 'text')?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
             const more = applyGuards((JSON.parse(raw2).events || []).filter(e => e?.name && e?.date_start))
             const seen = new Set(events.map(e => e.name.toLowerCase()))
@@ -468,6 +475,7 @@ ${extra}` }],
       })
       if (vRes.ok) {
         const vd = await vRes.json()
+        logAiUsage({ userId: authUser?.id, endpoint: 'events', provider: 'perplexity', model: 'sonar-pro', inputTokens: vd?.usage?.prompt_tokens || 0, outputTokens: vd?.usage?.completion_tokens || 0 })
         const verification = vd.choices?.[0]?.message?.content
         if (verification) {
           const c3 = await fetch('https://api.anthropic.com/v1/messages', {
@@ -480,6 +488,7 @@ ${extra}` }],
           })
           if (c3.ok) {
             const cd3 = await c3.json()
+            logAiUsage({ userId: authUser?.id, endpoint: 'events', provider: 'anthropic', model: CLAUDE_MODEL, inputTokens: cd3?.usage?.input_tokens || 0, outputTokens: cd3?.usage?.output_tokens || 0 })
             const raw3 = (cd3.content?.find(b => b.type === 'text')?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
             const verdicts = JSON.parse(raw3).hosts || []
             const vMap = new Map(verdicts.map(v => [String(v.host).toLowerCase(), v]))

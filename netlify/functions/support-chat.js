@@ -12,6 +12,7 @@
  */
 
 import { enforceRateLimit } from './_rate-limit.js'
+import { logAiUsage } from './_ai-usage.js'
 
 const SUPABASE_URL  = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 // SUPABASE_ANON_KEY is the Netlify env var; VITE_SUPABASE_ANON_KEY is the Vite
@@ -235,6 +236,7 @@ export const handler = async (event) => {
     }
 
     const data = await res.json()
+    logAiUsage({ userId: null, endpoint: 'support-chat', provider: 'anthropic', model: 'claude-opus-4-8', inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
     return {
       statusCode: 200,
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },

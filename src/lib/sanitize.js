@@ -24,6 +24,15 @@ export function sanitizeHtml(html) {
   })
 }
 
+/** Announcement messages: formatting only — bold/italic/underline/breaks.
+ *  No sizes, colors, links, or anything else survives (per product spec). */
+export function sanitizeAnnouncementHtml(html) {
+  return DOMPurify.sanitize(html || '', {
+    ALLOWED_TAGS: ['b', 'strong', 'i', 'em', 'u', 'br', 'div', 'p'],
+    ALLOWED_ATTR: [],
+  })
+}
+
 /** Escape a plain-text value for interpolation into an HTML template string. */
 export function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => ({

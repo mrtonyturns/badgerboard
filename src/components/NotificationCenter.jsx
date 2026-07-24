@@ -16,6 +16,7 @@ import React, { useEffect, useState, useRef, useCallback } from 'react'
 import { Bell, Info, AlertTriangle, CheckCircle, AlertCircle, X } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { supabase } from '../lib/supabase'
+import { sanitizeAnnouncementHtml } from '../lib/sanitize'
 
 const READ_KEY   = 'bb_read_announcements'    // ids the user has seen in the bell
 const TOAST_KEY  = 'bb_toasted_announcements' // success ids already popped up
@@ -163,7 +164,8 @@ export default function NotificationCenter() {
                       <cfg.Icon className="w-4 h-4" style={{ color: cfg.color }} />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm text-gray-800 leading-snug">{a.message}</p>
+                      <div className="text-sm text-gray-800 leading-snug"
+                        dangerouslySetInnerHTML={{ __html: sanitizeAnnouncementHtml(a.message) }} />
                       <p className="text-xs text-gray-400 mt-1">
                         {a.created_at ? formatDistanceToNow(new Date(a.created_at), { addSuffix: true }) : ''}
                       </p>
@@ -189,7 +191,8 @@ export default function NotificationCenter() {
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-xs font-bold text-green-700 uppercase tracking-wide mb-0.5">Announcement</p>
-              <p className="text-sm text-gray-800 leading-snug">{toast.message}</p>
+              <div className="text-sm text-gray-800 leading-snug"
+                dangerouslySetInnerHTML={{ __html: sanitizeAnnouncementHtml(toast.message) }} />
             </div>
             <button onClick={dismissToast} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400 flex-shrink-0" aria-label="Dismiss">
               <X className="w-4 h-4" />

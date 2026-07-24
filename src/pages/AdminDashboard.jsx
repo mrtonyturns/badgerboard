@@ -40,6 +40,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { ADMIN_EMAILS } from '../lib/tiers'
+import { sanitizeAnnouncementHtml } from '../lib/sanitize'
 import ElectionResultsAdmin from './ElectionResultsAdmin'
 
 const AdminDashboard = () => {
@@ -1630,21 +1631,39 @@ const ChangePlanModal = ({ currentPlan, currentBracket, onSave, onClose }) => {
 }
 
 // TAB 4: AI Costs
+// ─── AI Costs (v1.20 rebuild) ─────────────────────────────────────────────────
+// Real metering from the ai_usage table: every AI call logs actual token
+// counts and computed cost. Shows where spend comes from (app section),
+// which provider it goes to, and which users drive it.
+const ENDPOINT_LABELS = {
+  'profiler':       'Profiler — AI profiles',
+  'events':         'District Events research',
+  'district-intel': 'District Intelligence',
+  'broadside':      'Broadside sparring',
+  'support-chat':   'Support chat',
+  'campaign-intel': 'Campaign Intel & SWOT',
+  'prospecting':    'Prospecting & discovery',
+  'candidates':     'Candidate tools',
+}
+const PROVIDER_META = {
+  anthropic:  { label: 'Anthropic (Claude)',    color: '#D97757' },
+  perplexity: { label: 'Perplexity (research)', color: '#1FB8CD' },
+  xai:        { label: 'xAI (Grok)',            color: '#0F172A' },
+}
+const fmtUsd = (v) => v >= 100 ? `$${v.toFixed(0)}` : v >= 1 ? `$${v.toFixed(2)}` : `$${(v || 0).toFixed(3)}`
+const fmtTok = (v) => v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(0)}k` : String(v || 0)
+
 const AICostsTab = ({ apiCall, showToast }) => {
-  const [costs, setCosts] = useState(null)
-  const [total, setTotal] = useState(0)
+  const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [userSort, setUserSort] = useState('cost')   // 'cost' | 'alpha'
   const [hoveredIndex, setHoveredIndex] = useState(null)
 
   useEffect(() => {
-    const fetch = async () => {
+    const fetchCosts = async () => {
       try {
         setLoading(true)
-        const data = await apiCall('ai_costs')
-        const categories = Array.isArray(data) ? data : (data?.categories || [])
-        const normalized = categories.map(c => ({ ...c, cost: c.estimated_cost ?? c.cost ?? 0 }))
-        setCosts(normalized)
-        setTotal(data?.total ?? normalized.reduce((s, c) => s + (c.cost || 0), 0))
+        setData(await apiCall('ai_costs'))
       } catch (err) {
         console.error(err)
         showToast('Failed to load AI costs', 'error')
@@ -1652,95 +1671,190 @@ const AICostsTab = ({ apiCall, showToast }) => {
         setLoading(false)
       }
     }
-    fetch()
+    fetchCosts()
   }, [apiCall, showToast])
 
   if (loading) return <Spinner />
 
-  // Even if DB returned nothing, costs should have fixed estimates from backend
-  const hasCosts = costs && costs.length > 0
+  if (!data?.tracking) {
+    return (
+      <div className="bg-white rounded-2xl shadow p-10 text-center">
+        <BarChart2 className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+        <p className="font-bold text-gray-900">Cost metering isn&apos;t set up yet</p>
+        <p className="text-sm text-gray-500 mt-1 max-w-md mx-auto">{data?.error || 'Run the ai_usage migration in the Supabase SQL editor, then reload. Every AI call will start logging real token counts and costs.'}</p>
+      </div>
+    )
+  }
+
+  const t = data.totals || {}
+  const maxDaily = Math.max(0.0001, ...(data.daily || []).map(d => d.cost))
+  const maxEndpoint = Math.max(0.0001, ...(data.by_endpoint || []).map(e => e.cost))
+  const users = [...(data.by_user || [])].sort((a, b) =>
+    userSort === 'alpha' ? String(a.email).localeCompare(String(b.email)) : b.cost - a.cost)
+  const donutData = (data.by_provider || []).map(p => ({
+    label: PROVIDER_META[p.key]?.label || p.key, cost: p.cost,
+  }))
+
+  const tiles = [
+    { label: 'Last 30 days',  value: fmtUsd(t.last_30d || 0),  sub: `${(t.calls_30d || 0).toLocaleString()} AI calls`, grad: 'from-red-600 to-rose-800' },
+    { label: 'Month to date', value: fmtUsd(t.month_to_date || 0), sub: 'resets on the 1st', grad: 'from-slate-800 to-slate-950' },
+    { label: 'Tokens (30d)',  value: fmtTok(t.tokens_30d || 0), sub: 'input + output', grad: 'from-sky-600 to-indigo-800' },
+    { label: 'Last 90 days',  value: fmtUsd(t.last_90d || 0),  sub: `${(data.tracked_rows || 0).toLocaleString()} logged calls`, grad: 'from-emerald-600 to-teal-800' },
+  ]
 
   return (
     <div className="space-y-6">
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white rounded-lg shadow p-6 border-l-4 border-red-500">
-          <p className="text-gray-500 text-sm font-medium">Total Estimated Spend</p>
-          <p className="text-3xl font-bold text-red-700 mt-1">${total.toFixed(2)}</p>
-          <p className="text-xs text-gray-400 mt-1">All-time across all AI services</p>
+      {/* ── Stat tiles ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {tiles.map(tile => (
+          <div key={tile.label} className={`relative overflow-hidden rounded-2xl bg-gradient-to-br ${tile.grad} text-white p-5 shadow-lg`}>
+            <p className="text-[11px] font-bold uppercase tracking-wider text-white/60">{tile.label}</p>
+            <p className="text-3xl font-black mt-1 tabular-nums">{tile.value}</p>
+            <p className="text-[11px] font-semibold text-white/50 mt-1">{tile.sub}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Daily spend chart (30d) ── */}
+      <div className="bg-white rounded-2xl shadow p-6">
+        <div className="flex items-baseline justify-between mb-4">
+          <h3 className="text-base font-bold text-gray-900">Daily spend — last 30 days</h3>
+          <span className="text-xs text-gray-400 font-semibold">hover a bar for detail</span>
         </div>
-        <div className="bg-white rounded-lg shadow p-6 border-l-4 border-blue-500">
-          <p className="text-gray-500 text-sm font-medium">Dynamic (logged calls)</p>
-          <p className="text-3xl font-bold text-gray-900 mt-1">
-            ${(costs || []).filter(c => c.count !== null).reduce((s, c) => s + (c.cost || 0), 0).toFixed(2)}
-          </p>
-          <p className="text-xs text-gray-400 mt-1">From generation_logs table</p>
+        {(data.daily || []).length === 0 ? (
+          <p className="text-sm text-gray-400 text-center py-8">No AI calls logged yet — costs appear here as the app is used.</p>
+        ) : (
+          <div className="flex items-end gap-[3px] h-36">
+            {data.daily.map(d => (
+              <div key={d.date} className="flex-1 group relative flex flex-col justify-end h-full">
+                <div className="bg-gradient-to-t from-red-700 to-rose-400 rounded-t-md min-h-[3px] transition-all group-hover:from-red-800 group-hover:to-rose-500"
+                  style={{ height: `${Math.max(3, (d.cost / maxDaily) * 100)}%` }} />
+                <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:block bg-gray-900 text-white text-[10px] font-bold px-2 py-1 rounded-md whitespace-nowrap z-10">
+                  {new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {fmtUsd(d.cost)}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* ── Cost by app section ── */}
+        <div className="bg-white rounded-2xl shadow p-6">
+          <h3 className="text-base font-bold text-gray-900 mb-4">Where the spend comes from <span className="text-xs font-semibold text-gray-400">(30d, by app section)</span></h3>
+          {(data.by_endpoint || []).length === 0 && <p className="text-sm text-gray-400 py-6 text-center">Nothing logged yet</p>}
+          <div className="space-y-3">
+            {(data.by_endpoint || []).map(e => (
+              <div key={e.key}>
+                <div className="flex items-baseline justify-between mb-1">
+                  <span className="text-sm font-bold text-gray-800">{ENDPOINT_LABELS[e.key] || e.key}</span>
+                  <span className="text-sm font-black text-gray-900 tabular-nums">{fmtUsd(e.cost)}</span>
+                </div>
+                <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-brand-navy to-sky-600 rounded-full" style={{ width: `${Math.max(2, (e.cost / maxEndpoint) * 100)}%` }} />
+                </div>
+                <p className="text-[11px] text-gray-400 font-semibold mt-0.5">
+                  {e.calls.toLocaleString()} calls · {fmtTok(e.input_tokens + e.output_tokens)} tokens
+                  {t.last_30d > 0 ? ` · ${((e.cost / t.last_30d) * 100).toFixed(0)}% of spend` : ''}
+                </p>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="bg-white rounded-lg shadow p-6 border-l-4 border-amber-500">
-          <p className="text-gray-500 text-sm font-medium">Fixed Baseline Estimates</p>
-          <p className="text-3xl font-bold text-gray-900 mt-1">
-            ${(costs || []).filter(c => c.count === null).reduce((s, c) => s + (c.cost || 0), 0).toFixed(2)}
-          </p>
-          <p className="text-xs text-gray-400 mt-1">Background jobs &amp; Perplexity</p>
+
+        {/* ── Cost by provider ── */}
+        <div className="bg-white rounded-2xl shadow p-6">
+          <h3 className="text-base font-bold text-gray-900 mb-4">Spend by AI platform <span className="text-xs font-semibold text-gray-400">(30d)</span></h3>
+          {donutData.length ? (
+            <DonutChart data={donutData} hoveredIndex={hoveredIndex} setHoveredIndex={setHoveredIndex} />
+          ) : (
+            <p className="text-sm text-gray-400 py-6 text-center">Nothing logged yet</p>
+          )}
+          <div className="mt-4 space-y-2">
+            {(data.by_provider || []).map(p => (
+              <div key={p.key} className="flex items-center gap-2.5 text-sm">
+                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: PROVIDER_META[p.key]?.color || '#94a3b8' }} />
+                <span className="font-bold text-gray-800 flex-1">{PROVIDER_META[p.key]?.label || p.key}</span>
+                <span className="text-gray-400 text-xs font-semibold">{p.calls.toLocaleString()} calls</span>
+                <span className="font-black text-gray-900 tabular-nums w-20 text-right">{fmtUsd(p.cost)}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
-      {hasCosts ? (
-        <>
-          {/* Donut Chart */}
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-6">Cost Breakdown by Category</h3>
-            <DonutChart data={costs} hoveredIndex={hoveredIndex} setHoveredIndex={setHoveredIndex} />
-          </div>
-
-          {/* Detail Table */}
-          <div className="bg-white rounded-lg shadow overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <h3 className="text-lg font-semibold text-gray-900">Cost Detail</h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Category</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Model / Service</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Calls</th>
-                    <th className="px-4 py-3 text-right font-semibold text-gray-700">Est. Cost</th>
-                    <th className="px-4 py-3 text-right font-semibold text-gray-700">% of Total</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Notes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...costs].sort((a, b) => (b.cost || 0) - (a.cost || 0)).map((c) => (
-                    <tr key={`${c.label}|${c.model || ''}`} className="border-b border-gray-100 hover:bg-gray-50">
-                      <td className="px-4 py-3 font-medium text-gray-900">{c.label}</td>
-                      <td className="px-4 py-3 text-gray-500 text-xs font-mono">{c.model || '—'}</td>
-                      <td className="px-4 py-3 text-gray-600">{c.count !== null ? c.count.toLocaleString() : <span className="text-gray-400 italic">fixed estimate</span>}</td>
-                      <td className="px-4 py-3 text-right font-semibold text-gray-900">${(c.cost || 0).toFixed(4)}</td>
-                      <td className="px-4 py-3 text-right text-gray-500">
-                        {total > 0 ? (((c.cost || 0) / total) * 100).toFixed(1) + '%' : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-gray-400 text-xs">{c.note || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot className="bg-gray-50 border-t-2 border-gray-300">
-                  <tr>
-                    <td colSpan={3} className="px-4 py-3 font-bold text-gray-900">Total</td>
-                    <td className="px-4 py-3 text-right font-bold text-red-700">${total.toFixed(4)}</td>
-                    <td colSpan={2} className="px-4 py-3 text-right text-gray-400 text-xs">All estimates are approximations</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </div>
-        </>
-      ) : (
-        <div className="bg-white rounded-lg shadow p-8 text-center text-gray-500">
-          <p className="font-medium">No cost data available</p>
-          <p className="text-sm mt-1">The generation_logs table may not be set up yet. Fixed estimates will appear here once the backend is configured.</p>
+      {/* ── Models table ── */}
+      <div className="bg-white rounded-2xl shadow overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100"><h3 className="text-base font-bold text-gray-900">By model <span className="text-xs font-semibold text-gray-400">(30d)</span></h3></div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-left text-xs font-bold text-gray-500 uppercase tracking-wide">
+              <tr><th className="px-6 py-3">Model</th><th className="px-4 py-3 text-right">Calls</th><th className="px-4 py-3 text-right">Input tokens</th><th className="px-4 py-3 text-right">Output tokens</th><th className="px-6 py-3 text-right">Cost</th></tr>
+            </thead>
+            <tbody>
+              {(data.by_model || []).map(m => (
+                <tr key={m.key} className="border-t border-gray-50 hover:bg-gray-50/60">
+                  <td className="px-6 py-3 font-mono text-xs font-bold text-gray-800">{m.key}{m.estimated_calls > 0 && <span className="ml-2 text-[10px] text-amber-600 font-sans font-bold" title="Some calls logged as flat estimates (no token counts available)">~est</span>}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-600">{m.calls.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-600">{fmtTok(m.input_tokens)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-600">{fmtTok(m.output_tokens)}</td>
+                  <td className="px-6 py-3 text-right tabular-nums font-black text-gray-900">{fmtUsd(m.cost)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      )}
+      </div>
+
+      {/* ── Per-user spend ── */}
+      <div className="bg-white rounded-2xl shadow overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-2">
+          <h3 className="text-base font-bold text-gray-900">Who&apos;s spending the most <span className="text-xs font-semibold text-gray-400">(30d)</span></h3>
+          <div className="flex gap-1.5">
+            <button onClick={() => setUserSort('cost')}
+              className={`text-xs font-bold px-3 py-1.5 rounded-full border-2 transition-colors ${userSort === 'cost' ? 'bg-brand-navy border-brand-navy text-white' : 'bg-white border-gray-200 text-gray-500'}`}>
+              Highest cost
+            </button>
+            <button onClick={() => setUserSort('alpha')}
+              className={`text-xs font-bold px-3 py-1.5 rounded-full border-2 transition-colors ${userSort === 'alpha' ? 'bg-brand-navy border-brand-navy text-white' : 'bg-white border-gray-200 text-gray-500'}`}>
+              A–Z
+            </button>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-left text-xs font-bold text-gray-500 uppercase tracking-wide">
+              <tr><th className="px-6 py-3">User</th><th className="px-4 py-3 text-right">Calls</th><th className="px-4 py-3 text-right">Tokens</th><th className="px-6 py-3 text-right">Cost</th><th className="px-4 py-3 text-right">% of spend</th></tr>
+            </thead>
+            <tbody>
+              {users.length === 0 && (
+                <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-400 text-sm">No user-attributed AI calls in the last 30 days</td></tr>
+              )}
+              {users.map(u => (
+                <tr key={u.key} className="border-t border-gray-50 hover:bg-gray-50/60">
+                  <td className="px-6 py-3 font-semibold text-gray-800">{u.email}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-600">{u.calls.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-600">{fmtTok(u.input_tokens + u.output_tokens)}</td>
+                  <td className="px-6 py-3 text-right tabular-nums font-black text-gray-900">{fmtUsd(u.cost)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-500">{t.last_30d > 0 ? `${((u.cost / t.last_30d) * 100).toFixed(1)}%` : '—'}</td>
+                </tr>
+              ))}
+              {t.system_cost_30d > 0 && (
+                <tr className="border-t border-gray-100 bg-gray-50/40">
+                  <td className="px-6 py-3 text-gray-500 italic">System — crons &amp; background jobs</td>
+                  <td className="px-4 py-3" /><td className="px-4 py-3" />
+                  <td className="px-6 py-3 text-right tabular-nums font-black text-gray-700">{fmtUsd(t.system_cost_30d)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-500">{t.last_30d > 0 ? `${((t.system_cost_30d / t.last_30d) * 100).toFixed(1)}%` : '—'}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <p className="text-xs text-gray-400 font-semibold">
+        Metering live since v1.20 — token counts come straight from each provider&apos;s API response. Rows marked ~est use flat per-call estimates (Perplexity search fees, Grok tool calls). History before v1.20 wasn&apos;t tracked.
+      </p>
     </div>
   )
 }
@@ -2157,6 +2271,63 @@ Please:
 }
 
 // TAB 6: Announcements
+// ── Rich announcement editor (v1.20) ─────────────────────────────────────────
+// Formatting toolbar: bold / italic / underline + emoji palette. Deliberately
+// NO text-size control (product decision). Output is HTML restricted to
+// b/i/u/em/strong/br — sanitized here, on the server, and again at render.
+const ANNOUNCE_EMOJIS = ['🎉','🚀','✅','🆕','📣','🔔','💡','🔥','👏','⭐','🗳️','🦡','📊','🎯','⚠️','❗','🛠️','📅','🤝','💪']
+
+const RichMessageEditor = ({ onChange, editorRef }) => {
+  const [showEmoji, setShowEmoji] = useState(false)
+
+  const exec = (cmd) => {
+    editorRef.current?.focus()
+    document.execCommand(cmd)
+    onChange(editorRef.current?.innerHTML || '')
+  }
+  const insertEmoji = (emoji) => {
+    editorRef.current?.focus()
+    document.execCommand('insertText', false, emoji)
+    onChange(editorRef.current?.innerHTML || '')
+    setShowEmoji(false)
+  }
+
+  const ToolBtn = ({ label, title, onClick, className = '' }) => (
+    <button type="button" onMouseDown={e => e.preventDefault()} onClick={onClick} title={title}
+      className={`w-8 h-8 rounded-lg border border-gray-200 bg-white hover:bg-gray-100 text-gray-700 text-sm flex items-center justify-center transition-colors ${className}`}>
+      {label}
+    </button>
+  )
+
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 mb-2 relative">
+        <ToolBtn label={<b>B</b>} title="Bold"      onClick={() => exec('bold')} />
+        <ToolBtn label={<i>I</i>} title="Italic"    onClick={() => exec('italic')} />
+        <ToolBtn label={<u>U</u>} title="Underline" onClick={() => exec('underline')} />
+        <div className="w-px h-5 bg-gray-200 mx-1" />
+        <ToolBtn label="😊" title="Insert emoji" onClick={() => setShowEmoji(s => !s)} />
+        {showEmoji && (
+          <div className="absolute top-9 left-0 z-20 bg-white border border-gray-200 rounded-xl shadow-xl p-2 grid grid-cols-10 gap-1 w-[320px]">
+            {ANNOUNCE_EMOJIS.map(e => (
+              <button key={e} type="button" onMouseDown={ev => ev.preventDefault()} onClick={() => insertEmoji(e)}
+                className="w-7 h-7 rounded-lg hover:bg-gray-100 text-base flex items-center justify-center">{e}</button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div
+        ref={editorRef}
+        contentEditable
+        suppressContentEditableWarning
+        onInput={() => onChange(editorRef.current?.innerHTML || '')}
+        data-placeholder="Write your announcement… select text to bold, italicize, or underline it."
+        className="w-full min-h-[110px] px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-700 text-sm text-gray-800 leading-relaxed [&:empty]:before:content-[attr(data-placeholder)] [&:empty]:before:text-gray-400"
+      />
+    </div>
+  )
+}
+
 const AnnouncementsTab = ({ apiCall, showToast }) => {
   const [announcements, setAnnouncements] = useState([])
   const [loading, setLoading] = useState(true)
@@ -2166,6 +2337,8 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
     type: 'info',
     message: '',
   })
+  const editorRef = useRef(null)
+  const plainText = (html) => { const d = document.createElement('div'); d.innerHTML = html; return d.textContent || '' }
 
   useEffect(() => {
     const fetch = async () => {
@@ -2187,8 +2360,10 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
 
   const handleCreateAnnouncement = async () => {
     if (posting) return
-    if (!formData.message.trim()) {
-      alert('Message is required')
+    // Sanitize to formatting-only HTML; require actual text content
+    const clean = sanitizeAnnouncementHtml(formData.message)
+    if (!plainText(clean).trim()) {
+      showToast('Message is required', 'error')
       return
     }
 
@@ -2196,12 +2371,13 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
     try {
       await apiCall('create_announcement', {
         type: formData.type,
-        message: formData.message,
+        message: clean,
       })
       const data = await apiCall('announcements')
       setAnnouncements(Array.isArray(data) ? data : (data?.announcements || []))
       setShowCreateForm(false)
       setFormData({ type: 'info', message: '' })
+      if (editorRef.current) editorRef.current.innerHTML = ''
       showToast('Announcement created')
     } catch (err) {
       console.error(err)
@@ -2290,13 +2466,13 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
 
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-2">Message</label>
-            <textarea
-              value={formData.message}
-              onChange={(e) => setFormData({ ...formData, message: e.target.value })}
-              placeholder="Enter announcement message..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-700"
-              rows={4}
+            <RichMessageEditor
+              editorRef={editorRef}
+              onChange={(html) => setFormData(f => ({ ...f, message: html }))}
             />
+            {formData.type === 'success' && (
+              <p className="text-xs text-green-700 mt-2">Success announcements also pop up for users for 10 seconds — other types go quietly to the bell.</p>
+            )}
           </div>
 
           {/* Preview */}
@@ -2308,7 +2484,8 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
                   {formData.type.charAt(0).toUpperCase() + formData.type.slice(1)}
                 </span>
               </div>
-              <p className="text-gray-800 mt-2 text-sm">{formData.message}</p>
+              <div className="text-gray-800 mt-2 text-sm leading-relaxed"
+                dangerouslySetInnerHTML={{ __html: sanitizeAnnouncementHtml(formData.message) }} />
             </div>
           )}
 
@@ -2356,7 +2533,8 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
               </div>
             </div>
 
-            <p className="text-gray-800 mb-4">{announcement.message}</p>
+            <div className="text-gray-800 mb-4 text-sm leading-relaxed"
+              dangerouslySetInnerHTML={{ __html: sanitizeAnnouncementHtml(announcement.message) }} />
 
             <div className="flex gap-2">
               <button

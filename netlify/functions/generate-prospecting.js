@@ -3,6 +3,7 @@
 // ANTHROPIC_API_KEY must be set in Netlify environment variables
 
 const { enforceRateLimit } = require('./_rate-limit')
+const { logAiUsage } = require('./_ai-usage')
 const { ADMIN_EMAILS } = require('./_config')
 const { PLAN_CONFIG } = require('../../src/lib/tiers.js')
 // Tier gating — prospecting is an Action-plan entitlement (tiers.js features.prospecting)
@@ -213,6 +214,7 @@ Sort candidates by priority (high first, then medium, then low). Include ALL can
     }
 
     const data = await response.json()
+    logAiUsage({ userId: caller?.id, endpoint: 'prospecting', provider: 'anthropic', model: MODEL, inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
     const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
 
     if (!text) throw new Error('No content returned from Claude')
