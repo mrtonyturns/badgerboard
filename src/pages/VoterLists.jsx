@@ -441,13 +441,7 @@ export default function VoterLists() {
           <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600 font-bold ml-3">✕</button>
         </div>
       )}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Users className="w-6 h-6 text-brand-red" /> Voter Lists
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">Upload voter CSV files, map addresses, and build targeted prospect lists</p>
-        </div>
+      <div className="flex items-start justify-end">
         <button onClick={() => setShowUploadModal(true)} className="btn-primary flex items-center gap-2">
           <Upload className="w-4 h-4" /> Upload CSV
         </button>

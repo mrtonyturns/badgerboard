@@ -541,13 +541,7 @@ export default function Prospecting() {
   return (
     <div className="space-y-6">
       <LoadingBar loading={loading} />
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <ListChecks className="w-6 h-6 text-brand-red" /> Prospecting Lists
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">AI-powered candidate prospecting for political marketing outreach</p>
-        </div>
+      <div className="flex items-start justify-end">
         <button onClick={openNewListModal} className="btn-primary flex items-center gap-2">
           <Plus className="w-4 h-4" /> New List
         </button>

@@ -552,12 +552,6 @@ export default function Offices() {
       <LoadingBar loading={loading} />
       {/* ── Header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Building2 className="w-6 h-6 text-brand-red" /> Offices & Districts
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">All political offices tracked across Wisconsin</p>
-        </div>
         <div className="sm:ml-auto flex items-center gap-2">
           <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
             <button onClick={() => switchView('table')}

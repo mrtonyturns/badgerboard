@@ -991,12 +991,8 @@ export default function GamePlan() {
     <div className="space-y-5">
       <LoadingBar loading={loading} />
 
-      {/* ── Page header ── */}
+      {/* ── Page header lives in the top bar (v1.24.1) ── */}
       <div className="flex items-center gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Game Plan</h1>
-          <p className="text-gray-400 text-sm mt-0.5">Campaign tasks &amp; election calendar</p>
-        </div>
         <div className="ml-auto flex items-center gap-2">
           {activeTab === 'calendar' && (
             <button onClick={() => { setEditingElect(null); setShowElect(true) }} className="btn-primary flex items-center gap-2 text-sm">

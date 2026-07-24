@@ -449,13 +449,6 @@ export default function Compare() {
         <Link to="/candidates" className="btn-secondary text-xs py-1.5 px-2.5 flex items-center gap-1">
           <ArrowLeft className="w-3.5 h-3.5" /> Candidates
         </Link>
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Scale className="w-6 h-6 text-brand-red" />
-            Candidate Comparison
-          </h1>
-          <p className="text-sm text-gray-500 mt-0.5">Side-by-side intelligence on two candidates</p>
-        </div>
       </div>
 
       {/* Selector card */}

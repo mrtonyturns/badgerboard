@@ -344,12 +344,6 @@ export default function Events() {
 
       {/* header */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <CalendarDays className="w-6 h-6 text-brand-red" /> District Events
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">Community events where your campaign should show up — researched for your district, refreshed daily</p>
-        </div>
         <div className="sm:ml-auto flex items-center gap-2 flex-wrap">
           <Link to="/settings#calendars" className="flex items-center gap-2 bg-white border-2 border-gray-200 rounded-xl px-3.5 py-2 text-xs font-semibold text-gray-600 hover:border-gray-300">
             {connectedCals.length ? (

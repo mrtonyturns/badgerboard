@@ -466,14 +466,7 @@ export default function Candidates() {
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Users className="w-6 h-6 text-brand-red" /> Candidates
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">
-            All tracked candidates across Wisconsin — <span className="font-semibold text-gray-700">{candidates.length}</span> total
-          </p>
-        </div>
+        <p className="text-sm text-gray-500"><span className="font-semibold text-gray-700">{candidates.length}</span> tracked</p>
         <div className="sm:ml-auto flex items-center gap-2">
           <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
             <button

@@ -662,6 +662,29 @@ export default function Layout() {
   // Full-bleed routes own the whole content area (no padding, no outer scroll)
   const { pathname } = useLocation()
   const fullBleed = pathname.startsWith('/broadside')
+
+  // v1.24.1: page titles live in the top bar (the formerly blank strip),
+  // so pages start their content immediately — no duplicated headers.
+  const PAGE_HEADERS = [
+    { match: /^\/offices/,          title: 'Offices & Districts',    sub: 'All political offices tracked across Wisconsin' },
+    { match: /^\/elections/,        title: 'Elections',              sub: 'Wisconsin election calendar & live results' },
+    { match: /^\/game-plan/,        title: 'Game Plan',              sub: 'Campaign tasks & election calendar' },
+    { match: /^\/candidates\/.+/,  title: 'Candidates',             sub: 'Candidate profile' },
+    { match: /^\/candidates/,       title: 'Candidates',             sub: 'All tracked candidates across Wisconsin' },
+    { match: /^\/prospecting/,      title: 'Prospecting Lists',      sub: 'AI-powered candidate prospecting for political marketing outreach' },
+    { match: /^\/voter-lists/,      title: 'Voter Lists',            sub: 'Upload voter CSV files, map addresses, and build targeted prospect lists' },
+    { match: /^\/(dossiers|profiler)/, title: 'Profiler',            sub: 'AI-generated 14-section political intelligence reports' },
+    { match: /^\/compare/,          title: 'Candidate Comparison',   sub: 'Side-by-side intelligence on two candidates', badge: 'Beta' },
+    { match: /^\/events/,           title: 'District Events',        sub: 'Community events where your campaign should show up' },
+    { match: /^\/campaign-connect/, title: 'Campaign Connect',       sub: 'Two accounts, one campaign' },
+    { match: /^\/broadside/,        title: 'Broadside',              sub: 'Take the hit before it\u2019s real', badge: 'Beta' },
+    { match: /^\/polling/,          title: 'Polling',                sub: 'AI-estimated district opinion snapshots', badge: 'Beta' },
+    { match: /^\/settings/,         title: 'Settings',               sub: 'Manage your profile, billing, and account security' },
+    { match: /^\/plans/,            title: 'Plans & Pricing',        sub: 'Choose the plan that fits your operation' },
+    { match: /^\/admin/,            title: 'Admin Panel',            sub: 'Platform health, accounts, billing & controls' },
+    { match: /^\/$/,                title: 'Intelligence Dashboard', sub: 'Wisconsin statewide political tracking' },
+  ]
+  const pageHeader = PAGE_HEADERS.find(h => h.match.test(pathname)) || null
   const navigate           = useNavigate()
   const [sidebarOpen, setSidebarOpen]   = useState(false)
   const [profileOpen, setProfileOpen]   = useState(false)
@@ -739,6 +762,17 @@ export default function Layout() {
             <Menu className="w-5 h-5 text-gray-600" />
           </button>
 
+          {pageHeader && (
+            <div className="min-w-0 flex items-baseline gap-3">
+              <h1 className="text-lg md:text-xl font-bold text-gray-900 whitespace-nowrap flex items-center gap-2">
+                {pageHeader.title}
+                {pageHeader.badge && (
+                  <span className="text-[9px] font-extrabold uppercase tracking-wider bg-purple-600 text-white px-1.5 py-0.5 rounded-full">{pageHeader.badge}</span>
+                )}
+              </h1>
+              <p className="hidden lg:block text-xs text-gray-400 truncate">{pageHeader.sub}</p>
+            </div>
+          )}
 
           <div className="ml-auto flex items-center gap-3">
             {/* Dossier generation status indicator */}

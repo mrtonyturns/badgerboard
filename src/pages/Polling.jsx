@@ -118,16 +118,7 @@ export default function Polling() {
     <div className="space-y-6">
       <LoadingBar loading={loading} />
 
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-          <BarChart2 className="w-6 h-6 text-brand-red" /> Polling
-          <span className="text-[10px] font-extrabold uppercase tracking-wider bg-purple-600 text-white px-2 py-0.5 rounded-full">Beta</span>
-        </h1>
-        <p className="text-gray-500 text-sm mt-1">
-          AI-estimated district opinion snapshots — a fast directional read between real polls, built from cited local news, public polling, past results, and social signal.
-        </p>
-      </div>
+      {/* Header lives in the top bar (v1.24.1) */}
 
       {/* District selector */}
       <div className="card py-4">

@@ -264,12 +264,6 @@ export default function Elections() {
       <LoadingBar loading={loading} />
       {/* ── Page header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <CalendarDays className="w-6 h-6 text-brand-red" /> Elections
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">Wisconsin election calendar &amp; live results</p>
-        </div>
         {activeTab === 'calendar' && isAdmin && (
           <button onClick={openAdd} className="btn-primary sm:ml-auto flex items-center gap-2">
             <Plus className="w-4 h-4" /> Add Election

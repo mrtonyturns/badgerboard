@@ -2301,13 +2301,7 @@ export default function Dossiers() {
         />
       )}
 
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <FileText className="w-6 h-6 text-brand-red" /> Profiler
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">AI-generated 14-section political intelligence reports</p>
-        </div>
+      <div className="flex flex-col sm:flex-row sm:items-end justify-end gap-4">
         <div className="sm:w-80">
           <DossierUsageBar used={dossiersUsed} limit={effectiveProfileLimit} />
         </div>
