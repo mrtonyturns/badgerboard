@@ -196,7 +196,7 @@ const navItems = [
   { to: '/prospecting', icon: ListChecks,      label: 'Prospecting'   },
   { to: '/voter-lists', icon: UserCheck,       label: 'Voter Lists'   },
   { to: '/profiler',    icon: FileText,        label: 'Profiler'      },
-  { to: '/compare',     icon: Scale,           label: 'Compare'       },
+  { to: '/compare',     icon: Scale,           label: 'Compare',       badge: 'Beta' },
   { to: '/broadside',   icon: Swords,          label: 'Broadside',     feature: 'broadside', webOnly: true },
   { to: '/events',      icon: CalendarDays,    label: 'Events',        badge: 'New' },
   { to: '/campaign-connect', icon: Users2,     label: 'Campaign Connect' },

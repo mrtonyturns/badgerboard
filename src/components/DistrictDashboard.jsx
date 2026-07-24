@@ -23,9 +23,18 @@ async function loadStatic() {
 }
 
 // ── district identity from a map click ───────────────────────────────────────
+// v1.19.1 layer keys: congress / ussenate / senate / assembly (legacy
+// 'federal' / 'state' still resolve for any cached callers).
 export function districtKeyFor(info) {
   const num = parseInt((info.name?.match(/\d+/) || [])[0])
-  if (info.layerKey === 'federal' && num) return { key: `congress-${num}`, chamber: 'congress', num }
+  if ((info.layerKey === 'congress' || info.layerKey === 'federal') && num) {
+    return { key: `congress-${num}`, chamber: 'congress', num }
+  }
+  if (info.layerKey === 'ussenate') {
+    return { key: 'state-wi', chamber: 'ussenate', num: null }
+  }
+  if (info.layerKey === 'senate' && num) return { key: `senate-${num}`, chamber: 'senate', num }
+  if (info.layerKey === 'assembly' && num) return { key: `assembly-${num}`, chamber: 'assembly', num }
   if (info.layerKey === 'state' && num) {
     if (info.sublabel === 'State Senate District') return { key: `senate-${num}`, chamber: 'senate', num }
     return { key: `assembly-${num}`, chamber: 'assembly', num }
@@ -44,6 +53,8 @@ const CHAMBER_META = {
     elig: (n) => `Qualified elector of Senate District ${n} (resident 28+ days before filing) · U.S. citizen, age 18+ · nomination papers with 400–800 district signatures · CF-1 + declaration of candidacy filed by June 1 of the election year · no felony conviction unless rights restored` },
   congress: { office: (n) => `U.S. Representative, Congressional District ${n}`, badge: 'Federal · Legislative', term: 2,
     elig: (n) => `U.S. citizen for 7+ years · age 25+ · resident of Wisconsin (district residency customary, not required) · nomination papers with 1,000–2,000 district signatures · federal FEC registration once raising/spending over $5,000 · WI filing by June 1 of the election year` },
+  ussenate: { office: () => `U.S. Senator for Wisconsin`, badge: 'Federal · Statewide', term: 6,
+    elig: () => `U.S. citizen for 9+ years · age 30+ · inhabitant of Wisconsin when elected (U.S. Const. Art. I §3) · nomination papers with 2,000–4,000 statewide signatures (Wis. Stat. § 8.15) · federal FEC registration once raising/spending over $5,000 · WI declaration of candidacy + filing by June 1 of the election year · seats are elected statewide on a 6-year cycle (Class I and Class III, staggered)` },
   county:   { office: (n, name) => `County Sheriff of ${name} County`, badge: 'County', term: 4,
     elig: (n, name) => `Qualified elector of ${name} County (resident 28+ days before filing) · U.S. citizen, age 18+ · nomination papers: 500–1,000 county signatures (counties of 100,000+) or 200–400 (smaller counties) · CF-1 + declaration of candidacy by June 1 of the election year · some offices carry extra requirements (Sheriff: law-enforcement certification; District Attorney: WI bar license)` },
 }
@@ -168,6 +179,11 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
       .select('id, office, district, seats, election:elections(id, name, election_date), results:election_results(candidate_name, party, votes, vote_pct, winner, declared)')
     if (id?.chamber === 'county') {
       baseSel.eq('county', id.countyName).limit(60).then(({ data }) => { if (alive) setContests(data || []) })
+    } else if (id?.chamber === 'ussenate') {
+      // Statewide race — no district number to match on
+      baseSel.or('office.ilike.%U.S. Senat%,office.ilike.%United States Senat%,office.ilike.%US Senat%')
+        .limit(40)
+        .then(({ data }) => { if (alive) setContests(data || []) })
     } else {
       const chamberWord = id?.chamber === 'assembly' ? 'Assembly' : id?.chamber === 'senate' ? 'Senate' : 'Congressional'
       baseSel.or(`office.ilike.%${chamberWord}%District ${num}%,district.ilike.%District ${num}%`)

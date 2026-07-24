@@ -17,15 +17,31 @@ export default function AnnouncementBanner() {
   })
 
   useEffect(() => {
-    supabase
-      .from('announcements')
-      .select('*')
-      .eq('is_active', true)
-      .order('created_at', { ascending: false })
-      .then(({ data, error }) => {
-        if (error) { console.warn('[AnnouncementBanner] Failed to load:', error.message); return }
-        if (data) setAnnouncements(data)
-      })
+    const load = () => {
+      supabase
+        .from('announcements')
+        .select('*')
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .then(({ data, error }) => {
+          if (error) { console.warn('[AnnouncementBanner] Failed to load:', error.message); return }
+          if (data) setAnnouncements(data)
+        })
+    }
+    load()
+    // Refresh so new announcements reach ALREADY-OPEN tabs: re-check every
+    // 5 minutes and whenever the tab regains focus (previously the banner
+    // only loaded on mount, so an announcement posted while users had the
+    // app open never appeared until they refreshed).
+    const interval = setInterval(load, 5 * 60 * 1000)
+    const onFocus = () => { if (document.visibilityState === 'visible') load() }
+    document.addEventListener('visibilitychange', onFocus)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onFocus)
+      window.removeEventListener('focus', onFocus)
+    }
   }, [])
 
   const dismiss = (id) => {
