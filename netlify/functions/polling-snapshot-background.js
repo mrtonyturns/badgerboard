@@ -306,7 +306,9 @@ async function synthesize(district, research, social, requestedBy, intel, prior)
       body: JSON.stringify({
         model: SYNTH_MODEL,
         max_tokens: 2000,
-        temperature: 0.2,
+        // NOTE: no `temperature` here — SYNTH_MODEL rejects it (400), which
+        // silently failed both synthesis attempts. Run-to-run stability for
+        // this call comes from PRIOR_NOTE anchoring instead.
         messages: [{
           role: 'user',
           content: `You are estimating a district opinion snapshot for ${label}, Wisconsin. Using ONLY the research below, produce STRICT JSON matching exactly this shape (no prose, no markdown fences):
@@ -337,7 +339,7 @@ ${(social || 'None available').slice(0, 4000)}${PRIOR_NOTE(prior)}${INTEL_NOTE(i
         }),
       }),
     })
-    if (!res.ok) throw new Error(`Anthropic ${res.status}`)
+    if (!res.ok) throw new Error(`Anthropic ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`)
     const d = await res.json()
     logAiUsage({ userId: requestedBy, endpoint: 'polling', provider: 'anthropic', model: SYNTH_MODEL, inputTokens: d?.usage?.input_tokens || 0, outputTokens: d?.usage?.output_tokens || 0 })
     return (d.content?.[0]?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
