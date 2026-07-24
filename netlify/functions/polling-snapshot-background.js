@@ -1,4 +1,12 @@
-// Netlify BACKGROUND Function: polling-snapshot-background (v1.26, BETA-ONLY)
+// Netlify BACKGROUND Function: polling-snapshot-background (v1.26.1, BETA-ONLY)
+//
+// v1.26.1 — two follow-ups from the first production run of v1.26:
+//   e) 0% candidates are stripped from the final projection. A model that knows
+//      a candidate withdrew often keeps listing them at 0 instead of omitting
+//      them, and a 0% row reads as "the tool thinks he's still running".
+//   f) each ensemble estimator retries once. A single transient failure used to
+//      drop that model from the run, and losing a voter is itself a source of
+//      run-to-run movement (3 estimates = median, 2 = mean, 1 = no ensemble).
 //
 // v1.26 — projection STABILITY pass. Four changes, in order of impact:
 //   a) ensemble combines by MEDIAN over the models that actually listed each
@@ -414,7 +422,29 @@ Rules:
 // sampling noise at the provider defaults.
 const EST_TEMP = 0.15
 
+// v1.26.1 — retry each estimator once. A single transient 429/5xx or one
+// malformed JSON reply used to silently drop that model from the run, and
+// losing a voter is precisely what destabilizes the projection: 3 estimates
+// give a true median, 2 degrade to a mean, and 1 disables the ensemble
+// entirely and falls back to the (less stable) synthesis number. One cheap
+// retry buys back most of those runs.
 async function estimateVoteShare(provider, district, research, requestedBy, intel, prior) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const out = await estimateVoteShareOnce(provider, district, research, requestedBy, intel, prior)
+      if (out) return out
+      if (!hasKeyFor(provider)) return null            // no key configured — retrying is pointless
+    } catch (e) {
+      console.warn(`[polling-bg] ${provider} estimate attempt ${attempt + 1} failed: ${e.message}`)
+    }
+    if (attempt === 0) await new Promise(r => setTimeout(r, 1500))
+  }
+  return null
+}
+
+const hasKeyFor = (p) => p === 'xai' ? !!XAI_KEY : p === 'perplexity' ? !!PPLX_KEY : !!GEMINI_KEY
+
+async function estimateVoteShareOnce(provider, district, research, requestedBy, intel, prior) {
   const label = districtLabel(district)
   const prompt = `You are projecting the vote share for ${label}, Wisconsin (office: ${officeLabel(district)}).
 ${VOTE_SHARE_RULES(district)}
@@ -616,6 +646,22 @@ function stabilizeRank(rows, priorMap) {
   return rows
 }
 
+// v1.26.1 — strip 0% lines. A model that knows a candidate withdrew often keeps
+// listing them at 0 rather than omitting them (Kell Bales did exactly this on
+// senate-1). A 0% row reads to the user as "the tool still thinks he's running",
+// which is the same complaint that started this. Dropping them can't break the
+// sum — they contribute nothing — and Undecided is exempt so a district with no
+// undecideds still renders the line.
+function dropZeroed(vs) {
+  const strip = (rows) => (Array.isArray(rows)
+    ? rows.filter(r => /undecided/i.test(r.candidate) || !(typeof r.pct === 'number' && r.pct <= 0))
+    : rows)
+  if (Array.isArray(vs?.primaries)) for (const g of vs.primaries) g.candidates = strip(g.candidates)
+  if (Array.isArray(vs?.general)) vs.general = strip(vs.general)
+  if (Array.isArray(vs)) return strip(vs)
+  return vs
+}
+
 function anchorVoteShare(vs, prior, maxDelta) {
   if (!vs || !prior?.vote_share || prior.vote_share.phase !== vs.phase) return vs
   const pv = prior.vote_share
@@ -734,6 +780,7 @@ export const handler = async (event) => {
     //    are unconstrained. Intel widens the band so a campaign's own data can
     //    actually move its candidate — but not re-rank the whole field.
     const maxDelta = 8 + (intel ? 4 : 0) + Math.min(10, prior?.ageDays || 0)
+    snapshot.vote_share = dropZeroed(snapshot.vote_share)
     if (prior) {
       const before = JSON.stringify(snapshot.vote_share)
       snapshot.vote_share = anchorVoteShare(snapshot.vote_share, prior, maxDelta)
