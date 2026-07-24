@@ -28,6 +28,7 @@ import {
 } from '../lib/supabase'
 import ElectionResultsBoard from './ElectionResultsBoard'
 import LoadingBar from '../components/LoadingBar'
+import SearchableSelect from '../components/SearchableSelect'
 import TaskBoard from '../components/TaskBoard'
 import UpgradePrompt from '../components/UpgradePrompt'
 import { useAuth } from '../contexts/AuthContext'
@@ -451,24 +452,23 @@ function MilestoneModal({ open, onClose, onSave, editing, candidates, elections,
           {candidates.length > 0 && (
             <div>
               <label className="label">Candidate <span className="text-gray-400 font-normal">(optional)</span></label>
-              <select className="input" value={form.candidate_id} onChange={f('candidate_id')}>
-                <option value="">All candidates</option>
-                {candidates.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+              <SearchableSelect value={form.candidate_id} onChange={v => f('candidate_id')({ target: { value: v } })}
+                options={[{ value: '', label: 'All candidates' }, ...candidates.map(c => ({ value: c.id, label: c.name }))]}
+                placeholder="All candidates"
+                searchPlaceholder="Search candidates..." />
             </div>
           )}
 
           {elections && elections.length > 0 && (
             <div>
               <label className="label">Election <span className="text-gray-400 font-normal">(optional)</span></label>
-              <select className="input" value={form.election_id} onChange={f('election_id')}>
-                <option value="">Not tied to a specific election</option>
-                {elections.map(e => (
-                  <option key={e.id} value={e.id}>
-                    {e.name}{e.election_date ? ` · ${format(parseISO(e.election_date), 'MMM d, yyyy')}` : ''}
-                  </option>
-                ))}
-              </select>
+              <SearchableSelect value={form.election_id} onChange={v => f('election_id')({ target: { value: v } })}
+                options={[
+                  { value: '', label: 'Not tied to a specific election' },
+                  ...elections.map(e => ({ value: e.id, label: `${e.name}${e.election_date ? ` · ${format(parseISO(e.election_date), 'MMM d, yyyy')}` : ''}` })),
+                ]}
+                placeholder="Not tied to a specific election"
+                searchPlaceholder="Search elections..." />
             </div>
           )}
 
@@ -531,21 +531,18 @@ function GeneratePlanModal({ open, onClose, onGenerate, generating, elections, c
         <div className="p-6 space-y-4">
           <div>
             <label className="label">Election *</label>
-            <select className="input" value={electionId} onChange={e => setElectionId(e.target.value)}>
-              {elections.length === 0 && <option value="">No elections — add one on the Calendar tab first</option>}
-              {[...elections].sort((a, b) => parseISO(a.election_date) - parseISO(b.election_date)).map(e => (
-                <option key={e.id} value={e.id}>
-                  {e.name} — {format(parseISO(e.election_date), 'MMM d, yyyy')}
-                </option>
-              ))}
-            </select>
+            <SearchableSelect value={electionId} onChange={setElectionId}
+              options={[...elections].sort((a, b) => parseISO(a.election_date) - parseISO(b.election_date))
+                .map(e => ({ value: e.id, label: `${e.name} — ${format(parseISO(e.election_date), 'MMM d, yyyy')}` }))}
+              placeholder={elections.length === 0 ? 'No elections — add one on the Calendar tab first' : 'Select election...'}
+              searchPlaceholder="Search elections..." />
           </div>
           <div>
             <label className="label">Candidate (optional)</label>
-            <select className="input" value={candidateId} onChange={e => setCandidateId(e.target.value)}>
-              <option value="">All / campaign-wide</option>
-              {candidates.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <SearchableSelect value={candidateId} onChange={setCandidateId}
+              options={[{ value: '', label: 'All / campaign-wide' }, ...candidates.map(c => ({ value: c.id, label: c.name }))]}
+              placeholder="All / campaign-wide"
+              searchPlaceholder="Search candidates..." />
           </div>
           <p className="text-xs text-gray-400">
             Dates are estimates based on a typical WI race calendar — filing windows and finance

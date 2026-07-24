@@ -5,6 +5,7 @@ import { supabase, getCandidates, getOffices, getElections, createCandidate, del
 import { useAuth } from '../contexts/AuthContext'
 import { getUserTier, getUserBracket, getBracketConfig, getUserPlanType, getActiveCandidateLimit, hasFeature, ADMIN_EMAILS } from '../lib/tiers'
 import LeafletMapView from '../components/LeafletMapView'
+import SearchableSelect from '../components/SearchableSelect'
 import MapErrorBoundary from '../components/MapErrorBoundary'
 import LoadingBar from '../components/LoadingBar'
 
@@ -606,14 +607,12 @@ export default function Candidates() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input className="input pl-9" placeholder="Search candidates..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-          <select className="input sm:w-40" value={partyFilter} onChange={e => setPartyFilter(e.target.value)}>
-            <option value="">All Parties</option>
-            {PARTIES.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
-          <select className="input sm:w-40" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-            <option value="">All Statuses</option>
-            {STATUSES.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
-          </select>
+          <SearchableSelect className="sm:w-40" value={partyFilter} onChange={setPartyFilter}
+            options={[{ value: '', label: 'All Parties' }, ...PARTIES.map(p => ({ value: p, label: p }))]}
+            placeholder="All Parties" />
+          <SearchableSelect className="sm:w-40" value={statusFilter} onChange={setStatusFilter}
+            options={[{ value: '', label: 'All Statuses' }, ...STATUSES.map(s => ({ value: s, label: statusLabel(s) }))]}
+            placeholder="All Statuses" />
         </div>
         {/* Office filter badge — shown when navigated from district panel */}
         {officeFilter && (
@@ -918,14 +917,13 @@ export default function Candidates() {
                 <>
                   <div>
                     <label className="label">County *</label>
-                    <select
-                      className="input"
+                    <SearchableSelect
                       value={discoverCounty}
-                      onChange={e => setDiscoverCounty(e.target.value)}
-                    >
-                      <option value="">Select a county...</option>
-                      {WI_COUNTIES.map(c => <option key={c} value={c}>{c} County</option>)}
-                    </select>
+                      onChange={setDiscoverCounty}
+                      options={WI_COUNTIES.map(c => ({ value: c, label: `${c} County` }))}
+                      placeholder="Select a county..."
+                      searchPlaceholder="Search counties..."
+                    />
                   </div>
                   <div>
                     <label className="label">Election Year (Optional)</label>
@@ -1106,10 +1104,9 @@ export default function Candidates() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
                         <label className="label">Party</label>
-                        <select className="input" value={form.party} onChange={f('party')}>
-                          <option value="">Select party...</option>
-                          {PARTIES.map(p => <option key={p} value={p}>{p}</option>)}
-                        </select>
+                        <SearchableSelect value={form.party} onChange={v => f('party')({ target: { value: v } })}
+                          options={PARTIES.map(p => ({ value: p, label: p }))}
+                          placeholder="Select party..." />
                       </div>
                       <div>
                         <label className="label">Status</label>
@@ -1120,21 +1117,20 @@ export default function Candidates() {
                     </div>
                     <div>
                       <label className="label">Running For (Office)</label>
-                      <select className="input" value={form.office_id} onChange={f('office_id')}>
-                        <option value="">Select office...</option>
-                        {offices.map(o => (
-                          <option key={o.id} value={o.id}>
-                            {o.name}{o.district_number ? ` — District ${o.district_number}` : ''}{o.district_name ? ` (${o.district_name})` : ''}{o.county ? ` · ${o.county}` : ''}
-                          </option>
-                        ))}
-                      </select>
+                      <SearchableSelect value={form.office_id} onChange={v => f('office_id')({ target: { value: v } })}
+                        options={offices.map(o => ({
+                          value: o.id,
+                          label: `${o.name}${o.district_number ? ` — District ${o.district_number}` : ''}${o.district_name ? ` (${o.district_name})` : ''}${o.county ? ` · ${o.county}` : ''}`,
+                        }))}
+                        placeholder="Select office..."
+                        searchPlaceholder="Search offices..." />
                     </div>
                     <div>
                       <label className="label">Election</label>
-                      <select className="input" value={form.election_id} onChange={f('election_id')}>
-                        <option value="">Select election...</option>
-                        {elections.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-                      </select>
+                      <SearchableSelect value={form.election_id} onChange={v => f('election_id')({ target: { value: v } })}
+                        options={elections.map(e => ({ value: e.id, label: e.name }))}
+                        placeholder="Select election..."
+                        searchPlaceholder="Search elections..." />
                     </div>
                     {/* AI Autofill */}
                     <div className="pt-1">

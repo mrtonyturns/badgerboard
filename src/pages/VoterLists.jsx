@@ -69,6 +69,7 @@ import {
   getVoterSavedLists, createVoterSavedList, updateVoterSavedList, deleteVoterSavedList,
 } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import SearchableSelect from '../components/SearchableSelect'
 import { parseCsvRows } from '../lib/csv'
 import LoadingBar from '../components/LoadingBar'
 
@@ -600,14 +601,13 @@ export default function VoterLists() {
                 >
                   {DISTRICT_TYPES.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
                 </select>
-                <select
-                  className="input text-xs py-1.5 w-40"
+                <SearchableSelect
+                  className="w-40"
+                  buttonClassName="text-xs py-1.5"
                   value={districtFilter.value}
-                  onChange={e => setDistrictFilter(p => ({ ...p, value: e.target.value }))}
-                >
-                  <option value="">All {districtFilter.type.replace(/_/g,' ')}</option>
-                  {districtValues.map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
+                  onChange={v => setDistrictFilter(p => ({ ...p, value: v }))}
+                  options={[{ value: '', label: `All ${districtFilter.type.replace(/_/g,' ')}` }, ...districtValues.map(v => ({ value: v, label: v }))]}
+                  placeholder={`All ${districtFilter.type.replace(/_/g,' ')}`} />
                 <button
                   onClick={() => setShowSuppressed(s => !s)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${showSuppressed ? 'bg-orange-50 border-orange-200 text-orange-700' : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'}`}

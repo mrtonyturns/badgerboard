@@ -11,6 +11,7 @@ import {
 import { getCandidates, getDossiers } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import LoadingBar from '../components/LoadingBar'
+import SearchableSelect from '../components/SearchableSelect'
 
 // ─── Theme: candidate A = red (left), candidate B = navy (right) ─────────────
 const LEFT  = { primary: '#dc2626', bg: 'bg-red-50',   text: 'text-red-700',   border: 'border-red-200',   dot: 'bg-red-500',   ring: 'ring-red-200',   badge: 'bg-red-100 text-red-700 border border-red-200'   }
@@ -58,19 +59,17 @@ function CandidatePicker({ candidates, value, onChange, exclude, side }) {
   const theme = side === 'left' ? LEFT : RIGHT
   const filtered = candidates.filter(c => c.id !== exclude)
   return (
-    <select
+    <SearchableSelect
       value={value || ''}
-      onChange={e => onChange(e.target.value || null)}
-      className={`w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 bg-white ${theme.border} focus:ring-2`}
-      style={{ focusBorderColor: theme.primary }}
-    >
-      <option value="">— Select a candidate —</option>
-      {filtered.map(c => (
-        <option key={c.id} value={c.id}>
-          {c.name} {c.party ? `(${c.party[0]})` : ''} {c.office?.name ? `— ${c.office.name}` : ''}
-        </option>
-      ))}
-    </select>
+      onChange={v => onChange(v || null)}
+      options={filtered.map(c => ({
+        value: c.id,
+        label: `${c.name} ${c.party ? `(${c.party[0]})` : ''} ${c.office?.name ? `— ${c.office.name}` : ''}`.trim(),
+      }))}
+      placeholder="— Select a candidate —"
+      searchPlaceholder="Search candidates..."
+      buttonClassName={`rounded-xl ${theme.border}`}
+    />
   )
 }
 

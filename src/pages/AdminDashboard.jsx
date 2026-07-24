@@ -37,6 +37,7 @@ import {
   ExternalLink,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import SearchableSelect from '../components/SearchableSelect'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { ADMIN_EMAILS } from '../lib/tiers'
@@ -2123,13 +2124,13 @@ const ErrorLogsTab = ({ apiCall, showToast }) => {
             Show Resolved
           </label>
         </div>
-        <select
+        <SearchableSelect
+          className="w-48"
+          buttonClassName="py-1.5 text-sm"
           value={componentFilter}
-          onChange={(e) => setComponentFilter(e.target.value)}
-          className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-400"
-        >
-          {components.map(c => <option key={c} value={c}>{c === 'all' ? 'All Components' : c}</option>)}
-        </select>
+          onChange={setComponentFilter}
+          options={components.map(c => ({ value: c, label: c === 'all' ? 'All Components' : c }))}
+          placeholder="All Components" />
         <input
           type="text"
           value={search}

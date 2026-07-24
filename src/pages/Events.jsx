@@ -19,6 +19,7 @@ async function loadPlaces() {
 }
 import { useAuth } from '../contexts/AuthContext'
 import LoadingBar from '../components/LoadingBar'
+import SearchableSelect from '../components/SearchableSelect'
 
 // ── district derivation from an office row ───────────────────────────────────
 export function officeToDistrict(office) {
@@ -378,12 +379,15 @@ export default function Events() {
           </div>
           <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
             <div className="relative flex-1 max-w-xl">
-              <select className="input font-semibold pr-8" value={sel} onChange={e => setSel(e.target.value)} disabled={!options.length}>
-                {!options.length && <option>Loading…</option>}
-                {options.map(o => (
-                  <option key={o.key} value={o.key}>{o.name}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                value={sel}
+                onChange={setSel}
+                options={options.map(o => ({ value: o.key, label: o.name }))}
+                placeholder={options.length ? 'Select an area…' : 'Loading…'}
+                buttonClassName="font-semibold"
+                disabled={!options.length}
+                searchPlaceholder={`Search ${mode === 'district' ? 'districts' : mode === 'county' ? 'counties' : 'cities'}…`}
+              />
             </div>
             {target && (
               <span className="text-xs font-bold bg-red-50 text-brand-red px-2.5 py-1 rounded-full whitespace-nowrap">{target.name}</span>

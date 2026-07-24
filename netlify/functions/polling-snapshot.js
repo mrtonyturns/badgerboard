@@ -90,7 +90,9 @@ exports.handler = async (event) => {
     }
 
     // Mark generating (upsert) then fire the background pipeline
-    await sb('/poll_snapshots', {
+    // on_conflict=district is REQUIRED: merge-duplicates alone resolves on the
+    // id PK, so a second write for the same district 409s on the UNIQUE(district)
+    await sb('/poll_snapshots?on_conflict=district', {
       method: 'POST',
       headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
       body: JSON.stringify({ district, status: 'generating', generated_at: new Date().toISOString(), requested_by: user.id }),

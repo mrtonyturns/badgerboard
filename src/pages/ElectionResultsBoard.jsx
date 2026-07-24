@@ -14,6 +14,7 @@ import {
   Clock, MapPin, Users, ExternalLink, ChevronDown, Download, Info,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import SearchableSelect from '../components/SearchableSelect'
 
 // ── Party colours ─────────────────────────────────────────────────────────────
 const PARTY = {
@@ -433,14 +434,14 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
             </div>
           )}
           {counties.length > 0 && (
-            <select
+            <SearchableSelect
+              className="w-44"
+              buttonClassName="text-xs py-1.5"
               value={countyFilter}
-              onChange={e => setCountyFilter(e.target.value)}
-              className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 text-gray-700 bg-white focus:ring-2 focus:ring-brand-red/20 focus:border-brand-red outline-none"
-            >
-              <option value="all">All Counties</option>
-              {counties.map(c => <option key={c} value={c}>{c} County</option>)}
-            </select>
+              onChange={setCountyFilter}
+              options={[{ value: 'all', label: 'All Counties' }, ...counties.map(c => ({ value: c, label: `${c} County` }))]}
+              placeholder="All Counties"
+              searchPlaceholder="Search counties…" />
           )}
         </div>
       )}

@@ -13,6 +13,7 @@ import {
   Maximize2, Minimize2, EyeOff } from 'lucide-react'
 import { getCandidates, getDossiers, getDossier, createDossier, deleteDossier, createCandidate, updateCandidate, getOffices } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import SearchableSelect from '../components/SearchableSelect'
 import { getUserTier, getTierConfig, isLiteProfileOnly, LITE_PROFILE_FREE_SECTIONS, getUserBracket, getProfileLimit, getEffectiveProfileLimit } from '../lib/tiers'
 import { filterSections } from '../lib/profileContent'
 import { supabase } from '../lib/supabase'
@@ -2393,14 +2394,13 @@ export default function Dossiers() {
             <div className="space-y-3">
               <div>
                 <label className="label text-xs">Select Candidate</label>
-                <select className="input" value={candidateId} onChange={e => setCandidateId(e.target.value)}>
-                  <option value="">Choose candidate...</option>
-                  {(Array.isArray(candidates) ? candidates : []).map(c => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}{c.party ? ` (${c.party})` : ''} — {c.office?.name || 'No office'}
-                    </option>
-                  ))}
-                </select>
+                <SearchableSelect value={candidateId} onChange={setCandidateId}
+                  options={(Array.isArray(candidates) ? candidates : []).map(c => ({
+                    value: c.id,
+                    label: `${c.name}${c.party ? ` (${c.party})` : ''} — ${c.office?.name || 'No office'}`,
+                  }))}
+                  placeholder="Choose candidate..."
+                  searchPlaceholder="Search candidates..." />
               </div>
 
               {selectedCandidate && (

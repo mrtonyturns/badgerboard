@@ -20,6 +20,7 @@ import {
 } from '../lib/supabase'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import SearchableSelect from '../components/SearchableSelect'
 import {
   getUserTier, hasFeature, getUserPlanType, getUserBracket,
   getBracketConfig, getActiveCandidateLimit, ADMIN_EMAILS,
@@ -2257,10 +2258,9 @@ export default function CandidateDetail() {
             <div className="flex flex-wrap items-center gap-2 mt-2">
               {editing ? (
                 <>
-                  <select className="input w-44" value={form.party || ''} onChange={f('party')}>
-                    <option value="">No party</option>
-                    {PARTIES.map(p => <option key={p} value={p}>{p}</option>)}
-                  </select>
+                  <SearchableSelect className="w-44" value={form.party || ''} onChange={v => f('party')({ target: { value: v } })}
+                    options={[{ value: '', label: 'No party' }, ...PARTIES.map(p => ({ value: p, label: p }))]}
+                    placeholder="No party" />
                   <select className="input w-44" value={form.status} onChange={f('status')}>
                     {STATUSES.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
                   </select>

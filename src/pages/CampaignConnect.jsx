@@ -4,6 +4,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { Users, UserPlus, Send, Clock, Check, X, Shield, AlertTriangle, RefreshCw, ChevronRight, Inbox, Trash2, Eye, ArrowLeft, Copy, Link2, Sparkles, CheckCircle2, ListChecks, FileText, Zap } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import SearchableSelect from '../components/SearchableSelect'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserPlan, getUserPlanType } from '../lib/tiers'
 
@@ -335,13 +336,13 @@ function Workspace({ link, onBack, flash }) {
         <div className="rounded-2xl border-2 border-brand-red/20 bg-gradient-to-br from-brand-red/5 to-white shadow-sm p-5">
           <h3 className="font-bold text-gray-900 mb-3 flex items-center gap-2"><span className="w-8 h-8 rounded-xl bg-brand-red/10 flex items-center justify-center"><Send className="w-4 h-4 text-brand-red" /></span> Send a profile to this candidate</h3>
           <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-            <select className="input flex-1" value={sendPick} onChange={e => setSendPick(e.target.value)}>
-              <option value="">Choose one of your profiles…</option>
-              {myDossiers.map(d => <option key={d.id} value={d.id}>{d.title}</option>)}
-            </select>
-            <select className="input sm:w-48" value={expiry} onChange={e => setExpiry(Number(e.target.value))}>
-              {EXPIRY_OPTS.map(o => <option key={o.ms} value={o.ms}>{o.label}</option>)}
-            </select>
+            <SearchableSelect className="flex-1" value={sendPick} onChange={setSendPick}
+              options={myDossiers.map(d => ({ value: d.id, label: d.title }))}
+              placeholder="Choose one of your profiles…"
+              searchPlaceholder="Search profiles…" />
+            <SearchableSelect className="sm:w-48" value={expiry} onChange={v => setExpiry(Number(v))}
+              options={EXPIRY_OPTS.map(o => ({ value: o.ms, label: o.label }))}
+              placeholder="Link expiry" />
             <button onClick={sendProfile} disabled={!sendPick} className="btn-primary whitespace-nowrap">Send</button>
           </div>
           <p className="text-xs text-gray-400 mt-2">Viewable for the window you pick (30 min – 7 days), then hidden from them. Your copy is never deleted.</p>

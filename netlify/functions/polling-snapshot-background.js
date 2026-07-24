@@ -269,7 +269,9 @@ export const handler = async (event) => {
 
     const modelUsed = `${researchProvider}:${researchProvider === 'gemini' ? 'gemini-2.5-flash' : RESEARCH_MODEL} + ${social ? `xai:${SOCIAL_MODEL} + ` : ''}anthropic:${SYNTH_MODEL}`
 
-    const up = await sb('/poll_snapshots', {
+    // on_conflict=district is REQUIRED: merge-duplicates alone resolves on the
+    // id PK, so re-saving an existing district 409s on the UNIQUE(district)
+    const up = await sb('/poll_snapshots?on_conflict=district', {
       method: 'POST',
       headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
       body: JSON.stringify({

@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import SearchableSelect from '../components/SearchableSelect'
 import { useNavigate, Link } from 'react-router-dom'
 import { Eye, EyeOff, AlertCircle, CheckCircle, User, Building2, Phone, Mail, Briefcase } from 'lucide-react'
 import BluejackLogo from '../components/BluejackLogo'
@@ -218,13 +219,14 @@ export default function Login() {
                   <div>
                     <label className="label">Position / Role <span className="text-brand-red">*</span></label>
                     <div className="relative">
-                      <Briefcase className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none z-10" />
-                      <select className="input pl-9 appearance-none" value={position}
-                        onChange={e => setPosition(e.target.value)} required>
-                        {POSITION_OPTIONS.map(o => (
-                          <option key={o.value} value={o.value} disabled={!o.value}>{o.label}</option>
-                        ))}
-                      </select>
+                      <Briefcase className="absolute left-3 top-[22px] -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none z-10" />
+                      <SearchableSelect
+                        value={position}
+                        onChange={setPosition}
+                        options={POSITION_OPTIONS.filter(o => o.value).map(o => ({ value: o.value, label: o.label }))}
+                        placeholder="Select your role..."
+                        buttonClassName="pl-9"
+                        searchPlaceholder="Search roles..." />
                     </div>
                   </div>
                 </>

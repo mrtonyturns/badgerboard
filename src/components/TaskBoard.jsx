@@ -22,6 +22,7 @@ import {
   createTasksBatch, createTaskSectionsBatch, primeTaskCaches, subscribeTaskChanges,
 } from '../lib/supabase'
 import { recurrenceLabel, nextOccurrence } from '../lib/recurrence.js'
+import SearchableSelect from './SearchableSelect'
 import { parseQuickAdd } from '../lib/quickAdd'
 import LoadingBar from './LoadingBar'
 
@@ -332,17 +333,19 @@ function TaskDetailModal({ task, tasks, projects, sections, labels, onClose, onS
           {/* Project / section */}
           <div>
             <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Project</label>
-            <select value={projectId} onChange={(e) => { setProjectId(e.target.value); setSectionId('') }}
-              className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2 bg-white">
-              <option value="">Inbox</option>
-              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <div className="mt-1">
+              <SearchableSelect value={projectId} onChange={v => { setProjectId(v); setSectionId('') }}
+                options={[{ value: '', label: 'Inbox' }, ...projects.map(p => ({ value: p.id, label: p.name }))]}
+                placeholder="Inbox" buttonClassName="text-sm"
+                searchPlaceholder="Search projects…" />
+            </div>
             {projectSections.length > 0 && (
-              <select value={sectionId || ''} onChange={(e) => setSectionId(e.target.value)}
-                className="mt-2 w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2 bg-white">
-                <option value="">No section</option>
-                {projectSections.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+              <div className="mt-2">
+                <SearchableSelect value={sectionId || ''} onChange={setSectionId}
+                  options={[{ value: '', label: 'No section' }, ...projectSections.map(s => ({ value: s.id, label: s.name }))]}
+                  placeholder="No section" buttonClassName="text-sm"
+                  searchPlaceholder="Search sections…" />
+              </div>
             )}
           </div>
 
@@ -544,14 +547,12 @@ function TemplateModal({ onClose, onGenerate }) {
         ) : elections.length === 0 ? (
           <p className="text-sm text-gray-500 py-4">No elections found — add one on the Calendar tab first.</p>
         ) : (
-          <select value={electionId} onChange={(e) => setElectionId(e.target.value)}
-            className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 mb-5 bg-white">
-            {elections.map(e => (
-              <option key={e.id} value={e.id}>
-                {e.name} — {e.election_date ? format(parseISO(e.election_date), 'MMM d, yyyy') : 'no date'}
-              </option>
-            ))}
-          </select>
+          <div className="mb-5">
+            <SearchableSelect value={electionId} onChange={setElectionId}
+              options={elections.map(e => ({ value: e.id, label: `${e.name} — ${e.election_date ? format(parseISO(e.election_date), 'MMM d, yyyy') : 'no date'}` }))}
+              placeholder="Select election…" buttonClassName="text-sm"
+              searchPlaceholder="Search elections…" />
+          </div>
         )}
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="text-sm text-gray-500 px-4 py-2 rounded-lg hover:bg-gray-100">Cancel</button>
@@ -1099,15 +1100,12 @@ export default function TaskBoard() {
 
         {/* Mobile plan switcher */}
         {planOwners.length > 1 && (
-          <select
-            value={activePlan?.id || ''}
-            onChange={(e) => switchPlan(e.target.value)}
-            className="md:hidden w-full text-xs font-medium border border-gray-200 rounded-lg px-2 py-2 bg-white mb-3"
-          >
-            {planOwners.map(o => (
-              <option key={o.id} value={o.id}>{o.self ? 'My plan' : `Plan: ${o.label}`}</option>
-            ))}
-          </select>
+          <div className="md:hidden mb-3">
+            <SearchableSelect value={activePlan?.id || ''} onChange={switchPlan}
+              options={planOwners.map(o => ({ value: o.id, label: o.self ? 'My plan' : `Plan: ${o.label}` }))}
+              placeholder="Select plan" buttonClassName="text-xs font-medium"
+              searchPlaceholder="Search plans…" />
+          </div>
         )}
 
         {/* Mobile view switcher */}

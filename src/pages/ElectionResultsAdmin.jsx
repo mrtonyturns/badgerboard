@@ -10,6 +10,7 @@ import {
   CheckCircle2, X, MapPin, Users, Radio, ExternalLink, AlertTriangle,
 } from 'lucide-react'
 import { supabase, adminElections } from '../lib/supabase'
+import SearchableSelect from '../components/SearchableSelect'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const OFFICE_TYPES = [
@@ -303,20 +304,14 @@ export default function ElectionResultsAdmin({ showToast }) {
       <div className="card py-3">
         <div className="flex items-center gap-3 flex-wrap">
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Election</span>
-          <select
-            className="input py-1.5 text-sm flex-1 max-w-xs"
+          <SearchableSelect
+            className="flex-1 max-w-xs"
+            buttonClassName="py-1.5 text-sm"
             value={selectedElection?.id || ''}
-            onChange={e => {
-              const el = elections.find(x => x.id === e.target.value)
-              setSelectedElection(el || null)
-            }}
-          >
-            {elections.map(el => (
-              <option key={el.id} value={el.id}>
-                {el.name} — {format(parseISO(el.election_date), 'MMM d, yyyy')}
-              </option>
-            ))}
-          </select>
+            onChange={v => setSelectedElection(elections.find(x => x.id === v) || null)}
+            options={elections.map(el => ({ value: el.id, label: `${el.name} — ${format(parseISO(el.election_date), 'MMM d, yyyy')}` }))}
+            placeholder="Select election…"
+            searchPlaceholder="Search elections…" />
           {selectedElection && (
             <button
               onClick={openAddContest}
@@ -706,13 +701,11 @@ export default function ElectionResultsAdmin({ showToast }) {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="label">Party</label>
-                <select
-                  className="input"
+                <SearchableSelect
                   value={resultForm.party}
-                  onChange={e => setResultForm({ ...resultForm, party: e.target.value })}
-                >
-                  {PARTIES.map(p => <option key={p} value={p}>{p}</option>)}
-                </select>
+                  onChange={v => setResultForm({ ...resultForm, party: v })}
+                  options={PARTIES.map(p => ({ value: p, label: p }))}
+                  placeholder="Select party…" />
               </div>
               <div className="flex items-center gap-2 mt-5">
                 <input

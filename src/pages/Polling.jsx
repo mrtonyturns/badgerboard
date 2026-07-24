@@ -7,11 +7,12 @@
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import {
   BarChart2, RefreshCw, Loader2, AlertCircle, Sparkles, ExternalLink,
-  Clock, ShieldAlert, ChevronDown,
+  Clock, ShieldAlert,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import LoadingBar from '../components/LoadingBar'
+import SearchableSelect from '../components/SearchableSelect'
 
 const PARTY_COLOR = {
   Republican: '#B91C1C', Democrat: '#1D4ED8', Independent: '#7C3AED',
@@ -131,20 +132,18 @@ export default function Polling() {
       {/* District selector */}
       <div className="card py-4">
         <label className="block text-xs font-semibold text-gray-700 mb-2">District</label>
-        <div className="relative max-w-md">
-          <select
-            className="input font-semibold pr-8 appearance-none w-full"
+        <div className="max-w-md">
+          <SearchableSelect
             value={district}
-            onChange={e => setDistrict(e.target.value)}
-          >
-            <option value="">Select a district…</option>
-            {Object.entries(grouped).map(([group, items]) => (
-              <optgroup key={group} label={group}>
-                {items.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
-              </optgroup>
-            ))}
-          </select>
-          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+            onChange={setDistrict}
+            groups={Object.entries(grouped).map(([group, items]) => ({
+              label: group,
+              options: items.map(d => ({ value: d.key, label: d.label })),
+            }))}
+            placeholder="Select a district…"
+            buttonClassName="font-semibold"
+            searchPlaceholder="Search districts…"
+          />
         </div>
       </div>
 
