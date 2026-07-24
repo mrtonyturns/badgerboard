@@ -256,7 +256,7 @@ async function fetchPerplexityNews(name, office, district, ctx, mode, localSourc
         model,
         messages: [
           { role: 'system', content: NEWS_SYSTEM },
-          { role: 'user', content: (queries[mode] || queries.challenger) + localSources },
+          { role: 'user', content: (queries[mode] || queries.challenger) + ' ALSO search for podcast episodes, radio interviews, and YouTube/TV appearances featuring them (list each as an item with the show name as the publication).' + localSources },
         ],
         max_tokens: maxTokens,
       }),
@@ -698,6 +698,74 @@ async function applyCandidateUpdates(candidateId, currentCandidate, updates) {
     }
   } catch (e) {
     console.error(`[dossier-bg] Candidate update error: ${e.message}`)
+  }
+}
+
+
+// ─── Weekly digest (active monitoring v2) ────────────────────────────────────
+// Compares the new profile against the previous one with a cheap Haiku pass
+// and stores a structured week-in-review on the dossier row:
+//   weekly_digest = { summary, items: [{ category, title, note }] }
+// Categories: news | social | podcast | controversy | polling | endorsement | other
+async function buildWeeklyDigest(dossierId, candidateId, newContent, candidateName, userId) {
+  try {
+    if (!ANTHROPIC_API_KEY) return
+    const prevRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/dossiers?candidate_id=eq.${candidateId}&order=generated_at.desc&limit=2&select=id,content`,
+      { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
+    )
+    const rows = await prevRes.json()
+    const prev = Array.isArray(rows) ? rows.find(r => r.id !== dossierId) : null
+    if (!prev?.content) { console.log('[dossier-bg] digest skipped — no previous dossier'); return }
+
+    const clip = (s, n) => String(s || '').slice(0, n)
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1500,
+        messages: [{
+          role: 'user',
+          content: `Compare the PREVIOUS and NEW intelligence profiles for ${candidateName} and produce a week-in-review of genuinely NEW developments (items in NEW that are absent from PREVIOUS). Cover: news articles, podcast/radio/TV appearances, social media activity, controversies, polling, endorsements.
+
+Return STRICT JSON only, no prose, no markdown fences:
+{"summary": "2-3 plain-English sentences a busy campaign manager can skim — what actually happened this week; if nothing meaningful changed say so plainly", "items": [{"category": "news|social|podcast|controversy|polling|endorsement|other", "title": "short headline", "note": "one sentence"}]}
+
+Max 8 items, most important first. Empty items array if nothing new.
+
+PREVIOUS PROFILE:
+${clip(prev.content, 14000)}
+
+NEW PROFILE:
+${clip(newContent, 14000)}`
+        }],
+      }),
+    })
+    if (!res.ok) { console.error('[dossier-bg] digest LLM failed:', res.status); return }
+    const d = await res.json()
+    logAiUsage({ userId, endpoint: 'monitoring', provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
+      inputTokens: d?.usage?.input_tokens || 0, outputTokens: d?.usage?.output_tokens || 0 })
+    const raw = (d.content?.[0]?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
+    let digest
+    try { digest = JSON.parse(raw) } catch { console.error('[dossier-bg] digest JSON unparseable'); return }
+    if (!digest || typeof digest.summary !== 'string') return
+    digest.items = (Array.isArray(digest.items) ? digest.items : []).slice(0, 8).map(i => ({
+      category: String(i.category || 'other').slice(0, 20),
+      title: String(i.title || '').slice(0, 160),
+      note: String(i.note || '').slice(0, 300),
+    }))
+    digest.summary = digest.summary.slice(0, 600)
+    digest.generated_at = new Date().toISOString()
+
+    const patch = await fetch(`${SUPABASE_URL}/rest/v1/dossiers?id=eq.${dossierId}`, {
+      method: 'PATCH',
+      headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ weekly_digest: digest }),
+    })
+    console.log(`[dossier-bg] weekly digest stored (${digest.items.length} items): ${patch.ok}`)
+  } catch (e) {
+    console.error('[dossier-bg] buildWeeklyDigest error:', e.message)
   }
 }
 
@@ -1648,6 +1716,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
       console.log(`[dossier-bg] Scout lite gate applied (${countSections(content)} sections retained/templated)`)
     }
 
+    let savedDossierId = null
     // ─── Save to Supabase ──────────────────────────────────────────────────
     const saveRes = await fetch(`${SUPABASE_URL}/rest/v1/dossiers`, {
       method: 'POST',
@@ -1687,10 +1756,18 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
         throw new Error(`Failed to save dossier: ${baseRes.status}`)
       }
       const baseSaved = await baseRes.json()
+      savedDossierId = baseSaved?.[0]?.id || null
       console.log(`[dossier-bg] Saved (base) id=${baseSaved?.[0]?.id}, total=${Date.now() - startTime}ms`)
     } else {
       const saved = await saveRes.json()
+      savedDossierId = saved?.[0]?.id || null
       console.log(`[dossier-bg] Saved id=${saved?.[0]?.id}, sections=${countSections(content)}, changes=${!!changeSummary}, flags=${!!verificationFlags}, total=${Date.now() - startTime}ms`)
+    }
+
+    // ─── Weekly digest: what changed vs the previous profile ────────────────
+    // Powers the Monday monitoring email and the in-app "What's new" card.
+    if (savedDossierId && candidate_id) {
+      await buildWeeklyDigest(savedDossierId, candidate_id, content, safe.name, user_id)
     }
 
     // ─── Consume a purchased credit if this exceeded the free monthly allotment ─

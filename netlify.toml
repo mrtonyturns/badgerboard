@@ -50,6 +50,11 @@
 [functions."auto-regenerate-dossiers"]
   schedule = "0 15 * * 1"
 
+# Weekly monitoring digest email — Monday 17:00 UTC, two hours after the
+# auto-regenerate run so refreshes + digests are finished
+[functions."monitoring-digest"]
+  schedule = "0 17 * * 1"
+
 # Expire lapsed free trials + send T-3-day warnings, daily ~8-9am Central
 [functions."trial-expiry"]
   schedule = "0 14 * * *"

@@ -1433,7 +1433,7 @@ function GenerationStrip({ startedAt, candidateName }) {
   )
 }
 
-function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan }) {
+function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan, initialSection }) {
   const { isAdmin } = useAuth()
   const [showEmpty, setShowEmpty] = useState(false)
   const [expanded, setExpanded]   = useState(false)
@@ -1484,6 +1484,16 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
       setActiveSection(id)
     }
   }
+
+  // Deep link: land on the requested section once content is rendered
+  const initialScrolledRef = useRef(false)
+  useEffect(() => {
+    if (!initialSection || initialScrolledRef.current) return
+    initialScrolledRef.current = true
+    const t = setTimeout(() => { try { scrollToSection(initialSection) } catch {} }, 600)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSection])
 
   const handleCopy = () => {
     navigator.clipboard.writeText(dossier.content)
@@ -1597,6 +1607,35 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
 
       {/* Animated snapshot intro — types out on open */}
       {snapshot && <SnapshotCard text={snapshot} />}
+
+      {/* What's new this week — from the Monday monitoring digest */}
+      {dossier.weekly_digest?.summary && (
+        <div className="mx-4 mt-2 mb-1 rounded-2xl border border-brand-navy/15 bg-gradient-to-br from-blue-50/60 via-white to-white px-5 py-4">
+          <div className="flex items-center gap-2 mb-1.5">
+            <RefreshCw className="w-3.5 h-3.5 text-brand-navy" />
+            <span className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-brand-navy">What&apos;s new this week</span>
+            {dossier.weekly_digest.generated_at && (
+              <span className="text-[10px] text-gray-400 font-semibold ml-auto">
+                {new Date(dossier.weekly_digest.generated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              </span>
+            )}
+          </div>
+          <p className="text-sm leading-relaxed text-gray-700 font-medium">{dossier.weekly_digest.summary}</p>
+          {(dossier.weekly_digest.items || []).length > 0 && (
+            <div className="mt-2.5 flex flex-wrap gap-1.5">
+              {dossier.weekly_digest.items.map((it, i) => (
+                <span key={i} title={it.note || ''} className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-200 rounded-full px-3 py-1">
+                  <span className={`w-1.5 h-1.5 rounded-full ${
+                    it.category === 'controversy' ? 'bg-red-500' : it.category === 'news' ? 'bg-blue-500'
+                    : it.category === 'podcast' ? 'bg-purple-500' : it.category === 'social' ? 'bg-sky-400'
+                    : it.category === 'polling' ? 'bg-teal-500' : it.category === 'endorsement' ? 'bg-green-500' : 'bg-gray-400'}`} />
+                  {it.title}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Disclaimer banner */}
       <div className="py-2 px-4 flex-shrink-0">
@@ -1885,6 +1924,22 @@ export default function Dossiers() {
     fetchData()
     getOffices().then(({ data }) => setOffices(data || []))
   }, [])
+
+  // Deep link from the weekly monitoring digest email:
+  // /profiler?candidate=<id>&section=section-1 — open that candidate's latest
+  // profile and land on the requested section.
+  const deepLinkedRef = useRef(false)
+  const initSection = searchParams.get('section')
+  useEffect(() => {
+    if (deepLinkedRef.current || !initCandidateId || !dossiers.length) return
+    const latest = dossiers
+      .filter(d => d.candidate_id === initCandidateId)
+      .sort((a, b) => new Date(b.generated_at) - new Date(a.generated_at))[0]
+    if (!latest) return
+    deepLinkedRef.current = true
+    openDossier(latest.id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dossiers, initCandidateId])
 
   // ── Resume polling after page refresh ─────────────────────────────────────
   // If the context shows a generation was in progress when the page refreshed,
@@ -2687,6 +2742,7 @@ export default function Dossiers() {
             </div>
           ) : (
             <DossierViewer
+              initialSection={deepLinkedRef.current ? initSection : null}
               key={selected.id}
               dossier={selected}
               onRegenerate={handleRegenerate}
