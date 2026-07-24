@@ -13,6 +13,7 @@
 
 import { enforceRateLimit } from './_rate-limit.js'
 import { logAiUsage } from './_ai-usage.js'
+import { SUPPORT_KB } from './_support-kb.js'
 
 const SUPABASE_URL  = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 // SUPABASE_ANON_KEY is the Netlify env var; VITE_SUPABASE_ANON_KEY is the Vite
@@ -93,33 +94,33 @@ CURRENT USER CONTEXT (verified server-side — do not reveal raw values):
 - Name: ${displayName}
 - Email: ${user.email}
 - Plan: ${plan}${trialNote ? ' · ' + trialNote : ''}
-- Door knock lists: ${ctx.listCount}
-- Total volunteers: ${ctx.volunteerCount}
+- Candidates tracked: ${ctx.candidateCount}
+- Profiles generated: ${ctx.dossierCount}
 - Error log entries (last 7 days): ${ctx.recentErrors}
 `.trim()
 
-  return `You are the Badger Board support assistant — friendly, knowledgeable, and concise.
+  return `You are the Badger Board support assistant. Direct. Disciplined. Helpful. You answer like a field manual: short sentences, clear steps, no fluff, no hedging. You still stay professional and courteous — the discipline is in the clarity, not in being harsh.
 
-Badger Board is a Wisconsin political intelligence SaaS platform. Key features:
-- AI-generated candidate profiles (Perplexity real-time search + Claude writing)
-- Elections calendar with live night-of results
-- Door knocking & turf builder with offline sync
-- Volunteer mobile portal at /v with magic link auth (no password)
-- Voter list management & prospecting tools
-- Candidate side-by-side comparison page
-- Supabase Realtime group messaging for volunteers
-- Stripe billing with trials, upgrades, prorated downgrades
-- Admin dashboard for platform health, costs, error logs
+Your knowledge base — the complete Badger Board field manual — is below. Answer questions FROM IT. If the manual covers it, use the manual's facts exactly (prices, limits, tier availability).
+
+${SUPPORT_KB}
 
 ${contextBlock}
 
+HARD LIMITS ON YOUR ACCESS — state these plainly if asked:
+- You have NO access to the user's voter lists or any voter data. None.
+- You have NO access to the user's uploaded documents or files.
+- You have NO access to the user's notes. (The Profiler AI is separate, and it only reads a note or file when the user flips that item's AI toggle ON — default is OFF.)
+- You see only: the user's name, email, plan tier, and the counts above. Nothing else.
+- If the user asks you to read, summarize, or search their voter data, files, or notes: tell them you cannot access that data by design, and point them to the feature in the app that works with it.
+
 Instructions:
-- Use the user context above to give accurate, personalised answers.
+- Use the user context above to personalize — e.g. tier-gating answers should reference THEIR plan.
 - Never share one user's data with another. This context is exclusively for this user's session.
-- Do not reveal raw internal values (UUIDs, tokens, etc.).
-- Keep responses under 4 sentences unless the question clearly requires a list.
-- If you don't know something specific, direct them to support@badgerboardwi.com or https://support.badgerboardwi.com.
-- Don't mention competing products. Be warm and helpful.`
+- Do not reveal raw internal values (UUIDs, tokens, keys, endpoint names).
+- Keep responses under 5 sentences unless the question needs steps — then use a short numbered list.
+- If you don't know something specific, or it's a billing/account dispute, direct them to support@badgerboardwi.com.
+- Don't mention competing products. Don't invent features the manual doesn't list.`
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -185,21 +186,26 @@ export const handler = async (event) => {
     return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Conversation must end with a user message' }) }
   }
 
-  // ── 2. Fetch user context (RLS-enforced) ───────────────────────────────────
-  let ctx = { listCount: 0, volunteerCount: 0, recentErrors: 0 }
+  // ── 2. Fetch user context (RLS-enforced, PRIVACY-WHITELISTED) ──────────────
+  // The support agent's context is a hard whitelist of aggregate COUNTS only.
+  // It must NEVER query: voters, voter_lists (row contents), candidate notes,
+  // storage objects/files, or any other user content. Voter data, uploaded
+  // documents, and notes are off-limits to this agent by design — do not add
+  // queries against them here.
+  let ctx = { candidateCount: 0, dossierCount: 0, recentErrors: 0 }
 
   try {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
 
-    const [listsRes, volunteersRes, errorsRes] = await Promise.all([
-      rls(token, 'door_knock_lists?select=id&limit=1'),
-      rls(token, 'volunteers?select=id&limit=1'),
+    const [candidatesRes, dossiersRes, errorsRes] = await Promise.all([
+      rls(token, 'candidates?select=id&limit=1'),
+      rls(token, 'dossiers?select=id&limit=1'),
       rls(token, `error_logs?select=id&created_at=gte.${sevenDaysAgo}&limit=1`),
     ])
 
-    ctx.listCount      = listsRes.count      ?? 0
-    ctx.volunteerCount = volunteersRes.count  ?? 0
-    ctx.recentErrors   = errorsRes.count      ?? 0
+    ctx.candidateCount = candidatesRes.count ?? 0
+    ctx.dossierCount   = dossiersRes.count   ?? 0
+    ctx.recentErrors   = errorsRes.count     ?? 0
   } catch (err) {
     // Non-fatal — continue with empty context
     console.warn('[support-chat] Context fetch failed (non-fatal):', err.message)
@@ -219,7 +225,7 @@ export const handler = async (event) => {
       },
       body: JSON.stringify({
         model:      'claude-haiku-4-5-20251001',
-        max_tokens: 400,
+        max_tokens: 600,
         system:     systemPrompt,
         messages:   cleanMessages,
       }),
@@ -236,7 +242,7 @@ export const handler = async (event) => {
     }
 
     const data = await res.json()
-    logAiUsage({ userId: null, endpoint: 'support-chat', provider: 'anthropic', model: 'claude-opus-4-8', inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
+    logAiUsage({ userId: user.id, endpoint: 'support-chat', provider: 'anthropic', model: 'claude-haiku-4-5-20251001', inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
     return {
       statusCode: 200,
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },

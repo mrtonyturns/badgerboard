@@ -1730,6 +1730,7 @@ function NotesAndFilesPanel({ candidateId, userId, rawNotes, onSaved }) {
       id: (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)),
       text: noteText.trim(),
       ts: new Date().toISOString(),
+      ai_access: false,   // AI never sees a note unless the user turns it on
     }
     await persist({ ...data, notes: [note, ...(data.notes || [])] })
     setNoteText(''); setAddingNote(false); setSavingNote(false)
@@ -1770,6 +1771,12 @@ function NotesAndFilesPanel({ candidateId, userId, rawNotes, onSaved }) {
     setTogglingId(null)
   }
 
+  const handleToggleNoteAi = async (noteId) => {
+    setTogglingId(noteId)
+    await persist({ ...data, notes: (data.notes || []).map(n => n.id === noteId ? { ...n, ai_access: !n.ai_access } : n) })
+    setTogglingId(null)
+  }
+
   const handleDeleteFile = async (file) => {
     if (!window.confirm(`Delete "${file.name}"? This cannot be undone.`)) return
     setDeletingId(file.id)
@@ -1789,6 +1796,7 @@ function NotesAndFilesPanel({ candidateId, userId, rawNotes, onSaved }) {
   const notes = data.notes || []
   const files = data.files || []
   const aiFiles = files.filter(f => f.ai_access).length
+  const aiNotes = notes.filter(n => n.ai_access).length
 
   return (
     <div className="space-y-4">
@@ -1842,12 +1850,22 @@ function NotesAndFilesPanel({ candidateId, userId, rawNotes, onSaved }) {
             {notes.map(note => (
               <div key={note.id} className={`group relative p-3 rounded-xl border border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200 transition-all ${deletingId === note.id ? 'opacity-50' : ''}`}>
                 <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-line pr-6">{note.text}</p>
-                {note.ts && (
-                  <p className="text-xs text-gray-400 mt-1.5">
-                    <Clock className="w-3 h-3 inline mr-1" />
-                    {note.ts ? format(new Date(note.ts), 'MMM d, yyyy · h:mm a') : 'Legacy note'}
-                  </p>
-                )}
+                <div className="flex items-center gap-2 mt-1.5">
+                  {note.ts && (
+                    <p className="text-xs text-gray-400">
+                      <Clock className="w-3 h-3 inline mr-1" />
+                      {note.ts ? format(new Date(note.ts), 'MMM d, yyyy · h:mm a') : 'Legacy note'}
+                    </p>
+                  )}
+                  <button
+                    onClick={() => handleToggleNoteAi(note.id)}
+                    disabled={togglingId === note.id}
+                    title={note.ai_access ? 'AI can use this note — click to disable' : 'AI cannot use this note — click to enable'}
+                    className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md border font-semibold transition-all ${note.ai_access ? 'bg-brand-red/10 text-brand-red border-brand-red/30 hover:bg-brand-red/20' : 'bg-gray-100 text-gray-400 border-gray-200 hover:bg-gray-200'}`}
+                  >
+                    <Bot className="w-3 h-3" /> {note.ai_access ? 'AI On' : 'AI Off'}
+                  </button>
+                </div>
                 <button
                   onClick={() => handleDeleteNote(note.id)}
                   disabled={deletingId === note.id}
@@ -1857,6 +1875,15 @@ function NotesAndFilesPanel({ candidateId, userId, rawNotes, onSaved }) {
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {aiNotes > 0 && (
+          <div className="mt-3 p-2.5 bg-brand-red/5 border border-brand-red/20 rounded-lg flex items-start gap-2">
+            <Bot className="w-3.5 h-3.5 text-brand-red flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-gray-600">
+              <span className="font-semibold text-brand-red">{aiNotes} note{aiNotes !== 1 ? 's' : ''}</span> will be referenced when generating AI profiles for this candidate.
+            </p>
           </div>
         )}
       </div>
