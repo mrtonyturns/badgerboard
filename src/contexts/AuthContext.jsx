@@ -180,6 +180,13 @@ export const AuthProvider = ({ children }) => {
   }
 
   const signOut = async () => {
+    // v1.25.1: session-scoped UI memory (e.g. Polling's last/recent districts)
+    // is cleared on explicit logout — a fresh login starts clean
+    try {
+      Object.keys(localStorage)
+        .filter(k => k.startsWith('bb_polling_'))
+        .forEach(k => localStorage.removeItem(k))
+    } catch (_) {}
     const { error } = await supabase.auth.signOut()
     return { error }
   }

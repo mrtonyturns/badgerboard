@@ -46,6 +46,19 @@ const DISTRICTS = [
   ...Array.from({ length: 99 }, (_, i) => ({ key: `assembly-${i + 1}`, label: `Assembly District ${i + 1}`,      group: 'State Assembly' })),
 ]
 
+// ── v1.25.1: per-user district memory ────────────────────────────────────────
+// Last-opened district survives tab switches and refreshes; the recent-5 list
+// feeds a "Recent" group at the top of the selector. Both are cleared by the
+// explicit sign-out in AuthContext (bb_polling_* prefix).
+const lastKey   = (uid) => `bb_polling_last_${uid || 'anon'}`
+const recentKey = (uid) => `bb_polling_recent_${uid || 'anon'}`
+const readRecent = (uid) => {
+  try {
+    const v = JSON.parse(localStorage.getItem(recentKey(uid)) || '[]')
+    return Array.isArray(v) ? v.filter(k => DISTRICTS.some(d => d.key === k)).slice(0, 5) : []
+  } catch (_) { return [] }
+}
+
 const AiTag = () => (
   <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase tracking-wider bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">
     <Sparkles style={{ width: 9, height: 9 }} /> AI-Estimated
@@ -172,7 +185,13 @@ function DonutGroup({ slices, animKey }) {
 
 export default function Polling() {
   const { user } = useAuth()
-  const [district, setDistrict]   = useState('')
+  const [district, setDistrict]   = useState(() => {
+    try {
+      const v = localStorage.getItem(lastKey(user?.id))
+      return v && DISTRICTS.some(d => d.key === v) ? v : ''
+    } catch (_) { return '' }
+  })
+  const [recent, setRecent]       = useState(() => readRecent(user?.id))
   const [snapshot, setSnapshot]   = useState(null)
   const [loading, setLoading]     = useState(false)
   const [generating, setGenerating] = useState(false)
@@ -328,6 +347,17 @@ export default function Polling() {
     setIntelBusy(false)
   }
 
+  // Persist last-opened + recent-5 whenever the district changes
+  useEffect(() => {
+    if (!district) return
+    try {
+      localStorage.setItem(lastKey(user?.id), district)
+      const next = [district, ...readRecent(user?.id).filter(k => k !== district)].slice(0, 5)
+      localStorage.setItem(recentKey(user?.id), JSON.stringify(next))
+      setRecent(next)
+    } catch (_) {}
+  }, [district, user?.id])
+
   const grouped = useMemo(() => {
     const g = {}
     DISTRICTS.forEach(d => { (g[d.group] ||= []).push(d) })
@@ -351,10 +381,19 @@ export default function Polling() {
           <SearchableSelect
             value={district}
             onChange={setDistrict}
-            groups={Object.entries(grouped).map(([group, items]) => ({
-              label: group,
-              options: items.map(d => ({ value: d.key, label: d.label })),
-            }))}
+            groups={[
+              ...(recent.length ? [{
+                label: 'Recent',
+                options: recent.map(k => {
+                  const d = DISTRICTS.find(x => x.key === k)
+                  return { value: k, label: d ? d.label : k }
+                }),
+              }] : []),
+              ...Object.entries(grouped).map(([group, items]) => ({
+                label: group,
+                options: items.map(d => ({ value: d.key, label: d.label })),
+              })),
+            ]}
             placeholder="Select a district…"
             buttonClassName="font-semibold"
             searchPlaceholder="Search districts…"
