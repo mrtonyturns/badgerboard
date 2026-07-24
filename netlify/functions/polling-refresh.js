@@ -26,7 +26,7 @@ exports.handler = async (event) => {
     }
   }
 
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/poll_snapshots?select=district,generated_at&order=generated_at.asc&limit=${MAX_PER_RUN}`, {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/poll_snapshots?select=district,generated_at&user_id=eq.00000000-0000-0000-0000-000000000000&order=generated_at.asc&limit=${MAX_PER_RUN}`, {
     headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
   })
   const rows = res.ok ? await res.json() : []

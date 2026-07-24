@@ -64,6 +64,7 @@ Execution:
 3. You get: Top 4 issues ranked with why. Approval estimate. Vote-share projection. A confidence indicator with a margin on every figure.
 3a. Vote-share is an ensemble: Grok, Perplexity, and Gemini each project it independently from the same research, and the app averages them — one model's bad read gets outvoted.
 3b. Vote-share respects the calendar. Before a contested primary: each party's field is shown separately — candidates only compete inside their own primary — with the November general outlook below. Once nominees are set: a straight general head-to-head.
+3c. Local Intel: add your own signal — canvass tallies, internal numbers, mailers, photos, PDFs, notes — and hit Regenerate. The AI weighs it alongside public research and adjusts the projection. Private to your account; your intel never touches the shared district baseline other users see.
 4. Read the label: AI-Estimated. Not a scientific poll. It is modeled from news, past results, public polling, and social signal — sources listed at the bottom. Use it to aim your attention. Do not use it to bet the campaign. When it matters, field a real poll.
 Availability: beta testers only.
 

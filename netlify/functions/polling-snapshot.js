@@ -20,6 +20,15 @@ const SITE_URL     = process.env.URL || 'https://badgerboardwi.com'
 
 const FRESH_DAYS = 7
 const DISTRICT_RE = /^(congress-[1-8]|senate-([1-9]|[12][0-9]|3[0-3])|assembly-([1-9]|[1-9][0-9])|state-wi)$/
+// user_id sentinel for the shared (global) per-district snapshot row
+const GLOBAL_USER = '00000000-0000-0000-0000-000000000000'
+
+async function intelCount(userId, district) {
+  const r = await sb(`/poll_intel?user_id=eq.${userId}&district=eq.${encodeURIComponent(district)}&select=id&limit=1`, {
+    headers: { Prefer: 'count=exact' },
+  })
+  return parseInt(r.headers.get('content-range')?.split('/')[1] ?? '0', 10) || 0
+}
 
 const sb = (path, opts = {}) => fetch(`${SUPABASE_URL}/rest/v1${path}`, {
   ...opts,
@@ -65,18 +74,33 @@ exports.handler = async (event) => {
   const headers = { 'Content-Type': 'application/json' }
 
   if (action === 'get') {
-    const res = await sb(`/poll_snapshots?district=eq.${encodeURIComponent(district)}&select=*`)
+    // Personalized row (user has local intel for this district) wins over the
+    // shared baseline; fall back to global when none exists.
+    const nIntel = await intelCount(user.id, district)
+    if (nIntel > 0) {
+      const pr = await sb(`/poll_snapshots?district=eq.${encodeURIComponent(district)}&user_id=eq.${user.id}&select=*`)
+      const prows = await pr.json()
+      if (prows?.[0]) {
+        return { statusCode: 200, headers, body: JSON.stringify({ snapshot: prows[0], personalized: true, intel_count: nIntel, fresh_days: FRESH_DAYS }) }
+      }
+    }
+    const res = await sb(`/poll_snapshots?district=eq.${encodeURIComponent(district)}&user_id=eq.${GLOBAL_USER}&select=*`)
     const rows = await res.json()
     const snap = rows?.[0] || null
-    return { statusCode: 200, headers, body: JSON.stringify({ snapshot: snap, fresh_days: FRESH_DAYS }) }
+    return { statusCode: 200, headers, body: JSON.stringify({ snapshot: snap, personalized: false, intel_count: nIntel, fresh_days: FRESH_DAYS }) }
   }
 
   if (action === 'generate') {
     const limited = await enforceRateLimit(user.id, 'polling-snapshot', headers)
     if (limited) return limited
 
-    // Fresh-window + concurrency guard on the shared row
-    const res = await sb(`/poll_snapshots?district=eq.${encodeURIComponent(district)}&select=district,generated_at,status`)
+    // Intel present → this generation is PERSONALIZED (its own row keyed to
+    // the user); otherwise it refreshes the shared global row.
+    const nIntel = await intelCount(user.id, district)
+    const rowUser = nIntel > 0 ? user.id : GLOBAL_USER
+
+    // Fresh-window + concurrency guard on the target row
+    const res = await sb(`/poll_snapshots?district=eq.${encodeURIComponent(district)}&user_id=eq.${rowUser}&select=district,generated_at,status`)
     const rows = await res.json()
     const existing = rows?.[0]
     if (existing) {
@@ -89,21 +113,20 @@ exports.handler = async (event) => {
       }
     }
 
-    // Mark generating (upsert) then fire the background pipeline
-    // on_conflict=district is REQUIRED: merge-duplicates alone resolves on the
-    // id PK, so a second write for the same district 409s on the UNIQUE(district)
-    await sb('/poll_snapshots?on_conflict=district', {
+    // Mark generating (upsert) then fire the background pipeline.
+    // on_conflict must name the composite unique (district,user_id).
+    await sb('/poll_snapshots?on_conflict=district,user_id', {
       method: 'POST',
       headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify({ district, status: 'generating', generated_at: new Date().toISOString(), requested_by: user.id }),
+      body: JSON.stringify({ district, user_id: rowUser, status: 'generating', generated_at: new Date().toISOString(), requested_by: user.id }),
     })
     fetch(`${SITE_URL}/.netlify/functions/polling-snapshot-background`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ district, internal_trigger: process.env.ADMIN_TRIGGER_SECRET, requested_by: user.id }),
+      body: JSON.stringify({ district, internal_trigger: process.env.ADMIN_TRIGGER_SECRET, requested_by: user.id, snapshot_user: nIntel > 0 ? user.id : null }),
     }).catch(e => console.error('[polling] background fire failed:', e.message))
 
-    return { statusCode: 200, headers, body: JSON.stringify({ status: 'generating' }) }
+    return { statusCode: 200, headers, body: JSON.stringify({ status: 'generating', personalized: nIntel > 0 }) }
   }
 
   return { statusCode: 400, headers, body: JSON.stringify({ error: 'Unknown action' }) }

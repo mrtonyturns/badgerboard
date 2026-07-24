@@ -30,6 +30,46 @@ const RESEARCH_MODEL = process.env.POLLING_RESEARCH_MODEL || 'sonar-pro'   // Pe
 const SOCIAL_MODEL   = process.env.POLLING_SOCIAL_MODEL   || GROK_MODEL
 const SYNTH_MODEL    = process.env.POLLING_SYNTH_MODEL    || 'claude-opus-4-8'
 
+const GLOBAL_USER = '00000000-0000-0000-0000-000000000000'
+
+// ── Local intel (v1.25): the requesting user's notes/files for this district ─
+async function loadIntel(userId, district) {
+  if (!userId) return null
+  const res = await sb(`/poll_intel?user_id=eq.${userId}&district=eq.${encodeURIComponent(district)}&select=*&order=created_at.asc&limit=40`)
+  if (!res.ok) return null
+  const rows = await res.json()
+  if (!rows.length) return null
+  let text = ''
+  for (const r of rows) {
+    if (r.content) {
+      const chunk = `--- ${r.title || r.kind} ---\n${r.content}\n`
+      if (text.length + chunk.length < 9000) text += chunk
+    }
+  }
+  // images: up to 3, ≤ 4 MB each, fed to the Claude synthesis (vision)
+  const images = []
+  for (const r of rows.filter(x => x.kind === 'image' && x.file_path)) {
+    if (images.length >= 3) break
+    try {
+      const ir = await fetch(`${SUPABASE_URL}/storage/v1/object/poll-intel/${r.file_path}`, {
+        headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+      })
+      if (!ir.ok) continue
+      const buf = Buffer.from(await ir.arrayBuffer())
+      if (buf.length > 4 * 1024 * 1024) continue
+      const mt = (r.file_type && /^image\/(png|jpeg|jpg|gif|webp)$/.test(r.file_type)) ? r.file_type.replace('jpg', 'jpeg') : 'image/jpeg'
+      images.push({ media_type: mt, data: buf.toString('base64'), title: r.title || 'image' })
+    } catch (_) {}
+  }
+  return { text: text.trim() || null, images, count: rows.length }
+}
+
+const INTEL_NOTE = (intel) => intel && (intel.text || intel.images.length) ? `
+
+CAMPAIGN-PROVIDED LOCAL INTEL (private, supplied by the requesting campaign — internal canvass results, mailers, on-the-ground reports${intel.images.length ? ', plus attached images' : ''}):
+${(intel.text || '(images only)').slice(0, 9000)}
+Weigh this as genuine on-the-ground signal alongside the public research — it SHOULD move the vote-share numbers when it is specific (canvass tallies, internal polls, event turnout). Discount any claim that directly contradicts documented public facts. Note in the confidence text that campaign-provided local intel was factored in.` : ''
+
 function safeEqual(a, b) {
   const A = crypto.createHash('sha256').update(String(a ?? '')).digest()
   const B = crypto.createHash('sha256').update(String(b ?? '')).digest()
@@ -195,7 +235,7 @@ const SNAPSHOT_SCHEMA_NOTE = `{
   "confidence": { "margin_pts": number, "band": "low|moderate|high", "note": "one line on what drives the uncertainty" }
 }`
 
-async function synthesize(district, research, social, requestedBy) {
+async function synthesize(district, research, social, requestedBy, intel) {
   const label = districtLabel(district)
   const call = async () => {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -223,8 +263,15 @@ NEWS / POLLING / RESULTS RESEARCH:
 ${(research?.text || 'None available').slice(0, 12000)}
 
 SOCIAL LISTENING (secondary signal, Top Issues only):
-${(social || 'None available').slice(0, 4000)}`
-        }],
+${(social || 'None available').slice(0, 4000)}${INTEL_NOTE(intel)}`
+        }].map(m => {
+          // attach intel images (canvass sheets, mailers, photos) as vision blocks
+          if (!intel || !intel.images.length) return m
+          return { role: m.role, content: [
+            ...intel.images.map(img => ({ type: 'image', source: { type: 'base64', media_type: img.media_type, data: img.data } })),
+            { type: 'text', text: m.content },
+          ] }
+        }),
       }),
     })
     if (!res.ok) throw new Error(`Anthropic ${res.status}`)
@@ -298,13 +345,13 @@ Rules:
 - phase "general" when nominations are settled: fill "general" only, summing to 100 ±1.
 - BE DECISIVE: allocate soft/undecided voters by name recognition, endorsements, fundraising, incumbency, geography, and traction. Undecided ≤ 15 per party (≤ 10 with real polling or in the general).`
 
-async function estimateVoteShare(provider, district, research, requestedBy) {
+async function estimateVoteShare(provider, district, research, requestedBy, intel) {
   const label = districtLabel(district)
   const prompt = `You are projecting the vote share for ${label}, Wisconsin (office: ${officeLabel(district)}).
 ${VOTE_SHARE_RULES(district)}
 
 RESEARCH:
-${(research?.text || '').slice(0, 11000)}`
+${(research?.text || '').slice(0, 11000)}${INTEL_NOTE(intel)}`
   let text = null
   if (provider === 'xai') {
     if (!XAI_KEY) return null
@@ -439,9 +486,11 @@ export const handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid district' }) }
   }
   const requestedBy = body.requested_by || null
+  const snapshotUser = /^[0-9a-f-]{36}$/i.test(String(body.snapshot_user || '')) ? body.snapshot_user : null
+  const rowUser = snapshotUser || GLOBAL_USER
 
   const fail = async (note) => {
-    await sb(`/poll_snapshots?district=eq.${encodeURIComponent(district)}`, {
+    await sb(`/poll_snapshots?district=eq.${encodeURIComponent(district)}&user_id=eq.${rowUser}`, {
       method: 'PATCH', headers: { Prefer: 'return=minimal' },
       body: JSON.stringify({ status: 'error', error_note: String(note).slice(0, 300) }),
     })
@@ -464,14 +513,17 @@ export const handler = async (event) => {
     }
     if (!research?.text) return await fail('Research providers unavailable')
 
+    // 1b. Local intel (personalized snapshots only)
+    const intel = await loadIntel(snapshotUser, district).catch(() => null)
+
     // 2. Social signal (best-effort)
     const social = await grokSocialSignal(district, requestedBy)
 
     // 3. Synthesis (full snapshot) + 3-model vote-share ensemble, in parallel
     const [snapshot, ...estimates] = await Promise.all([
-      synthesize(district, research, social, requestedBy),
+      synthesize(district, research, social, requestedBy, intel),
       ...['xai', 'perplexity', 'gemini'].map(prov =>
-        estimateVoteShare(prov, district, research, requestedBy)
+        estimateVoteShare(prov, district, research, requestedBy, intel)
           .catch(e => { console.warn(`[polling-bg] ${prov} estimate failed: ${e.message}`); return null })),
     ])
     if (!snapshot) return await fail('Synthesis produced invalid output twice')
@@ -489,10 +541,16 @@ export const handler = async (event) => {
     console.log(`[polling-bg] ${district} ensemble: ${validEstimates.length}/3 estimates valid, used=${ensembleUsed}`)
 
     // Sources: prefer structured citations; else pull URLs out of the research text
-    let sources = (research.citations || []).map(c => ({
-      title: String(c.title || c.name || c.url || c).slice(0, 160),
-      url: String(c.url || c).slice(0, 500),
-    })).filter(s => /^https?:\/\//.test(s.url))
+    const hostOf = (u) => String(u || '').replace(/^https?:\/\/(www\.)?/, '').split('/')[0]
+    let sources = (research.citations || []).map(c => {
+      const url = String(c.url || c).slice(0, 500)
+      let title = String(c.title || c.name || '').trim().slice(0, 160)
+      // Grok annotations often carry bare footnote numbers as titles — use the domain instead
+      if (!title || /^[\d.\[\]#]+$/.test(title)) title = hostOf(url)
+      return { title, url }
+    }).filter(s => /^https?:\/\//.test(s.url))
+    // dedupe by URL (multi-annotation citations repeat)
+    sources = [...new Map(sources.map(s => [s.url, s])).values()].slice(0, 12)
     if (!sources.length) {
       sources = [...new Set((research.text.match(/https?:\/\/[^\s)\]]+/g) || []).slice(0, 12))]
         .map(u => ({ title: u.replace(/^https?:\/\/(www\.)?/, '').split('/')[0], url: u }))
@@ -503,7 +561,7 @@ export const handler = async (event) => {
 
     // on_conflict=district is REQUIRED: merge-duplicates alone resolves on the
     // id PK, so re-saving an existing district 409s on the UNIQUE(district)
-    const up = await sb('/poll_snapshots?on_conflict=district', {
+    const up = await sb('/poll_snapshots?on_conflict=district,user_id', {
       method: 'POST',
       headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
       body: JSON.stringify({
@@ -520,6 +578,8 @@ export const handler = async (event) => {
         status: 'ready',
         error_note: null,
         requested_by: requestedBy,
+        user_id: rowUser,
+        intel_count: intel ? intel.count : 0,
       }),
     })
     if (!up.ok) return await fail(`Save failed ${up.status}`)

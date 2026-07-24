@@ -7,7 +7,8 @@
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import {
   BarChart2, RefreshCw, Loader2, AlertCircle, Sparkles, ExternalLink,
-  Clock, ShieldAlert,
+  Clock, ShieldAlert, Paperclip, Plus, Trash2, FileText, Image as ImageIcon,
+  StickyNote, Upload,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
@@ -149,6 +150,14 @@ function DonutRanking({ slices, t, hover, setHover }) {
 function DonutGroup({ slices, animKey }) {
   const [hover, setHover] = useState(null)
   const t = useAnimProgress(animKey)
+  // scrolling moves the chart under a stationary cursor without firing
+  // mouseleave — clear any stuck hover on scroll
+  useEffect(() => {
+    if (hover == null) return
+    const clear = () => setHover(null)
+    window.addEventListener('scroll', clear, true)
+    return () => window.removeEventListener('scroll', clear, true)
+  }, [hover])
   const leader = slices.find(x => !/undecided/i.test(x.label)) || slices[0]
   const leadName = leader ? (leader.label.includes('(') ? leader.label.split('(')[0] : leader.label).trim().split(/\s+/).slice(-1)[0] : ''
   return (
@@ -169,6 +178,14 @@ export default function Polling() {
   const [generating, setGenerating] = useState(false)
   const [error, setError]         = useState(null)
   const pollRef = useRef(0)
+  // ── Local intel (v1.25): user notes/files factored into the projection ──
+  const [intel, setIntel]           = useState([])
+  const [personalized, setPersonalized] = useState(false)
+  const [noteText, setNoteText]     = useState('')
+  const [intelBusy, setIntelBusy]   = useState(false)
+  const [intelMsg, setIntelMsg]     = useState(null)
+  const [intelDirty, setIntelDirty] = useState(false)
+  const intelFileRef = useRef(null)
 
   const api = useCallback(async (action, extra = {}) => {
     const { data: { session } } = await supabase.auth.getSession()
@@ -191,8 +208,10 @@ export default function Polling() {
     ;(async () => {
       setLoading(true); setError(null); setSnapshot(null); setGenerating(false)
       try {
-        const { snapshot: snap } = await api('get')
+        const got = await api('get')
+        const snap = got.snapshot
         if (!alive()) return
+        setPersonalized(!!got.personalized)
         const ageOk = snap?.status === 'ready' && snap.generated_at && (Date.now() - new Date(snap.generated_at).getTime()) < 7 * 86400000
         if (snap && (ageOk || snap.status === 'ready')) {
           setSnapshot(snap); setLoading(false)
@@ -213,10 +232,11 @@ export default function Polling() {
       for (let i = 0; i < 50; i++) {
         await new Promise(r => setTimeout(r, 4000))
         if (!alive()) return
-        const { snapshot: snap } = await api('get')
+        const got2 = await api('get')
+        const snap = got2.snapshot
         if (!alive()) return
         if (snap?.status === 'ready' && (!force || Date.now() - new Date(snap.generated_at).getTime() < 10 * 60000)) {
-          setSnapshot(snap); setGenerating(false); setLoading(false)
+          setSnapshot(snap); setPersonalized(!!got2.personalized); setGenerating(false); setLoading(false); setIntelDirty(false)
           return
         }
         if (snap?.status === 'error') throw new Error(snap.error_note || 'Snapshot generation failed — try again')
@@ -225,6 +245,87 @@ export default function Polling() {
     } catch (e) {
       if (alive()) { setError(e.message); setGenerating(false); setLoading(false) }
     }
+  }
+
+  // ── Local intel CRUD (RLS-scoped: users only ever see their own rows) ──
+  const loadIntel = useCallback(async (d) => {
+    if (!d) { setIntel([]); return }
+    const { data } = await supabase.from('poll_intel').select('*').eq('district', d).order('created_at', { ascending: true })
+    setIntel(data || [])
+  }, [])
+  useEffect(() => { loadIntel(district); setIntelDirty(false); setIntelMsg(null) }, [district, loadIntel])
+
+  const addNote = async () => {
+    if (!noteText.trim() || !district) return
+    setIntelBusy(true)
+    const { error: e } = await supabase.from('poll_intel').insert({
+      user_id: user.id, district, kind: 'note', title: 'Note', content: noteText.trim().slice(0, 8000),
+    })
+    if (e) setIntelMsg('Could not save the note: ' + e.message)
+    else { setNoteText(''); setIntelDirty(true); await loadIntel(district) }
+    setIntelBusy(false)
+  }
+
+  const extractPdfText = async (file) => {
+    if (!window.pdfjsLib) {
+      await new Promise((res, rej) => {
+        const sc = document.createElement('script')
+        sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
+        sc.onload = res; sc.onerror = () => rej(new Error('could not load the PDF engine'))
+        document.head.appendChild(sc)
+      })
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+    }
+    const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise
+    let text = ''
+    for (let pg = 1; pg <= Math.min(pdf.numPages, 40); pg++) {
+      const tc = await (await pdf.getPage(pg)).getTextContent()
+      text += tc.items.map(i => i.str).join(' ') + '\n'
+    }
+    return text
+  }
+
+  const addFiles = async (files) => {
+    if (!district || !files?.length) return
+    setIntelBusy(true); setIntelMsg(null)
+    for (const file of files) {
+      try {
+        const isImage = /^image\/(png|jpe?g|gif|webp)$/i.test(file.type)
+        if (isImage) {
+          if (file.size > 4 * 1024 * 1024) throw new Error(`${file.name} is over 4 MB`)
+          const path = `${user.id}/${district}/${(crypto.randomUUID ? crypto.randomUUID() : Date.now())}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+          const { error: upErr } = await supabase.storage.from('poll-intel').upload(path, file, { upsert: false })
+          if (upErr) throw new Error(upErr.message)
+          const { error: e } = await supabase.from('poll_intel').insert({
+            user_id: user.id, district, kind: 'image', title: file.name, file_path: path, file_type: file.type,
+          })
+          if (e) throw new Error(e.message)
+        } else {
+          let text
+          if (/\.pdf$/i.test(file.name)) text = await extractPdfText(file)
+          else if (/\.(txt|md|csv|json)$/i.test(file.name) || /^text\//.test(file.type)) text = await file.text()
+          else throw new Error(`${file.name}: use PDF, text, CSV, JSON, or image files`)
+          text = (text || '').trim().slice(0, 20000)
+          if (!text) throw new Error(`${file.name}: no readable text found`)
+          const { error: e } = await supabase.from('poll_intel').insert({
+            user_id: user.id, district, kind: 'text', title: file.name, content: text, file_type: file.type || 'text/plain',
+          })
+          if (e) throw new Error(e.message)
+        }
+        setIntelDirty(true)
+      } catch (err) { setIntelMsg(err.message) }
+    }
+    await loadIntel(district)
+    setIntelBusy(false)
+  }
+
+  const deleteIntel = async (row) => {
+    setIntelBusy(true)
+    try { if (row.file_path) await supabase.storage.from('poll-intel').remove([row.file_path]) } catch (_) {}
+    await supabase.from('poll_intel').delete().eq('id', row.id)
+    setIntelDirty(true)
+    await loadIntel(district)
+    setIntelBusy(false)
   }
 
   const grouped = useMemo(() => {
@@ -260,6 +361,76 @@ export default function Polling() {
           />
         </div>
       </div>
+
+      {/* ── Local Intel (v1.25) — user-supplied signal factored into the projection ── */}
+      {district && (
+        <div className="card py-4">
+          <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+            <h2 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+              <Paperclip className="w-4 h-4 text-brand-navy" /> Local Intel
+              {intel.length > 0 && <span className="text-xs font-normal text-gray-400">({intel.length})</span>}
+            </h2>
+            <div className="flex items-center gap-2">
+              {personalized && !intelDirty && (
+                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">Factored into this projection</span>
+              )}
+              {intelDirty && (
+                <button onClick={() => runGenerate(undefined, true)} disabled={generating}
+                  className="btn-primary text-xs py-1.5 flex items-center gap-1.5">
+                  <RefreshCw className={`w-3.5 h-3.5 ${generating ? 'animate-spin' : ''}`} /> Regenerate with intel
+                </button>
+              )}
+            </div>
+          </div>
+          <p className="text-xs text-gray-500 mb-3">
+            Add canvass results, internal numbers, mailers, photos, or notes — the AI weighs them alongside public research and adjusts the vote-share projection. Private to your account.
+          </p>
+
+          {intel.length > 0 && (
+            <div className="space-y-1.5 mb-3">
+              {intel.map(row => (
+                <div key={row.id} className="flex items-center gap-2.5 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                  {row.kind === 'image' ? <ImageIcon className="w-3.5 h-3.5 text-purple-500 flex-shrink-0" />
+                    : row.kind === 'note' ? <StickyNote className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                    : <FileText className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />}
+                  <span className="text-xs font-semibold text-gray-700 truncate">{row.title || row.kind}</span>
+                  {row.kind !== 'image' && row.content && (
+                    <span className="text-[11px] text-gray-400 truncate hidden sm:block">{row.content.slice(0, 80)}</span>
+                  )}
+                  <button onClick={() => deleteIntel(row)} disabled={intelBusy}
+                    className="ml-auto p-1 rounded hover:bg-red-50 text-gray-300 hover:text-brand-red flex-shrink-0">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row gap-2">
+            <textarea
+              className="input text-sm flex-1" rows={1}
+              placeholder="Type local intel — canvass tallies, event turnout, what you're hearing at the doors…"
+              value={noteText} onChange={e => setNoteText(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addNote() }}
+            />
+            <div className="flex gap-2">
+              <button onClick={addNote} disabled={intelBusy || !noteText.trim()} className="btn-secondary text-xs py-2 flex items-center gap-1.5 whitespace-nowrap">
+                {intelBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />} Add note
+              </button>
+              <button onClick={() => intelFileRef.current?.click()} disabled={intelBusy} className="btn-secondary text-xs py-2 flex items-center gap-1.5 whitespace-nowrap">
+                <Upload className="w-3.5 h-3.5" /> Upload files
+              </button>
+              <input ref={intelFileRef} type="file" multiple className="hidden"
+                accept=".pdf,.txt,.md,.csv,.json,image/png,image/jpeg,image/webp,image/gif"
+                onChange={e => { addFiles([...e.target.files]); e.target.value = '' }} />
+            </div>
+          </div>
+          {intelMsg && <p className="text-xs text-red-600 font-semibold mt-2">{intelMsg}</p>}
+          {intelDirty && !generating && (
+            <p className="text-[11px] text-amber-600 font-semibold mt-2">Intel changed — hit "Regenerate with intel" to factor it into the projection.</p>
+          )}
+        </div>
+      )}
 
       {/* Empty state */}
       {!district && !loading && (
@@ -411,29 +582,46 @@ export default function Polling() {
                   {isPrimary ? 'Primary fields shown per party — candidates only compete within their own primary' : 'If the election were held today'}
                 </p>
 
-                {isPrimary && (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-2">
-                    {vs.primaries.map((p, i) => (
-                      <div key={i} className="rounded-xl border p-4 sm:p-5" style={{ borderColor: `${PARTY_COLOR[p.party] || '#64748B'}40`, background: `${PARTY_COLOR[p.party] || '#64748B'}08` }}>
-                        <p className="text-xs font-extrabold uppercase tracking-wider mb-4" style={{ color: PARTY_COLOR[p.party] || '#334155' }}>
-                          {p.party} primary
-                        </p>
-                        <DonutGroup slices={primarySlices(p)} animKey={`${baseKey}-p-${p.party}`} />
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {generalSlices.length > 0 && (
-                  <div className={isPrimary ? 'mt-5 pt-5 border-t border-gray-100' : ''}>
-                    {isPrimary && (
-                      <p className="text-xs font-extrabold uppercase tracking-wider text-gray-500 mb-4">November general outlook</p>
-                    )}
-                    <div className={isPrimary ? 'max-w-xl' : 'max-w-2xl'}>
+                {(() => {
+                  // Republican primary first (left), Democrat second (right),
+                  // others after; November general underneath. With a single
+                  // contested primary, the general sits beside it instead.
+                  const ORDER = { Republican: 0, Democrat: 1 }
+                  const prims = isPrimary ? [...vs.primaries].sort((a, b) => (ORDER[a.party] ?? 9) - (ORDER[b.party] ?? 9)) : []
+                  const GeneralCard = ({ framed }) => generalSlices.length === 0 ? null : (
+                    <div className={framed
+                      ? 'rounded-xl border border-gray-200 bg-gray-50/60 p-4 sm:p-5'
+                      : ''}>
+                      {isPrimary && (
+                        <p className="text-xs font-extrabold uppercase tracking-wider text-gray-500 mb-4">November general outlook</p>
+                      )}
                       <DonutGroup slices={generalSlices} animKey={`${baseKey}-g`} />
                     </div>
-                  </div>
-                )}
+                  )
+                  const PrimaryCard = ({ p }) => (
+                    <div className="rounded-xl border p-4 sm:p-5" style={{ borderColor: `${PARTY_COLOR[p.party] || '#64748B'}40`, background: `${PARTY_COLOR[p.party] || '#64748B'}08` }}>
+                      <p className="text-xs font-extrabold uppercase tracking-wider mb-4" style={{ color: PARTY_COLOR[p.party] || '#334155' }}>
+                        {p.party} primary
+                      </p>
+                      <DonutGroup slices={primarySlices(p)} animKey={`${baseKey}-p-${p.party}`} />
+                    </div>
+                  )
+                  if (!isPrimary) return <div className="max-w-2xl"><GeneralCard framed={false} /></div>
+                  if (prims.length === 1) return (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      <PrimaryCard p={prims[0]} />
+                      <GeneralCard framed />
+                    </div>
+                  )
+                  return (
+                    <>
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                        {prims.map((p, i) => <PrimaryCard key={i} p={p} />)}
+                      </div>
+                      <GeneralCard framed />
+                    </>
+                  )
+                })()}
 
                 {band && (
                   <p className="text-[11px] text-gray-400 font-semibold mt-5">
