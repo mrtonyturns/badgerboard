@@ -1,4 +1,15 @@
-// Netlify BACKGROUND Function: polling-snapshot-background (v1.22, BETA-ONLY)
+// Netlify BACKGROUND Function: polling-snapshot-background (v1.26, BETA-ONLY)
+//
+// v1.26 — projection STABILITY pass. Four changes, in order of impact:
+//   a) ensemble combines by MEDIAN over the models that actually listed each
+//      candidate (was: mean with "missing from a model" scored as 0, which
+//      quietly demoted anyone one model forgot), with a quorum filter so a
+//      single model's invented entrant is dropped rather than diluting the field
+//   b) every run is anchored to the previous shared snapshot — handed to the
+//      models as a baseline AND clamped server-side to ±maxDelta per candidate
+//   c) local intel now moves only the candidates it actually names, with
+//      explicit magnitude limits and no collateral reordering
+//   d) low temperature on all four model calls
 // The AI polling pipeline. Internal-trigger auth only (fired by
 // polling-snapshot or the weekly refresh cron — never directly by clients).
 //
@@ -64,11 +75,62 @@ async function loadIntel(userId, district) {
   return { text: text.trim() || null, images, count: rows.length }
 }
 
+// v1.26: intel is evidence about the candidate(s) it names — nothing more.
+// The previous wording ("it SHOULD move the vote-share numbers") licensed every
+// model to re-roll the entire field whenever any intel existed, which is how a
+// note about one candidate ended up promoting an unrelated one to first place.
 const INTEL_NOTE = (intel) => intel && (intel.text || intel.images.length) ? `
 
 CAMPAIGN-PROVIDED LOCAL INTEL (private, supplied by the requesting campaign — internal canvass results, mailers, on-the-ground reports${intel.images.length ? ', plus attached images' : ''}):
 ${(intel.text || '(images only)').slice(0, 9000)}
-Weigh this as genuine on-the-ground signal alongside the public research — it SHOULD move the vote-share numbers when it is specific (canvass tallies, internal polls, event turnout). Discount any claim that directly contradicts documented public facts. Note in the confidence text that campaign-provided local intel was factored in.` : ''
+
+HOW TO APPLY THIS INTEL — follow exactly:
+1. SCOPE. First identify which race and which specific candidate(s) this intel is actually about. It is evidence about those candidates ONLY. Candidates the intel does not mention get no evidentiary change from it.
+2. NO COLLATERAL REORDERING. Adjust the subject candidate(s), then absorb the difference across the rest of that party's field PROPORTIONALLY to their existing shares. A candidate the intel says nothing about must NOT overtake another candidate as a side effect of this intel. If the intel concerns candidate A, the relative order of B, C and D stays as it was.
+3. MAGNITUDE. Be conservative and proportional to the evidence:
+   - a complete internal poll or a full district canvass: up to ~8 points on the subject candidate
+   - partial canvass tallies, mailer counts, event turnout, volunteer reports: ~3 points or less
+   - a claim, photo, endorsement rumor, or opposition item with no numbers behind it: ~2 points or less
+   Nothing here justifies moving a candidate into or out of first place on its own.
+4. CREDIBILITY. This comes from an interested party and is unverified. Discount anything that contradicts documented public facts, and never let it override real published polling — at most it nudges within the polling's margin.
+5. Note in the confidence text that campaign-provided local intel was factored in.` : ''
+
+// The previous projection for this district, handed to every model as the
+// working baseline so a refresh reproduces rather than re-rolls.
+const PRIOR_NOTE = (prior) => prior?.vote_share ? `
+
+PREVIOUS PROJECTION for this district (produced by this same system ${prior.ageDays} day(s) ago) — this is your BASELINE:
+${JSON.stringify(prior.vote_share)}
+Rules for the baseline:
+- A refresh is a re-measurement of the same race, not a fresh opinion. If nothing material has changed, REPRODUCE these numbers (within a point or two). Voters do not swing 20 points in a week.
+- Depart from the baseline only where the research below contains specific NEW evidence — a new poll, a withdrawal, a fundraising report, a major local event — and then move only the candidates that evidence concerns, citing it in the confidence note.
+- If a baseline candidate has since withdrawn, drop them and redistribute their share across the remaining field in proportion to their current standing.
+- If a candidate is missing from the baseline but is confirmed running in the research, add them at a level justified by the evidence.
+- Do not reorder the field unless the research gives a concrete reason to.${prior.approval ? `
+Previous approval read: ${JSON.stringify(prior.approval)} — same rule applies, stay close to it absent new evidence.` : ''}` : ''
+
+// Pull the shared (global) baseline for this district. Personalized runs anchor
+// to the public baseline too, which is what makes local intel a bounded
+// perturbation of the shared read instead of an independent re-roll.
+async function loadPrior(district) {
+  try {
+    const res = await sb(`/poll_snapshots?district=eq.${encodeURIComponent(district)}&user_id=eq.${GLOBAL_USER}&select=vote_share,approval,generated_at,status`)
+    if (!res.ok) return null
+    const row = (await res.json())?.[0]
+    // NOTE: status is 'generating' by the time we run (polling-snapshot flips it
+    // before firing us) — the vote_share on the row is still the previous run's,
+    // which is exactly the baseline we want. Don't gate on status.
+    if (!row?.vote_share) return null
+    if (validateVoteShare(row.vote_share)) return null       // don't anchor to a malformed prior
+    // generated_at was reset by the 'generating' upsert, so this reads ~0 on a
+    // normal refresh — that's the intended tight clamp. It only widens when a
+    // row has genuinely sat untouched.
+    const ageDays = Math.max(0, Math.round((Date.now() - new Date(row.generated_at).getTime()) / 86400000))
+    if (ageDays > 45) return null                            // too stale to constrain a new read
+    const { _spread, ...vote_share } = row.vote_share
+    return { vote_share, approval: row.approval || null, ageDays }
+  } catch (_) { return null }
+}
 
 function safeEqual(a, b) {
   const A = crypto.createHash('sha256').update(String(a ?? '')).digest()
@@ -235,7 +297,7 @@ const SNAPSHOT_SCHEMA_NOTE = `{
   "confidence": { "margin_pts": number, "band": "low|moderate|high", "note": "one line on what drives the uncertainty" }
 }`
 
-async function synthesize(district, research, social, requestedBy, intel) {
+async function synthesize(district, research, social, requestedBy, intel, prior) {
   const label = districtLabel(district)
   const call = async () => {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -244,6 +306,7 @@ async function synthesize(district, research, social, requestedBy, intel) {
       body: JSON.stringify({
         model: SYNTH_MODEL,
         max_tokens: 2000,
+        temperature: 0.2,
         messages: [{
           role: 'user',
           content: `You are estimating a district opinion snapshot for ${label}, Wisconsin. Using ONLY the research below, produce STRICT JSON matching exactly this shape (no prose, no markdown fences):
@@ -263,7 +326,7 @@ NEWS / POLLING / RESULTS RESEARCH:
 ${(research?.text || 'None available').slice(0, 12000)}
 
 SOCIAL LISTENING (secondary signal, Top Issues only):
-${(social || 'None available').slice(0, 4000)}${INTEL_NOTE(intel)}`
+${(social || 'None available').slice(0, 4000)}${PRIOR_NOTE(prior)}${INTEL_NOTE(intel)}`
         }].map(m => {
           // attach intel images (canvass sheets, mailers, photos) as vision blocks
           if (!intel || !intel.images.length) return m
@@ -345,20 +408,24 @@ Rules:
 - phase "general" when nominations are settled: fill "general" only, summing to 100 ±1.
 - BE DECISIVE: allocate soft/undecided voters by name recognition, endorsements, fundraising, incumbency, geography, and traction. Undecided ≤ 15 per party (≤ 10 with real polling or in the general).`
 
-async function estimateVoteShare(provider, district, research, requestedBy, intel) {
+// Low temperature on every estimator: run-to-run swings were partly just
+// sampling noise at the provider defaults.
+const EST_TEMP = 0.15
+
+async function estimateVoteShare(provider, district, research, requestedBy, intel, prior) {
   const label = districtLabel(district)
   const prompt = `You are projecting the vote share for ${label}, Wisconsin (office: ${officeLabel(district)}).
 ${VOTE_SHARE_RULES(district)}
 
 RESEARCH:
-${(research?.text || '').slice(0, 11000)}${INTEL_NOTE(intel)}`
+${(research?.text || '').slice(0, 11000)}${PRIOR_NOTE(prior)}${INTEL_NOTE(intel)}`
   let text = null
   if (provider === 'xai') {
     if (!XAI_KEY) return null
     const res = await fetch('https://api.x.ai/v1/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${XAI_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: GROK_MODEL, max_tokens: 1200, messages: [{ role: 'user', content: prompt }] }),
+      body: JSON.stringify({ model: GROK_MODEL, max_tokens: 1200, temperature: EST_TEMP, messages: [{ role: 'user', content: prompt }] }),
     })
     if (!res.ok) throw new Error(`xai ${res.status}`)
     const d = await res.json()
@@ -369,7 +436,7 @@ ${(research?.text || '').slice(0, 11000)}${INTEL_NOTE(intel)}`
     const res = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${PPLX_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: RESEARCH_MODEL, max_tokens: 1200, messages: [
+      body: JSON.stringify({ model: RESEARCH_MODEL, max_tokens: 1200, temperature: EST_TEMP, messages: [
         { role: 'system', content: 'You are a Wisconsin election forecaster. You may verify facts with live search, but output STRICT JSON only.' },
         { role: 'user', content: prompt },
       ] }),
@@ -383,7 +450,7 @@ ${(research?.text || '').slice(0, 11000)}${INTEL_NOTE(intel)}`
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: EST_TEMP } }),
     })
     if (!res.ok) throw new Error(`gemini ${res.status}`)
     const d = await res.json()
@@ -402,34 +469,85 @@ const nameKey = (n) => /undecided/i.test(n) ? 'undecided'
   : /nominee|tbd/i.test(n) ? `tbd-${(n.match(/republican|democrat|independent/i) || ['x'])[0].toLowerCase()}`
   : String(n).toLowerCase().replace(/[^a-z ]/g, '').trim().split(/\s+/).pop()
 
-function averageLists(lists, withParty) {
-  // lists: array of candidate arrays from different models
-  const acc = new Map()  // key → { name, party, total, count }
+const median = (arr) => {
+  const s = [...arr].sort((x, y) => x - y)
+  const m = Math.floor(s.length / 2)
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
+}
+
+// Renormalize a list to exactly 100 (integers), Undecided last.
+function normalize100(rows) {
+  const sum = rows.reduce((t, r) => t + r.pct, 0) || 1
+  const out = rows.map(r => ({ ...r, pct: Math.round((r.pct / sum) * 100) }))
+  const drift = 100 - out.reduce((t, r) => t + r.pct, 0)
+  if (drift !== 0 && out.length) {
+    // give drift to the largest non-Undecided line so rounding never invents a leader
+    const idx = out.reduce((best, r, i) =>
+      (/undecided/i.test(r.candidate) ? best : (out[best] && out[best].pct >= r.pct ? best : i)), 0)
+    out[idx].pct += drift
+  }
+  out.sort((a, b) => (/undecided/i.test(a.candidate) ? 1 : 0) - (/undecided/i.test(b.candidate) ? 1 : 0) || b.pct - a.pct)
+  return out
+}
+
+// v1.26 — combine model estimates by MEDIAN over the models that actually
+// listed each candidate.
+//
+// The previous implementation summed pct and divided by lists.length, so a
+// candidate one model forgot to list was scored 0 for that model — a real
+// front-runner listed by 2 of 3 models lost a third of their share and could be
+// overtaken by a weaker candidate all three happened to list. That single bug
+// explains most of the run-to-run reordering. Now: a candidate is kept only if
+// a quorum of models named them (which drops one model's hallucinated entrant
+// instead of diluting everyone else), and their number is the median of the
+// models that did — so one outlier estimate can no longer swing the ranking.
+function combineLists(lists, withParty) {
+  const n = lists.length
+  const acc = new Map()  // key → { candidate, party, vals[] }
   for (const list of lists) {
+    const seenThisModel = new Set()
     for (const c of list) {
       const k = nameKey(c.candidate)
-      if (!acc.has(k)) acc.set(k, { candidate: c.candidate, party: c.party, total: 0 })
+      if (seenThisModel.has(k)) continue      // one model listing a name twice counts once
+      seenThisModel.add(k)
+      if (!acc.has(k)) acc.set(k, { candidate: c.candidate, party: c.party, vals: [] })
       const a = acc.get(k)
-      a.total += (typeof c.pct === 'number' ? c.pct : 0)
+      a.vals.push(typeof c.pct === 'number' ? c.pct : 0)
       // prefer the longest name variant (fuller names read better)
       if (String(c.candidate).length > String(a.candidate).length) a.candidate = c.candidate
+      if (!a.party && c.party) a.party = c.party
     }
   }
-  // Missing from a model = 0 for that model → divide by number of models
-  const n = lists.length
-  let rows = [...acc.values()].map(a => ({
-    candidate: a.candidate, ...(withParty ? { party: a.party || 'Other' } : {}), pct: a.total / n,
+  // Quorum: with 3 models require 2; with 2 models a single mention stands
+  // (there's no majority to appeal to). Undecided always survives.
+  const quorum = n >= 3 ? 2 : 1
+  const kept = [...acc.values()].filter(a => a.vals.length >= quorum || /undecided/i.test(a.candidate))
+  const rows = (kept.length ? kept : [...acc.values()]).map(a => ({
+    candidate: a.candidate,
+    ...(withParty ? { party: a.party || 'Other' } : {}),
+    pct: median(a.vals),
   }))
-  // Renormalize to exactly 100 and round
-  const sum = rows.reduce((t, r) => t + r.pct, 0) || 1
-  rows = rows.map(r => ({ ...r, pct: Math.round((r.pct / sum) * 100) }))
-  const drift = 100 - rows.reduce((t, r) => t + r.pct, 0)
-  if (drift !== 0 && rows.length) {
-    rows.sort((a, b) => b.pct - a.pct)
-    rows[0].pct += drift
+  return normalize100(rows)
+}
+
+// Widest disagreement between models on any candidate they all weighed in on —
+// feeds the confidence margin so a split ensemble reports as less certain.
+function ensembleSpread(lists) {
+  const acc = new Map()
+  for (const list of lists) {
+    for (const c of list) {
+      if (/undecided/i.test(c.candidate)) continue
+      const k = nameKey(c.candidate)
+      if (!acc.has(k)) acc.set(k, [])
+      acc.get(k).push(typeof c.pct === 'number' ? c.pct : 0)
+    }
   }
-  rows.sort((a, b) => (/undecided/i.test(a.candidate) ? 1 : 0) - (/undecided/i.test(b.candidate) ? 1 : 0) || b.pct - a.pct)
-  return rows
+  let worst = 0
+  for (const vals of acc.values()) {
+    if (vals.length < 2) continue
+    worst = Math.max(worst, Math.max(...vals) - Math.min(...vals))
+  }
+  return worst
 }
 
 function averageVoteShares(estimates) {
@@ -438,17 +556,77 @@ function averageVoteShares(estimates) {
   const primaryVotes = estimates.filter(e => e.phase === 'primary').length
   const phase = primaryVotes * 2 >= estimates.length ? 'primary' : 'general'
   const out = { phase, primaries: [], general: [] }
+  let spread = 0
 
   if (phase === 'primary') {
     const parties = [...new Set(estimates.flatMap(e => (e.primaries || []).map(p => p.party)))]
     for (const party of parties) {
       const lists = estimates.map(e => (e.primaries || []).find(p => p.party === party)?.candidates).filter(Boolean)
-      if (lists.length) out.primaries.push({ party, candidates: averageLists(lists, false) })
+      if (lists.length) {
+        out.primaries.push({ party, candidates: combineLists(lists, false) })
+        spread = Math.max(spread, ensembleSpread(lists))
+      }
     }
   }
   const genLists = estimates.map(e => e.general).filter(g => Array.isArray(g) && g.length)
-  if (genLists.length) out.general = averageLists(genLists, true)
+  if (genLists.length) {
+    out.general = combineLists(genLists, true)
+    spread = Math.max(spread, ensembleSpread(genLists))
+  }
+  out._spread = spread
   return (out.primaries.length || out.general.length) ? out : null
+}
+
+// ── Prior-snapshot anchoring (v1.26) ─────────────────────────────────────────
+// A regeneration is a fresh sample of the same underlying reality, not a fresh
+// opinion. Absent new evidence the numbers should barely move. We tell every
+// model the previous projection (see PRIOR_NOTE) and then enforce it here:
+// any candidate that appears in both runs is held within maxDelta points of
+// where they were, and each list is renormalized. Candidates who are new, or
+// who have dropped out since, are unconstrained — genuine news still lands.
+function clampList(rows, priorRows, maxDelta) {
+  if (!Array.isArray(priorRows) || !priorRows.length) return rows
+  const prior = new Map(priorRows.map(p => [nameKey(p.candidate), typeof p.pct === 'number' ? p.pct : null]))
+  const adjusted = rows.map(r => {
+    const p = prior.get(nameKey(r.candidate))
+    if (p == null) return r                                  // new name — let it stand
+    return { ...r, pct: Math.min(p + maxDelta, Math.max(p - maxDelta, r.pct)) }
+  })
+  return stabilizeRank(normalize100(adjusted), prior)
+}
+
+// Rank hysteresis: when the top two are inside the dead-heat band the ordering
+// carries no real information, so flipping the #1 badge on every refresh is
+// noise presented as news. If the run puts a new name on top by ≤ TIE_BAND
+// points and the previous baseline had it the other way, keep the prior order.
+// Outside the band the new result stands — a real lead change still shows.
+const TIE_BAND = 3
+function stabilizeRank(rows, priorMap) {
+  const real = rows.filter(r => !/undecided/i.test(r.candidate))
+  if (real.length < 2) return rows
+  const [a, b] = real
+  if (a.pct - b.pct > TIE_BAND) return rows
+  const pa = priorMap.get(nameKey(a.candidate))
+  const pb = priorMap.get(nameKey(b.candidate))
+  if (pa == null || pb == null || pb <= pa) return rows       // no flip to undo
+  const t = a.pct; a.pct = b.pct; b.pct = t                   // restore prior order
+  rows.sort((x, y) => (/undecided/i.test(x.candidate) ? 1 : 0) - (/undecided/i.test(y.candidate) ? 1 : 0) || y.pct - x.pct)
+  return rows
+}
+
+function anchorVoteShare(vs, prior, maxDelta) {
+  if (!vs || !prior?.vote_share || prior.vote_share.phase !== vs.phase) return vs
+  const pv = prior.vote_share
+  if (Array.isArray(vs.primaries)) {
+    for (const grp of vs.primaries) {
+      const pg = (pv.primaries || []).find(p => p.party === grp.party)
+      if (pg) grp.candidates = clampList(grp.candidates, pg.candidates, maxDelta)
+    }
+  }
+  if (Array.isArray(vs.general) && vs.general.length && Array.isArray(pv.general) && pv.general.length) {
+    vs.general = clampList(vs.general, pv.general, maxDelta)
+  }
+  return vs
 }
 
 function validateSnapshot(s) {
@@ -513,32 +691,64 @@ export const handler = async (event) => {
     }
     if (!research?.text) return await fail('Research providers unavailable')
 
-    // 1b. Local intel (personalized snapshots only)
-    const intel = await loadIntel(snapshotUser, district).catch(() => null)
+    // 1b. Local intel (personalized snapshots only) + the shared baseline this
+    //     run anchors to. Personalized runs anchor to the GLOBAL baseline, so
+    //     intel perturbs the public read instead of replacing it.
+    const [intel, prior] = await Promise.all([
+      loadIntel(snapshotUser, district).catch(() => null),
+      loadPrior(district).catch(() => null),
+    ])
 
     // 2. Social signal (best-effort)
     const social = await grokSocialSignal(district, requestedBy)
 
     // 3. Synthesis (full snapshot) + 3-model vote-share ensemble, in parallel
     const [snapshot, ...estimates] = await Promise.all([
-      synthesize(district, research, social, requestedBy, intel),
+      synthesize(district, research, social, requestedBy, intel, prior),
       ...['xai', 'perplexity', 'gemini'].map(prov =>
-        estimateVoteShare(prov, district, research, requestedBy, intel)
+        estimateVoteShare(prov, district, research, requestedBy, intel, prior)
           .catch(e => { console.warn(`[polling-bg] ${prov} estimate failed: ${e.message}`); return null })),
     ])
     if (!snapshot) return await fail('Synthesis produced invalid output twice')
 
-    // 4. Ensemble average — Grok + Perplexity + Gemini estimates, matched by
-    //    candidate and renormalized. Needs ≥2 valid estimates; otherwise the
-    //    Claude synthesis vote_share stands.
+    // 4. Ensemble — median across Grok/Perplexity/Gemini, quorum-filtered.
+    //    Needs ≥2 valid estimates; otherwise the Claude synthesis vote_share
+    //    stands (and is still anchored below).
     const validEstimates = estimates.filter(Boolean)
     let ensembleUsed = false
+    let spread = 0
     if (validEstimates.length >= 2) {
       const averaged = averageVoteShares(validEstimates)
-      if (averaged && !validateVoteShare(averaged)) { snapshot.vote_share = averaged; ensembleUsed = true }
-      else if (averaged) console.warn(`[polling-bg] ensemble average failed validation: ${validateVoteShare(averaged)}`)
+      if (averaged) {
+        spread = averaged._spread || 0
+        delete averaged._spread
+        if (!validateVoteShare(averaged)) { snapshot.vote_share = averaged; ensembleUsed = true }
+        else console.warn(`[polling-bg] ensemble failed validation: ${validateVoteShare(averaged)}`)
+      }
     }
-    console.log(`[polling-bg] ${district} ensemble: ${validEstimates.length}/3 estimates valid, used=${ensembleUsed}`)
+
+    // 5. Anchor to the prior baseline. Candidates present in both runs are held
+    //    within maxDelta points of where they were; new entrants and dropouts
+    //    are unconstrained. Intel widens the band so a campaign's own data can
+    //    actually move its candidate — but not re-rank the whole field.
+    const maxDelta = 8 + (intel ? 4 : 0) + Math.min(10, prior?.ageDays || 0)
+    if (prior) {
+      const before = JSON.stringify(snapshot.vote_share)
+      snapshot.vote_share = anchorVoteShare(snapshot.vote_share, prior, maxDelta)
+      const vErr = validateVoteShare(snapshot.vote_share)
+      if (vErr) { console.warn(`[polling-bg] anchoring broke validation (${vErr}) — reverting`); snapshot.vote_share = JSON.parse(before) }
+    }
+
+    // 6. Model disagreement feeds the confidence band — a split ensemble is a
+    //    genuinely less certain read and should say so.
+    if (spread > 12 && snapshot.confidence) {
+      snapshot.confidence.margin_pts = Math.max(snapshot.confidence.margin_pts || 0, Math.round(spread / 2))
+      if (spread > 20) snapshot.confidence.band = 'low'
+      else if (snapshot.confidence.band === 'high') snapshot.confidence.band = 'moderate'
+      snapshot.confidence.note = `${String(snapshot.confidence.note || '').replace(/\s*$/, '')} Models disagreed by up to ${Math.round(spread)} pts on this field, which widens the margin.`.trim().slice(0, 400)
+    }
+
+    console.log(`[polling-bg] ${district} ensemble: ${validEstimates.length}/3 valid, used=${ensembleUsed}, spread=${Math.round(spread)}, anchored=${!!prior} (Δ≤${maxDelta}, prior ${prior?.ageDays ?? '-'}d)`)
 
     // Sources: prefer structured citations; else pull URLs out of the research text
     const hostOf = (u) => String(u || '').replace(/^https?:\/\/(www\.)?/, '').split('/')[0]
@@ -557,7 +767,7 @@ export const handler = async (event) => {
     }
 
     const researchModelName = researchProvider === 'xai' ? GROK_MODEL : researchProvider === 'gemini' ? 'gemini-2.5-flash' : RESEARCH_MODEL
-    const modelUsed = `${researchProvider}:${researchModelName} + anthropic:${SYNTH_MODEL}${ensembleUsed ? ` + vote-share avg of ${validEstimates.length} models (grok/perplexity/gemini)` : ''}`
+    const modelUsed = `${researchProvider}:${researchModelName} + anthropic:${SYNTH_MODEL}${ensembleUsed ? ` + vote-share median of ${validEstimates.length} models (grok/perplexity/gemini)` : ''}${prior ? ' + baseline-anchored' : ''}`
 
     // on_conflict=district is REQUIRED: merge-duplicates alone resolves on the
     // id PK, so re-saving an existing district 409s on the UNIQUE(district)
