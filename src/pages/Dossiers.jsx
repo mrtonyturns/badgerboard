@@ -937,17 +937,21 @@ function StaleBanner({ generatedAt, onRegenerate, regenerating }) {
   )
 }
 
-// ─── Share Modal (Agency only) ────────────────────────────────────────────────
+// ─── Share Modal (v1.19: consolidated sharing — PDF export + timed links) ─────
+// Expiry range: minimum 1 hour, maximum 7 days.
 const EXPIRY_OPTIONS = [
-  { value: '24h', label: '24 Hours' },
-  { value: '7d',  label: '7 Days'   },
-  { value: '30d', label: '30 Days'  },
+  { value: 1,   label: '1 Hour'   },
+  { value: 3,   label: '3 Hours'  },
+  { value: 12,  label: '12 Hours' },
+  { value: 24,  label: '24 Hours' },
+  { value: 72,  label: '3 Days'   },
+  { value: 168, label: '7 Days'   },
 ]
 
-function ShareModal({ dossier, onClose }) {
+function ShareModal({ dossier, onClose, onExportPdf }) {
   const { user }                    = useAuth()
   const [step, setStep]             = useState('disclosure') // disclosure | create | manage
-  const [expiresIn, setExpiresIn]   = useState('7d')
+  const [expiresIn, setExpiresIn]   = useState(24)
   const [creating, setCreating]     = useState(false)
   const [newLink, setNewLink]       = useState(null) // { share_url, expires_at, id }
   const [copied, setCopied]         = useState(false)
@@ -987,7 +991,7 @@ function ShareModal({ dossier, onClose }) {
       const res = await fetch('/.netlify/functions/create-dossier-share', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ dossier_id: dossier.id, expires_in: expiresIn }),
+        body: JSON.stringify({ dossier_id: dossier.id, expires_hours: expiresIn }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error || 'Failed to create link'); setCreating(false); return }
@@ -1029,8 +1033,7 @@ function ShareModal({ dossier, onClose }) {
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
           <div className="flex items-center gap-2">
             <Link2 className="w-4 h-4 text-brand-navy" />
-            <span className="text-sm font-bold text-gray-900">Share Temporary Profile Link</span>
-            <span className="text-xs bg-purple-100 text-purple-700 font-bold px-2 py-0.5 rounded-full">Agency</span>
+            <span className="text-sm font-bold text-gray-900">Share Profile</span>
           </div>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600">
             <X className="w-4 h-4" />
@@ -1039,7 +1042,31 @@ function ShareModal({ dossier, onClose }) {
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
 
-          {/* ── Step: Disclosure ──────────────────────────────────────────── */}
+          {/* ── Option 1: Export PDF ─────────────────────────────────────── */}
+          {step === 'disclosure' && (
+            <button
+              onClick={() => { onExportPdf?.(); onClose() }}
+              className="w-full flex items-center gap-3 p-4 bg-gray-50 border border-gray-200 rounded-xl hover:border-gray-300 hover:bg-gray-100 transition-all text-left"
+            >
+              <div className="w-9 h-9 rounded-lg bg-brand-navy/10 flex items-center justify-center flex-shrink-0">
+                <Download className="w-4 h-4 text-brand-navy" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-gray-900">Export as PDF</p>
+                <p className="text-xs text-gray-500">Download a printable copy of this profile</p>
+              </div>
+            </button>
+          )}
+
+          {step === 'disclosure' && (
+            <div className="flex items-center gap-3">
+              <div className="flex-1 h-px bg-gray-200" />
+              <span className="text-xs text-gray-400 font-semibold">OR SHARE A TIMED LINK</span>
+              <div className="flex-1 h-px bg-gray-200" />
+            </div>
+          )}
+
+          {/* ── Option 2: Generate timed link ─────────────────────────────── */}
           {step === 'disclosure' && (
             <>
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-2">
@@ -1056,13 +1083,13 @@ function ShareModal({ dossier, onClose }) {
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-gray-700">Link Expiration</label>
-                <div className="flex gap-2">
+                <label className="text-xs font-semibold text-gray-700">Link active for</label>
+                <div className="grid grid-cols-3 gap-2">
                   {EXPIRY_OPTIONS.map(opt => (
                     <button
                       key={opt.value}
                       onClick={() => setExpiresIn(opt.value)}
-                      className={`flex-1 py-2.5 px-3 rounded-xl border text-xs font-semibold transition-all ${
+                      className={`py-2.5 px-3 rounded-xl border text-xs font-semibold transition-all ${
                         expiresIn === opt.value
                           ? 'bg-brand-navy text-white border-brand-navy shadow-sm'
                           : 'bg-gray-50 text-gray-600 border-gray-200 hover:border-gray-300'
@@ -1072,7 +1099,7 @@ function ShareModal({ dossier, onClose }) {
                     </button>
                   ))}
                 </div>
-                <p className="text-xs text-gray-400">After this time, the link will stop working automatically.</p>
+                <p className="text-xs text-gray-400">After this time, the link stops working automatically. Minimum 1 hour, maximum 7 days.</p>
               </div>
 
               {error && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
@@ -1096,7 +1123,7 @@ function ShareModal({ dossier, onClose }) {
                 <span className="text-sm font-bold text-green-800">Link Created</span>
                 <span className="text-xs text-green-600 ml-auto flex items-center gap-1">
                   <Clock className="w-3 h-3" />
-                  Expires {EXPIRY_OPTIONS.find(o => o.value === expiresIn)?.label}
+                  Active for {EXPIRY_OPTIONS.find(o => o.value === expiresIn)?.label}
                 </span>
               </div>
               <div className="flex items-center gap-2 bg-white border border-green-200 rounded-lg px-3 py-2">
@@ -1144,7 +1171,7 @@ function ShareModal({ dossier, onClose }) {
               {activeShares.map(share => {
                 const url = `${APP_URL}/temporary-dossier/${share.token}`
                 const expired = new Date(share.expires_at) < new Date()
-                const expiresLabel = expired ? 'Expired' : `Expires ${new Date(share.expires_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+                const expiresLabel = expired ? 'Expired' : `Expires ${new Date(share.expires_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
                 return (
                   <div key={share.id} className="flex items-center gap-3 p-3 bg-gray-50 border border-gray-200 rounded-xl">
                     <div className="flex-1 min-w-0">
@@ -1368,7 +1395,8 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
   const [showShareModal, setShowShareModal] = useState(false)
   const [annotations, saveAnnotation]       = useAnnotations(dossier.id)
   const annotationCount = Object.keys(annotations).length
-  const isAgency = ['agency', 'a_monitor', 'a_active', 'a_campaign'].includes(userPlan)
+  // v1.19: sharing is available on all paid plans (Share button always shown;
+  // link generation is plan-gated server-side, PDF export works everywhere)
   const isLite   = isLiteProfileOnly(userPlan)
   const liteFreeNums = new Set((LITE_PROFILE_FREE_SECTIONS || []).map(s => s.sectionNumber))
   const sectionRefs = useRef({})
@@ -1483,24 +1511,19 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
             <Scale className="w-3.5 h-3.5" />
             Review {flaggedCount > 0 && <span className={`ml-0.5 px-1.5 py-0.5 rounded-full text-xs font-bold ${showReviewer ? 'bg-white/20' : 'bg-amber-100 text-amber-800'}`}>{flaggedCount}</span>}
           </button>
-          {isAgency && (
-            <button
-              onClick={() => setShowShareModal(true)}
-              className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold transition-all text-white"
-              style={{ background: '#B91C1C' }}
-              title="Share temporary profile link (Agency)"
-            >
-              <Link2 className="w-3.5 h-3.5" />
-              Share
-            </button>
-          )}
+          {/* v1.19: consolidated sharing — one button opens PDF export + timed-link options */}
+          <button
+            onClick={() => setShowShareModal(true)}
+            className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold transition-all text-white"
+            style={{ background: '#B91C1C' }}
+            title="Export PDF or share a timed link"
+          >
+            <Link2 className="w-3.5 h-3.5" />
+            Share
+          </button>
           <button onClick={handleCopy} className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold bg-white/10 text-white hover:bg-white/20 transition-all">
             {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
             {copied ? 'Copied' : 'Copy'}
-          </button>
-          <button onClick={handleExportPdf} className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold bg-white/10 text-white hover:bg-white/20 transition-all">
-            <Download className="w-3.5 h-3.5" />
-            Export PDF
           </button>
           {dossier.candidate_id && (
             <Link to={`/candidates/${dossier.candidate_id}`} className="text-xs py-1.5 px-2.5 rounded-lg font-bold bg-white/10 text-white hover:bg-white/20 transition-all">
@@ -1669,7 +1692,7 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
 
       {/* Share modal */}
       {showShareModal && (
-        <ShareModal dossier={dossier} onClose={() => setShowShareModal(false)} />
+        <ShareModal dossier={dossier} onClose={() => setShowShareModal(false)} onExportPdf={handleExportPdf} />
       )}
     </div>
   )
