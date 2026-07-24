@@ -115,7 +115,7 @@ export default function Polling() {
   const unsure = snapshot?.approval ? Math.max(0, 100 - (snapshot.approval.approval_pct + snapshot.approval.disapproval_pct)) : 0
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6">
       <LoadingBar loading={loading} />
 
       {/* Header */}

@@ -2,18 +2,18 @@
 // The AI polling pipeline. Internal-trigger auth only (fired by
 // polling-snapshot or the weekly refresh cron — never directly by clients).
 //
-//   1. Perplexity Sonar Pro — source-cited district signal: local news,
-//      existing public polling, past results, demographics. Citations →
-//      sources[]. (Gemini w/ Google-Search grounding is the drop-in fallback
-//      when GEMINI_API_KEY is set and Perplexity fails.)
-//   2. Grok (xAI) — live X/social conversation, informs Top Issues ONLY
+//   1. Grok (xAI) — PRIMARY research engine (v1.23.2, per accuracy review):
+//      live web + X search for district signal — news, polling, past results,
+//      candidates (with an explicit dropout/withdrawal check). Perplexity
+//      Sonar Pro is the trailing fallback, Gemini the last resort.
+//   2. Grok social pass — X conversation, informs Top Issues ONLY
 //      (secondary signal; X skews demographically).
-//   3. Claude — synthesizes everything into the strict snapshot JSON,
-//      validated server-side; one retry on malformed output.
+//   3. Claude synthesis to the strict snapshot JSON, validated server-side;
+//      one retry on malformed output.
 //
-// Providers are swappable via env: POLLING_RESEARCH_MODEL (default sonar-pro),
-// POLLING_SOCIAL_MODEL (default grok-4.3), POLLING_SYNTH_MODEL (default
-// claude-opus-4-8). All keys server-side only.
+// Providers are swappable via env: POLLING_GROK_MODEL (default grok-4.3),
+// POLLING_RESEARCH_MODEL (Perplexity fallback model, default sonar-pro),
+// POLLING_SYNTH_MODEL (default claude-opus-4-8). All keys server-side only.
 
 import crypto from 'crypto'
 import { logAiUsage } from './_ai-usage.js'
@@ -25,8 +25,9 @@ const XAI_KEY        = process.env.XAI_API_KEY
 const ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY
 const GEMINI_KEY     = process.env.GEMINI_API_KEY
 
-const RESEARCH_MODEL = process.env.POLLING_RESEARCH_MODEL || 'sonar-pro'
-const SOCIAL_MODEL   = process.env.POLLING_SOCIAL_MODEL   || 'grok-4.3'
+const GROK_MODEL     = process.env.POLLING_GROK_MODEL     || 'grok-4.3'
+const RESEARCH_MODEL = process.env.POLLING_RESEARCH_MODEL || 'sonar-pro'   // Perplexity fallback
+const SOCIAL_MODEL   = process.env.POLLING_SOCIAL_MODEL   || GROK_MODEL
 const SYNTH_MODEL    = process.env.POLLING_SYNTH_MODEL    || 'claude-opus-4-8'
 
 function safeEqual(a, b) {
@@ -56,7 +57,53 @@ function officeLabel(key) {
   return { congress: 'U.S. Representative', senate: 'State Senator', assembly: 'State Representative' }[m[1]]
 }
 
-// ── Step 1a: Perplexity research (primary grounding) ─────────────────────────
+// ── Step 1: Grok research (PRIMARY grounding — live web + X search) ──────────
+async function grokResearch(district, requestedBy) {
+  if (!XAI_KEY) return null
+  const label = districtLabel(district)
+  const ctrl = new AbortController()
+  setTimeout(() => ctrl.abort(), 90000)
+  const res = await fetch('https://api.x.ai/v1/responses', {
+    method: 'POST', signal: ctrl.signal,
+    headers: { Authorization: `Bearer ${XAI_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: GROK_MODEL,
+      input: [{ role: 'user', content: `[SYSTEM: You are a Wisconsin political researcher. Search the live web and X now. Report only sourced, current facts — name the outlet for every claim, never fabricate polls or results.]
+Build a current opinion-signal brief for ${label}, Wisconsin (office: ${officeLabel(district)}). Report, with sources and dates:
+1. CURRENT OFFICEHOLDER(S) and every declared 2026 candidate for this seat (names + parties), including the primary field for each party. CRITICAL: verify each candidate's CURRENT status — explicitly search for withdrawal/dropout/suspension news for every name you list, and clearly mark anyone who has DROPPED OUT or withdrawn (with date + source). Do not present withdrawn candidates as active.
+2. EXISTING PUBLIC POLLING that covers this district or Wisconsin statewide (pollster, date, numbers) — approval and head-to-head if available.
+3. PAST ELECTION RESULTS for this seat (last 2-3 cycles, vote percentages).
+4. LOCAL ISSUES dominating recent local news coverage in this area (schools, taxes, roads, healthcare, agriculture, housing, public safety, etc.) — which get the most coverage and community reaction.
+5. DISTRICT DEMOGRAPHICS relevant to opinion (urban/rural mix, income, age, education).
+6. Any recent events likely moving opinion (plant closures, controversies, disasters, big announcements).
+List the URL for every source you used.` }],
+      tools: [{ type: 'web_search' }, { type: 'x_search' }],
+    }),
+  })
+  if (!res.ok) throw new Error(`Grok ${res.status}`)
+  const d = await res.json()
+  logAiUsage({ userId: requestedBy, endpoint: 'polling', provider: 'xai', model: GROK_MODEL, inputTokens: d?.usage?.input_tokens || 0, outputTokens: d?.usage?.output_tokens || 0 })
+  let text = null
+  const citations = []
+  if (Array.isArray(d.citations)) for (const u of d.citations) { if (typeof u === 'string') citations.push({ url: u }); else if (u?.url) citations.push(u) }
+  for (const out of (d.output || [])) {
+    if (out.type === 'message') {
+      for (const c of (out.content || [])) {
+        if (c.type === 'output_text' && c.text) {
+          text = (text ? text + '\n' : '') + c.text
+          for (const a of (c.annotations || [])) {
+            const url = a?.url || a?.url_citation?.url
+            if (url) citations.push({ title: a?.title || a?.url_citation?.title, url })
+          }
+        }
+      }
+    }
+  }
+  if (!text) throw new Error('Grok returned no text')
+  return { text, citations }
+}
+
+// ── Step 1b: Perplexity research (trailing fallback) ─────────────────────────
 async function perplexityResearch(district, requestedBy) {
   if (!PPLX_KEY) return null
   const label = districtLabel(district)
@@ -163,6 +210,7 @@ async function synthesize(district, research, social, requestedBy) {
 ${SNAPSHOT_SCHEMA_NOTE}
 
 Rules:
+- CANDIDATE STATUS: if the research marks any candidate as withdrawn, dropped out, or suspended, EXCLUDE them from every vote_share list. Only candidates confirmed still running appear.
 - top_issues: the 4 issues district voters care about most right now, ranked. Ground primarily in the news/coverage research; the social-listening signal may inform ranking but weight it lightly (X skews demographically).
 - approval: the current ${officeLabel(district)} (or the most electorally relevant figure in the research). Anchor to real polling when present; otherwise model from past results + lean + coverage tone. approval_pct + disapproval_pct ≤ 100 (remainder = unsure).
 - vote_share: today's date is ${new Date().toISOString().slice(0, 10)}. Wisconsin's 2026 partisan primary is August 11, 2026; the general is November 3, 2026. Decide the phase:
@@ -276,12 +324,17 @@ export const handler = async (event) => {
   }
 
   try {
-    // 1. Primary grounding (Perplexity → Gemini fallback)
-    let research = null, researchProvider = 'perplexity'
-    try { research = await perplexityResearch(district, requestedBy) }
+    // 1. Primary grounding: Grok (most accurate in testing) → Perplexity
+    //    trailing fallback → Gemini last resort
+    let research = null, researchProvider = 'xai'
+    try { research = await grokResearch(district, requestedBy) }
     catch (e) {
-      console.warn(`[polling-bg] Perplexity failed (${e.message}) — trying Gemini fallback`)
-      try { research = await geminiResearch(district, requestedBy); researchProvider = 'gemini' } catch (e2) { console.warn('[polling-bg] Gemini failed:', e2.message) }
+      console.warn(`[polling-bg] Grok research failed (${e.message}) — trying Perplexity fallback`)
+      try { research = await perplexityResearch(district, requestedBy); researchProvider = 'perplexity' }
+      catch (e2) {
+        console.warn(`[polling-bg] Perplexity failed (${e2.message}) — trying Gemini fallback`)
+        try { research = await geminiResearch(district, requestedBy); researchProvider = 'gemini' } catch (e3) { console.warn('[polling-bg] Gemini failed:', e3.message) }
+      }
     }
     if (!research?.text) return await fail('Research providers unavailable')
 
@@ -302,7 +355,8 @@ export const handler = async (event) => {
         .map(u => ({ title: u.replace(/^https?:\/\/(www\.)?/, '').split('/')[0], url: u }))
     }
 
-    const modelUsed = `${researchProvider}:${researchProvider === 'gemini' ? 'gemini-2.5-flash' : RESEARCH_MODEL} + ${social ? `xai:${SOCIAL_MODEL} + ` : ''}anthropic:${SYNTH_MODEL}`
+    const researchModelName = researchProvider === 'xai' ? GROK_MODEL : researchProvider === 'gemini' ? 'gemini-2.5-flash' : RESEARCH_MODEL
+    const modelUsed = `${researchProvider}:${researchModelName} + ${social && researchProvider !== 'xai' ? `xai:${SOCIAL_MODEL} + ` : ''}anthropic:${SYNTH_MODEL}`
 
     // on_conflict=district is REQUIRED: merge-duplicates alone resolves on the
     // id PK, so re-saving an existing district 409s on the UNIQUE(district)
