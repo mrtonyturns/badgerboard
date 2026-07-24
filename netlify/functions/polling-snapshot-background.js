@@ -751,13 +751,24 @@ export const handler = async (event) => {
     const social = await grokSocialSignal(district, requestedBy)
 
     // 3. Synthesis (full snapshot) + 3-model vote-share ensemble, in parallel
+    const EST_PROVIDERS = ['xai', 'perplexity', 'gemini']
     const [snapshot, ...estimates] = await Promise.all([
       synthesize(district, research, social, requestedBy, intel, prior),
-      ...['xai', 'perplexity', 'gemini'].map(prov =>
+      ...EST_PROVIDERS.map(prov =>
         estimateVoteShare(prov, district, research, requestedBy, intel, prior)
           .catch(e => { console.warn(`[polling-bg] ${prov} estimate failed: ${e.message}`); return null })),
     ])
     if (!snapshot) return await fail('Synthesis produced invalid output twice')
+
+    // Which models actually voted. Named in model_used rather than hardcoding
+    // "grok/perplexity/gemini": a provider whose key is missing or whose model
+    // name has gone stale fails silently every run, and a "median of 2" label
+    // that still lists three providers hides which one is dead.
+    const estProviders = EST_PROVIDERS.filter((_, i) => estimates[i])
+    const estLabel = estProviders.map(p => p === 'xai' ? 'grok' : p).join('/')
+    for (const p of EST_PROVIDERS.filter(p => !estProviders.includes(p))) {
+      console.warn(`[polling-bg] estimator ${p} contributed nothing this run (key missing, model rejected, or invalid JSON twice)`)
+    }
 
     // 4. Ensemble — median across Grok/Perplexity/Gemini, quorum-filtered.
     //    Needs ≥2 valid estimates; otherwise the Claude synthesis vote_share
@@ -816,7 +827,7 @@ export const handler = async (event) => {
     }
 
     const researchModelName = researchProvider === 'xai' ? GROK_MODEL : researchProvider === 'gemini' ? 'gemini-2.5-flash' : RESEARCH_MODEL
-    const modelUsed = `${researchProvider}:${researchModelName} + anthropic:${SYNTH_MODEL}${ensembleUsed ? ` + vote-share median of ${validEstimates.length} models (grok/perplexity/gemini)` : ''}${prior ? ' + baseline-anchored' : ''}`
+    const modelUsed = `${researchProvider}:${researchModelName} + anthropic:${SYNTH_MODEL}${ensembleUsed ? ` + vote-share median of ${validEstimates.length} models (${estLabel})` : ''}${prior ? ' + baseline-anchored' : ''}`
 
     // on_conflict=district is REQUIRED: merge-duplicates alone resolves on the
     // id PK, so re-saving an existing district 409s on the UNIQUE(district)
