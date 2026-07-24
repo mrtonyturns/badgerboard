@@ -397,6 +397,113 @@ async function logKnock(params, authHeader) {
   }
 }
 
+// ─── Volunteer chat + notifications (audit fix #15) ──────────────────────────
+// RLS on volunteer_messages / volunteer_notifications grants access only to
+// the coordinator's auth.uid(), so the portal's direct anon-client reads and
+// writes silently returned nothing: chat loaded empty, sends failed, realtime
+// never delivered, mark-read updated 0 rows. These service-role actions are
+// the volunteer-side access path the RLS migration comment promised but never
+// implemented — each authorized by session_token/JWT and scoped to the
+// volunteer's OWN list_id (read server-side, never from the client).
+
+// Shared authorizer for self-service actions: loads the volunteer row and
+// verifies session_token (or matching JWT email). Returns { vol } or { err }.
+async function authorizeVolunteer(params, authHeader) {
+  const { volunteer_id } = params
+  if (!volunteer_id || !isUuid(volunteer_id)) {
+    return { err: { statusCode: 400, body: JSON.stringify({ error: 'valid volunteer_id required' }) } }
+  }
+  const res = await sb(`/volunteers?id=eq.${encodeURIComponent(volunteer_id)}&select=id,name,list_id,email,session_token`)
+  const rows = await res.json()
+  if (!rows?.length) {
+    return { err: { statusCode: 404, body: JSON.stringify({ error: 'Volunteer not found' }) } }
+  }
+  const vol = rows[0]
+  const providedToken = params.session_token || (authHeader || '').replace('Bearer ', '')
+  const tokenOk = vol.session_token && providedToken && providedToken === vol.session_token
+  let jwtOk = false
+  if (!tokenOk) {
+    const jwtEmail = await emailFromJwt(authHeader)
+    jwtOk = jwtEmail && vol.email && jwtEmail === String(vol.email).toLowerCase()
+  }
+  if (!tokenOk && !jwtOk) {
+    return { err: { statusCode: 401, body: JSON.stringify({ error: 'Unauthorized' }) } }
+  }
+  return { vol }
+}
+
+async function getMessages(params, authHeader) {
+  const { vol, err } = await authorizeVolunteer(params, authHeader)
+  if (err) return err
+  if (!vol.list_id) return { statusCode: 200, body: JSON.stringify({ messages: [] }) }
+  const res = await sb(`/volunteer_messages?list_id=eq.${encodeURIComponent(vol.list_id)}&select=*&order=created_at.asc&limit=100`)
+  const messages = await res.json()
+  return { statusCode: 200, body: JSON.stringify({ messages: Array.isArray(messages) ? messages : [] }) }
+}
+
+async function sendMessage(params, authHeader) {
+  const { vol, err } = await authorizeVolunteer(params, authHeader)
+  if (err) return err
+  if (!vol.list_id) return { statusCode: 400, body: JSON.stringify({ error: 'No walk list assigned' }) }
+  const content = typeof params.content === 'string' ? params.content.trim().slice(0, 2000) : ''
+  if (!content) return { statusCode: 400, body: JSON.stringify({ error: 'content required' }) }
+  // Sender identity comes from the volunteer's own row, never the client
+  const res = await sb('/volunteer_messages', {
+    method: 'POST',
+    body: JSON.stringify({
+      list_id: vol.list_id,
+      sender_id: vol.id,
+      sender_type: 'volunteer',
+      sender_name: vol.name,
+      content,
+    }),
+  })
+  if (!res.ok) {
+    console.error('[volunteer-auth] send_message failed:', await res.text())
+    return { statusCode: 500, body: JSON.stringify({ error: 'Message could not be sent — try again' }) }
+  }
+  const rows = await res.json()
+  return { statusCode: 200, body: JSON.stringify({ sent: true, message: rows?.[0] || null }) }
+}
+
+async function getNotifications(params, authHeader) {
+  const { vol, err } = await authorizeVolunteer(params, authHeader)
+  if (err) return err
+  if (!vol.list_id) return { statusCode: 200, body: JSON.stringify({ notifications: [] }) }
+  // Broadcast (list-wide) plus notifications targeted at this volunteer
+  const res = await sb(
+    `/volunteer_notifications?list_id=eq.${encodeURIComponent(vol.list_id)}&or=(volunteer_id.is.null,volunteer_id.eq.${encodeURIComponent(vol.id)})&select=*&order=created_at.desc&limit=30`
+  )
+  const notifications = await res.json()
+  return { statusCode: 200, body: JSON.stringify({ notifications: Array.isArray(notifications) ? notifications : [] }) }
+}
+
+async function markNotifRead(params, authHeader) {
+  const { vol, err } = await authorizeVolunteer(params, authHeader)
+  if (err) return err
+  const { notif_id } = params
+  if (!notif_id || !isUuid(notif_id)) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'valid notif_id required' }) }
+  }
+  // Scope: the notification must belong to this volunteer's list (or be
+  // targeted at them) — a volunteer can't touch other lists' notifications.
+  const nRes = await sb(`/volunteer_notifications?id=eq.${encodeURIComponent(notif_id)}&select=id,list_id,volunteer_id,read_by`)
+  const nRows = await nRes.json()
+  const notif = nRows?.[0]
+  if (!notif) return { statusCode: 404, body: JSON.stringify({ error: 'Notification not found' }) }
+  const mine = notif.list_id === vol.list_id || notif.volunteer_id === vol.id
+  if (!mine) return { statusCode: 403, body: JSON.stringify({ error: 'Forbidden' }) }
+  const readBy = Array.isArray(notif.read_by) ? notif.read_by : []
+  if (!readBy.includes(vol.id)) {
+    const upd = await sb(`/volunteer_notifications?id=eq.${encodeURIComponent(notif_id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ read_by: [...readBy, vol.id] }),
+    })
+    if (!upd.ok) return { statusCode: 500, body: JSON.stringify({ error: 'Could not mark as read' }) }
+  }
+  return { statusCode: 200, body: JSON.stringify({ read: true }) }
+}
+
 // ─── Action: get_volunteers_for_list ─────────────────────────────────────────
 async function getVolunteersForList(params, coordinatorId) {
   const { list_id } = params
@@ -485,6 +592,10 @@ export const handler = async (event) => {
   if (action === 'get_volunteer') return getVolunteer(params, selfAuthHeader)
   if (action === 'update_stats')  return updateStats(params, selfAuthHeader)
   if (action === 'log_knock')     return logKnock(params, selfAuthHeader)
+  if (action === 'get_messages')      return getMessages(params, selfAuthHeader)
+  if (action === 'send_message')      return sendMessage(params, selfAuthHeader)
+  if (action === 'get_notifications') return getNotifications(params, selfAuthHeader)
+  if (action === 'mark_notif_read')   return markNotifRead(params, selfAuthHeader)
 
   // All other actions require coordinator auth
   const authHeader = event.headers.authorization || ''

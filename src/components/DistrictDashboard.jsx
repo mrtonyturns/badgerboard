@@ -238,7 +238,8 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
       // serverless gateway time limit. Cached results return from call one.
       const step1 = await call({ force, step: 'research' })
       if (step1.history) { setHistory(step1.history); setHistLoading(false); return }
-      const step2 = await call({ force, research: step1.research })
+      // research_sig proves the research came from step 1 unmodified (anti-poisoning)
+      const step2 = await call({ force, research: step1.research, research_sig: step1.research_sig })
       setHistory(step2.history)
     } catch (e) { setHistErr(e.message) }
     setHistLoading(false)

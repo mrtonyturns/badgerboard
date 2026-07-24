@@ -119,20 +119,42 @@ export const handler = async (event) => {
     headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${authHeader.slice(7)}` },
   })
   if (!authRes.ok) return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid token' }) }
+  const authUser = await authRes.json()
+  if (!authUser?.id) return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid token' }) }
+  const { ADMIN_EMAILS } = await import('./_config.js')
+  const isAdmin = ADMIN_EMAILS.includes((authUser.email || '').toLowerCase())
+
+  // Audit fix (#18): this is the most expensive AI endpoint in the app (up to
+  // 4 Perplexity + 3 Opus calls + 30 page fetches per run) and had NO rate
+  // limit — any free signup could loop it with force:true for unbounded spend.
+  const { enforceRateLimit } = await import('./_rate-limit.js')
+  const limited = await enforceRateLimit(authUser.id, 'research-district-events', headers)
+  if (limited) return limited
 
   let body
   try { body = JSON.parse(event.body || '{}') } catch {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
-  const { district_key, district_name, area_description, district_lean, counties, force } = body
-  const sourceBrief = countySourceBrief(Array.isArray(counties) ? counties : [])
+  const { district_key, district_name: rawName, area_description: rawArea, district_lean, counties: rawCounties, force: rawForce } = body
+  if (!district_key || !rawName) {
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'district_key, district_name required' }) }
+  }
+  // Audit fix (#17/#18): district_key is the sole PK of a shared cache table —
+  // validate its shape, cap the free-text fields that fence the prompts, and
+  // only allow admins to force-refresh (each force run is real LLM spend and
+  // last-write-wins on a row every user reads).
+  if (!/^[\w:.\-]{1,80}$/.test(district_key)) {
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid district_key' }) }
+  }
+  const district_name    = String(rawName).slice(0, 120)
+  const area_description = rawArea ? String(rawArea).slice(0, 600) : null
+  const counties         = (Array.isArray(rawCounties) ? rawCounties : []).slice(0, 8).map(c => String(c).slice(0, 40))
+  const force            = Boolean(rawForce) && isAdmin
+  const sourceBrief = countySourceBrief(counties)
   // In-district community list (area_description = "Place1, Place2, ... (X, Y counties)").
   // Used to fence every research + structuring prompt to the district's actual footprint.
   const communities = (area_description || district_name).split('(')[0].trim().replace(/,\s*$/, '')
-  const countyNames = (Array.isArray(counties) && counties.length) ? counties.map(c => `${c} County`).join(', ') : null
-  if (!district_key || !district_name) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: 'district_key, district_name required' }) }
-  }
+  const countyNames = counties.length ? counties.map(c => `${c} County`).join(', ') : null
 
   const sb = (path, opts = {}) => fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     ...opts,
@@ -251,17 +273,12 @@ Aim for 25-40 events; if you find more, list more — do NOT stop at the big wel
   }
 
   if (!research) {
-    // Research source unavailable (e.g. Perplexity credits exhausted). Never
-    // overwrite an existing good cache — only mark empty if nothing was cached.
-    const existing = await (await sb(`district_events?district_key=eq.${encodeURIComponent(district_key)}&select=events`)).json()
-    if (!existing?.[0]?.events?.length) {
-      const fetched_at = new Date().toISOString()
-      await sb('district_events', {
-        method: 'POST',
-        headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-        body: JSON.stringify({ district_key, name: district_name, events: [], fetched_at, updated_at: fetched_at }),
-      })
-    }
+    // Research source unavailable (e.g. Perplexity credits exhausted).
+    // Audit fix (#18): do NOT write an empty events row here — the old code
+    // stamped events:[] with a fresh fetched_at, which the server then served
+    // as a "valid" 24h cache while the client rejected it, bricking the
+    // district behind 120-second spinners for a full day. Just fail; the next
+    // request retries research.
     return { statusCode: 502, headers, body: JSON.stringify({ error: 'Event research unavailable' }) }
   }
 

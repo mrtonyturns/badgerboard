@@ -433,18 +433,48 @@ async function getWebhookSecret() {
   }
 }
 
+// Audit fix (#9): GoTrue's admin users endpoint IGNORES an ?email= filter —
+// the old version got page 1 of ALL users and took users[0], an arbitrary
+// account, which the payment_failed fallback then locked. Paginate and
+// exact-match the email (same pattern as admin-set-tier.js); return null
+// rather than ever guessing.
 async function findSupabaseUserByEmail(email) {
-  const res = await fetch(
-    `${process.env.SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(email)}`,
-    {
-      headers: {
-        apikey:        process.env.SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-      },
+  const target = String(email || '').toLowerCase()
+  if (!target) return null
+  try {
+    for (let page = 1; page <= 20; page++) {
+      const res = await fetch(
+        `${process.env.SUPABASE_URL}/auth/v1/admin/users?page=${page}&per_page=200`,
+        {
+          headers: {
+            apikey:        process.env.SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+          },
+        }
+      )
+      if (!res.ok) return null
+      const json = await res.json()
+      const users = json?.users || []
+      const match = users.find(u => (u.email || '').toLowerCase() === target)
+      if (match) return match
+      if (users.length < 200) break  // last page
     }
-  )
-  const json = await res.json()
-  return json?.users?.[0] || null
+  } catch (e) {
+    console.error('[stripe-webhook] findSupabaseUserByEmail failed:', e.message)
+  }
+  return null
+}
+
+// Audit fix (#9): Stripe API v2025+ (Basil) moved subscription_details to
+// invoice.parent.subscription_details — the old top-level read resolved
+// undefined on current payloads, so receipts never sent and payment_failed
+// always dropped into the (broken) email fallback. Read the new path first,
+// with legacy fallbacks for older API versions.
+function invoiceUserId(invoice) {
+  return invoice?.parent?.subscription_details?.metadata?.supabase_user_id
+      || invoice?.subscription_details?.metadata?.supabase_user_id
+      || invoice?.metadata?.supabase_user_id
+      || null
 }
 
 // ── Credit helpers ────────────────────────────────────────────────────────────
@@ -765,8 +795,7 @@ exports.handler = async (event) => {
       // ── Invoice payment failed — mark account past_due ───────────────────
       case 'invoice.payment_failed': {
         const invoice        = stripeEvent.data.object
-        const supabaseUserId = invoice.subscription_details?.metadata?.supabase_user_id
-                            || invoice.metadata?.supabase_user_id
+        const supabaseUserId = invoiceUserId(invoice)
 
         console.warn(`Payment failed for customer ${invoice.customer}, attempt ${invoice.attempt_count}`)
 
@@ -868,8 +897,7 @@ exports.handler = async (event) => {
       // ── Invoice payment succeeded — clear any past_due flag ──────────────
       case 'invoice.payment_succeeded': {
         const invoice        = stripeEvent.data.object
-        const supabaseUserId = invoice.subscription_details?.metadata?.supabase_user_id
-                            || invoice.metadata?.supabase_user_id
+        const supabaseUserId = invoiceUserId(invoice)
 
         if (supabaseUserId && !(await isAdminUser(supabaseUserId))) {
           try {

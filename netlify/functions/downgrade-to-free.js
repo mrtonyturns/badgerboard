@@ -137,19 +137,24 @@ export const handler = async (event) => {
       })
     } catch (e) { console.warn('voluntary_downgrade flag write failed:', e.message) }
 
-    // Find and cancel the active Stripe subscription for this user
+    // Find and cancel the user's Stripe subscription(s). Audit fix (#20 class):
+    // include trialing/past_due/unpaid/paused — a past_due sub left uncancelled
+    // here would keep retrying charges after the user moved to Scout. Resolve
+    // via stored customer id first (email can diverge from Stripe).
+    const CANCELLABLE = ['active', 'trialing', 'past_due', 'unpaid', 'paused', 'incomplete']
+    const metaNow = (await getSupabaseUser(userId))?.app_metadata || {}
+    const customerIds = new Set()
+    if (metaNow.stripe_customer_id) customerIds.add(metaNow.stripe_customer_id)
     if (verifiedEmail) {
       const customers = await stripe.customers.list({ email: verifiedEmail, limit: 5 })
-      for (const customer of customers.data) {
-        const subs = await stripe.subscriptions.list({
-          customer: customer.id,
-          status:   'active',
-          limit:    10,
-        })
-        for (const sub of subs.data) {
-          await stripe.subscriptions.cancel(sub.id)
-          console.log(`Cancelled subscription ${sub.id} (customer ${customer.id})`)
-        }
+      for (const c of customers.data) customerIds.add(c.id)
+    }
+    for (const customerId of customerIds) {
+      const subs = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 20 })
+      for (const sub of subs.data) {
+        if (!CANCELLABLE.includes(sub.status)) continue
+        await stripe.subscriptions.cancel(sub.id)
+        console.log(`Cancelled subscription ${sub.id} (${sub.status}, customer ${customerId})`)
       }
     }
 

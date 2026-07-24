@@ -299,7 +299,9 @@ export const handler = async (event) => {
         plan_type: planType(plan),
         ...(bracket ? { bracket } : {}),
         billing,
-        supabase_user_id: userId,
+        // Audit fix (#20): always the VERIFIED caller id — body.userId could be
+        // empty and would erase the id the webhooks rely on to find the account
+        supabase_user_id: callerId,
       },
     })
 

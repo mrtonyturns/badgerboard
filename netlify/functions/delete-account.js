@@ -108,28 +108,63 @@ exports.handler = async (event) => {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
 
   try {
-    // 1. Immediately cancel any active Stripe subscriptions (no grace period).
-    // Wrapped in its own try/catch so a Stripe failure doesn't abort the Supabase deletion.
-    if (verifiedEmail) {
-      try {
+    // 1. Cancel EVERY cancellable Stripe subscription before deleting the account.
+    // Audit fix (#20): the old code listed status:'active' only, so trialing /
+    // past_due / unpaid / paused subscriptions survived deletion and kept
+    // billing a customer who no longer had an account to see or cancel them.
+    // It also looked up the customer by email only, missing customers whose
+    // Stripe email diverged after an admin email change. Resolve via the
+    // stored stripe_customer_id first, and if any cancellable subscription
+    // fails to cancel, ABORT the deletion instead of orphaning the billing.
+    const CANCELLABLE = ['active', 'trialing', 'past_due', 'unpaid', 'paused', 'incomplete']
+    const meta = user?.app_metadata || {}
+    const customerIds = new Set()
+    if (meta.stripe_customer_id) customerIds.add(meta.stripe_customer_id)
+
+    try {
+      // Resolve the customer from a stored subscription id too (covers accounts
+      // that predate stripe_customer_id being written)
+      if (meta.stripe_subscription_id) {
+        try {
+          const sub = await stripe.subscriptions.retrieve(meta.stripe_subscription_id)
+          if (sub?.customer) customerIds.add(typeof sub.customer === 'string' ? sub.customer : sub.customer.id)
+        } catch (e) { /* sub may already be gone */ }
+      }
+      if (verifiedEmail) {
         const customers = await stripe.customers.list({ email: verifiedEmail, limit: 5 })
-        for (const customer of customers.data) {
-          const subs = await stripe.subscriptions.list({
-            customer: customer.id,
-            status:   'active',
-            limit:    10,
-          })
-          for (const sub of subs.data) {
-            try {
-              await stripe.subscriptions.cancel(sub.id)
-              console.log(`Cancelled subscription ${sub.id} for deleted user ${userId}`)
-            } catch (subErr) {
-              console.error(`Failed to cancel subscription ${sub.id}:`, subErr.message)
-            }
+        for (const c of customers.data) customerIds.add(c.id)
+      }
+
+      const failures = []
+      for (const customerId of customerIds) {
+        const subs = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 20 })
+        for (const sub of subs.data) {
+          if (!CANCELLABLE.includes(sub.status)) continue
+          try {
+            await stripe.subscriptions.cancel(sub.id)
+            console.log(`Cancelled subscription ${sub.id} (${sub.status}) for deleted user ${userId}`)
+          } catch (subErr) {
+            console.error(`Failed to cancel subscription ${sub.id}:`, subErr.message)
+            failures.push(sub.id)
           }
         }
-      } catch (stripeErr) {
-        console.error('Stripe lookup failed during account deletion (proceeding with Supabase delete):', stripeErr.message)
+      }
+      if (failures.length) {
+        return {
+          statusCode: 502,
+          body: JSON.stringify({ error: 'We could not cancel your subscription, so your account has NOT been deleted (this protects you from being billed for a deleted account). Please try again in a few minutes or contact support@badgerboardwi.com.' }),
+        }
+      }
+    } catch (stripeErr) {
+      console.error('Stripe lookup failed during account deletion:', stripeErr.message)
+      // If we KNOW the user has billing on file, don't delete the account while
+      // blind — that's exactly the orphaned-billing scenario. Users with no
+      // stored billing markers (free accounts) proceed normally.
+      if (meta.stripe_customer_id || meta.stripe_subscription_id) {
+        return {
+          statusCode: 502,
+          body: JSON.stringify({ error: 'We could not reach our billing provider to cancel your subscription, so your account has NOT been deleted. Please try again in a few minutes.' }),
+        }
       }
     }
 

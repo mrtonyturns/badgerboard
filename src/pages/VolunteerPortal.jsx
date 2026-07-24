@@ -1097,99 +1097,58 @@ export default function VolunteerPortal() {
     return () => subscription.unsubscribe()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Load initial messages + notifications ─────────────────────────────────
+  // ── Load + poll messages and notifications ─────────────────────────────────
+  // Audit fix (#15): the portal used to query volunteer_messages /
+  // volunteer_notifications directly with the anon client — RLS grants those
+  // tables only to the coordinator, so chat loaded empty, sends silently
+  // failed, and Realtime (which also respects RLS) never delivered a thing.
+  // Everything now goes through the authorized volunteer-auth actions, with a
+  // 15-second poll standing in for the realtime channel that could never work.
   useEffect(() => {
     if (!volunteer?.list_id) return
+    let alive = true
 
     const loadData = async () => {
+      const token = loadSession()?.session_token
       const [msgsRes, notifsRes] = await Promise.all([
-        supabase
-          .from('volunteer_messages')
-          .select('*')
-          .eq('list_id', volunteer.list_id)
-          .order('created_at', { ascending: true })
-          .limit(100),
-        supabase
-          .from('volunteer_notifications')
-          .select('*')
-          .or(`list_id.eq.${volunteer.list_id},volunteer_id.eq.${volunteer.id}`)
-          .order('created_at', { ascending: false })
-          .limit(30),
+        callApi('get_messages', { volunteer_id: volunteer.id, session_token: token }),
+        callApi('get_notifications', { volunteer_id: volunteer.id, session_token: token }),
       ])
+      if (!alive) return
 
-      const msgs = msgsRes.data || []
-      const notifs = notifsRes.data || []
+      const msgs = msgsRes.messages || []
+      const notifs = notifsRes.notifications || []
 
-      setMessages(msgs)
+      setMessages(prev => {
+        // Unread badge for messages that arrived since the last poll
+        const prevIds = new Set(prev.map(m => m.id))
+        const fresh = msgs.filter(m => !prevIds.has(m.id) && m.sender_id !== volunteer.id)
+        if (prev.length && fresh.length && activeTabRef.current !== 'chat') {
+          setUnreadMsgs(c => c + fresh.length)
+        }
+        return msgs
+      })
       lastMsgCountRef.current = msgs.length
 
-      setNotifications(notifs)
-      const unread = notifs.filter(n => !n.read_by?.includes(volunteer.id)).length
-      setUnreadNotifs(unread)
+      setNotifications(prevNotifs => {
+        const prevIds = new Set(prevNotifs.map(n => n.id))
+        const fresh = notifs.filter(n => !prevIds.has(n.id))
+        if (prevNotifs.length && fresh.length && 'Notification' in window && Notification.permission === 'granted') {
+          for (const n of fresh) new Notification(n.title, { body: n.body || '' })
+        }
+        return notifs
+      })
+      setUnreadNotifs(notifs.filter(n => !n.read_by?.includes(volunteer.id)).length)
     }
 
     loadData()
+    const interval = setInterval(loadData, 15000)
+    return () => { alive = false; clearInterval(interval) }
   }, [volunteer?.list_id, volunteer?.id])
 
-  // ── Supabase Realtime subscriptions ──────────────────────────────────────
-  useEffect(() => {
-    if (!volunteer?.list_id) return
-
-    const msgChannel = supabase
-      .channel(`volunteer_messages_${volunteer.list_id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'volunteer_messages',
-          filter: `list_id=eq.${volunteer.list_id}`,
-        },
-        (payload) => {
-          const newMsg = payload.new
-          setMessages(prev => {
-            // Avoid duplicates
-            if (prev.some(m => m.id === newMsg.id)) return prev
-            return [...prev, newMsg]
-          })
-          // Unread badge if not on chat tab
-          if (activeTab !== 'chat' && newMsg.sender_id !== volunteer.id) {
-            setUnreadMsgs(c => c + 1)
-          }
-        }
-      )
-      .subscribe()
-
-    const notifChannel = supabase
-      .channel(`volunteer_notifications_${volunteer.list_id}_${volunteer.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'volunteer_notifications',
-          filter: `list_id=eq.${volunteer.list_id}`,
-        },
-        (payload) => {
-          const notif = payload.new
-          // Only show if broadcast or targeted to me
-          if (!notif.volunteer_id || notif.volunteer_id === volunteer.id) {
-            setNotifications(prev => [notif, ...prev])
-            setUnreadNotifs(c => c + 1)
-            // Browser notification (if permitted)
-            if ('Notification' in window && Notification.permission === 'granted') {
-              new Notification(notif.title, { body: notif.body || '' })
-            }
-          }
-        }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(msgChannel)
-      supabase.removeChannel(notifChannel)
-    }
-  }, [volunteer?.list_id, volunteer?.id, activeTab])
+  // Track the active tab in a ref so the poll callback sees the current value
+  const activeTabRef = useRef(activeTab)
+  useEffect(() => { activeTabRef.current = activeTab }, [activeTab])
 
   // ── Request notification permission ──────────────────────────────────────
   useEffect(() => {
@@ -1207,27 +1166,33 @@ export default function VolunteerPortal() {
   // ── Send message ──────────────────────────────────────────────────────────
   const handleSendMessage = async (content) => {
     if (!volunteer?.list_id) return
-    await supabase.from('volunteer_messages').insert({
-      list_id: volunteer.list_id,
-      sender_id: volunteer.id,
-      sender_type: 'volunteer',
-      sender_name: volunteer.name,
+    // Audit fix (#15): authorized service-role send; append on confirmed success
+    const res = await callApi('send_message', {
+      volunteer_id: volunteer.id,
       content,
+      session_token: loadSession()?.session_token,
     })
+    if (res?.sent && res.message) {
+      setMessages(prev => prev.some(m => m.id === res.message.id) ? prev : [...prev, res.message])
+    }
+    return res
   }
 
   // ── Mark notification read ────────────────────────────────────────────────
   const handleMarkNotifRead = async (notifId) => {
     const notif = notifications.find(n => n.id === notifId)
     if (!notif || notif.read_by?.includes(volunteer.id)) return
+    const res = await callApi('mark_notif_read', {
+      volunteer_id: volunteer.id,
+      notif_id: notifId,
+      session_token: loadSession()?.session_token,
+    })
+    if (!res?.read) return
     const newReadBy = [...(notif.read_by || []), volunteer.id]
-    await supabase
-      .from('volunteer_notifications')
-      .update({ read_by: newReadBy })
-      .eq('id', notifId)
     setNotifications(prev =>
       prev.map(n => n.id === notifId ? { ...n, read_by: newReadBy } : n)
     )
+    setUnreadNotifs(c => Math.max(0, c - 1))
   }
 
   // ── Refresh volunteer data ─────────────────────────────────────────────────

@@ -468,6 +468,41 @@ function countSections(content) {
   return (content.match(/^## SECTION \d+/gim) || []).length
 }
 
+// ─── Audit fix (#10): Scout lite-profile gate (storage-time) ──────────────────
+// Mirrors LITE_PROFILE_FREE_SECTIONS in src/lib/tiers.js: Section 2 (Biography)
+// and 4 (Political Record) stay full; Section 8 (Affiliations) keeps its first
+// 2 items; every other section's body is replaced with an upgrade template
+// BEFORE saving, so the paid content never exists in a Scout user's row.
+const LITE_FREE_FULL_SECTIONS = new Set([2, 4])
+const LITE_PARTIAL_SECTIONS   = { 8: 2 }  // section → number of leading items kept
+
+function applyScoutLiteGate(content) {
+  return content.replace(/^## SECTION (\d+)[^\n]*\n[\s\S]*?(?=^## SECTION \d+|$(?![\s\S]))/gim, (block, numStr) => {
+    const num = parseInt(numStr, 10)
+    if (LITE_FREE_FULL_SECTIONS.has(num)) return block
+    const headerMatch = block.match(/^## SECTION \d+[^\n]*\n/)
+    const header = headerMatch ? headerMatch[0] : `## SECTION ${num}\n`
+
+    if (num in LITE_PARTIAL_SECTIONS) {
+      const maxItems = LITE_PARTIAL_SECTIONS[num]
+      const bodyLines = block.slice(header.length).split('\n')
+      const kept = []
+      let items = 0
+      for (const line of bodyLines) {
+        if (/^###\s/.test(line)) {
+          items++
+          if (items > maxItems) break
+        }
+        kept.push(line)
+        if (kept.length >= 30) break  // hard cap if the section isn't ###-delimited
+      }
+      return `${header}${kept.join('\n').trim()}\n\n*The rest of this section is available on paid Badger Board plans.*\n\n`
+    }
+
+    return `${header}**[LOCKED — PAID PLANS]**\n\n*This section is available on paid Badger Board plans. Upgrade to unlock the full 14-section profile with controversies, financial background, social media analysis, attack & defense strategy, and more.*\n\n`
+  })
+}
+
 // ─── #1: Secondary Haiku pass — verify high-risk sections and flag issues ─────
 async function runVerificationPass(content, candidateName) {
   if (!ANTHROPIC_API_KEY || !content) return null
@@ -1532,6 +1567,17 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     // ─── #10: Change detection vs previous dossier ──────────────────────────
     const changeSummary = await detectChanges(candidate_id, content)
     if (changeSummary) console.log(`[dossier-bg] Changes detected: ${changeSummary}`)
+
+    // ─── Audit fix (#10): enforce Scout's lite profile at STORAGE time ──────
+    // Previously the full 14-section paid dossier was stored and shipped to
+    // Scout browsers where locked sections were merely CSS-blurred — Copy,
+    // Export PDF, devtools, or a direct table select handed over the entire
+    // paid report. Locked sections are now replaced server-side before the
+    // row is ever written, so paid content never reaches a free client.
+    if (userPlan === 'scout') {
+      content = applyScoutLiteGate(content)
+      console.log(`[dossier-bg] Scout lite gate applied (${countSections(content)} sections retained/templated)`)
+    }
 
     // ─── Save to Supabase ──────────────────────────────────────────────────
     const saveRes = await fetch(`${SUPABASE_URL}/rest/v1/dossiers`, {
