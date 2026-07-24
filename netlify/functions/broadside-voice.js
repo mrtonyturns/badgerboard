@@ -55,6 +55,19 @@ exports.handler = async (event) => {
 
   const voiceId = ALLOWED_VOICES.has(body.voiceId) ? body.voiceId : DEFAULT_VOICE
 
+  // v1.24: optional per-line delivery controls, strictly whitelisted.
+  // controls = { speed: 'slow'|'normal'|'fast', emotion: ['anger:low', ...] }
+  const ALLOWED_SPEEDS = new Set(['slowest', 'slow', 'normal', 'fast', 'fastest'])
+  const EMOTION_RE = /^(anger|positivity|curiosity|surprise|sadness)(:(lowest|low|high|highest))?$/
+  let controls = null
+  if (body.controls && typeof body.controls === 'object') {
+    const speed = ALLOWED_SPEEDS.has(body.controls.speed) ? body.controls.speed : undefined
+    const emotion = Array.isArray(body.controls.emotion)
+      ? body.controls.emotion.filter(e => typeof e === 'string' && EMOTION_RE.test(e)).slice(0, 2)
+      : undefined
+    if (speed || (emotion && emotion.length)) controls = { ...(speed ? { speed } : {}), ...(emotion && emotion.length ? { emotion } : {}) }
+  }
+
   try {
     const ctrl = new AbortController()
     const to = setTimeout(() => ctrl.abort(), 9000)
@@ -69,7 +82,7 @@ exports.handler = async (event) => {
       body: JSON.stringify({
         model_id: MODEL_ID,
         transcript,
-        voice: { mode: 'id', id: voiceId },
+        voice: { mode: 'id', id: voiceId, ...(controls ? { __experimental_controls: controls } : {}) },
         output_format: { container: 'mp3', bit_rate: 128000, sample_rate: 44100 },
       }),
     })

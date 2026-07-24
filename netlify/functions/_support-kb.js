@@ -67,10 +67,15 @@ Execution:
 4. Read the label: AI-Estimated. Not a scientific poll. It is modeled from news, past results, public polling, and social signal — sources listed at the bottom. Use it to aim your attention. Do not use it to bet the campaign. When it matters, field a real poll.
 Availability: beta testers only.
 
-── BROADSIDE ──
+── BROADSIDE (BETA) ──
 Mission: debate sparring. Train like you fight.
-Execution: open Broadside, pick your opponent and format, and go rounds against an AI that argues back — text or voice. Get the debrief after. Weak answers get exposed here so they do not get exposed on stage. Repetition builds readiness.
-Availability: all paid plans.
+Execution:
+1. Load a profile in the Intel Intake panel (pick from your Profiler dossiers, paste text, or drop a file), set intensity, press Start.
+2. Two roles. Defend: the AI grills you on the loaded profile's vulnerabilities. Attack: load your OPPONENT's profile and cross-examine — the AI defends in character, dodging and spinning like a real politician. Press when they dodge.
+3. It talks fast now: replies stream sentence-by-sentence, the silence detector adapts to short answers, or hit Done Talking to hand over instantly. Start talking mid-sentence and barge-in cuts them off.
+4. Topics get drilled, not skimmed: the opponent escalates on one topic until you land 2 strong answers or flub 3. Set the pace with Drill Depth; force depth with the Drill Topic button.
+5. End every session with the report card — message discipline on defense, attack sharpness and follow-through on offense. OPPO LAG in the console tracks reply latency.
+Availability: all paid plans. Beta — report rough edges.
 
 ── PROSPECTING ──
 Mission: build target lists of potential candidates and contacts.

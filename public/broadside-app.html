@@ -273,6 +273,16 @@ html[data-theme="dark"] .ring-svg .track{stroke:rgba(255,255,255,.12)}
 .tbtn:active{transform:translateY(1px)}
 .tbtn.primary{background:linear-gradient(180deg,var(--red-bright),var(--red) 65%);}
 .tbtn:disabled{opacity:.35;cursor:not-allowed;filter:none}
+.jump-pill{
+  position:absolute;left:50%;transform:translateX(-50%);bottom:14px;display:none;
+  background:var(--red,#c41e1e);color:#fff;border:0;border-radius:999px;
+  padding:5px 14px;font:600 11px/1 'Rajdhani',system-ui,sans-serif;letter-spacing:.08em;
+  cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.35);z-index:5}
+.jump-pill.on{display:block}
+.barge-toggle{
+  display:flex;align-items:center;gap:7px;margin-top:12px;max-width:150px;
+  font-size:10px;letter-spacing:.06em;opacity:.75;cursor:pointer;text-transform:uppercase}
+.barge-toggle input{accent-color:#c41e1e}
 .hint{font-size:11px;color:var(--ink-soft);text-align:center;margin-top:8px;min-height:15px}
 
 /* ---------- RIGHT PANEL: scope + lamps ---------- */
@@ -330,6 +340,7 @@ html[data-theme="dark"] .comp-track{box-shadow:0 1px 0 rgba(255,255,255,.1), ins
 
 /* ---------- CONSOLE (transcript) — dark strip at plugin base ---------- */
 .console{
+  position:relative;
   position:relative;z-index:2;
   margin:0 44px 26px;
   background:linear-gradient(180deg,#0d1524,#070c16);
@@ -578,6 +589,19 @@ html[data-theme="dark"] .lamp{box-shadow:0 1px 0 rgba(255,255,255,.15), inset 0 
         <option value="frontrunner">Frontrunner</option>
       </select>
 
+      <div class="ctl-label">Session Role</div>
+      <select class="pill-select" id="selRole">
+        <option value="defend" selected>Defend — they grill you</option>
+        <option value="attack">Attack — you cross-examine</option>
+      </select>
+
+      <div class="ctl-label">Drill Depth</div>
+      <select class="pill-select" id="selDepth">
+        <option value="quick">Quick Scrum</option>
+        <option value="standard" selected>Standard</option>
+        <option value="deep">Deep Drill</option>
+      </select>
+
       <div class="ctl-label">Oppo Voice</div>
       <select class="pill-select" id="selOppoVoice">
         <option value="565510e8-6b45-45de-8758-13588fbaec73" selected>Frank</option>
@@ -623,6 +647,10 @@ html[data-theme="dark"] .lamp{box-shadow:0 1px 0 rgba(255,255,255,.15), inset 0 
           <button class="tbtn" id="btnRepeat" disabled>Repeat</button>
           <button class="tbtn" id="btnEnd" disabled>End</button>
         </div>
+        <div class="transport-row">
+          <button class="tbtn" id="btnDone" disabled>Done Talking</button>
+          <button class="tbtn" id="btnDrill" disabled>Drill Topic</button>
+        </div>
       </div>
       <div class="hint" id="hint"></div>
     </div>
@@ -647,6 +675,7 @@ html[data-theme="dark"] .lamp{box-shadow:0 1px 0 rgba(255,255,255,.15), inset 0 
         <input type="range" class="wv" id="sldRate" min="60" max="140" value="100">
         <div class="slider-val" id="valRate">1.0× — live</div>
       </div>
+      <label class="barge-toggle" id="bargeWrap"><input type="checkbox" id="chkBarge" checked> Barge-in — start talking to cut them off</label>
     </div>
   </div>
 
@@ -657,6 +686,7 @@ html[data-theme="dark"] .lamp{box-shadow:0 1px 0 rgba(255,255,255,.15), inset 0 
       <div class="stats">
         <span>ATTACKS <b id="stAttacks">0</b></span>
         <span>AVG RESPONSE <b id="stAvg">—</b></span>
+        <span>OPPO LAG <b id="stLag">—</b></span>
         <span id="ticStat">TICS &amp; FILLERS <b id="stFiller">0</b></span>
         <span>MOST USED <b id="stTop">—</b></span>
         <span>VOICE <b id="stVoice">BROWSER</b></span>
@@ -666,6 +696,7 @@ html[data-theme="dark"] .lamp{box-shadow:0 1px 0 rgba(255,255,255,.15), inset 0 
     <div class="scroll" id="screen">
       <div class="line sys"><span class="who">SYSTEM</span>Load info in the intake panel, set intensity, then press START. The opposition agent will hit you with attacks pulled from the profile — answer out loud.</div>
     </div>
+    <button class="jump-pill" id="jumpPill" type="button">↓ latest</button>
   </div>
 </div>
 
@@ -831,7 +862,7 @@ class CartesiaVoice {
 const REACTION_CACHE=new Map();   // voiceId|text -> blob URL (instant latency mask)
 class ProxyVoice {
   constructor(cfg={}){ this.cfg=cfg; this.name='CARTESIA'; this.audio=null; this.disabled=false; this.ctrl=null; }
-  async speak(text,{voiceId,rate=1,onStart,onEnd}={}){
+  async speak(text,{voiceId,rate=1,onStart,onEnd,controls}={}){
     if(this.disabled) return new BrowserVoice().speak(text,{rate,onStart,onEnd});
     // cached clip (reaction sounds) -> play instantly, no network
     const ck=(voiceId||this.cfg.voiceId)+'|'+text;
@@ -850,7 +881,7 @@ class ProxyVoice {
       const r = await fetch(PROXY_CONFIG.voiceUrl,{
         method:'POST', signal:this.ctrl.signal,
         headers:{'Authorization':'Bearer '+PROXY_CONFIG.token,'Content-Type':'application/json'},
-        body:JSON.stringify({transcript:text, voiceId:voiceId||this.cfg.voiceId})
+        body:JSON.stringify({transcript:text, voiceId:voiceId||this.cfg.voiceId, controls:controls||undefined})
       });
       if(r.status===503){ this.disabled=true; throw new Error('voice not configured on server'); }
       if(!r.ok) throw new Error('voice proxy '+r.status);
@@ -883,6 +914,55 @@ class ProxyVoice {
 }
 
 /* =====================================================================
+   STREAM SPEAKER (v1.24) — sentence-parallel TTS playback. Sentences are
+   synthesized through the voice proxy AS THEY ARRIVE (from the streaming
+   brain or a full line split up front) and played back-to-back, so the
+   first words are audible while later sentences are still rendering.
+   Any synth failure falls back to browser TTS for that sentence only.
+   ===================================================================== */
+class StreamSpeaker{
+  constructor(o){ this.o=o||{}; this.buf=''; this.q=[]; this.playing=false; this.done=false; this.dead=false; this.startedAny=false; this.audio=null; }
+  addText(t){ this.buf+=t; this._flush(false); }
+  _flush(final){
+    const parts=this.buf.split(/(?<=[.!?…]["')\u201d]?)\s+/);
+    const complete=final?parts:parts.slice(0,-1);
+    this.buf=final?'':(parts[parts.length-1]||'');
+    for(const sRaw of complete){ const t=sRaw.trim(); if(t) this._enqueue(t); }
+  }
+  _enqueue(text){ this.q.push(this._synth(text)); this._pump(); }
+  async _synth(text){
+    try{
+      if(!PROXY_CONFIG.enabled) throw 0;
+      const r=await fetch(PROXY_CONFIG.voiceUrl,{method:'POST',
+        headers:{'Authorization':'Bearer '+PROXY_CONFIG.token,'Content-Type':'application/json'},
+        body:JSON.stringify({transcript:text, voiceId:this.o.voiceId, controls:this.o.controls||undefined})});
+      if(!r.ok) throw 0;
+      return {url:URL.createObjectURL(await r.blob())};
+    }catch(_){ return {browser:true, text}; }
+  }
+  _first(){ if(!this.startedAny){ this.startedAny=true; this.o.onFirstAudio&&this.o.onFirstAudio(); } }
+  _maybeDone(){ if(this.done && !this.playing && !this.q.length && !this.dead){ this.dead=true; this.o.onAllDone&&this.o.onAllDone(); } }
+  _pump(){
+    if(this.playing||this.dead) return;
+    const next=this.q.shift();
+    if(!next){ this._maybeDone(); return; }
+    this.playing=true;
+    next.then(res=>{
+      if(this.dead){ this.playing=false; return; }
+      const fin=()=>{ this.playing=false; this.audio=null; this._pump(); };
+      if(res.browser){ new BrowserVoice().speak(res.text,{rate:this.o.rate||1,onStart:()=>this._first(),onEnd:fin}); return; }
+      const a=new Audio(res.url); this.audio=a; a.playbackRate=this.o.rate||1;
+      a.onplay=()=>this._first(); a.onended=fin; a.onerror=fin;
+      a.play().catch(fin);
+    }).catch(()=>{ this.playing=false; this._pump(); });
+  }
+  finish(){ this._flush(true); this.done=true; if(!this.playing) this._pump(); }
+  setRate(r){ this.o.rate=r; if(this.audio) this.audio.playbackRate=r; }
+  stop(){ this.dead=true; this.q=[]; try{ this.audio&&this.audio.pause(); }catch(_){} this.audio=null; }
+}
+let activeSpeaker=null;
+
+/* =====================================================================
    THE BRAIN — hybrid director/actor.
    The rule engine (director) decides WHEN and WHAT KIND of line to
    deliver; this LLM actor writes the actual words, tethered to the
@@ -911,23 +991,36 @@ function remember(who,text){ transcript.push({who,text}); if(transcript.length>2
 
 const Brain={
   get enabled(){ return !!BRAIN_CONFIG.apiKey || PROXY_CONFIG.enabled; },
-  /* directive = the director's instruction to the actor. The actor only
-     writes ONE short line matching it — never invents facts beyond the info. */
-  async line(directive){
-    if(!this.enabled) return null;
+  /* Build the actor prompts for a directive. role:'defender' flips the
+     character: the AI plays the OPPONENT CANDIDATE defending their own
+     record while the trainee cross-examines (Attack mode, v1.24). */
+  prompts(directive){
     const P=persona();
-    const sys=`You are a debate/press opponent in a political controversy-prep SIMULATION. You play a rival candidate or hostile journalist attacking the trainee. Stay in character.
+    let sys;
+    if(directive.role==='defender'){
+      sys=`You are ${(dossier&&dossier.name)||'the candidate'}, a politician in a controversy-prep SIMULATION being cross-examined by the trainee, who plays your election opponent. You are DEFENDING your own record. Stay in character.
+HARD RULES:
+- Output ONE spoken line only. No stage directions, no quotes, no preamble.
+- Max ${directive.maxWords} words. Punchy, like a real debate answer — never a paragraph.
+- The CASE FILE lists YOUR vulnerabilities. Never volunteer new damaging specifics; you may use plausible generic defenses (context, timing, corrective action, questioning motives) without inventing facts.
+- Behave like a real politician under fire: bridge, deflect, reframe, spin — or occasionally answer straight.
+${directive.rattled?'- You are RATTLED: shorter, choppier, hesitation and a filler or false start are fine.':''}
+${directive.floored?'- You are FLOORED — the trainee has dismantled you. Concede ground or retreat defensively; no confident spin.':''}`;
+    }else{
+      sys=`You are a debate/press opponent in a political controversy-prep SIMULATION. You play a rival candidate or hostile journalist attacking the trainee. Stay in character.
 PERSONA: ${P.label} — ${P.blurb}
 HARD RULES:
 - Output ONE spoken line only. No stage directions, no quotes, no preamble.
 - Max ${directive.maxWords} words. Punchy, like a real debate soundbite — never a paragraph.
 - ONLY use facts from the CASE FILE below. NEVER invent accusations, numbers, or events not in it. If you need a specific, use one from the file.
 - You are the attacker; do not coach or break character.
+- Sound like a live human: an occasional natural false start or beat ("Look—", "See,") is good; never robotic list-reading.
 ${directive.rattled?'- You are RATTLED: shorter, choppier, a filler or false start is fine.':''}
 ${directive.floored?'- You are FLOORED — the trainee has dismantled you all session. Concede ground or retreat defensively first; no full-confidence zingers.':''}
 - If the trainee contradicts or softens something they said earlier in RECENT EXCHANGE, quote their earlier words back at them.`;
-    const ctx=transcript.slice(-12).map(t=>`${t.who==='oppo'?'You':'Trainee'}: ${t.text}`).join('\n');
-    const usr=`CASE FILE (the trainee's vulnerabilities — your only ammunition):
+    }
+    const ctx=transcript.slice(-12).map(t=>`${t.who==='oppo'?(directive.role==='defender'?'You (defending)':'You'):'Trainee'}: ${t.text}`).join('\n');
+    const usr=`CASE FILE (${directive.role==='defender'?'YOUR vulnerabilities — what the trainee is attacking':"the trainee's vulnerabilities — your only ammunition"}):
 ${dossier.items.map(i=>'- '+i.detail).join('\n')}
 
 RECENT EXCHANGE:
@@ -937,6 +1030,13 @@ DIRECTOR'S INSTRUCTION: ${directive.instruction}
 ${directive.item?'FOCUS ON: '+directive.item.detail:''}
 
 Write your single spoken line now.`;
+    return {sys,usr};
+  },
+  /* directive = the director's instruction to the actor. The actor only
+     writes ONE short line matching it — never invents facts beyond the info. */
+  async line(directive){
+    if(!this.enabled) return null;
+    const {sys,usr}=this.prompts(directive);
     try{
       const ctrl=new AbortController();
       const to=setTimeout(()=>ctrl.abort(),PROXY_CONFIG.enabled?6500:3500);
@@ -963,6 +1063,45 @@ Write your single spoken line now.`;
       let out=(j.content?.[0]?.text||'').trim().replace(/^["'“]|["'”]$/g,'').replace(/\s+/g,' ');
       return out||null;
     }catch(e){ console.warn('Brain fell back to templates:',e.message); return null; }
+  },
+  /* v1.24 streaming: token deltas via the SSE proxy. onDelta(chunk, full)
+     fires as text arrives. Returns the full line. Throws on any failure so
+     the caller can fall back to the classic path. */
+  async lineStream(directive,onDelta){
+    if(!PROXY_CONFIG.enabled) throw new Error('stream requires proxy');
+    const {sys,usr}=this.prompts(directive);
+    const ctrl=new AbortController();
+    const to=setTimeout(()=>ctrl.abort(),15000);
+    const r=await fetch('/.netlify/functions/broadside-brain-stream',{
+      method:'POST', signal:ctrl.signal,
+      headers:{'Authorization':'Bearer '+PROXY_CONFIG.token,'content-type':'application/json'},
+      body:JSON.stringify({system:sys,user:usr,mode:BRAIN_CONFIG.mode})
+    });
+    if(!r.ok||!r.body){ clearTimeout(to); throw new Error('stream '+r.status); }
+    const reader=r.body.getReader(), dec=new TextDecoder();
+    let buf='', full='';
+    try{
+      while(true){
+        const {done,value}=await reader.read();
+        if(done) break;
+        buf+=dec.decode(value,{stream:true});
+        let idx;
+        while((idx=buf.indexOf('\n\n'))>=0){
+          const block=buf.slice(0,idx); buf=buf.slice(idx+2);
+          for(const ln of block.split('\n')){
+            if(!ln.startsWith('data:')) continue;
+            const payload=ln.slice(5).trim();
+            if(!payload||payload==='[DONE]') continue;
+            try{
+              const j=JSON.parse(payload);
+              const t=j&&j.delta&&j.delta.text;
+              if(j.type==='content_block_delta'&&t){ full+=t; onDelta&&onDelta(t,full); }
+            }catch(_){}
+          }
+        }
+      }
+    }finally{ clearTimeout(to); try{reader.releaseLock();}catch(_){} }
+    return full.trim().replace(/^["'\u201c]|["'\u201d]$/g,'').replace(/[ \t]+/g,' ');
   }
 };
 
@@ -1304,10 +1443,8 @@ function buildAttack(item,intensity){
     body='Three things keep coming up tonight — '+themes.join(', ')+'. This is another one. '+body;
   }
   let tag = Math.random()<0.6 ? pick(P.tag) : '';
-  // message-triangle callback (~1 in 3 attacks): tie the item to a theme
-  if(themes.length && Math.random()<0.3 && !themes.includes(item.topic)){
-    tag+=' It\'s the same pattern I keep pointing to: '+pick(themes)+'.';
-  }
+  // v1.24: the random mid-answer theme callback is gone — it read as a
+  // non-sequitur topic jump. Theme repetition still happens at attacks 4 & 7.
   // length budget: real soundbites aren't 80-word monologues — shed optional
   // layers (tag/callback, then lead) until the attack fits
   const wc=t=>t.trim().split(/\s+/).filter(Boolean).length;
@@ -1403,16 +1540,48 @@ const $=id=>document.getElementById(id);
 const screenEl=$('screen'), hintEl=$('hint');
 let dossier=null, queue=[], current=null, followupsUsed=0;
 let running=false, listening=false, micSkipped=false;
-let stats={attacks:0,fillers:0,responseTimes:[],tally:{}};
+let stats={attacks:0,fillers:0,responseTimes:[],tally:{},aiLatency:[]};
 let responseStart=0;
+/* v1.24 session state */
+let sessionRole='defend';                  // 'defend' | 'attack'
+let topicExchanges=0, topicStrong=0, topicFlubs=0, topicStage=0;
+let spec=null, specTimer=null;             // speculative pre-generation
+let userTurnEndTs=0;                       // per-turn AI latency telemetry
+let STREAM_OK=true;                        // streaming brain health flag
+const DEPTH={quick:2, standard:4, deep:6};
+const STAGES=['open softly, give them room',
+              'turn up the pressure — sharper and more specific',
+              'go for the gotcha — corner them with the strongest specific in the file',
+              'close the topic out — force a yes-or-no commitment'];
+function markFirstAudio(){
+  if(!userTurnEndTs) return;
+  const lag=(performance.now()-userTurnEndTs)/1000;
+  userTurnEndTs=0;
+  if(lag>0 && lag<60){ stats.aiLatency.push(Math.round(lag*10)/10); updateStats(); }
+}
 
+/* Stick-to-bottom console (v1.24): auto-pin only while the user is already
+   at the bottom; scrolling up to review pauses it and shows a jump pill.
+   Interim (live transcript) updates re-pin too — the old code only scrolled
+   on NEW lines, so your own words ran below the fold while you talked. */
+let stickBottom=true;
+function scrollToBottom(force){
+  if(force) stickBottom=true;
+  if(stickBottom) screenEl.scrollTop=screenEl.scrollHeight;
+  $('jumpPill').classList.toggle('on', !stickBottom);
+}
+screenEl.addEventListener('scroll',()=>{
+  stickBottom = screenEl.scrollTop + screenEl.clientHeight >= screenEl.scrollHeight - 48;
+  $('jumpPill').classList.toggle('on', !stickBottom);
+});
+$('jumpPill').onclick=()=>scrollToBottom(true);
 function log(who,text,cls){
   const d=document.createElement('div');
   d.className='line '+cls;
   d.innerHTML=`<span class="who">${who}</span>`;
   d.appendChild(document.createTextNode(text));
   screenEl.appendChild(d);
-  screenEl.scrollTop=screenEl.scrollHeight;
+  scrollToBottom();
   return d;
 }
 function setState(s){ $('sessionState').textContent=s; }
@@ -1422,6 +1591,8 @@ function updateStats(){
   $('stFiller').textContent=stats.fillers;
   const rt=stats.responseTimes;
   $('stAvg').textContent=rt.length? (rt.reduce((a,b)=>a+b,0)/rt.length).toFixed(1)+'s':'—';
+  const al=stats.aiLatency||[];
+  $('stLag').textContent=al.length? (al.reduce((a,b)=>a+b,0)/al.length).toFixed(1)+'s':'—';
   $('stTop').textContent=Object.keys(stats.tally).length ? topTics(stats.tally,3) : '—';
 }
 
@@ -1545,6 +1716,7 @@ $('sldRate').addEventListener('input',e=>{
   $('valRate').textContent=(e.target.value/100).toFixed(2).replace(/0$/,'')+'× — live';
   // real-time: retime the audio that's playing right now
   if(Voice.setRate) Voice.setRate(getRate()*currentRateMul);
+  if(activeSpeaker) activeSpeaker.setRate(getRate()*currentRateMul);
 });
 $('sldPress').addEventListener('input',e=>$('valPress').textContent=e.target.value);
 const getRate=()=> $('sldRate').value/100;
@@ -1627,10 +1799,34 @@ async function initMicMeter(){
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 let recog=null,finalText='',silenceTimer=null,interimLine=null;
 let intUsed=0,lastIntTs=0,lastSpeechTs=0,overtimeTimer=null,wrapTimer=null,interjecting=false;
-function startListening(){
-  finalText=''; listening=true; responseStart=performance.now();
+function adaptiveSilenceMs(){
+  // Short answers finalize fast; long answers get the full research window.
+  const words=finalText.trim().split(/\s+/).filter(Boolean).length;
+  if(words<12) return 1100;
+  if(words<30) return 1700;
+  return rules().silence;
+}
+function maybePrefetch(){
+  // Speculative pre-generation (v1.24): once the transcript has settled for
+  // ~0.8s, generate the likely reply from what's been said so far. If the
+  // final answer matches the snapshot, the reply is already in hand.
+  try{
+    if(sessionRole!=='defend' || !Brain.enabled || !running || !listening) return;
+    const text=finalText.trim();
+    if(!text || text.split(/\s+/).length<8) return;
+    if(spec && spec.text===text) return;
+    const plan=computeTurnPlan(text);
+    if(!plan.directive){ spec=null; return; }
+    spec={text, plan, promise:Brain.line(plan.directive).catch(()=>null)};
+  }catch(_){ spec=null; }
+}
+function startListening(seed){
+  finalText=seed||''; listening=true; responseStart=performance.now();
   const R=rules();
-  setState('LISTENING'); setHint('Answer out loud. Pause (or press Next) when done.');
+  setState(sessionRole==='attack'?'YOUR FLOOR':'LISTENING');
+  setHint(sessionRole==='attack'
+    ? 'Ask your question out loud. Pause (or press Done Talking) when finished.'
+    : 'Answer out loud. Pause (or press Done Talking) when done.');
   $('lampMic').classList.add('on');
   // debate answer window: warn near the limit, opponent may cut in past it
   clearTimeout(overtimeTimer); clearTimeout(wrapTimer);
@@ -1651,15 +1847,18 @@ function startListening(){
       if(!interimLine) interimLine=log('YOU','','you interim');
       interimLine.lastChild.textContent=interim;
     }
+    if(interim||finalText) scrollToBottom();
     clearTimeout(silenceTimer);
-    silenceTimer=setTimeout(()=>{ if(finalText.trim() && !interjecting) endUserTurn(); },rules().silence);
+    silenceTimer=setTimeout(()=>{ if(finalText.trim() && !interjecting) endUserTurn(); },adaptiveSilenceMs());
+    clearTimeout(specTimer);
+    specTimer=setTimeout(maybePrefetch,800);
   };
   recog.onerror=ev=>{ if(ev.error==='not-allowed'){ $('typedFallback').style.display='flex'; } };
   recog.onend=()=>{ if(listening && running){ try{recog.start();}catch(e){} } };
   try{recog.start();}catch(e){}
 }
 function stopListening(){
-  listening=false; clearTimeout(silenceTimer); clearTimeout(overtimeTimer); clearTimeout(wrapTimer);
+  listening=false; clearTimeout(silenceTimer); clearTimeout(overtimeTimer); clearTimeout(wrapTimer); clearTimeout(specTimer);
   if(recog){ recog.onend=null; try{recog.stop();}catch(e){} recog=null; }
   if(interimLine){ interimLine.remove(); interimLine=null; }
 }
@@ -1694,50 +1893,120 @@ $('typedInput').addEventListener('keydown',e=>{
   if(e.key==='Enter'&&e.target.value.trim()){ if(!running)return; finalText=e.target.value; e.target.value=''; endUserTurn(); }
 });
 
+/* computeTurnPlan (v1.24): the full topic-continuation decision as a pure-ish
+   function so speculative prefetch and the real turn use the SAME plan.
+   Quality-based continuation: stay on a topic until the trainee lands 2
+   strong answers or flubs 3 — capped by the Drill Depth setting. */
+function computeTurnPlan(text){
+  const a=analyzeResponse(text,getPressure());
+  const q=scoreAnswer(text,a);
+  const depthMax=DEPTH[$('selDepth').value]||4;
+  const nStrong=topicStrong+(q>=60?1:0);
+  const nFlubs=topicFlubs+(a.verdict!=='good'?1:0);
+  const mustAdvance=(topicExchanges+1>=depthMax)||nStrong>=2||nFlubs>=3;
+  const stageIdx=Math.min(topicStage+1,3);
+  const stageNote=' Escalation: '+STAGES[stageIdx]+'.';
+  let branch='advance', directive=null, fallback='';
+  if(isCounterAttack(text)&&Math.random()<0.75){
+    branch='dodge';
+  }else if(q>=60&&!mustAdvance){
+    branch='concede';
+    directive={instruction:'The trainee just landed a strong, specific, composed answer. Concede the point briefly with grace, then pivot to a fresh sharp follow-up on the same topic.'+stageNote, item:current, maxWords:30, tone:'concede'};
+    fallback=pick(CONCESSIONS)+' But here\'s the follow-up they\'ll ask: '+buildFollowupQuestion();
+  }else if(a.shouldPress&&!mustAdvance){
+    branch='press';
+    let instr;
+    if(a.verdict==='good'){ fallback=pick(FOLLOWUPS.good)+' '+buildFollowupQuestion(); instr='The trainee gave a decent answer — press with one sharp follow-up they can\'t dodge.'; }
+    else{ fallback=smartJoin(pick(persona().followLead), pick(FOLLOWUPS[a.verdict]));
+      instr=a.verdict==='dodge'?'The trainee dodged — call out the non-answer and re-ask directly.':a.verdict==='deny'?'The trainee denied it — push back hard, it\'s documented in the case file.':a.verdict==='filler'?'The trainee stumbled through a filler-heavy answer — needle the hesitation and re-ask crisply.':'The trainee gave a thin, one-line answer — demand they actually explain.'; }
+    directive={instruction:instr+' Stay on the current topic.'+stageNote, item:current, tone:'press'};
+  }
+  return {a,q,branch,directive,fallback};
+}
+
 function endUserTurn(){
   if(!running) return;                     // guard: no processing after End/Reset
   const text=finalText.trim();
   stopListening();
   if(!text) return;
+  clearTimeout(specTimer);
+  const specHit=(spec && spec.text===text)?spec:null;
+  spec=null;
   remember('user',text);
   const secs=(performance.now()-responseStart)/1000;
   stats.responseTimes.push(Math.round(secs*10)/10);
   log('YOU',text,'you');
-  const a=analyzeResponse(text,getPressure());
+  userTurnEndTs=performance.now();
+  if(sessionRole==='attack'){ handleUserAttack(text); return; }
+  const plan=specHit?specHit.plan:computeTurnPlan(text);
+  const a=plan.a, q=plan.q;
   stats.fillers+=a.fillers;
   for(const [k,v] of Object.entries(a.ticMap)) stats.tally[k]=(stats.tally[k]||0)+v;
   updateStats();
   if(a.fillers>2) log('COACH',`${a.fillers} tics in that answer (${topTics(a.ticMap,3)}). Tighten it up.`,'sys');
   coachFeedback(text,a);
   // Layer 1: composure damage from clean hits
-  const q=scoreAnswer(text,a);
   setComposure(composure-(q>=50?Math.round(q/6):1));  // slower decay — floor should take sustained work
   // Layer 2: reciprocity mirroring (±1 notch, decays)
   if(isCounterAttack(text)||isHostile(text)) mirror=1.5; else mirror*=0.5;
-  // Layer 3: user counter-attacked → dodge engine (with beat of silence if it stung)
-  if(isCounterAttack(text) && Math.random()<0.75){
+  topicExchanges++;
+  if(q>=60) topicStrong++;
+  if(a.verdict!=='good') topicFlubs++;
+  if(plan.branch==='dodge'){
     const myTurn=newTurn();
     setTimeout(()=>{ if(running && myTurn===turnToken) dodgeRespond(text); }, q>=60?1500:400);
     return;
   }
-  // Clean hit → beat of silence + concession (instant retaliation reads as rattled)
-  if(q>=60 && followupsUsed<2){
-    followupsUsed++;
+  if(plan.branch==='concede'){
+    topicStage=Math.min(topicStage+1,3);
     log('COACH','Clean hit — watch the pause before they respond. That beat of silence is what composure looks like.','sys');
     const myTurn=newTurn();
-    setTimeout(()=>{ if(running && myTurn===turnToken) deliver(
-      {instruction:'The trainee just landed a strong, specific, composed answer. Concede the point briefly with grace, then pivot to a fresh sharp follow-up on the same topic.', item:current, maxWords:30},
-      pick(CONCESSIONS)+' But here\'s the follow-up they\'ll ask: '+buildFollowupQuestion()); },1500);
+    setTimeout(()=>{ if(running && myTurn===turnToken) deliver(plan.directive, plan.fallback, specHit&&specHit.promise); },1200);
     return;
   }
-  if(a.shouldPress && followupsUsed<2){
-    followupsUsed++;
-    let fallback, instr;
-    if(a.verdict==='good'){ fallback=pick(FOLLOWUPS.good)+' '+buildFollowupQuestion(); instr='The trainee gave a decent answer — press with one sharp follow-up they can\'t dodge.'; }
-    else { fallback=smartJoin(pick(persona().followLead), pick(FOLLOWUPS[a.verdict]));
-      instr=a.verdict==='dodge'?'The trainee dodged — call out the non-answer and re-ask directly.':a.verdict==='deny'?'The trainee denied it — push back hard, it\'s documented in the case file.':a.verdict==='filler'?'The trainee stumbled through a filler-heavy answer — needle the hesitation and re-ask crisply.':'The trainee gave a thin, one-line answer — demand they actually explain.'; }
-    deliver({instruction:instr+' Stay on the current topic.', item:current}, fallback);
-  } else nextAttack();
+  if(plan.branch==='press'){
+    topicStage=Math.min(topicStage+1,3);
+    deliver(plan.directive, plan.fallback, specHit&&specHit.promise);
+    return;
+  }
+  nextAttack();
+}
+
+/* ── ATTACK MODE (v1.24): you cross-examine, the AI defends in character ── */
+function bestFileMatch(text){
+  if(!dossier||!dossier.items) return null;
+  const t=text.toLowerCase();
+  let best=null,bestN=0;
+  for(const it of dossier.items){
+    const n=(it.detail||'').toLowerCase().split(/\W+/).filter(w=>w.length>4).filter(w=>t.includes(w)).length;
+    if(n>bestN){ bestN=n; best=it; }
+  }
+  return bestN>=2?best:null;
+}
+function handleUserAttack(text){
+  const words=text.trim().split(/\s+/).filter(Boolean).length;
+  let sharp=0;
+  if(/\b(19|20)\d\d\b|\$[\d,]+|\d+\s?(percent|%|votes?|years?|dollars?)/i.test(text)) sharp+=30;
+  if(/\?|^\s*(did|why|how|when|who|would|will|do|have|is|are|was)\b/i.test(text)) sharp+=25;
+  if(words<=45) sharp+=20;
+  const qCount=(text.match(/\?/g)||[]).length;
+  if(qCount<=1) sharp+=15;
+  else log('COACH','You stacked '+qCount+' questions — they\'ll answer the easiest one. Ask ONE.','sys');
+  const fileHit=bestFileMatch(text);
+  if(fileHit) sharp+=10;
+  stats.attacks++; updateStats();
+  if(sharp>=70) log('COACH','Sharp attack — specific and a single direct question. That\'s how you corner someone.','sys');
+  else if(sharp<40) log('COACH','Too vague — no date, no number, no direct question. Vague attacks bounce off.','sys');
+  setComposure(composure-(sharp>=70?12:sharp>=40?5:1));
+  const cornered=composure<40;
+  const counterpunch=Math.random()<0.35;
+  let instr;
+  if(cornered) instr='You are cornered and rattled. Give ground: a partial admission with corrective framing; hesitation is fine.';
+  else if(!fileHit) instr='The attack didn\'t land on anything in your file. Swat it away confidently and reframe to your strengths.';
+  else instr='Defend against the attack like a seasoned politician: dodge, bridge, or spin using the case-file item.';
+  if(counterpunch&&!cornered) instr+=' End by turning ONE sharp question back on the trainee.';
+  deliver({role:'defender', instruction:instr, item:fileHit||current, maxWords:36, tone:cornered?'concede':'press'},
+    fileHit?pick(DODGES[0].lines):'I\'m glad you brought that up — because voters deserve the full story, not a drive-by attack.');
 }
 function buildFollowupQuestion(){
   const t=current;
@@ -1758,7 +2027,7 @@ async function primeReactions(){
   try{
     if(!PROXY_CONFIG.enabled || !(Voice instanceof ProxyVoice)) return;
     const vid=oppoVoiceId(persona())||'';
-    for(const t of REACTIONS.slice(0,4)){
+    for(const t of REACTIONS){
       const ck=vid+'|'+t;
       if(REACTION_CACHE.has(ck)) continue;
       const r=await fetch(PROXY_CONFIG.voiceUrl,{method:'POST',
@@ -1774,26 +2043,100 @@ function playReaction(){                    // instant sound masks Brain latency
   try{ Voice.speak(pick(REACTIONS),{rate:getRate()*P.rateMul,pitch:P.pitch,voiceId:oppoVoiceId(P)}); }catch(e){}
 }
 
-/* deliver: director hands the actor a directive; actor (Brain) writes the
-   line, else fall back to the template text. Latency masked by a reaction. */
-async function deliver(directive,fallbackText){
+/* Per-line delivery tone → whitelisted Cartesia controls (v1.24). */
+function toneControls(d){
+  const i=((d&&d.instruction)||'').toLowerCase();
+  if((d&&d.floored)||/concede|grace|credit where|give ground|partial admission/.test(i)) return {speed:'slow', emotion:['sadness:lowest']};
+  if(d&&d.rattled) return {speed:'fast', emotion:['anger:lowest']};
+  if(/gotcha|corner|push back hard|go for the throat|call out|needle/.test(i)) return {emotion:['anger:low']};
+  if(/curious|walk me through/.test(i)) return {emotion:['curiosity:low']};
+  return null;
+}
+
+/* deliver (v1.24): director hands the actor a directive.
+   Path 1 — speculative prefetch already resolved → sentence-parallel playback.
+   Path 2 — streaming brain (SSE) → speak sentence-by-sentence as text arrives.
+   Path 3 — classic full round trip → template fallback if the brain fails. */
+async function deliver(directive,fallbackText,prefetchedPromise){
   const myTurn=newTurn();
   directive.rattled=composure<40;
   directive.floored=composure<=15;
   // floored opponent visibly gives ground before anything else
   if(directive.floored && Math.random()<0.6) fallbackText=pick(CONCESSIONS)+' '+fallbackText;
   directive.maxWords=directive.maxWords||(directive.rattled?24:34);
-  let text=null;
+  const controls=toneControls(directive);
+  if(prefetchedPromise && Brain.enabled){
+    setState('OPPO LIVE');
+    try{
+      const text=await Promise.race([prefetchedPromise, new Promise((_,rej)=>setTimeout(()=>rej(new Error('spec-timeout')),4000))]);
+      if(myTurn!==turnToken) return;
+      if(text){ playLine(text,myTurn,controls); return; }
+    }catch(_){ if(myTurn!==turnToken) return; }
+  }
   if(Brain.enabled){
     setState('OPPO LIVE');
+    if(PROXY_CONFIG.enabled && STREAM_OK && Voice instanceof ProxyVoice && !Voice.disabled){
+      try{ await deliverStreamed(directive,myTurn,controls); return; }
+      catch(e){
+        if(myTurn!==turnToken) return;
+        console.warn('[broadside] stream path failed — classic fallback:',e.message);
+      }
+    }
     if(Voice.name!=='BROWSER') playReaction();   // skip masking on slow browser TTS
-    text=await Brain.line(directive);
+    const text=await Brain.line(directive);
     if(myTurn!==turnToken) return;                // session advanced/ended → drop
+    playLine(text||fallbackText,myTurn,controls);
+    return;
   }
-  speakAttack(text||fallbackText, myTurn);
+  playLine(fallbackText,myTurn,controls);
 }
 
-function speakAttack(text, myTurn){
+/* Streamed delivery: console line types out live; sentences hit TTS the
+   moment they complete; first audio in ~1s instead of the full round trip. */
+async function deliverStreamed(directive,myTurn,controls){
+  const P=persona();
+  const stressed=composure<40;
+  const speaker=new StreamSpeaker({
+    voiceId:oppoVoiceId(P),
+    rate:getRate()*P.rateMul*(stressed?1.07:1),
+    controls,
+    onFirstAudio:()=>{ if(myTurn===turnToken){ markFirstAudio(); aiTalking=true; $('lampAi').classList.add('hot'); } },
+    onAllDone:()=>{
+      if(myTurn!==turnToken) return;
+      aiTalking=false; $('lampAi').classList.remove('hot'); stopBargeWatch();
+      if(running) startListening();
+    }
+  });
+  activeSpeaker=speaker;
+  const el=log('OPPO · '+P.label+(stressed?' (rattled)':''),'','ai');
+  playReaction();
+  startBargeWatch();
+  let full='';
+  try{
+    full=await Brain.lineStream(directive,(t,acc)=>{
+      if(myTurn!==turnToken) throw new Error('superseded');
+      el.lastChild.textContent=acc; scrollToBottom();
+      speaker.addText(t);
+    });
+  }catch(e){
+    speaker.stop(); if(activeSpeaker===speaker) activeSpeaker=null;
+    stopBargeWatch();
+    try{ el.remove(); }catch(_){}
+    if(/^stream \d|brain-|upstream/.test(e.message)) STREAM_OK=false;   // endpoint unhealthy → stop trying this session
+    throw e;
+  }
+  if(myTurn!==turnToken){ speaker.stop(); return; }
+  if(!full){ speaker.stop(); try{ el.remove(); }catch(_){} throw new Error('empty stream'); }
+  const cleaned=full.trim().replace(/^["'\u201c]|["'\u201d]$/g,'');
+  el.lastChild.textContent=cleaned; scrollToBottom();
+  remember('oppo',cleaned);
+  setHint('');
+  speaker.finish();
+}
+
+/* Full-line playback. ProxyVoice → sentence-parallel synthesis (first
+   sentence plays while the rest render); otherwise the classic single call. */
+function playLine(text,myTurn,controls){
   if(myTurn===undefined) myTurn=newTurn();
   setState('OPPO LIVE'); setHint('');
   const P=persona();
@@ -1803,34 +2146,98 @@ function speakAttack(text, myTurn){
   aiTalking=true; $('lampAi').classList.add('hot');
   log('OPPO · '+P.label+(stressed?' (rattled)':''),spoken,'ai');
   remember('oppo',text);
+  startBargeWatch();
+  if(Voice instanceof ProxyVoice && !Voice.disabled){
+    const speaker=new StreamSpeaker({
+      voiceId:oppoVoiceId(P),
+      rate:getRate()*currentRateMul,
+      controls,
+      onFirstAudio:()=>{ if(myTurn===turnToken){ markFirstAudio(); aiTalking=true; } },
+      onAllDone:()=>{
+        if(myTurn!==turnToken) return;
+        aiTalking=false; $('lampAi').classList.remove('hot'); stopBargeWatch();
+        if(running) startListening();
+      }
+    });
+    activeSpeaker=speaker;
+    speaker.addText(spoken);
+    speaker.finish();
+    return;
+  }
   Voice.speak(spoken,{
     rate:getRate()*currentRateMul,
     pitch:P.pitch+(stressed?0.05:0),
     voiceId:oppoVoiceId(P),
-    onStart:()=>{aiTalking=true;},
-    onEnd:()=>{ aiTalking=false; $('lampAi').classList.remove('hot'); if(running && myTurn===turnToken) startListening(); }
+    onStart:()=>{ aiTalking=true; markFirstAudio(); },
+    onEnd:()=>{ aiTalking=false; $('lampAi').classList.remove('hot'); stopBargeWatch(); if(running && myTurn===turnToken) startListening(); }
   });
 }
+/* legacy name kept for any stragglers */
+function speakAttack(text,myTurn){ playLine(text,myTurn,null); }
+
+/* ── Barge-in (v1.24): start talking while the opponent speaks and they
+   shut up — like a real debate. A light recognizer runs during AI speech;
+   4+ words of sustained speech cuts the audio and hands you the floor.
+   Cartesia voice only (browser TTS + SR fight over the audio stack). ── */
+let bargeRecog=null;
+function startBargeWatch(){
+  try{
+    if(!SR||micSkipped||bargeRecog||!running) return;
+    if(!$('chkBarge').checked) return;
+    if(!(Voice instanceof ProxyVoice)||Voice.disabled) return;
+    const b=new SR(); b.continuous=true; b.interimResults=true; b.lang='en-US';
+    b.onresult=e=>{
+      let txt='';
+      for(let i=e.resultIndex;i<e.results.length;i++) txt+=e.results[i][0].transcript;
+      if(txt.trim().split(/\s+/).filter(Boolean).length>=4) bargeIn(txt.trim());
+    };
+    b.onerror=()=>{};
+    b.onend=()=>{ if(bargeRecog===b){ try{b.start();}catch(_){}} };
+    bargeRecog=b;
+    b.start();
+  }catch(_){ bargeRecog=null; }
+}
+function stopBargeWatch(){
+  const b=bargeRecog; bargeRecog=null;
+  if(b){ b.onend=null; try{b.stop();}catch(_){} }
+}
+function bargeIn(seedText){
+  if(!running||!aiTalking) return;
+  stopBargeWatch(); newTurn();
+  if(activeSpeaker){ activeSpeaker.stop(); activeSpeaker=null; }
+  Voice.stop(); aiTalking=false; $('lampAi').classList.remove('hot');
+  log('SYSTEM','You cut in — the floor is yours.','sys');
+  startListening(seedText+' ');
+}
+
 function nextAttack(){
   followupsUsed=0; intUsed=0;
+  topicExchanges=0; topicStrong=0; topicFlubs=0; topicStage=0; spec=null;
   if(!queue.length){ endSession(true); return; }
+  const isTransition=stats.attacks>0;
   current=queue.shift();
   pickPersona();               // new persona per attack when set to Rotate
   stats.attacks++; updateStats();
   const ei=effIntensity();
   const tier=ei<=3?'lightly, giving them room':ei<=7?'firmly':'aggressively, going for the throat';
   const remind=(themes.length&&[4,7].includes(stats.attacks))?' Note this fits a pattern you keep raising: '+themes.join(', ')+'.':'';
+  // v1.24: topic changes are SIGNALED, not hard cuts
+  const bridge=isTransition?'First, verbally bridge in a few words ("Alright — let\'s move on."), then ':'';
+  const fb=(isTransition?'Alright — let\'s move on. ':'')+buildAttack(current,ei);
   deliver({
-    instruction:`Open a NEW line of attack ${tier} on the focus item. Debate mode: ${document.getElementById('selMode').value}.${remind}`,
+    instruction:`${bridge}open a NEW line of attack ${tier} on the focus item. Debate mode: ${document.getElementById('selMode').value}.${remind} Escalation: ${STAGES[0]}.`,
     item:current
-  }, buildAttack(current,ei));
+  }, fb);
 }
 async function startSession(){
   if(!dossier||!dossier.items.length){ setHint('Load info with controversy items first (or use the sample).'); return; }
   running=true;
+  sessionRole=$('selRole').value==='attack'?'attack':'defend';
   $('btnStart').disabled=true; $('btnNext').disabled=false; $('btnRepeat').disabled=false; $('btnEnd').disabled=false;
+  $('btnDone').disabled=false; $('btnDrill').disabled=(sessionRole==='attack');
   queue=[...dossier.items].sort(()=>Math.random()-.5);
-  stats={attacks:0,fillers:0,responseTimes:[],tally:{}}; updateStats();
+  stats={attacks:0,fillers:0,responseTimes:[],tally:{},aiLatency:[]}; updateStats();
+  topicExchanges=0; topicStrong=0; topicFlubs=0; topicStage=0; spec=null; STREAM_OK=true;
   transcript.length=0; sessionReported=false;
   // Layer 2: fix the message triangle — 3 themes this opponent hammers all session
   themes=queue.slice(0,3).map(i=>i.topic.slice(0,45).replace(/[,.;:]$/,''));
@@ -1848,18 +2255,27 @@ async function startSession(){
   if(got==='skip'){ micSkipped=true; log('SYSTEM','Typed mode — answer in the text box and hit Enter.','sys'); }
   if(!running) return;                        // ended while waiting on the prompt
   primeReactions();                           // warm the reaction-clip cache (fire & forget)
-  nextAttack();
+  if(sessionRole==='attack'){
+    current=queue[0]||null;
+    pickPersona();
+    log('SYSTEM','ATTACK MODE — you are on offense. The AI defends in character as '+dossier.name+'. Hit them on any vector in the file; press when they dodge. Next suggests a line of attack.','sys');
+    startListening();
+  } else {
+    nextAttack();
+  }
 }
 let sessionReported=false;
 async function requestDebrief(){
   if(!PROXY_CONFIG.enabled || sessionReported || stats.attacks<1) return;
   sessionReported=true;
-  const rt=stats.responseTimes;
+  const rt=stats.responseTimes, al=stats.aiLatency||[];
   const payload={
     transcript: transcript.slice(-40),
+    mode: sessionRole,
     stats:{ attacks:stats.attacks,
             avgResponse: rt.length?+(rt.reduce((a,b)=>a+b,0)/rt.length).toFixed(1):0,
             fillers:stats.fillers,
+            avgOppoLag: al.length?+(al.reduce((a,b)=>a+b,0)/al.length).toFixed(1):null,
             topTics: topTics(stats.tally,3) },
     dossierName: PROXY_CONFIG.dossierMeta?.title || (dossier&&dossier.name) || null,
     dossierId: PROXY_CONFIG.dossierMeta?.id || null
@@ -1876,7 +2292,11 @@ async function requestDebrief(){
   }catch(e){ log('SYSTEM','Report card unavailable this session ('+e.message+').','sys'); }
 }
 function endSession(complete){
-  running=false; newTurn(); stopListening(); Voice.stop(); aiTalking=false;
+  running=false; newTurn(); stopListening(); stopBargeWatch(); Voice.stop();
+  if(activeSpeaker){ activeSpeaker.stop(); activeSpeaker=null; }
+  spec=null; clearTimeout(specTimer);
+  aiTalking=false;
+  $('btnDone').disabled=true; $('btnDrill').disabled=true;
   $('lampAi').classList.remove('hot');
   $('typedFallback').style.display='none';
   $('btnStart').disabled=false; $('btnNext').disabled=true; $('btnRepeat').disabled=true; $('btnEnd').disabled=true;
@@ -1889,8 +2309,42 @@ function endSession(complete){
 }
 
 $('btnStart').onclick=startSession;
-$('btnNext').onclick=()=>{ if(!running)return; newTurn(); stopListening(); Voice.stop(); aiTalking=false; nextAttack(); };
-$('btnRepeat').onclick=()=>{ if(!running||!current)return; newTurn(); stopListening(); Voice.stop(); aiTalking=false; deliver({instruction:'Re-ask your last attack a different way — same point, fresh phrasing.',item:current}, buildAttack(current,effIntensity())); };
+$('btnNext').onclick=()=>{
+  if(!running)return;
+  if(sessionRole==='attack'){
+    // suggest the next unused attack vector, keep the floor with the user
+    const it=queue.shift();
+    if(it){ current=it; log('COACH','Try this vector: '+it.topic+' — '+it.detail.slice(0,160),'sys'); }
+    else log('COACH','No unused vectors left in the file — press what they\'ve dodged.','sys');
+    return;
+  }
+  newTurn(); stopListening(); stopBargeWatch(); Voice.stop();
+  if(activeSpeaker){ activeSpeaker.stop(); activeSpeaker=null; }
+  aiTalking=false; nextAttack();
+};
+$('btnRepeat').onclick=()=>{
+  if(!running||!current)return;
+  newTurn(); stopListening(); stopBargeWatch(); Voice.stop();
+  if(activeSpeaker){ activeSpeaker.stop(); activeSpeaker=null; }
+  aiTalking=false;
+  deliver({instruction:'Re-ask your last attack a different way — same point, fresh phrasing.',item:current}, buildAttack(current,effIntensity()));
+};
+$('btnDone').onclick=()=>{
+  if(!running||!listening) return;
+  if(!finalText.trim() && interimLine) finalText=interimLine.lastChild.textContent||'';
+  if(finalText.trim()) endUserTurn();
+};
+$('btnDrill').onclick=()=>{
+  if(!running||!current||sessionRole==='attack') return;
+  topicFlubs=0; topicStrong=Math.min(topicStrong,1); topicExchanges=0;
+  topicStage=Math.min(topicStage+1,3);
+  newTurn(); stopListening(); stopBargeWatch(); Voice.stop();
+  if(activeSpeaker){ activeSpeaker.stop(); activeSpeaker=null; }
+  aiTalking=false;
+  log('COACH','Drilling this topic deeper.','sys');
+  deliver({instruction:'Drill deeper on the SAME topic from a fresh angle — '+STAGES[topicStage]+'.', item:current, tone:'press'},
+    pick(FOLLOWUPS.good)+' '+buildFollowupQuestion());
+};
 $('btnEnd').onclick=()=>endSession(false);
 $('btnReset').onclick=()=>{ endSession(false); screenEl.innerHTML=''; log('SYSTEM','Session reset. Load info and press START.','sys'); };
 
@@ -1942,7 +2396,13 @@ const TIPS=[
   ['#compWrap','<b>OPPO COMPOSURE</b> — the opponent\'s inner state. Land fluent, specific, corrective-action answers and it drops: they hesitate more, simplify, and get rattled. It recovers slowly, like a real stress arc.'],
   ['#ticStat','<b>TICS &amp; FILLERS</b> — context-aware count of verbal tics: filled pauses (um, uh), empty discourse markers (you know, I mean), quotative “like,” clause-opening so/well, trailing “but yeah,” hedges, and stutter repeats. Legitimate uses (“you know the answer,” “what kind of”) are not counted.'],
   ['#stTop','<b>MOST USED</b> — your three most frequent tics this session, so you know exactly what to cut.'],
-  ['#stBrain','<b>BRAIN</b> — LIVE AI means a Claude model writes each opponent line from your info + the running exchange (reacts to what you actually said). TEMPLATES is the offline fallback. Set the Anthropic key in Engine Setup to enable.']
+  ['#stBrain','<b>BRAIN</b> — LIVE AI means a Claude model writes each opponent line from your info + the running exchange (reacts to what you actually said). TEMPLATES is the offline fallback. Set the Anthropic key in Engine Setup to enable.'],
+  ['#selRole','<b>SESSION ROLE</b> — Defend: the AI grills you on the loaded profile. Attack: you cross-examine while the AI defends in character as the profiled candidate — load your OPPONENT\'s profile for this one.'],
+  ['#selDepth','<b>DRILL DEPTH</b> — how long the opponent stays on one topic before moving on: Quick Scrum (2 exchanges), Standard (4), Deep Drill (6). Landing 2 strong answers or flubbing 3 also moves the topic.'],
+  ['#btnDone','<b>DONE TALKING</b> — instantly ends your answer instead of waiting out the silence detector.'],
+  ['#btnDrill','<b>DRILL TOPIC</b> — forces the opponent to stay on the current topic and go deeper instead of moving on.'],
+  ['#bargeWrap','<b>BARGE-IN</b> — start talking while the opponent is mid-sentence and they stop, like a real debate. Four or more words cuts them off.'],
+  ['#stLag','<b>OPPO LAG</b> — average seconds between the end of your answer and the opponent\'s first spoken word. The fluidity metric.']
 ];
 let coNodes=null;
 function hideCallout(){ if(coNodes){ coNodes.forEach(n=>n.remove()); coNodes=null; } }
@@ -2079,7 +2539,9 @@ window.ControversyPrep={
   configureProxy(cfg={}){
     if(!cfg.token) return;
     PROXY_CONFIG.enabled=true; PROXY_CONFIG.token=cfg.token;
-    if(cfg.brainMode) BRAIN_CONFIG.mode=cfg.brainMode;
+    /* v1.24: real-time sparring defaults to the fast brain — the quality
+       model still writes the post-session report card server-side. */
+    BRAIN_CONFIG.mode=cfg.brainMode||'speed';
     /* token refreshes re-call this mid-session — don't orphan playing audio */
     if(!(Voice instanceof ProxyVoice)) Voice = new ProxyVoice({voiceId:cfg.voiceId||VOICE_CONFIG.cartesia.voiceId});
     else if(cfg.voiceId) Voice.cfg.voiceId=cfg.voiceId;
