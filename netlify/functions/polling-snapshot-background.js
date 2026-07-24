@@ -280,6 +280,130 @@ function validateVoteShare(vs) {
   return null
 }
 
+// ── Vote-share ensemble (v1.23.4) ────────────────────────────────────────────
+// Grok, Perplexity, and Gemini each independently estimate the vote share from
+// the shared research; the final projection is the average of the valid
+// estimates (matched by candidate, renormalized to 100).
+
+const VOTE_SHARE_RULES = (district) => `Today's date is ${new Date().toISOString().slice(0, 10)}. Wisconsin's 2026 partisan primary is August 11, 2026; the general is November 3, 2026.
+Output STRICT JSON only (no prose, no markdown fences) in exactly this shape:
+{
+  "phase": "primary" | "general",
+  "primaries": [ { "party": "Republican", "candidates": [ { "candidate": "name", "pct": number }, ..., { "candidate": "Undecided", "pct": number } ] }, ... ],
+  "general": [ { "candidate": "name", "party": "Republican|Democrat|Independent|Other", "pct": number }, ..., { "candidate": "Undecided", "party": "None", "pct": number } ]
+}
+Rules:
+- EXCLUDE any candidate reported withdrawn, dropped out, or suspended. Use candidates' FULL names.
+- phase "primary" when the primary hasn't happened and any nomination is contested: one primaries entry per party with a contested field; candidates + "Undecided" sum to 100 ±1 WITHIN each party; never mix parties. Also fill "general" with the November outlook (use "Republican nominee (TBD)" style for unsettled fields).
+- phase "general" when nominations are settled: fill "general" only, summing to 100 ±1.
+- BE DECISIVE: allocate soft/undecided voters by name recognition, endorsements, fundraising, incumbency, geography, and traction. Undecided ≤ 15 per party (≤ 10 with real polling or in the general).`
+
+async function estimateVoteShare(provider, district, research, requestedBy) {
+  const label = districtLabel(district)
+  const prompt = `You are projecting the vote share for ${label}, Wisconsin (office: ${officeLabel(district)}).
+${VOTE_SHARE_RULES(district)}
+
+RESEARCH:
+${(research?.text || '').slice(0, 11000)}`
+  let text = null
+  if (provider === 'xai') {
+    if (!XAI_KEY) return null
+    const res = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${XAI_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: GROK_MODEL, max_tokens: 1200, messages: [{ role: 'user', content: prompt }] }),
+    })
+    if (!res.ok) throw new Error(`xai ${res.status}`)
+    const d = await res.json()
+    logAiUsage({ userId: requestedBy, endpoint: 'polling', provider: 'xai', model: GROK_MODEL, inputTokens: d?.usage?.prompt_tokens || 0, outputTokens: d?.usage?.completion_tokens || 0 })
+    text = d.choices?.[0]?.message?.content
+  } else if (provider === 'perplexity') {
+    if (!PPLX_KEY) return null
+    const res = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${PPLX_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: RESEARCH_MODEL, max_tokens: 1200, messages: [
+        { role: 'system', content: 'You are a Wisconsin election forecaster. You may verify facts with live search, but output STRICT JSON only.' },
+        { role: 'user', content: prompt },
+      ] }),
+    })
+    if (!res.ok) throw new Error(`perplexity ${res.status}`)
+    const d = await res.json()
+    logAiUsage({ userId: requestedBy, endpoint: 'polling', provider: 'perplexity', model: RESEARCH_MODEL, inputTokens: d?.usage?.prompt_tokens || 0, outputTokens: d?.usage?.completion_tokens || 0 })
+    text = d.choices?.[0]?.message?.content
+  } else if (provider === 'gemini') {
+    if (!GEMINI_KEY) return null
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    })
+    if (!res.ok) throw new Error(`gemini ${res.status}`)
+    const d = await res.json()
+    logAiUsage({ userId: requestedBy, endpoint: 'polling', provider: 'gemini', model: 'gemini-2.5-flash', flatUsd: 0.005, estimated: true })
+    text = d.candidates?.[0]?.content?.parts?.map(x => x.text).filter(Boolean).join('\n')
+  }
+  if (!text) return null
+  const cleaned = text.replace(/^[^{]*/, '').replace(/[^}]*$/, '')
+  const parsed = JSON.parse(cleaned)
+  const err = validateVoteShare(parsed)
+  if (err) { console.warn(`[polling-bg] ${provider} estimate invalid: ${err}`); return null }
+  return parsed
+}
+
+const nameKey = (n) => /undecided/i.test(n) ? 'undecided'
+  : /nominee|tbd/i.test(n) ? `tbd-${(n.match(/republican|democrat|independent/i) || ['x'])[0].toLowerCase()}`
+  : String(n).toLowerCase().replace(/[^a-z ]/g, '').trim().split(/\s+/).pop()
+
+function averageLists(lists, withParty) {
+  // lists: array of candidate arrays from different models
+  const acc = new Map()  // key → { name, party, total, count }
+  for (const list of lists) {
+    for (const c of list) {
+      const k = nameKey(c.candidate)
+      if (!acc.has(k)) acc.set(k, { candidate: c.candidate, party: c.party, total: 0 })
+      const a = acc.get(k)
+      a.total += (typeof c.pct === 'number' ? c.pct : 0)
+      // prefer the longest name variant (fuller names read better)
+      if (String(c.candidate).length > String(a.candidate).length) a.candidate = c.candidate
+    }
+  }
+  // Missing from a model = 0 for that model → divide by number of models
+  const n = lists.length
+  let rows = [...acc.values()].map(a => ({
+    candidate: a.candidate, ...(withParty ? { party: a.party || 'Other' } : {}), pct: a.total / n,
+  }))
+  // Renormalize to exactly 100 and round
+  const sum = rows.reduce((t, r) => t + r.pct, 0) || 1
+  rows = rows.map(r => ({ ...r, pct: Math.round((r.pct / sum) * 100) }))
+  const drift = 100 - rows.reduce((t, r) => t + r.pct, 0)
+  if (drift !== 0 && rows.length) {
+    rows.sort((a, b) => b.pct - a.pct)
+    rows[0].pct += drift
+  }
+  rows.sort((a, b) => (/undecided/i.test(a.candidate) ? 1 : 0) - (/undecided/i.test(b.candidate) ? 1 : 0) || b.pct - a.pct)
+  return rows
+}
+
+function averageVoteShares(estimates) {
+  if (!estimates.length) return null
+  // Phase: majority vote (ties → primary, the safer pre-August default)
+  const primaryVotes = estimates.filter(e => e.phase === 'primary').length
+  const phase = primaryVotes * 2 >= estimates.length ? 'primary' : 'general'
+  const out = { phase, primaries: [], general: [] }
+
+  if (phase === 'primary') {
+    const parties = [...new Set(estimates.flatMap(e => (e.primaries || []).map(p => p.party)))]
+    for (const party of parties) {
+      const lists = estimates.map(e => (e.primaries || []).find(p => p.party === party)?.candidates).filter(Boolean)
+      if (lists.length) out.primaries.push({ party, candidates: averageLists(lists, false) })
+    }
+  }
+  const genLists = estimates.map(e => e.general).filter(g => Array.isArray(g) && g.length)
+  if (genLists.length) out.general = averageLists(genLists, true)
+  return (out.primaries.length || out.general.length) ? out : null
+}
+
 function validateSnapshot(s) {
   if (!s || typeof s !== 'object') return 'not an object'
   if (!Array.isArray(s.top_issues) || s.top_issues.length !== 4) return 'top_issues must have exactly 4 items'
@@ -343,9 +467,26 @@ export const handler = async (event) => {
     // 2. Social signal (best-effort)
     const social = await grokSocialSignal(district, requestedBy)
 
-    // 3. Synthesis + validation
-    const snapshot = await synthesize(district, research, social, requestedBy)
+    // 3. Synthesis (full snapshot) + 3-model vote-share ensemble, in parallel
+    const [snapshot, ...estimates] = await Promise.all([
+      synthesize(district, research, social, requestedBy),
+      ...['xai', 'perplexity', 'gemini'].map(prov =>
+        estimateVoteShare(prov, district, research, requestedBy)
+          .catch(e => { console.warn(`[polling-bg] ${prov} estimate failed: ${e.message}`); return null })),
+    ])
     if (!snapshot) return await fail('Synthesis produced invalid output twice')
+
+    // 4. Ensemble average — Grok + Perplexity + Gemini estimates, matched by
+    //    candidate and renormalized. Needs ≥2 valid estimates; otherwise the
+    //    Claude synthesis vote_share stands.
+    const validEstimates = estimates.filter(Boolean)
+    let ensembleUsed = false
+    if (validEstimates.length >= 2) {
+      const averaged = averageVoteShares(validEstimates)
+      if (averaged && !validateVoteShare(averaged)) { snapshot.vote_share = averaged; ensembleUsed = true }
+      else if (averaged) console.warn(`[polling-bg] ensemble average failed validation: ${validateVoteShare(averaged)}`)
+    }
+    console.log(`[polling-bg] ${district} ensemble: ${validEstimates.length}/3 estimates valid, used=${ensembleUsed}`)
 
     // Sources: prefer structured citations; else pull URLs out of the research text
     let sources = (research.citations || []).map(c => ({
@@ -358,7 +499,7 @@ export const handler = async (event) => {
     }
 
     const researchModelName = researchProvider === 'xai' ? GROK_MODEL : researchProvider === 'gemini' ? 'gemini-2.5-flash' : RESEARCH_MODEL
-    const modelUsed = `${researchProvider}:${researchModelName} + ${social && researchProvider !== 'xai' ? `xai:${SOCIAL_MODEL} + ` : ''}anthropic:${SYNTH_MODEL}`
+    const modelUsed = `${researchProvider}:${researchModelName} + anthropic:${SYNTH_MODEL}${ensembleUsed ? ` + vote-share avg of ${validEstimates.length} models (grok/perplexity/gemini)` : ''}`
 
     // on_conflict=district is REQUIRED: merge-duplicates alone resolves on the
     // id PK, so re-saving an existing district 409s on the UNIQUE(district)
