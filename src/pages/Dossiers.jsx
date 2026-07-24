@@ -1936,13 +1936,16 @@ export default function Dossiers() {
         ? { ...candidate, research_context: researchContext.trim() }
         : candidate
 
-      // Call background function directly — Netlify returns 202 immediately, runs async
-      const res = await fetch('/.netlify/functions/generate-dossier-background', {
+      // Audit fix (#1): go through the synchronous trigger, not the background
+      // endpoint directly. Netlify answers background invocations with 202
+      // before the handler runs, so limit/auth errors were invisible — the UI
+      // just polled for 5 minutes and "timed out". The sync trigger validates
+      // auth + the monthly profile limit and returns a real error immediately.
+      const res = await fetch('/.netlify/functions/generate-dossier', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ candidate: candidateWithCtx, candidate_id: cid }),
       })
-      // Background functions return 202 (accepted) or 200. Anything else is an error.
       if (!res.ok && res.status !== 202) {
         let errMsg = 'Failed to start generation'
         try { const j = await res.json(); errMsg = j.error || errMsg } catch {}
@@ -2070,7 +2073,9 @@ export default function Dossiers() {
         // Get pre-existing dossier IDs for this candidate
         const { data: beforeD } = await getDossiers(cid)
         const beforeBulkIds = new Set((beforeD || []).map(d => d.id))
-        const res = await fetch('/.netlify/functions/generate-dossier-background', {
+        // Audit fix (#1): sync trigger surfaces limit/auth errors immediately
+        // (a direct background POST always gets 202 — errors were invisible)
+        const res = await fetch('/.netlify/functions/generate-dossier', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bulkToken}` },
           body: JSON.stringify({ candidate, candidate_id: cid }),

@@ -29,6 +29,23 @@ const VALID_BRACKETS       = ['b1', 'b2_5', 'b6', 'b11', 'b26', 'b51', 'ent']
 const BETA_PLAN    = 'a_campaign'
 const BETA_BRACKET = 'ent'
 
+// ─── v1.18 monthly profile allotments ────────────────────────────────────────
+// Server mirror of src/lib/tiers.js getProfileLimit(): Candidate plans have a
+// fixed monthly limit (c_campaign = 6); Action plans scale profiles-per-
+// candidate × bracket size (a_monitor 1×, a_active 2×, a_campaign 4×).
+const BRACKET_MAX = { b1: 1, b2_5: 5, b6: 10, b11: 25, b26: 50, b51: 100, ent: Infinity }
+const CANDIDATE_PROFILE_LIMIT = { scout: 1, c_monitor: 1, c_active: 2, c_campaign: 6 }
+const ACTION_PROFILES_PER_CANDIDATE = { a_monitor: 1, a_active: 2, a_campaign: 4 }
+
+function getMonthlyProfileBase(plan, bracket) {
+  const p = normalizePlan(plan)
+  if (p in ACTION_PROFILES_PER_CANDIDATE) {
+    const max = BRACKET_MAX[bracket] ?? 1
+    return max === Infinity ? Infinity : ACTION_PROFILES_PER_CANDIDATE[p] * max
+  }
+  return CANDIDATE_PROFILE_LIMIT[p] ?? 1
+}
+
 function normalizePlan(p) {
   if (!p) return 'scout'
   const norm = LEGACY_ALIASES[p] || p
@@ -108,6 +125,7 @@ module.exports = {
   resolveEntitlement,
   getActiveTrial,
   getGlobalBetaEnabled,
+  getMonthlyProfileBase,
   normalizePlan,
   planRank,
   BETA_PLAN,

@@ -1,13 +1,25 @@
 import { paymentIssueTemplate } from './_email-templates.js';
 import { ADMIN_EMAILS } from './_config.js';
+import crypto from 'crypto';
+
+// Audit fix (#5): fail CLOSED and compare in constant time. The old check
+// (`webhookSecret !== process.env.PAYMENT_WEBHOOK_SECRET`) authorized any
+// request with no header whenever the env var was unset (undefined !==
+// undefined → false), letting anyone lock/unlock arbitrary accounts.
+function secretMatches(provided) {
+  const expected = process.env.PAYMENT_WEBHOOK_SECRET;
+  if (!expected || !provided) return false;
+  const A = crypto.createHash('sha256').update(String(provided)).digest();
+  const B = crypto.createHash('sha256').update(String(expected)).digest();
+  return crypto.timingSafeEqual(A, B);
+}
 
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
   }
 
-  const webhookSecret = event.headers['x-webhook-secret'];
-  if (webhookSecret !== process.env.PAYMENT_WEBHOOK_SECRET) {
+  if (!secretMatches(event.headers['x-webhook-secret'])) {
     return { statusCode: 401, body: JSON.stringify({ error: 'Unauthorized' }) };
   }
 

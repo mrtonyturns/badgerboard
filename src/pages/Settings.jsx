@@ -555,7 +555,18 @@ export default function Settings() {
         },
         body: JSON.stringify({ userId: user?.id, email: user?.email }),
       })
-      const json = res.ok ? await res.json() : {}
+      // Audit fix (#2): never show "cancelled" unless the server actually
+      // confirmed it — a 401/500 here previously produced a success banner
+      // while Stripe kept billing.
+      if (!res.ok) {
+        let errText = 'We couldn\'t cancel your subscription. Please try again, or use "Manage billing" to cancel through the billing portal.'
+        try { const j = await res.json(); if (j?.error) errText = `${j.error} — please try again or use "Manage billing" to cancel through the billing portal.` } catch { /* keep default */ }
+        setBillingMsg({ type: 'error', text: errText })
+        setCancelStep(null)
+        setDeleteLoading(false)
+        return
+      }
+      const json = await res.json()
       // Refresh JWT so the app immediately reflects Scout plan (no stale tier in UI)
       await refreshSession?.()
       setCancelStep(null)
@@ -564,8 +575,7 @@ export default function Settings() {
         text: json.message || 'Your subscription has been cancelled. You\'ve been moved to the free Scout plan — all your data is safe.',
       })
     } catch {
-      // Fallback: open billing portal to let them cancel themselves
-      handleManageBilling()
+      setBillingMsg({ type: 'error', text: 'Could not reach the server to cancel. Please try again, or use "Manage billing" to cancel through the billing portal.' })
       setCancelStep(null)
     }
     setDeleteLoading(false)
@@ -584,9 +594,12 @@ export default function Settings() {
         },
         body: JSON.stringify({ userId: user?.id, email: user?.email }),
       })
-      const json = res.ok ? await res.json() : {}
-      if (json.error) {
-        setDeleteMsg({ type: 'error', text: json.error })
+      // Audit fix (#2): a non-2xx here previously signed the user out as if
+      // the account were deleted while it (and its Stripe subscription) lived on.
+      let json = {}
+      try { json = await res.json() } catch { /* non-JSON error body */ }
+      if (!res.ok || json.error) {
+        setDeleteMsg({ type: 'error', text: json.error || `Account deletion failed (HTTP ${res.status}). Please try again or contact support — your account has NOT been deleted.` })
       } else {
         // Sign out and redirect — account is gone
         try {

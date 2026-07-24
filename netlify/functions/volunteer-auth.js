@@ -292,6 +292,111 @@ async function updateStats(params, authHeader) {
   return { statusCode: 200, body: JSON.stringify({ updated: updateRes.ok, stats: patch }) }
 }
 
+// ─── Action: log_knock ────────────────────────────────────────────────────────
+// Audit fix (#3): the portal used to insert door_knocks directly with the anon
+// browser client — RLS rejected the insert, the result was never checked, and
+// every volunteer knock was silently dropped while "Logged!" showed. This
+// action inserts via the service role AND increments the volunteer's stats in
+// one authorized call. list_id comes from the volunteer's own row (never the
+// client) so a volunteer cannot write knocks into someone else's list.
+// The portal's outcome values differ from the door_knocks.status CHECK
+// constraint ('contacted','not_home','refused','moved','wrong_address',
+// 'do_not_knock') — the old direct insert would have violated the CHECK even
+// without RLS. Map portal values to DB values; canonical DB values pass through.
+const KNOCK_STATUS_MAP = {
+  contact:       'contacted',      // portal "Spoke With Voter"
+  no_answer:     'not_home',       // portal "No Answer"
+  not_home:      'not_home',       // portal "Left Lit"
+  refused:       'refused',
+  moved:         'wrong_address',  // portal value 'moved' is labeled "Wrong Address"
+  contacted:     'contacted',
+  wrong_address: 'wrong_address',
+  do_not_knock:  'do_not_knock',
+}
+
+async function logKnock(params, authHeader) {
+  const { volunteer_id, address, status, support_level = null, notes = null } = params
+  if (!volunteer_id || !isUuid(volunteer_id)) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'valid volunteer_id required' }) }
+  }
+  const cleanAddress = typeof address === 'string' ? address.trim().slice(0, 300) : ''
+  if (!cleanAddress) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'address required' }) }
+  }
+  const cleanStatus = KNOCK_STATUS_MAP[status] || 'not_home'
+  // contacts_made should track actual voter conversations, not the raw status string
+  const madeContact = cleanStatus === 'contacted'
+
+  // Fetch the volunteer row — authorization + server-side list_id in one read
+  const res = await sb(`/volunteers?id=eq.${encodeURIComponent(volunteer_id)}&select=id,list_id,user_id,email,session_token,doors_knocked,contacts_made`)
+  const rows = await res.json()
+  if (!rows?.length) {
+    return { statusCode: 404, body: JSON.stringify({ error: 'Volunteer not found' }) }
+  }
+  const vol = rows[0]
+
+  // Authorize exactly like update_stats: session_token match OR matching JWT email
+  const providedToken = params.session_token || (authHeader || '').replace('Bearer ', '')
+  const tokenOk = vol.session_token && providedToken && providedToken === vol.session_token
+  let jwtOk = false
+  if (!tokenOk) {
+    const jwtEmail = await emailFromJwt(authHeader)
+    jwtOk = jwtEmail && vol.email && jwtEmail === String(vol.email).toLowerCase()
+  }
+  if (!tokenOk && !jwtOk) {
+    return { statusCode: 401, body: JSON.stringify({ error: 'Unauthorized' }) }
+  }
+
+  if (!vol.list_id) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'No walk list assigned to this volunteer yet' }) }
+  }
+
+  // Insert the knock via the service role (bypasses the RLS that silently
+  // dropped the old client-side insert)
+  const insertRes = await sb('/door_knocks', {
+    method: 'POST',
+    body: JSON.stringify({
+      list_id: vol.list_id,
+      address: cleanAddress,
+      status: cleanStatus,
+      support_level: Number.isInteger(support_level) && support_level >= 1 && support_level <= 5 ? support_level : null,
+      notes: typeof notes === 'string' && notes.trim() ? notes.trim().slice(0, 2000) : null,
+      knocked_at: new Date().toISOString(),
+      knocked_by: vol.user_id || null,
+    }),
+  })
+  if (!insertRes.ok) {
+    const err = await insertRes.text()
+    console.error('[volunteer-auth] log_knock insert failed:', err)
+    return { statusCode: 500, body: JSON.stringify({ error: 'Failed to save the door knock — please try again' }) }
+  }
+
+  // Increment stats in the same action (atomic from the portal's point of view)
+  const statsPatch = {
+    doors_knocked: (vol.doors_knocked || 0) + 1,
+    contacts_made: (vol.contacts_made || 0) + (madeContact ? 1 : 0),
+    last_active: new Date().toISOString(),
+    status: 'active',
+  }
+  const statsRes = await sb(`/volunteers?id=eq.${encodeURIComponent(volunteer_id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(statsPatch),
+  })
+  if (!statsRes.ok) {
+    console.error('[volunteer-auth] log_knock stats update failed:', await statsRes.text())
+  }
+
+  return {
+    statusCode: 200,
+    body: JSON.stringify({
+      logged: true,
+      stats_updated: statsRes.ok,
+      doors_knocked: statsPatch.doors_knocked,
+      contacts_made: statsPatch.contacts_made,
+    }),
+  }
+}
+
 // ─── Action: get_volunteers_for_list ─────────────────────────────────────────
 async function getVolunteersForList(params, coordinatorId) {
   const { list_id } = params
@@ -379,6 +484,7 @@ export const handler = async (event) => {
   if (action === 'verify_token') return verifyToken(params)
   if (action === 'get_volunteer') return getVolunteer(params, selfAuthHeader)
   if (action === 'update_stats')  return updateStats(params, selfAuthHeader)
+  if (action === 'log_knock')     return logKnock(params, selfAuthHeader)
 
   // All other actions require coordinator auth
   const authHeader = event.headers.authorization || ''

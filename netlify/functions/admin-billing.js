@@ -184,7 +184,23 @@ async function applyCredit(stripe, userId, amountCents, description) {
   };
 }
 
+// Audit fix (#4): server-side validation — the admin UI once sent bracket keys
+// (b2, b3, b6-as-26-50…) that either wrote garbage into app_metadata or moved
+// live subscriptions to the wrong price. Never trust the picker.
+const VALID_PLAN_KEYS = ['scout', 'free', 'c_monitor', 'c_active', 'c_campaign', 'a_monitor', 'a_active', 'a_campaign', 'monitor', 'campaign', 'agency'];
+const VALID_BRACKET_KEYS = ['b1', 'b2_5', 'b6', 'b11', 'b26', 'b51', 'ent'];
+
+function validatePlanBracket(plan, bracket) {
+  if (plan && !VALID_PLAN_KEYS.includes(String(plan).toLowerCase())) {
+    throw new Error(`Invalid plan key "${plan}". Valid: ${VALID_PLAN_KEYS.join(', ')}`);
+  }
+  if (bracket && !VALID_BRACKET_KEYS.includes(String(bracket))) {
+    throw new Error(`Invalid bracket key "${bracket}". Valid: ${VALID_BRACKET_KEYS.join(', ')}`);
+  }
+}
+
 async function updatePlan(stripe, userId, plan, bracket) {
+  validatePlanBracket(plan, bracket);
   const email = await getUserEmail(userId);
   if (!email) throw new Error('User not found');
 
@@ -303,6 +319,7 @@ async function grantTrial(stripe, userId, days) {
 }
 
 async function createUser(email, password, plan, bracket) {
+  validatePlanBracket(plan, bracket);
   // Create user in Supabase Auth
   const res = await fetch(`${process.env.SUPABASE_URL}/auth/v1/admin/users`, {
     method: 'POST',
@@ -414,6 +431,10 @@ export const handler = async (event) => {
     }
   } catch (err) {
     console.error('Admin billing error:', err);
+    // Validation errors are safe (and necessary) to show the admin verbatim
+    if (String(err.message || '').startsWith('Invalid plan key') || String(err.message || '').startsWith('Invalid bracket key')) {
+      return { statusCode: 400, body: JSON.stringify({ error: err.message }) };
+    }
     return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) };
   }
 };

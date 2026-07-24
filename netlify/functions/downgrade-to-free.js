@@ -125,6 +125,18 @@ export const handler = async (event) => {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
 
   try {
+    // Audit fix (#7): mark the downgrade as VOLUNTARY before cancelling, so the
+    // customer.subscription.deleted webhook the cancellation fires knows not to
+    // apply the inactive/deletion-countdown lockout to a "keep my data" user.
+    try {
+      const cur = await getSupabaseUser(userId)
+      await fetch(`${process.env.SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` },
+        body: JSON.stringify({ app_metadata: { ...(cur?.app_metadata || {}), voluntary_downgrade: true } }),
+      })
+    } catch (e) { console.warn('voluntary_downgrade flag write failed:', e.message) }
+
     // Find and cancel the active Stripe subscription for this user
     if (verifiedEmail) {
       const customers = await stripe.customers.list({ email: verifiedEmail, limit: 5 })

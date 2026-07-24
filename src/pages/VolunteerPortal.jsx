@@ -319,45 +319,52 @@ function DoorsTab({ volunteer }) {
   const [notes, setNotes]           = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted]   = useState(false)
+  const [submitError, setSubmitError] = useState(null)
   const [total, setTotal]           = useState(volunteer.doors_knocked || 0)
 
   const handleSubmit = async () => {
     if (!address.trim() || !outcome) return
     setSubmitting(true)
+    setSubmitError(null)
 
-    // Insert knock directly via Supabase (volunteer is a valid Supabase auth user)
-    if (volunteer.list_id) {
-      await supabase.from('door_knocks').insert({
-        list_id: volunteer.list_id,
+    // Audit fix (#3): the knock used to be inserted directly with the anon
+    // Supabase client — RLS rejected it, the result was never checked, and the
+    // knock silently vanished while "Logged!" showed. It now goes through the
+    // volunteer-auth log_knock action (service role, authorized by the durable
+    // session token), which saves the knock AND updates stats in one call —
+    // and we only celebrate if the server says it worked.
+    try {
+      const res = await callApi('log_knock', {
+        volunteer_id: volunteer.id,
         address: address.trim(),
         status: outcome,
         support_level: support,
         notes: notes.trim() || null,
-        knocked_at: new Date().toISOString(),
-        knocked_by: volunteer.user_id || null,
+        session_token: loadSession()?.session_token,
       })
+
+      if (!res?.logged) {
+        setSubmitError(res?.error || "We couldn't save that door knock. Check your connection and try again.")
+        setSubmitting(false)
+        return
+      }
+
+      setTotal(typeof res.doors_knocked === 'number' ? res.doors_knocked : t => t + 1)
+      setSubmitted(true)
+      setSubmitting(false)
+
+      // Reset after 1.5s
+      setTimeout(() => {
+        setAddress('')
+        setOutcome(null)
+        setSupport(null)
+        setNotes('')
+        setSubmitted(false)
+      }, 1800)
+    } catch {
+      setSubmitError("We couldn't save that door knock. Check your connection and try again.")
+      setSubmitting(false)
     }
-
-    // Update volunteer stats (authenticated with the durable session token)
-    await callApi('update_stats', {
-      volunteer_id: volunteer.id,
-      doors_knocked: 1,
-      contacts_made: outcome === 'contact' ? 1 : 0,
-      session_token: loadSession()?.session_token,
-    })
-
-    setTotal(t => t + 1)
-    setSubmitted(true)
-    setSubmitting(false)
-
-    // Reset after 1.5s
-    setTimeout(() => {
-      setAddress('')
-      setOutcome(null)
-      setSupport(null)
-      setNotes('')
-      setSubmitted(false)
-    }, 1800)
   }
 
   if (submitted) {
@@ -469,6 +476,13 @@ function DoorsTab({ volunteer }) {
           className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/30 text-sm focus:outline-none focus:ring-2 focus:ring-red-500/50 resize-none"
         />
       </div>
+
+      {/* Error */}
+      {submitError && (
+        <div className="bg-red-500/15 border border-red-500/40 rounded-xl px-4 py-3 text-red-300 text-sm">
+          {submitError}
+        </div>
+      )}
 
       {/* Submit */}
       <button

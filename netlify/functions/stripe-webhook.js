@@ -610,6 +610,9 @@ exports.handler = async (event) => {
           // Clear downgrade lock if user is re-subscribing
           payment_status: 'active',
           downgraded_at:  null,
+          // Stale voluntary-downgrade marker must not survive into a new sub
+          // (it would skip the lockout on a future REAL cancellation)
+          voluntary_downgrade: null,
         })
 
         // Send plan activated email
@@ -660,15 +663,23 @@ exports.handler = async (event) => {
         const billing = metaBilling || mapped?.billing
 
         if (plan) {
-          console.log(`Updating to ${plan}/${bracket}/${billing} for user ${supabaseUserId}`)
+          // Audit fix (#6): payment_status must FOLLOW the subscription's real
+          // status. The old unconditional 'active' write meant any
+          // subscription.updated during delinquency (Stripe fires one alongside
+          // invoice.payment_failed, on past_due→unpaid, and when the customer
+          // toggles cancel-at-period-end) cleared the past_due lockout and
+          // restored access without payment.
+          const subStatus = sub.status
+          const statusFields = ['active', 'trialing'].includes(subStatus)
+            ? { payment_status: 'active', downgraded_at: null }
+            : ['past_due', 'unpaid'].includes(subStatus)
+              ? { payment_status: 'past_due' }
+              : {}  // incomplete/canceled etc. — leave payment_status untouched
+          console.log(`Updating to ${plan}/${bracket}/${billing} (sub status: ${subStatus}) for user ${supabaseUserId}`)
           await updateSupabasePlan(supabaseUserId, plan, bracket, billing, {
             stripe_customer_id: sub.customer,
             stripe_subscription_id: sub.id,
-          }, {
-            // Clear any downgrade lock when the subscription becomes active again
-            payment_status: 'active',
-            downgraded_at:  null,
-          })
+          }, statusFields)
 
           // Send plan updated email
           try {
@@ -704,6 +715,25 @@ exports.handler = async (event) => {
 
         if (await isAdminUser(supabaseUserId)) {
           console.log(`Admin account ${supabaseUserId} — refusing downgrade, keeping agency`)
+          break
+        }
+
+        // Audit fix (#7): a VOLUNTARY "keep my data — move to Scout" downgrade
+        // cancels the Stripe sub, which fires this same event. The old handler
+        // then stamped payment_status 'inactive' + downgraded_at, throwing every
+        // voluntary downgrader into the deletion-countdown lockout.
+        // downgrade-to-free.js now sets voluntary_downgrade=true before
+        // cancelling; when we see it, honor the good-standing Scout state.
+        const existingUser = await getSupabaseUser(supabaseUserId)
+        if (existingUser?.app_metadata?.voluntary_downgrade) {
+          console.log(`Voluntary downgrade for ${supabaseUserId} — Scout in good standing, no lockout`)
+          const cleanMeta = { ...existingUser.app_metadata, plan: 'scout', plan_type: 'candidate', payment_status: 'active', downgraded_at: null, stripe_subscription_id: null }
+          delete cleanMeta.voluntary_downgrade
+          await fetch(`${process.env.SUPABASE_URL}/auth/v1/admin/users/${supabaseUserId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` },
+            body: JSON.stringify({ app_metadata: cleanMeta }),
+          })
           break
         }
 
@@ -874,6 +904,18 @@ exports.handler = async (event) => {
     return { statusCode: 200, body: JSON.stringify({ received: true }) }
   } catch (err) {
     console.error('Webhook handler error:', err.message)
+    // Audit fix (#8): the idempotency row was inserted BEFORE handling, so a
+    // transient failure here used to permanently swallow the event — Stripe's
+    // retry hit the 409 and was treated as a processed duplicate, silently
+    // dropping paid credit grants and plan activations. Release the row so the
+    // retry actually reprocesses.
+    try {
+      await fetch(
+        `${process.env.SUPABASE_URL}/rest/v1/stripe_webhook_events?id=eq.${encodeURIComponent(stripeEvent.id)}`,
+        { method: 'DELETE', headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` } }
+      )
+      console.log(`[stripe-webhook] released idempotency row for ${stripeEvent.id} — Stripe retry will reprocess`)
+    } catch (e) { console.warn('[stripe-webhook] failed to release idempotency row:', e.message) }
     return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }
 }

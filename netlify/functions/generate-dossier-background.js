@@ -49,11 +49,17 @@ async function verifyUser(authHeader) {
 // trial > paid), then normalizes to this function's legacy internal buckets.
 const { resolveEntitlement } = require('./_entitlements')
 
-async function getUserPlan(user) {
-  if (!user) return 'scout'
-  if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'agency'
-  const { plan } = await resolveEntitlement(user)
-  // Normalize new-format plan keys introduced in v1.14 pricing overhaul
+// Resolves the user's canonical entitlement (plan + bracket). Admins short-
+// circuit to the top action plan; everyone else goes through the shared
+// resolver (admin > beta > trial > paid > free).
+async function getUserEntitlement(user) {
+  if (!user) return { plan: 'scout', bracket: 'b1' }
+  if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return { plan: 'a_campaign', bracket: 'ent' }
+  return resolveEntitlement(user)
+}
+
+// Legacy internal buckets — still used for Section 6 gating (SECTION6_TIERS).
+function toLegacyBucket(plan) {
   const PLAN_MAP = {
     c_monitor: 'monitor',  a_monitor: 'monitor',
     c_active:  'campaign', a_active:  'campaign',
@@ -62,30 +68,49 @@ async function getUserPlan(user) {
   return PLAN_MAP[plan] || (['scout', 'monitor', 'campaign', 'agency'].includes(plan) ? plan : 'scout')
 }
 
-// Base monthly profile allotment per plan (excludes purchased credits).
-// Dossier credit packs are a Candidate-plan feature; Action/Agency/admin are effectively unlimited.
-const MONTHLY_BASE = { scout: 1, monitor: 1, campaign: 2, agency: Infinity }
+// ─── v1.18 monthly profile allotments (server-side source of truth) ──────────
+// getMonthlyProfileBase (from _entitlements) mirrors tiers.js getProfileLimit:
+// Candidate plans fixed (c_campaign = 6); Action plans profiles-per-candidate ×
+// bracket (a_monitor 1×, a_active 2×, a_campaign 4×). Purchased credits bank on
+// top. Enforced HERE, before any LLM spend — the client-side check in
+// Profiler.jsx is advisory only and trivially bypassed with a direct POST.
+const { getMonthlyProfileBase } = require('./_entitlements')
+const getMonthlyBase = getMonthlyProfileBase
+
+async function countMonthToDateDossiers(userId) {
+  const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/dossiers?generated_by=eq.${userId}&generated_at=gte.${monthStart.toISOString()}&select=id`,
+    { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
+  )
+  if (!res.ok) throw new Error(`dossier count failed (${res.status})`)
+  const rows = await res.json()
+  return Array.isArray(rows) ? rows.length : 0
+}
 
 // After a successful generation, consume one banked profile credit if this
-// generation went beyond the user's free monthly allotment. Safe/idempotent:
-// counts month-to-date dossiers and never drops the bank below zero.
-async function consumeProfileCreditIfOverage(user, userId, userPlan) {
+// generation went beyond the user's free monthly allotment. Audit fix (#1):
+// re-reads the user's metadata fresh before decrementing — the request-start
+// snapshot could be minutes old (research takes 3-6 min), and decrementing a
+// stale bank both double-spent and un-spent credits under concurrency.
+async function consumeProfileCreditIfOverage(userId, plan, bracket) {
   try {
     if (!userId) return
-    const bank = Number(user?.app_metadata?.profile_credits) || 0
-    if (bank <= 0) return
-    const base = MONTHLY_BASE[userPlan]
+    const base = getMonthlyBase(plan, bracket)
     if (!Number.isFinite(base)) return  // unlimited plans never consume credits
-    const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
-    const cntRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/dossiers?generated_by=eq.${userId}&generated_at=gte.${monthStart.toISOString()}&select=id`,
-      { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
-    )
-    if (!cntRes.ok) return
-    const monthCount = (await cntRes.json()).length  // includes the one just saved
+    const monthCount = await countMonthToDateDossiers(userId)  // includes the one just saved
     if (monthCount <= base) return  // still within the free monthly allotment
+
+    // Fresh read of the bank at decrement time (not the request-start snapshot)
+    const freshRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
+      headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
+    })
+    if (!freshRes.ok) return
+    const fresh = await freshRes.json()
+    const bank = Number(fresh?.app_metadata?.profile_credits) || 0
+    if (bank <= 0) return
     const newBank = Math.max(0, bank - 1)
-    const meta = { ...(user.app_metadata || {}), profile_credits: newBank }
+    const meta = { ...(fresh.app_metadata || {}), profile_credits: newBank }
     await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
@@ -644,12 +669,46 @@ exports.handler = async (event) => {
   if (!user) {
     return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authenticated' }) }
   }
-  const userPlan = await getUserPlan(user)
+  const entitlement = await getUserEntitlement(user)
+  const userPlan = toLegacyBucket(entitlement.plan)
   const canViewSection6 = SECTION6_TIERS.includes(userPlan)
+  const isAdminCaller = ADMIN_EMAILS.includes(user.email?.toLowerCase())
 
   // ── Durable per-user rate limit (defense in depth if invoked directly) ─────
   const limited = await enforceRateLimit(user.id, 'generate-dossier-background', headers)
   if (limited) return limited
+
+  // ── Audit fix (#1): server-side monthly profile-limit enforcement ──────────
+  // Previously only the client checked the limit — a direct POST to this
+  // endpoint generated unlimited profiles (each a multi-dollar LLM spend) on
+  // any plan, including free Scout. Enforce base allotment + banked credits
+  // here, before any research queries fire.
+  if (!isAdminCaller) {
+    try {
+      const base = getMonthlyBase(entitlement.plan, entitlement.bracket)
+      if (Number.isFinite(base)) {
+        const bank = Math.max(0, Number(user?.app_metadata?.profile_credits) || 0)
+        const monthCount = await countMonthToDateDossiers(user.id)
+        if (monthCount >= base + bank) {
+          console.log(`[dossier-bg] Limit reached for ${user.id}: ${monthCount}/${base}+${bank} (${entitlement.plan}/${entitlement.bracket})`)
+          return {
+            statusCode: 403,
+            headers,
+            body: JSON.stringify({
+              error: `You've used all ${base + bank} of your profile generations for this month. Upgrade your plan or purchase profile credits to generate more.`,
+              limit: base + bank,
+              used: monthCount,
+            }),
+          }
+        }
+      }
+    } catch (e) {
+      // Fail closed on count errors — an attacker shouldn't get free generations
+      // by breaking the counter. Legit users can retry.
+      console.error('[dossier-bg] Limit check failed:', e.message)
+      return { statusCode: 503, headers, body: JSON.stringify({ error: 'Could not verify your profile allotment — please try again in a moment.' }) }
+    }
+  }
 
   const { candidate } = body
   if (!candidate || typeof candidate !== 'object') {
@@ -1454,7 +1513,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     }
 
     // ─── Consume a purchased credit if this exceeded the free monthly allotment ─
-    await consumeProfileCreditIfOverage(user, user_id, userPlan)
+    await consumeProfileCreditIfOverage(user_id, entitlement.plan, entitlement.bracket)
 
     // ─── Dossier-ready notification email ─────────────────────────────────────
     try {

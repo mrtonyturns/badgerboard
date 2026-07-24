@@ -990,7 +990,7 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
 
   const handleChangePlan = async (plan, bracket) => {
     try {
-      await billingCall('change_plan', { user_id: selectedUser.id, plan, bracket })
+      const result = await billingCall('change_plan', { user_id: selectedUser.id, plan, bracket })
       // Refresh Stripe subscription data
       const data = await billingCall('get_subscription', { user_id: selectedUser.id })
       setSubscriptionData(data)
@@ -1000,7 +1000,21 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
       // Also update the users list sidebar so the new plan shows immediately
       setUsers(prev => prev.map(u => u.id === selectedUser.id ? updatedUser : u))
       setModals({ ...modals, changePlan: false })
-      showToast(`Plan updated to ${plan} — changes take effect on user's next login`)
+      // Audit fix (#4): surface the Stripe sync result instead of a blanket
+      // success — "price_not_configured" / "no_subscription" states were
+      // previously hidden behind a success toast.
+      const stripeNote = {
+        subscription_updated: 'Stripe subscription moved to the new price.',
+        subscription_scheduled_for_cancellation: 'Stripe subscription will cancel at period end.',
+        no_stripe_customer: 'No Stripe customer — metadata updated only (no billing change).',
+        no_active_subscription: 'No active Stripe subscription — metadata updated only.',
+        no_subscription: 'No Stripe subscription — metadata updated only.',
+        not_configured: 'Stripe not configured — metadata updated only.',
+      }[result?.stripe] || (String(result?.stripe || '').startsWith('price_not_configured')
+        ? `⚠ Stripe price missing for this plan/bracket (${result.stripe}) — billing NOT changed.`
+        : null)
+      showToast(`Plan set to ${plan}${bracket ? ` (${bracket})` : ''}. ${stripeNote || ''}`.trim(),
+        String(result?.stripe || '').startsWith('price_not_configured') ? 'error' : 'success')
     } catch (err) {
       console.error(err)
       showToast('Failed to change plan', 'error')
@@ -1470,15 +1484,18 @@ const PLAN_FAMILIES = {
 
 const ACTION_PLAN_KEYS = PLAN_FAMILIES.action.map(p => p.key)
 
+// Audit fix (#4): these MUST be the canonical bracket keys from tiers.js.
+// The old b1-b8 set collided with the server's real keys — picking
+// "26–50 candidates" sent 'b6', which server-side is the 6–10 tier, silently
+// moving live Stripe subscriptions to the wrong (cheaper) price.
 const BRACKET_OPTIONS = [
   { key: 'b1',   label: '1 candidate' },
-  { key: 'b2',   label: '2–3 candidates' },
-  { key: 'b3',   label: '4–5 candidates' },
-  { key: 'b4',   label: '6–10 candidates' },
-  { key: 'b5',   label: '11–25 candidates' },
-  { key: 'b6',   label: '26–50 candidates' },
-  { key: 'b7',   label: '51–100 candidates' },
-  { key: 'b8',   label: '100+ candidates' },
+  { key: 'b2_5', label: '2–5 candidates' },
+  { key: 'b6',   label: '6–10 candidates' },
+  { key: 'b11',  label: '11–25 candidates' },
+  { key: 'b26',  label: '26–50 candidates' },
+  { key: 'b51',  label: '51–100 candidates' },
+  { key: 'ent',  label: '100+ (enterprise)' },
 ]
 
 const ChangePlanModal = ({ currentPlan, currentBracket, onSave, onClose }) => {
