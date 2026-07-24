@@ -217,7 +217,7 @@ exports.handler = async (event) => {
       method: 'POST',
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        from: 'Badger Board <noreply@badgerboardwi.com>',
+        from: 'Badger Board <noreply@noreply.badgerboardwi.com>',  // Resend-verified domain (same as _email.js)
         to: email,
         subject: `Weekly monitoring digest — ${entries.length === 1 ? entries[0].candidate.name : `${entries.length} candidates`} · ${weekLabel}`,
         html,
