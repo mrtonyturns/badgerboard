@@ -197,7 +197,9 @@ async function queryPerplexity(systemMsg, userMsg, maxTokens = 1500, model = 'so
   if (!PERPLEXITY_API_KEY) return null
   try {
     const ctrl = new AbortController()
-    setTimeout(() => ctrl.abort(), 22000)
+    // v1.20.1: 45s (was 22s) — deep sonar-pro searches were being aborted and
+    // silently returned null, which is why news/social sections came up thin.
+    setTimeout(() => ctrl.abort(), 45000)
     const res = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST', signal: ctrl.signal,
       headers: { 'Authorization': `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
@@ -242,25 +244,54 @@ async function fetchPerplexityNews(name, office, district, ctx, mode, localSourc
     incumbent: `Find all recent news articles, coverage of official actions, and re-election campaign activity for ${name} who holds ${office}${locNote}.${ctxNote} Include: coverage of their official votes and decisions, legislation they sponsored or opposed, constituent controversies, endorsements for re-election, fundraising stories, any challenger coverage that references them, ethics or legal coverage, and any press about their record in office. Return 15+ items.`,
   }
 
-  try {
+  const NEWS_SYSTEM = 'You are a Wisconsin political news researcher. For each news item, use this exact format:\n### [Exact Article Title](https://full-url.com)\n**Publication Name** · Month D, YYYY\nOne sentence summary.\n\nIf URL unknown: ### Exact Article Title\nReturn at least 12-20 items. Focus on Wisconsin local outlets. Do not fabricate articles.'
+
+  const runNewsSearch = async (model, maxTokens, timeoutMs) => {
     const ctrl = new AbortController()
-    setTimeout(() => ctrl.abort(), 20000)
+    setTimeout(() => ctrl.abort(), timeoutMs)
     const res = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST', signal: ctrl.signal,
       headers: { 'Authorization': `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'sonar-pro',
+        model,
         messages: [
-          { role: 'system', content: 'You are a Wisconsin political news researcher. For each news item, use this exact format:\n### [Exact Article Title](https://full-url.com)\n**Publication Name** · Month D, YYYY\nOne sentence summary.\n\nIf URL unknown: ### Exact Article Title\nReturn at least 10-15 items. Focus on Wisconsin local outlets. Do not fabricate articles.' },
+          { role: 'system', content: NEWS_SYSTEM },
           { role: 'user', content: (queries[mode] || queries.challenger) + localSources },
         ],
-        max_tokens: 2000,
+        max_tokens: maxTokens,
       }),
     })
-    if (!res.ok) { console.error(`[perplexity/news] ${res.status}`); return null }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
     return data.choices?.[0]?.message?.content || null
-  } catch (e) { console.error(`[perplexity/news] ${e.message}`); return null }
+  }
+
+  // v1.20.1: 45s budget + a fast sonar retry when the deep search fails —
+  // previously a 20s abort silently produced a dossier with NO news at all.
+  try {
+    return await runNewsSearch('sonar-pro', 3000, 45000)
+  } catch (e) {
+    console.error(`[perplexity/news] deep search failed (${e.message}) — retrying with sonar`)
+    try {
+      return await runNewsSearch('sonar', 2000, 20000)
+    } catch (e2) { console.error(`[perplexity/news] fallback failed: ${e2.message}`); return null }
+  }
+}
+
+// v1.20.1: dedicated hyper-local pass — the general news search covers state
+// and major outlets; this one exclusively works the county-local source list
+// (weeklies, city pages, chambers, local broadcast), which the single-pass
+// search consistently under-covered.
+async function fetchPerplexityLocalNews(name, office, district, ctx, mode, localSources = '') {
+  if (!PERPLEXITY_API_KEY || !localSources) return null
+  const ctxNote = ctx ? ` Context: ${ctx}.` : ''
+  const locNote = district ? ` in ${district}` : ' in Wisconsin'
+  return queryPerplexity(
+    'You are a hyper-local Wisconsin news researcher. Search ONLY small local outlets: county weeklies, city newspapers, local TV/radio stations, chamber-of-commerce pages, city/village hall announcements, school district pages, and community Facebook pages surfaced by news search. For each item:\n### [Exact Title](https://full-url.com)\n**Outlet Name** · Month D, YYYY\nOne sentence summary.\nSmall items count — meeting minutes mentions, letters to the editor, event coverage, local award notices. Return every item you find. Do not fabricate.',
+    `Search these specific local outlets and any other hyper-local sources for ANY mention of ${name}${locNote} — as a candidate, official, business owner, or community member.${ctxNote}${localSources}\nInclude older items (up to 3 years back) if relevant to their public record.`,
+    2500,
+    'sonar-pro'
+  )
 }
 
 // ─── Political / civic record — mode-aware ────────────────────────────────────
@@ -315,10 +346,13 @@ async function fetchPerplexitySocialMedia(name, office, district, ctx, mode) {
     incumbent: `Find social media activity for ${name} who holds ${office}${locNote}.${ctxNote} Search: official government social media accounts, campaign social media, constituent interactions, posts about their votes/decisions by community members, Reddit discussions, local Facebook groups discussing their record. Include both their posts and community commentary on their performance.`,
   }
 
+  // v1.20.1: upgraded from sonar → sonar-pro with a platform-by-platform sweep —
+  // the cheap single-pass search was the main reason Section 10 came up thin.
   return queryPerplexity(
-    'You are a Wisconsin social media researcher. Return a structured list of posts and mentions. For each item use this format:\n### [Post description or excerpt](URL-if-known)\n**Platform / Author** · Date\nSentiment: +/-/~. One-sentence context.\n\nReturn 10-15+ items including both posts BY the subject and posts ABOUT them.',
+    'You are a Wisconsin social media researcher. Work platform by platform — for EACH of Facebook, X/Twitter, Instagram, LinkedIn, TikTok, YouTube, Reddit, and Nextdoor, search for the subject and report what you find (or skip silently if nothing). Return a structured list of posts and mentions. For each item use this format:\n### [Post description or excerpt](URL-if-known)\n**Platform / Author** · Date\nSentiment: +/-/~. One-sentence context.\n\nReturn 12-20+ items including both posts BY the subject and posts ABOUT them (community reactions, local group discussions). Do not fabricate posts.',
     queries[mode] || queries.challenger,
-    2000
+    3000,
+    'sonar-pro'
   )
 }
 
@@ -369,7 +403,11 @@ async function fetchPerplexityIncumbent(candidateName, office) {
 // ─── Grok: real-time X + web intelligence — mode-aware ───────────────────────
 async function fetchGrokXIntelligence(name, office, district, twitterHandle, ctx, mode) {
   if (!XAI_API_KEY) return null
-  const handleLine = twitterHandle ? ` Their X handle is @${twitterHandle}.` : ''
+  // v1.20.1: no stored handle is no longer a dead end — Grok is told to FIND
+  // the account first, then search it.
+  const handleLine = twitterHandle
+    ? ` Their X handle is @${twitterHandle}.`
+    : ` Their X handle is not known — first search X to identify their account (match name + Wisconsin + role), state which handle you found, then proceed.`
   const ctxLine = ctx ? ` Additional context: ${ctx}.` : ''
   const locNote = district ? ` in ${district}` : ' in Wisconsin'
 
@@ -393,7 +431,7 @@ ${modeInstructions[mode] || modeInstructions.challenger}
 
 Search X (Twitter) and the web RIGHT NOW and report:
 
-1. X POST ACTIVITY (past 30 days): Format each as: [@handle · Date] "excerpt" — context note.
+1. X POST ACTIVITY (past 90 days — local candidates post infrequently, go back further): Format each as: [@handle · Date] "excerpt" — context note.
 2. REAL-TIME SENTIMENT: Overall X/web sentiment (positive/negative/mixed) and what's driving it.
 3. BREAKING COVERAGE: Any news in the last 2 weeks — emerging stories, recent statements, new endorsements or withdrawals.
 4. GRASSROOTS SIGNALS: What are local activists, organizers, and community members saying?
@@ -402,7 +440,7 @@ Return structured findings with source attribution. Mark recency: [Today] [This 
 
   try {
     const ctrl = new AbortController()
-    setTimeout(() => ctrl.abort(), 40000)  // Responses API with tool use takes longer
+    setTimeout(() => ctrl.abort(), 60000)  // Responses API with tool use takes longer (v1.20.1: 60s)
     const res = await fetch('https://api.x.ai/v1/responses', {
       method: 'POST',
       signal: ctrl.signal,
@@ -868,6 +906,8 @@ exports.handler = async (event) => {
 
   // ─── Fire all Perplexity + Grok queries in parallel (#2, #3) ─────────────
   const perplexityPromise   = fetchPerplexityNews(safe.name, officeLine, safe.districtName, ctx, mode, localSourcesNote)
+  // v1.20.1: second, hyper-local-only news pass over the county source list
+  const localNewsPromise    = fetchPerplexityLocalNews(safe.name, officeLine, safe.districtName, ctx, mode, localSourcesNote)
   // fetchPerplexityIncumbent retired — fetchPerplexityPoliticalRecord (incumbent mode) covers the same ground
   const incumbentPromise    = Promise.resolve(null)
   const identityPromise     = fetchPerplexityIdentity(safe.name, officeLine, safe.districtName, ctx, mode)
@@ -1056,19 +1096,25 @@ Label all items [RESEARCH REQUIRED] unless you have a credible public record sou
   const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
 
   // ─── Wait for all Perplexity + Grok results in parallel ─────────────────
-  let perplexityNews = null, perplexityIncumbent = null
+  let perplexityNews = null, perplexityIncumbent = null, localNews = null
   let identityData = null, financeData = null, politicalData = null, affiliationsData = null, socialMediaData = null
   let grokData = null, officialData = null
   try {
-    ;[perplexityNews, perplexityIncumbent, identityData, financeData, politicalData, affiliationsData, socialMediaData, grokData, officialData] =
-      await Promise.all([perplexityPromise, incumbentPromise, identityPromise, financePromise, politicalPromise, affiliationsPromise, socialMediaPromise, grokPromise, officialPromise])
+    ;[perplexityNews, perplexityIncumbent, identityData, financeData, politicalData, affiliationsData, socialMediaData, grokData, officialData, localNews] =
+      await Promise.all([perplexityPromise, incumbentPromise, identityPromise, financePromise, politicalPromise, affiliationsPromise, socialMediaPromise, grokPromise, officialPromise, localNewsPromise])
+    // Merge the hyper-local pass into the news research block
+    if (localNews) {
+      perplexityNews = perplexityNews
+        ? `${perplexityNews}\n\n— ADDITIONAL HYPER-LOCAL COVERAGE (county weeklies, city pages, local broadcast) —\n\n${localNews}`
+        : localNews
+    }
 
     // v1.20: cost metering — one row per successful research call. Perplexity's
     // per-request search fee dominates its token cost, so these are flat-fee
     // estimates (marked estimated=true); Grok includes server-side search tools.
     {
       const uid = user?.id || null
-      const pplxSuccesses = [perplexityNews, identityData, financeData, politicalData, affiliationsData, socialMediaData].filter(Boolean).length
+      const pplxSuccesses = [perplexityNews, localNews, identityData, financeData, politicalData, affiliationsData, socialMediaData].filter(Boolean).length
       for (let i = 0; i < pplxSuccesses; i++) {
         logAiUsage({ userId: uid, endpoint: 'profiler', provider: 'perplexity', model: 'sonar-pro', flatUsd: 0.004, estimated: true })
       }
@@ -1100,7 +1146,7 @@ Label all items [RESEARCH REQUIRED] unless you have a credible public record sou
     : ''
 
   const newsContext = perplexityNews
-    ? `\n\nREAL-TIME NEWS RESEARCH (from web search — use as the primary basis for Section 1):\n${perplexityNews}\n\nUse these real news results for Section 1. Keep ### heading format. Add confidence badges. Prioritize these verified results over training knowledge.`
+    ? `\n\nREAL-TIME NEWS RESEARCH (from web search — use as the primary basis for Section 1):\n${perplexityNews}\n\nUse these real news results for Section 1. Keep ### heading format. Add confidence badges. Prioritize these verified results over training knowledge. MANDATORY: include EVERY distinct item from this research in Section 1 — do NOT summarize the list down or drop smaller items; Section 1 must contain at least 12 items whenever the research provides them.`
     : ''
 
   const incumbentContext = perplexityIncumbent
@@ -1357,7 +1403,7 @@ If URL unknown, omit link: ### Post description or excerpt
 **Platform / Author** · Month D, YYYY
 
 **By candidate:** (posts made by the candidate on their own accounts)
-List 5-10+ items using ### heading format above.
+List 8-15+ items using ### heading format above. MANDATORY: include EVERY distinct post from the social media research and the real-time X intelligence — do not drop items.
 
 **About candidate:** (posts by others mentioning or discussing the candidate)
 List 5-10+ items using ### heading format above.
@@ -1518,7 +1564,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     const webSearchTools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }]
     const claudePayload = {
       model: CLAUDE_MODEL,
-      max_tokens: 12000,
+      max_tokens: 16000,
       system: systemPrompt + webSearchDirective,
       tools: webSearchTools,
       messages: [{ role: 'user', content: userPrompt }],
@@ -1564,7 +1610,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     if (sectionCount < 10) {
       console.log('[dossier-bg] Too few sections — retrying with continuation prompt')
       const retryPrompt = `The dossier you just generated for ${safe.name} was cut short — only ${sectionCount} of 14 sections were included. Continue from where it was cut off and complete ALL missing sections. Start with the next missing ## SECTION header and continue through ## SECTION 14. Do not repeat sections already written.\n\nPrevious output (partial):\n${content.slice(-3000)}`
-      const retryResp = await callClaudeWithRetry({ model: CLAUDE_MODEL, max_tokens: 12000, system: systemPrompt + webSearchDirective, tools: webSearchTools, messages: [{ role: 'user', content: retryPrompt }] })
+      const retryResp = await callClaudeWithRetry({ model: CLAUDE_MODEL, max_tokens: 16000, system: systemPrompt + webSearchDirective, tools: webSearchTools, messages: [{ role: 'user', content: retryPrompt }] })
       if (retryResp.ok) {
         const retryData = await retryResp.json()
         logAiUsage({ userId: user_id, endpoint: 'profiler', provider: 'anthropic', model: CLAUDE_MODEL,
