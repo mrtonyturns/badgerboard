@@ -77,6 +77,7 @@ import VolunteerPortal from './pages/VolunteerPortal'
 import SharedDossier from './pages/SharedDossier'
 const Events = lazy(() => import('./pages/Events'))  // code-split: trims the initial bundle (M1)
 const Broadside = lazy(() => import('./pages/Broadside'))  // code-split: admin-only beta
+const Polling = lazy(() => import('./pages/Polling'))  // code-split: beta-only (v1.22)
 import ResetPassword from './pages/ResetPassword'
 
 const ProtectedRoute = ({ children }) => {
@@ -108,6 +109,22 @@ const AdminRoute = ({ children }) => {
     )
   }
   if (!isAdmin) return <Navigate to="/" replace />
+  return children
+}
+
+// Beta-only route (v1.22) — silently redirects everyone without beta access to
+// the dashboard. Intentionally NOT a "you're not allowed" page: the feature
+// shouldn't be discoverable outside the beta group.
+const BetaRoute = ({ children }) => {
+  const { user, isAdmin, loading } = useAuth()
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-brand-navy flex items-center justify-center">
+        <div className="w-12 h-12 border-4 border-brand-red border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
+  if (!isAdmin && !isBetaActive(user)) return <Navigate to="/" replace />
   return children
 }
 
@@ -184,6 +201,7 @@ const AppRoutes = () => {
         <Route path="settings" element={<Settings />} />
         <Route path="plans" element={<Pricing />} />
         <Route path="broadside" element={<FeatureRoute feature="broadside"><Broadside /></FeatureRoute>} />
+        <Route path="polling" element={<BetaRoute><Polling /></BetaRoute>} />
         <Route path="admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -55,6 +55,10 @@
 [functions."monitoring-digest"]
   schedule = "0 17 * * 1"
 
+# Weekly refresh of existing beta polling snapshots — Monday 16:00 UTC
+[functions."polling-refresh"]
+  schedule = "0 16 * * 1"
+
 # Expire lapsed free trials + send T-3-day warnings, daily ~8-9am Central
 [functions."trial-expiry"]
   schedule = "0 14 * * *"

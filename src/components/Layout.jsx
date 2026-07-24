@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Building2, CalendarDays, Target, Users, ListChecks,
   FileText, Settings, LogOut, Menu, X, ChevronRight,
   User, CreditCard, Shield, ChevronDown, Tag, DoorOpen, UserCheck,
-  ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink, Users2, Swords,
+  ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink, Users2, Swords, BarChart2,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import BluejackLogo from './BluejackLogo'
@@ -198,6 +198,7 @@ const navItems = [
   { to: '/profiler',    icon: FileText,        label: 'Profiler'      },
   { to: '/compare',     icon: Scale,           label: 'Compare',       badge: 'Beta' },
   { to: '/broadside',   icon: Swords,          label: 'Broadside',     feature: 'broadside', webOnly: true },
+  { to: '/polling',     icon: BarChart2,       label: 'Polling',       badge: 'Beta', betaOnly: true },
   { to: '/events',      icon: CalendarDays,    label: 'Events',        badge: 'New' },
   { to: '/campaign-connect', icon: Users2,     label: 'Campaign Connect' },
   // Door Knocking hidden from UI (feature parked — restore this line to re-enable)
@@ -292,17 +293,19 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, onNavigate, onSig
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">AI Tools</p>
-        {navItems.slice(4, 9).filter(item =>
+        {navItems.slice(4, 10).filter(item =>
           (!item.adminOnly || isAdmin) &&
           // Plan-feature gate (v1.18.2): beta users and admins resolve to the top
           // plan via getUserTier, so tierConfig covers paid + beta + admin.
           (!item.feature || isAdmin || isBeta || tierConfig?.features?.[item.feature]) &&
+          // Beta-only features: hidden entirely unless beta tester or admin
+          (!item.betaOnly || isAdmin || isBeta) &&
           !(item.webOnly && isNativeApp)
         ).map(item => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">Outreach</p>
-        {navItems.slice(9, 11).map(item => (
+        {navItems.slice(10, 12).map(item => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         {/* Field Ops group hidden (Door Knocking parked) — restore with the nav item to re-enable

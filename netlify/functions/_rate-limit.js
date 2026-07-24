@@ -42,6 +42,8 @@ const RATE_LIMITS = {
   // Most expensive endpoint in the app (multi-Perplexity + multi-Opus per run) —
   // cache covers normal use; the budget only matters for abuse (audit #18)
   'research-district-events':    { perMinute: 2,  perDay: 20  },
+  // Beta polling snapshots — heavy pipeline (Perplexity + Grok + Opus per run)
+  'polling-snapshot':            { perMinute: 2,  perDay: 15  },
 }
 
 const DEFAULT_LIMITS = { perMinute: 10, perDay: 100 }
