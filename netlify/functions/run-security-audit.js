@@ -371,7 +371,9 @@ async function runAudit() {
       await rlsIsolationSuite(
         CM,
         'canvass_messages',
-        { list_id: seedListId, message: `Audit message ${STAMP}` },
+        // sender_name is NOT NULL in the production schema (differs from
+        // migration 005) — omitting it made the seed insert 400 before RLS ran.
+        { list_id: seedListId, sender_name: 'Security Audit', message: `Audit message ${STAMP}` },
         'sent_by',
         null,   // canvass_messages has no UPDATE policy — skip UPDATE isolation test
         helpers
@@ -405,6 +407,8 @@ async function runAudit() {
           first_name: 'AuditFirst',
           last_name:  'AuditLast',
           address:    `${STAMP} Test Ave`,
+          // Required by voters_insert_own RLS policy (created_by = auth.uid())
+          created_by: userAUserId,
         })
         assert(r.status === 201 || r.status === 200, `Expected 201, got ${r.status}`)
         const data = await r.json()

@@ -304,10 +304,17 @@ export default function VoterLists() {
       if (!newList?.id) { setError('Failed to create voter list record.'); setUploading(false); return }
 
       // Strip raw_data before inserting (avoids large payloads) and batch in 200-row chunks
-      const rows = csvPreview.map(({ raw_data, ...r }) => ({ ...r, voter_list_id: newList.id }))
+      // created_by is REQUIRED by the voters RLS insert policy (migration
+      // 20260422000004) — without it every chunk is rejected with 403.
+      const rows = csvPreview.map(({ raw_data, ...r }) => ({ ...r, voter_list_id: newList.id, created_by: user?.id }))
       const totalChunks = Math.ceil(rows.length / 200)
       for (let i = 0; i < rows.length; i += 200) {
-        await createVoters(rows.slice(i, i + 200))
+        const { error: insertErr } = await createVoters(rows.slice(i, i + 200))
+        if (insertErr) {
+          setError(`Upload failed at row ${i + 1}: ${insertErr.message}`)
+          setUploading(false)
+          return
+        }
         setUploadProgress({ done: Math.floor(i / 200) + 1, total: totalChunks })
       }
 
