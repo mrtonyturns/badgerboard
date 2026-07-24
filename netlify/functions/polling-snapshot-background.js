@@ -212,12 +212,12 @@ ${SNAPSHOT_SCHEMA_NOTE}
 Rules:
 - CANDIDATE STATUS: if the research marks any candidate as withdrawn, dropped out, or suspended, EXCLUDE them from every vote_share list. Only candidates confirmed still running appear.
 - top_issues: the 4 issues district voters care about most right now, ranked. Ground primarily in the news/coverage research; the social-listening signal may inform ranking but weight it lightly (X skews demographically).
-- approval: the current ${officeLabel(district)} (or the most electorally relevant figure in the research). Anchor to real polling when present; otherwise model from past results + lean + coverage tone. approval_pct + disapproval_pct ≤ 100 (remainder = unsure).
+- approval: the current ${officeLabel(district)} (or the most electorally relevant figure in the research). Anchor to real polling when present; otherwise model from past results + lean + coverage tone. approval_pct + disapproval_pct ≤ 100 (remainder = unsure). Allocate leaners: keep unsure ≤ 15 — commit soft opinion to approve or disapprove based on lean and coverage tone.
 - vote_share: today's date is ${new Date().toISOString().slice(0, 10)}. Wisconsin's 2026 partisan primary is August 11, 2026; the general is November 3, 2026. Decide the phase:
-  * phase "primary" — the primary has NOT yet happened AND at least one party's nomination for this seat is contested. Fill "primaries": one entry per party that has a primary field, listing that party's ACTUAL candidates from the research. NEVER mix parties in one list. Each party's candidates + that party's "Undecided" line MUST sum to 100 ±1 WITHIN that party. A party with a single unopposed candidate may be included as that one candidate at 100, or omitted. Also fill "general" with the projected November head-to-head using each party's likely nominee (mark unsettled fields like "Republican nominee (TBD)") — the app shows the primaries first, then the general outlook.
-  * phase "general" — primaries are over or every nomination is uncontested. Fill "general" only (omit "primaries" or use []): the head-to-head across parties, using the ACTUAL likely matchup from the research (generic R vs D ballot if no declared challenger), including an "Undecided" line, summing to 100 ±1.
+  * phase "primary" — the primary has NOT yet happened AND at least one party's nomination for this seat is contested. Fill "primaries": one entry per party that has a primary field, listing that party's ACTUAL candidates from the research. NEVER mix parties in one list. Each party's candidates + that party's "Undecided" line MUST sum to 100 ±1 WITHIN that party. BE DECISIVE: allocate undecided/soft voters to candidates using name recognition, endorsements, fundraising, incumbency, geography, and social traction — Undecided is capped at 15 per party (10 when any real polling exists). This is a projection, not a survey: the confidence margin carries the uncertainty, so do not park it in Undecided. A party with a single unopposed candidate may be included as that one candidate at 100, or omitted. Also fill "general" with the projected November head-to-head using each party's likely nominee (mark unsettled fields like "Republican nominee (TBD)") — the app shows the primaries first, then the general outlook.
+  * phase "general" — primaries are over or every nomination is uncontested. Fill "general" only (omit "primaries" or use []): the head-to-head across parties, using the ACTUAL likely matchup from the research (generic R vs D ballot if no declared challenger), including an "Undecided" line capped at 10, summing to 100 ±1 — allocate leaners to the candidates the way a pollster's final projection would.
 - confidence: honest uncertainty. Real district polling in the research → margin 3-5, band high. Statewide polling only → 5-8, moderate. Modeled from results/demographics alone → 8-12, low. The note says what's driving it.
-- These are AI estimates, not measurements — be conservative, never invent precision.
+- These are AI estimates, not measurements. Take a clear position on every number — express the uncertainty through the confidence margin/band, not by inflating Undecided or Unsure.
 
 NEWS / POLLING / RESULTS RESEARCH:
 ${(research?.text || 'None available').slice(0, 12000)}
@@ -268,6 +268,8 @@ function validateVoteShare(vs) {
       if (!p.party || !Array.isArray(p.candidates) || p.candidates.length < 1) return 'primary group malformed'
       if (!p.candidates.every(c => c.candidate && typeof c.pct === 'number')) return `primary ${p.party} entries malformed`
       if (!sumsTo100(p.candidates)) return `primary ${p.party} does not sum to ~100`
+      const und = p.candidates.find(c => /^undecided$/i.test(c.candidate))
+      if (und && und.pct > 25) return `primary ${p.party} Undecided too high (${und.pct}) — allocate leaners`
     }
   }
   if (vs.phase === 'general' || (Array.isArray(vs.general) && vs.general.length)) {
