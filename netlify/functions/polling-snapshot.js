@@ -79,12 +79,16 @@ exports.handler = async (event) => {
     const nIntel = await intelCount(user.id, district)
     if (nIntel > 0) {
       const pr = await sb(`/poll_snapshots?district=eq.${encodeURIComponent(district)}&user_id=eq.${user.id}&select=*`)
+      // A failed read must NOT masquerade as "no snapshot" — the client would
+      // kick a full (paid) regeneration. Surface the outage instead.
+      if (!pr.ok) return { statusCode: 503, headers, body: JSON.stringify({ error: 'Snapshot store unavailable — try again shortly' }) }
       const prows = await pr.json()
       if (prows?.[0]) {
         return { statusCode: 200, headers, body: JSON.stringify({ snapshot: prows[0], personalized: true, intel_count: nIntel, fresh_days: FRESH_DAYS }) }
       }
     }
     const res = await sb(`/poll_snapshots?district=eq.${encodeURIComponent(district)}&user_id=eq.${GLOBAL_USER}&select=*`)
+    if (!res.ok) return { statusCode: 503, headers, body: JSON.stringify({ error: 'Snapshot store unavailable — try again shortly' }) }
     const rows = await res.json()
     const snap = rows?.[0] || null
     return { statusCode: 200, headers, body: JSON.stringify({ snapshot: snap, personalized: false, intel_count: nIntel, fresh_days: FRESH_DAYS }) }
@@ -101,6 +105,9 @@ exports.handler = async (event) => {
 
     // Fresh-window + concurrency guard on the target row
     const res = await sb(`/poll_snapshots?district=eq.${encodeURIComponent(district)}&user_id=eq.${rowUser}&select=district,generated_at,status`)
+    // Guard-read failure → abort rather than blow past the fresh-window check
+    // and pay for a regeneration that may not be needed.
+    if (!res.ok) return { statusCode: 503, headers, body: JSON.stringify({ error: 'Snapshot store unavailable — try again shortly' }) }
     const rows = await res.json()
     const existing = rows?.[0]
     if (existing) {
