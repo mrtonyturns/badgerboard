@@ -60,6 +60,58 @@ const SECTION_THEMES = {
 }
 
 // ─── Parse markdown sections ──────────────────────────────────────────────────
+// Pull the PROFILE SNAPSHOT block out of the report so it renders as the
+// animated intro card instead of as body text. Returns { snapshot, rest }.
+function extractSnapshot(content = '') {
+  if (!content) return { snapshot: '', rest: content }
+  const m = content.match(/##\s*PROFILE SNAPSHOT\s*\n([\s\S]*?)(?=\n##\s|$)/i)
+  if (!m) return { snapshot: '', rest: content }
+  const snapshot = m[1]
+    .replace(/\*\*\[[^\]]*\]\*\*/g, '')   // strip any stray badges
+    .replace(/[*#>_`]/g, '')               // strip markdown emphasis
+    .replace(/\s+/g, ' ')
+    .trim()
+  const rest = content.replace(m[0], '').replace(/^\s*\n/, '').trim()
+  return { snapshot, rest }
+}
+
+// Typewriter intro card — types the snapshot out on first open, fast.
+function SnapshotCard({ text }) {
+  const [shown, setShown]   = useState(0)
+  const [done, setDone]     = useState(false)
+  const reduceMotion = typeof window !== 'undefined'
+    && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+
+  useEffect(() => {
+    if (!text) return
+    if (reduceMotion) { setShown(text.length); setDone(true); return }
+    setShown(0); setDone(false)
+    let i = 0
+    // ~18ms/char, but step 2 chars at a time so long snapshots finish quickly
+    const id = setInterval(() => {
+      i += 2
+      if (i >= text.length) { setShown(text.length); setDone(true); clearInterval(id) }
+      else setShown(i)
+    }, 18)
+    return () => clearInterval(id)
+  }, [text, reduceMotion])
+
+  if (!text) return null
+  return (
+    <div className="mx-4 mt-3 mb-1 rounded-2xl border border-brand-red/15 bg-gradient-to-br from-red-50/70 via-white to-white px-5 py-4 shadow-sm animate-[snapfade_.5s_ease]">
+      <style>{`@keyframes snapfade{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}`}</style>
+      <div className="flex items-center gap-2 mb-1.5">
+        <Sparkles className="w-3.5 h-3.5 text-brand-red" />
+        <span className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-brand-red">Snapshot</span>
+      </div>
+      <p className="text-[15px] leading-relaxed text-gray-800 font-medium">
+        {text.slice(0, shown)}
+        {!done && <span className="inline-block w-[2px] h-[1.05em] align-[-0.15em] ml-0.5 bg-brand-red animate-pulse" />}
+      </p>
+    </div>
+  )
+}
+
 function parseSections(content = '') {
   if (!content) return [{ id: 'overview', label: 'Overview', content, index: 0 }]
 
@@ -258,6 +310,13 @@ function buildPrintHtml(dossier, sections) {
   const title = dossier.title || 'Political Profile'
   const candidate = dossier.candidate
   const generatedAt = dossier.generated_at ? format(new Date(dossier.generated_at), 'MMMM d, yyyy') : ''
+  const { snapshot } = extractSnapshot(dossier.content)
+  const snapshotHtml = snapshot
+    ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:16px 18px;margin-bottom:24px;">
+         <div style="font-size:0.65rem;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:#b91c1c;margin-bottom:6px;">Snapshot</div>
+         <div style="font-size:1rem;line-height:1.55;color:#1f2937;font-weight:500;">${escapeHtml(snapshot)}</div>
+       </div>`
+    : ''
 
   const sectionsHtml = sections.map(s => `
     <section style="page-break-inside:avoid;margin-bottom:32px;">
@@ -292,6 +351,7 @@ function buildPrintHtml(dossier, sections) {
       ${generatedAt ? ` · Generated ${generatedAt}` : ''}
     </div>
   </div>
+  ${snapshotHtml}
   ${sectionsHtml}
   <div class="footer">
     Badger Board · AI-Generated Political Intelligence · The Bluejack Group · Verify all information through official sources before use.
@@ -1377,7 +1437,8 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
   const { isAdmin } = useAuth()
   const [showEmpty, setShowEmpty] = useState(false)
   const [expanded, setExpanded]   = useState(false)
-  const allSections = parseSections(dossier.content)
+  const { snapshot, rest: bodyContent } = extractSnapshot(dossier.content)
+  const allSections = parseSections(bodyContent)
   const { sections, hiddenCount } = filterSections(allSections, showEmpty)
   const [activeSection, setActiveSection]   = useState(sections[0]?.id)
 
@@ -1533,6 +1594,9 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
         </div>
         </div>
       </div>
+
+      {/* Animated snapshot intro — types out on open */}
+      {snapshot && <SnapshotCard text={snapshot} />}
 
       {/* Disclaimer banner */}
       <div className="py-2 px-4 flex-shrink-0">

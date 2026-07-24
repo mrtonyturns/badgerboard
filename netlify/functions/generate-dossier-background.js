@@ -1260,7 +1260,10 @@ PARTY VERIFICATION REMINDER: Check campaign website donation links (ActBlue = De
 ${identityContext}${officialContext}${newsContext}${incumbentContext}${politicalContext}${financeContext}${affiliationsContext}${socialMediaContext}${grokContext}
 ---
 
-BEGIN DOSSIER. Output EXACTLY these 14 sections:
+BEGIN DOSSIER. Start with the PROFILE SNAPSHOT, then output EXACTLY the 14 sections.
+
+## PROFILE SNAPSHOT
+Two to three sentences (max 60 words) describing who this person is — written the way a sharp, neutral observer would describe them to a friend: intriguing, plain-spoken, easy to understand, and strictly unbiased. Lead with what makes them distinctive (their background, their path into politics, what they're known for locally). No confidence badges, no headers, no bullet points, no partisan framing — just a compelling, factual portrait.
 
 ## SECTION 1: NEWS & MEDIA COVERAGE
 **[HIGH/MEDIUM/LOW]**

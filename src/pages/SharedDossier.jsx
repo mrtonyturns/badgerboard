@@ -259,7 +259,10 @@ export default function SharedDossier() {
     )
   }
 
-  const { sections } = filterSections(parseSections(dossier.content))
+  const snapMatch = (dossier.content || '').match(/##\s*PROFILE SNAPSHOT\s*\n([\s\S]*?)(?=\n##\s|$)/i)
+  const snapshot = snapMatch ? snapMatch[1].replace(/\*\*\[[^\]]*\]\*\*/g, '').replace(/[*#>_`]/g, '').replace(/\s+/g, ' ').trim() : ''
+  const bodyContent = snapMatch ? dossier.content.replace(snapMatch[0], '').replace(/^\s*\n/, '').trim() : dossier.content
+  const { sections } = filterSections(parseSections(bodyContent))
   const candidate = dossier.candidate
   const generatedAt = dossier.generated_at ? format(new Date(dossier.generated_at), 'MMMM d, yyyy') : ''
 
@@ -302,6 +305,19 @@ export default function SharedDossier() {
           </div>
         </div>
       </div>
+
+      {/* ── Snapshot intro ───────────────────────────────────────────────── */}
+      {snapshot && (
+        <div className="max-w-4xl mx-auto w-full px-4 pb-1">
+          <div className="rounded-2xl border border-brand-red/15 bg-gradient-to-br from-red-50/70 via-white to-white px-5 py-4">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-brand-red" />
+              <span className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-brand-red">Snapshot</span>
+            </div>
+            <p className="text-[15px] leading-relaxed text-gray-800 font-medium">{snapshot}</p>
+          </div>
+        </div>
+      )}
 
       {/* ── Dossier sections ─────────────────────────────────────────────── */}
       <div className="max-w-4xl mx-auto w-full px-4 pb-10 space-y-4">
