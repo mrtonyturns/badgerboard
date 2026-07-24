@@ -401,76 +401,6 @@ export default function Polling() {
         </div>
       </div>
 
-      {/* ── Local Intel (v1.25) — user-supplied signal factored into the projection ── */}
-      {district && (
-        <div className="card py-4">
-          <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
-            <h2 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-              <Paperclip className="w-4 h-4 text-brand-navy" /> Local Intel
-              {intel.length > 0 && <span className="text-xs font-normal text-gray-400">({intel.length})</span>}
-            </h2>
-            <div className="flex items-center gap-2">
-              {personalized && !intelDirty && (
-                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">Factored into this projection</span>
-              )}
-              {intelDirty && (
-                <button onClick={() => runGenerate(undefined, true)} disabled={generating}
-                  className="btn-primary text-xs py-1.5 flex items-center gap-1.5">
-                  <RefreshCw className={`w-3.5 h-3.5 ${generating ? 'animate-spin' : ''}`} /> Regenerate with intel
-                </button>
-              )}
-            </div>
-          </div>
-          <p className="text-xs text-gray-500 mb-3">
-            Add canvass results, internal numbers, mailers, photos, or notes — the AI weighs them alongside public research and adjusts the vote-share projection. Private to your account.
-          </p>
-
-          {intel.length > 0 && (
-            <div className="space-y-1.5 mb-3">
-              {intel.map(row => (
-                <div key={row.id} className="flex items-center gap-2.5 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
-                  {row.kind === 'image' ? <ImageIcon className="w-3.5 h-3.5 text-purple-500 flex-shrink-0" />
-                    : row.kind === 'note' ? <StickyNote className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
-                    : <FileText className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />}
-                  <span className="text-xs font-semibold text-gray-700 truncate">{row.title || row.kind}</span>
-                  {row.kind !== 'image' && row.content && (
-                    <span className="text-[11px] text-gray-400 truncate hidden sm:block">{row.content.slice(0, 80)}</span>
-                  )}
-                  <button onClick={() => deleteIntel(row)} disabled={intelBusy}
-                    className="ml-auto p-1 rounded hover:bg-red-50 text-gray-300 hover:text-brand-red flex-shrink-0">
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="flex flex-col sm:flex-row gap-2">
-            <textarea
-              className="input text-sm flex-1" rows={1}
-              placeholder="Type local intel — canvass tallies, event turnout, what you're hearing at the doors…"
-              value={noteText} onChange={e => setNoteText(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addNote() }}
-            />
-            <div className="flex gap-2">
-              <button onClick={addNote} disabled={intelBusy || !noteText.trim()} className="btn-secondary text-xs py-2 flex items-center gap-1.5 whitespace-nowrap">
-                {intelBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />} Add note
-              </button>
-              <button onClick={() => intelFileRef.current?.click()} disabled={intelBusy} className="btn-secondary text-xs py-2 flex items-center gap-1.5 whitespace-nowrap">
-                <Upload className="w-3.5 h-3.5" /> Upload files
-              </button>
-              <input ref={intelFileRef} type="file" multiple className="hidden"
-                accept=".pdf,.txt,.md,.csv,.json,image/png,image/jpeg,image/webp,image/gif"
-                onChange={e => { addFiles([...e.target.files]); e.target.value = '' }} />
-            </div>
-          </div>
-          {intelMsg && <p className="text-xs text-red-600 font-semibold mt-2">{intelMsg}</p>}
-          {intelDirty && !generating && (
-            <p className="text-[11px] text-amber-600 font-semibold mt-2">Intel changed — hit "Regenerate with intel" to factor it into the projection.</p>
-          )}
-        </div>
-      )}
-
       {/* Empty state */}
       {!district && !loading && (
         <div className="card py-16 text-center">
@@ -670,6 +600,76 @@ export default function Polling() {
               </div>
             )
           })()}
+
+          {/* ── Local Intel (v1.25) — user-supplied signal factored into the projection ── */}
+          {district && (
+            <div className="card py-4">
+              <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+                <h2 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                  <Paperclip className="w-4 h-4 text-brand-navy" /> Local Intel
+                  {intel.length > 0 && <span className="text-xs font-normal text-gray-400">({intel.length})</span>}
+                </h2>
+                <div className="flex items-center gap-2">
+                  {personalized && !intelDirty && (
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">Factored into this projection</span>
+                  )}
+                  {intelDirty && (
+                    <button onClick={() => runGenerate(undefined, true)} disabled={generating}
+                      className="btn-primary text-xs py-1.5 flex items-center gap-1.5">
+                      <RefreshCw className={`w-3.5 h-3.5 ${generating ? 'animate-spin' : ''}`} /> Regenerate with intel
+                    </button>
+                  )}
+                </div>
+              </div>
+              <p className="text-xs text-gray-500 mb-3">
+                Add canvass results, internal numbers, mailers, photos, or notes — the AI weighs them alongside public research and adjusts the vote-share projection. Private to your account.
+              </p>
+
+              {intel.length > 0 && (
+                <div className="space-y-1.5 mb-3">
+                  {intel.map(row => (
+                    <div key={row.id} className="flex items-center gap-2.5 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                      {row.kind === 'image' ? <ImageIcon className="w-3.5 h-3.5 text-purple-500 flex-shrink-0" />
+                        : row.kind === 'note' ? <StickyNote className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                        : <FileText className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />}
+                      <span className="text-xs font-semibold text-gray-700 truncate">{row.title || row.kind}</span>
+                      {row.kind !== 'image' && row.content && (
+                        <span className="text-[11px] text-gray-400 truncate hidden sm:block">{row.content.slice(0, 80)}</span>
+                      )}
+                      <button onClick={() => deleteIntel(row)} disabled={intelBusy}
+                        className="ml-auto p-1 rounded hover:bg-red-50 text-gray-300 hover:text-brand-red flex-shrink-0">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-2">
+                <textarea
+                  className="input text-sm flex-1" rows={1}
+                  placeholder="Type local intel — canvass tallies, event turnout, what you're hearing at the doors…"
+                  value={noteText} onChange={e => setNoteText(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addNote() }}
+                />
+                <div className="flex gap-2">
+                  <button onClick={addNote} disabled={intelBusy || !noteText.trim()} className="btn-secondary text-xs py-2 flex items-center gap-1.5 whitespace-nowrap">
+                    {intelBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />} Add note
+                  </button>
+                  <button onClick={() => intelFileRef.current?.click()} disabled={intelBusy} className="btn-secondary text-xs py-2 flex items-center gap-1.5 whitespace-nowrap">
+                    <Upload className="w-3.5 h-3.5" /> Upload files
+                  </button>
+                  <input ref={intelFileRef} type="file" multiple className="hidden"
+                    accept=".pdf,.txt,.md,.csv,.json,image/png,image/jpeg,image/webp,image/gif"
+                    onChange={e => { addFiles([...e.target.files]); e.target.value = '' }} />
+                </div>
+              </div>
+              {intelMsg && <p className="text-xs text-red-600 font-semibold mt-2">{intelMsg}</p>}
+              {intelDirty && !generating && (
+                <p className="text-[11px] text-amber-600 font-semibold mt-2">Intel changed — hit "Regenerate with intel" to factor it into the projection.</p>
+              )}
+            </div>
+          )}
 
           {/* Sources */}
           {(snapshot.sources || []).length > 0 && (
