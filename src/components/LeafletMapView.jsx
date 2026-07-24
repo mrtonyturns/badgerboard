@@ -438,6 +438,12 @@ export default function LeafletMapView({
         const res = await fetch(source.url)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         data = await res.json()
+        // Defensive: Census/TIGER exports can include a statewide "…not
+        // defined" filler polygon that covers the whole state — rendered on
+        // top it swallows every district click (the v1.23.5 Senate-map bug).
+        if (Array.isArray(data?.features)) {
+          data = { ...data, features: data.features.filter(f => !/not defined/i.test(f?.properties?.NAME || f?.properties?.name || '')) }
+        }
         geoDataCache.current[source.url] = data
       }
       if (cancelled || !mapRef.current) return
