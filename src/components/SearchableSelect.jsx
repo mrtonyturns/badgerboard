@@ -47,12 +47,17 @@ export default function SearchableSelect({
   const flatAll = useMemo(() => allGroups.flatMap(g => g.options), [allGroups])
   const selected = flatAll.find(o => String(o.value) === String(value))
 
-  // Filter by query (case-insensitive substring on label)
+  // Filter by query — every whitespace-separated token must appear in the
+  // label (so "senate 1" matches "State Senate District 1")
   const filteredGroups = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return allGroups
+    const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    if (!tokens.length) return allGroups
+    const matches = (label) => {
+      const l = String(label).toLowerCase()
+      return tokens.every(t => l.includes(t))
+    }
     return allGroups
-      .map(g => ({ ...g, options: g.options.filter(o => String(o.label).toLowerCase().includes(q)) }))
+      .map(g => ({ ...g, options: g.options.filter(o => matches(o.label)) }))
       .filter(g => g.options.length > 0)
   }, [allGroups, query])
 
