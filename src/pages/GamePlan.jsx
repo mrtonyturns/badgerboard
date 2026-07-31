@@ -33,54 +33,32 @@ import TaskBoard from '../components/TaskBoard'
 import UpgradePrompt from '../components/UpgradePrompt'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserPlan, hasFeature, PLAN_CONFIG } from '../lib/tiers'
+import {
+  PHASES as PHASE_BASE,
+  MILESTONE_CATEGORIES as CATEGORIES,
+  MILESTONE_STATUSES as STATUSES,
+  ELECTION_TYPE_LABELS, ELECTION_TYPE_COLORS,
+} from '../lib/campaignEnums'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
+// Phase data (keys, labels, colors) lives in lib/campaignEnums.js so the plan
+// dashboards use the same vocabulary. Icons are attached here — lucide
+// components don't belong in a shared data module.
 
-const PHASES = [
-  { key: 'planning',      label: 'Planning',       icon: Target,      dot: 'bg-purple-500', text: 'text-purple-700', headerBg: 'bg-purple-50',  borderL: 'border-l-purple-400', progressBg: 'bg-purple-500' },
-  { key: 'filing',        label: 'Filing',         icon: Scale,       dot: 'bg-orange-500', text: 'text-orange-700', headerBg: 'bg-orange-50',  borderL: 'border-l-orange-400', progressBg: 'bg-orange-500' },
-  { key: 'voter_contact', label: 'Voter Contact',  icon: Megaphone,   dot: 'bg-blue-500',   text: 'text-blue-700',   headerBg: 'bg-blue-50',    borderL: 'border-l-blue-400',   progressBg: 'bg-blue-500'   },
-  { key: 'fundraising',   label: 'Fundraising',    icon: DollarSign,  dot: 'bg-emerald-500',text: 'text-emerald-700',headerBg: 'bg-emerald-50', borderL: 'border-l-emerald-400',progressBg: 'bg-emerald-500'},
-  { key: 'gotv',          label: 'GOTV',           icon: Flag,        dot: 'bg-red-500',    text: 'text-red-700',    headerBg: 'bg-red-50',     borderL: 'border-l-red-400',    progressBg: 'bg-red-500'    },
-  { key: 'election_day',  label: 'Election Day',   icon: CalendarDays,dot: 'bg-slate-500',  text: 'text-slate-700',  headerBg: 'bg-slate-50',   borderL: 'border-l-slate-400',  progressBg: 'bg-slate-500'  },
-]
+const PHASE_ICONS = {
+  planning:      Target,
+  filing:        Scale,
+  voter_contact: Megaphone,
+  fundraising:   DollarSign,
+  gotv:          Flag,
+  election_day:  CalendarDays,
+}
+
+const PHASES = PHASE_BASE.map(p => ({ ...p, icon: PHASE_ICONS[p.key] }))
 
 const PHASE_MAP = Object.fromEntries(PHASES.map(p => [p.key, p]))
 
-const CATEGORIES = [
-  { key: 'recruitment', label: 'Recruitment' },
-  { key: 'legal',       label: 'Legal / Filing' },
-  { key: 'outreach',    label: 'Voter Outreach' },
-  { key: 'finance',     label: 'Finance' },
-  { key: 'media',       label: 'Media / Comms' },
-  { key: 'admin',       label: 'Administration' },
-  { key: 'general',     label: 'General' },
-]
-
-const STATUSES = [
-  { key: 'upcoming',    label: 'Upcoming',    },
-  { key: 'in_progress', label: 'In Progress', },
-  { key: 'complete',    label: 'Complete',    },
-  { key: 'overdue',     label: 'Overdue',     },
-  { key: 'skipped',     label: 'Skipped',     },
-]
-
 const STATUS_MAP = Object.fromEntries(STATUSES.map(s => [s.key, s]))
-
-const ELECTION_TYPE_LABELS = {
-  primary:        'Partisan Primary',
-  general:        'General Election',
-  spring_primary: 'Spring Primary',
-  spring_general: 'Spring General',
-  special:        'Special Election',
-}
-const ELECTION_TYPE_COLORS = {
-  primary:        { bg: 'bg-orange-500', light: 'bg-orange-100 text-orange-800', border: 'border-orange-300' },
-  general:        { bg: 'bg-blue-600',   light: 'bg-blue-100 text-blue-800',     border: 'border-blue-300' },
-  spring_primary: { bg: 'bg-purple-600', light: 'bg-purple-100 text-purple-800', border: 'border-purple-300' },
-  spring_general: { bg: 'bg-emerald-600',light: 'bg-emerald-100 text-emerald-800',border:'border-emerald-300' },
-  special:        { bg: 'bg-yellow-500', light: 'bg-yellow-100 text-yellow-800', border: 'border-yellow-300' },
-}
 
 // ── Standard Wisconsin campaign plan template ─────────────────────────────────
 // Day offsets are relative to election day (negative = days before).
