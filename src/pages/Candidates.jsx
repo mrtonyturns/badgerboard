@@ -9,20 +9,15 @@ import SearchableSelect from '../components/SearchableSelect'
 import MapErrorBoundary from '../components/MapErrorBoundary'
 import LoadingBar from '../components/LoadingBar'
 
-const PARTIES   = ['Republican','Democrat','Independent','Libertarian','Green','Constitution','Nonpartisan','Other']
-const STATUSES  = ['exploring','declared','primary_winner','general','elected','lost','withdrawn']
-
-// Display-only label map — keeps DB value as 'exploring' but shows 'Not Known' to users
-const STATUS_LABELS = {
-  exploring:     'Not Known',
-  declared:      'Declared',
-  primary_winner:'Primary Winner',
-  general:       'General',
-  elected:       'Elected',
-  lost:          'Lost',
-  withdrawn:     'Withdrawn',
-}
-const statusLabel = (s) => STATUS_LABELS[s] ?? (s ? s.replace(/_/g, ' ') : '')
+// Party list, status enum and the display-only label map (DB keeps 'exploring',
+// users see 'Not Known') live in lib/campaignEnums.js so the plan dashboards
+// show the same statuses this page writes.
+import {
+  PARTIES,
+  CANDIDATE_STATUSES as STATUSES,
+  CANDIDATE_STATUS_LABELS as STATUS_LABELS,
+  candidateStatusLabel as statusLabel,
+} from '../lib/campaignEnums'
 
 const WI_COUNTIES = [
   'Adams', 'Ashland', 'Barron', 'Bayfield', 'Brown', 'Buffalo', 'Burnett', 'Calumet', 'Chippewa', 'Clark',
