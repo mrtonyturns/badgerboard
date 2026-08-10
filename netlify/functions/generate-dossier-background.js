@@ -756,6 +756,25 @@ async function buildRefreshDiff(dossierId, candidateId, newContent) {
   } catch (e) { console.error('[dossier-bg] buildRefreshDiff error:', e.message) }
 }
 
+// ─── Generation progress (Profiler redesign) ─────────────────────────────────
+// Real per-stage progress the library UI polls. Stages:
+//   1 Identifying the person · 2 Searching press & filings ·
+//   3 Drafting 14 sections · 4 Verifying claims. status: running|done|error
+async function reportStage(candidateId, stage, status = 'running') {
+  if (!candidateId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/dossier_generation_progress`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify({ candidate_id: candidateId, stage, status, updated_at: new Date().toISOString() }),
+    })
+  } catch (e) { console.warn('[dossier-bg] reportStage failed:', e.message) }
+}
+
 // ─── Weekly digest (active monitoring v2) ────────────────────────────────────
 // Compares the new profile against the previous one with a cheap Haiku pass
 // and stores a structured week-in-review on the dossier row:
@@ -1034,7 +1053,9 @@ exports.handler = async (event) => {
   const localNewsPromise    = fetchPerplexityLocalNews(safe.name, officeLine, safe.districtName, ctx, mode, localSourcesNote)
   // fetchPerplexityIncumbent retired — fetchPerplexityPoliticalRecord (incumbent mode) covers the same ground
   const incumbentPromise    = Promise.resolve(null)
+  reportStage(body.candidate_id, 1)                       // Identifying the person
   const identityPromise     = fetchPerplexityIdentity(safe.name, officeLine, safe.districtName, ctx, mode)
+  identityPromise.finally(() => reportStage(body.candidate_id, 2))  // Searching press & filings
   const financePromise      = fetchPerplexityCampaignFinance(safe.name, officeLine, safe.districtName, ctx, mode)
   const politicalPromise    = fetchPerplexityPoliticalRecord(safe.name, officeLine, safe.districtName, ctx, mode)
   const affiliationsPromise = fetchPerplexityAffiliations(safe.name, officeLine, safe.districtName, ctx, mode)
@@ -1226,6 +1247,7 @@ Label all items [RESEARCH REQUIRED] unless you have a credible public record sou
   try {
     ;[perplexityNews, perplexityIncumbent, identityData, financeData, politicalData, affiliationsData, socialMediaData, grokData, officialData, localNews] =
       await Promise.all([perplexityPromise, incumbentPromise, identityPromise, financePromise, politicalPromise, affiliationsPromise, socialMediaPromise, grokPromise, officialPromise, localNewsPromise])
+    reportStage(body.candidate_id, 3)                       // Drafting 14 sections
     // Merge the hyper-local pass into the news research block
     if (localNews) {
       perplexityNews = perplexityNews
@@ -1666,7 +1688,8 @@ CANDIDATE_UPDATES:
   "verified_party": "<Democrat|Republican|Independent|Nonpartisan|Green|Libertarian|Working Families|null>",
   "party_confidence": "<KNOWN|Confirmed|Likely|RESEARCH_REQUIRED>",
   "verified_status": "<exploring|declared|primary_winner|general|elected|lost|withdrawn|null>",
-  "status_notes": "<one sentence of evidence for status change, or null>"
+  "status_notes": "<one sentence of evidence for status change, or null>",
+  "research_note": {"finding": "<one or two sentences: the discrepancy between the request premise and the evidence>", "evidence": "<the specific source + date that establishes it>", "suggested_status": "<a status from the list above if the fix is a status change, else null>"}
 }
 \`\`\`
 
@@ -1674,7 +1697,10 @@ Rules:
 - verified_party: ONLY include if you found independent verification (WEC filing, ActBlue/Anedot page, official party listing, news). Otherwise null.
 - party_confidence: KNOWN = official primary source confirmed; Confirmed = 2+ independent sources agree; Likely = one credible indirect source; RESEARCH_REQUIRED = ambiguous or contradictory evidence.
 - verified_status: ONLY update from current status (${safe.status || 'unknown'}) if your research clearly shows a change — WEC committee filed = "declared", certified election result = "elected" or "lost", public withdrawal statement = "withdrawn". Otherwise null.
-- status_notes: required if verified_status is not null. One sentence citing the specific evidence (source + date).`
+- status_notes: required if verified_status is not null. One sentence citing the specific evidence (source + date).
+- research_note: use JSON null unless your research uncovered a MATERIAL discrepancy with the request premise (wrong office, already declared/elected, withdrawn, identity mismatch risk). This block is the ONLY place such findings may appear — NEVER narrate them as prose in or before the dossier body.
+
+OUTPUT DISCIPLINE: your dossier output must begin DIRECTLY with "## SECTION 1" — no preamble, no "I need to flag...", no narration of your research process anywhere in the document.`
 
   const { candidate_id } = body
   // Verified user ID, never from the body. Internal (cron) runs save with
@@ -1719,6 +1745,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     logAiUsage({ userId: user_id, endpoint: 'profiler', provider: 'anthropic', model: CLAUDE_MODEL,
       inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
     const extractClaudeText = (d) => (d?.content || []).filter(b => b.type === 'text' && b.text).map(b => b.text).join('')
+    reportStage(body.candidate_id, 4)                       // Verifying claims
     let content = extractClaudeText(data)
     // Strip any AI reasoning/thinking tags that should never be stored or shown to users
     if (content) {
@@ -1781,6 +1808,34 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
       console.log(`[dossier-bg] Scout lite gate applied (${countSections(content)} sections retained/templated)`)
     }
 
+    // ─── Reasoning-leak guard (Profiler redesign) ──────────────────────────
+    // Anything before the first "## SECTION" is model narration, never dossier
+    // content. Strip it; if it is substantive and no structured research_note
+    // was emitted, preserve it AS the research note so the finding survives
+    // as data instead of leaking into the page.
+    let researchNote = candidateUpdates?.research_note && typeof candidateUpdates.research_note === 'object'
+      ? {
+          finding: String(candidateUpdates.research_note.finding || '').slice(0, 600),
+          evidence: String(candidateUpdates.research_note.evidence || '').slice(0, 400),
+          suggested_status: candidateUpdates.research_note.suggested_status || null,
+          source: 'structured',
+        }
+      : null
+    if (researchNote && !researchNote.finding) researchNote = null
+    {
+      const firstSection = content.search(/^##\s*SECTION\s*\d+/im)
+      if (firstSection > 0) {
+        const preamble = content.slice(0, firstSection).replace(/^[-#*\s]+/, '').trim()
+        content = content.slice(firstSection).trim()
+        if (!researchNote && preamble.length > 80) {
+          researchNote = { finding: preamble.slice(0, 600), evidence: '', suggested_status: null, source: 'captured-preamble' }
+          console.log('[dossier-bg] preamble narration captured as research_note')
+        } else if (preamble.length) {
+          console.log('[dossier-bg] stripped pre-section narration (' + preamble.length + ' chars)')
+        }
+      }
+    }
+
     let savedDossierId = null
     // ─── Save to Supabase ──────────────────────────────────────────────────
     const saveRes = await fetch(`${SUPABASE_URL}/rest/v1/dossiers`, {
@@ -1795,6 +1850,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
         candidate_id: candidate_id || null,
         title: `Political Profile — ${safe.name}`,
         content,
+        research_note: researchNote,
         user_id: user_id || null,
         created_by: user_id || null,
         generated_by: user_id || null,
@@ -1834,6 +1890,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     if (savedDossierId && candidate_id) {
       await buildWeeklyDigest(savedDossierId, candidate_id, content, safe.name, user_id)
       await buildRefreshDiff(savedDossierId, candidate_id, content)
+      await reportStage(candidate_id, 4, 'done')
     }
 
     // ─── Consume a purchased credit if this exceeded the free monthly allotment ─
@@ -1861,6 +1918,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     return { statusCode: 200, body: '' }
   } catch (err) {
     console.error('[dossier-bg] Error:', err.message)
+    reportStage(body?.candidate_id, 0, 'error')
     return { statusCode: 500, body: '' }
   }
 }

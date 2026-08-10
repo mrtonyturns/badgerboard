@@ -40,10 +40,20 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.20.2'
+const APP_VERSION = 'v1.21.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.21.0',
+    date: 'July 21, 2026',
+    changes: [
+      'Profiler redesigned: the library and the report each get the full canvas — generate row, live four-stage progress driven by real backend stages, honest plan meter, and a full-width searchable table',
+      'Reports are now one quiet readable document: grouped contents rail, per-section takeaways, typed content blocks, and markers only on unverified claims',
+      'Bulk generate works from a CSV upload with real parsing, row preview, context flags, and honest error states — template included',
+      'Model reasoning can no longer leak into reports: discrepancy findings are structured data, shown as a Research note with a one-click fix',
+    ],
+  },
   {
     version: 'v1.20.2',
     date: 'July 21, 2026',
