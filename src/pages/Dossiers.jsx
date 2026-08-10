@@ -232,7 +232,7 @@ export default function Dossiers() {
     setLoading(false)
     if (initViewId && d && !initViewOpened.current) {
       const found = d.find(x => x.id === initViewId)
-      if (found) { initViewOpened.current = true; openDossier(initViewId) }
+      if (found) { initViewOpened.current = true; openDossier(initViewId, initSection) }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id])
@@ -270,11 +270,15 @@ export default function Dossiers() {
     // Refresh-proof: the open profile (and section) live in the URL.
     setSearchParams(section ? { view: id, section } : { view: id }, { replace: false })
     scrollPageTop()
-    if (section) setTimeout(() => {
-      const el = document.getElementById(`pf-${section}`)
-      // 'auto' on purpose — smooth programmatic scrolling no-ops on this container
-      el?.scrollIntoView({ behavior: 'auto', block: 'start' })
-    }, 500)
+    if (section) {
+      const jump = () => {
+        const el = document.getElementById(`pf-${section}`)
+        // 'auto' on purpose — smooth programmatic scrolling no-ops on this container
+        if (el) el.scrollIntoView({ behavior: 'auto', block: 'start' })
+        return !!el
+      }
+      setTimeout(() => { if (!jump()) setTimeout(jump, 700) }, 400)
+    }
   }
 
   // As the reader scrolls or the rail navigates, remember the section in the
