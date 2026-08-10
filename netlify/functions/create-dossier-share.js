@@ -134,14 +134,14 @@ exports.handler = async (event) => {
   // Ownership flows through the candidate: auto-refreshed dossiers carry
   // generated_by = null (kept off the quota), so requiring generated_by here
   // blocked owners from sharing their own weekly profiles.
-  const rows = await supa('dossiers', 'GET', null, `?id=eq.${encodeURIComponent(dossier_id)}&select=id,title,generated_by,created_by,candidate_id`)
-  let owned = Array.isArray(rows) && rows.length &&
-    (rows[0].generated_by === user.id || rows[0].created_by === user.id)
-  if (!owned && Array.isArray(rows) && rows.length && rows[0].candidate_id) {
-    const cand = await supa('candidates', 'GET', null, `?id=eq.${encodeURIComponent(rows[0].candidate_id)}&created_by=eq.${user.id}&select=id`)
-    owned = Array.isArray(cand) && cand.length > 0
+  const rowsRes = await supa('dossiers', 'GET', null, `?id=eq.${encodeURIComponent(dossier_id)}&select=id,title,generated_by,created_by,candidate_id`)
+  const drow = rowsRes.ok && Array.isArray(rowsRes.data) ? rowsRes.data[0] : null
+  let owned = !!drow && (drow.generated_by === user.id || drow.created_by === user.id)
+  if (!owned && drow?.candidate_id) {
+    const candRes = await supa('candidates', 'GET', null, `?id=eq.${encodeURIComponent(drow.candidate_id)}&created_by=eq.${user.id}&select=id`)
+    owned = candRes.ok && Array.isArray(candRes.data) && candRes.data.length > 0
   }
-  const check = owned ? rows : []
+  const check = { ok: owned, status: owned ? 200 : 404, data: owned ? [drow] : [] }
   if (!check.ok || !Array.isArray(check.data) || check.data.length === 0) {
     return { statusCode: 404, headers: CORS, body: JSON.stringify({ error: 'Profile not found or access denied' }) }
   }
