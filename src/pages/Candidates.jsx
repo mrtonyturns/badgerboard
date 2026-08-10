@@ -87,7 +87,6 @@ export default function Candidates() {
   const { user, session } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const navigate = useNavigate()
   const preFilterOfficeId = searchParams.get('officeId') || ''
 
   const [candidates, setCandidates]             = useState([])
