@@ -13,6 +13,7 @@ import {
   T, Card, EmptyState, CtaButton, TextLink, Btn, ViewHead, NewBadge,
   LockedView, Spinner, CategoryPill, useDossierSection, SectionContent,
   parseNewsItems, parseSocialItems, parseSection, detectPlatform, initialsOf, fmtDate,
+  headlineFrom, fetchDossierContent,
 } from './shared'
 
 // ── NEW badge rule ────────────────────────────────────────────────────────────
@@ -459,6 +460,11 @@ export function OppositionView({ candidate, dossiers, canIntel, weaknesses, oppo
             {list.map((w, i) => {
               const text = typeof w === 'string' ? w : w.text
               const sev = typeof w === 'object' && w.severity ? SEVERITY[String(w.severity).toLowerCase()] : null
+              // Headline is lifted from the weakness text itself — first
+              // sentence / clause, cut at a word boundary. When nothing can be
+              // extracted the card keeps its positional label.
+              const headline = headlineFrom(text)
+              const body = String(text || '').trim()
               return (
                 <Card key={i} style={{ padding: '16px 20px', borderRadius: 14 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6, flexWrap: 'wrap' }}>
@@ -468,10 +474,14 @@ export function OppositionView({ candidate, dossiers, canIntel, weaknesses, oppo
                         color: sev.c, background: sev.bg, borderRadius: 99, padding: '3px 9px',
                       }}>{sev.label}</span>
                     )}
-                    <span style={{ fontSize: 13.5, fontWeight: 600 }}>Weakness {i + 1}</span>
+                    <span style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.4 }}>
+                      {headline || `Weakness ${i + 1}`}
+                    </span>
                     {oppositionUpdated && <NewBadge />}
                   </div>
-                  <div style={{ fontSize: 12.5, color: T.ink3, lineHeight: 1.55 }}>{text}</div>
+                  {(!headline || headline !== body) && (
+                    <div style={{ fontSize: 12.5, color: T.ink3, lineHeight: 1.55 }}>{body}</div>
+                  )}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 10, flexWrap: 'wrap' }}>
                     <Btn
                       kind="primary"
@@ -555,8 +565,33 @@ export function parseAllies(sectionText) {
   return out.filter(a => a.name.length > 1 && a.name.length < 90).slice(0, 40)
 }
 
+// Names present in the newest profile's Sections 8 & 9 but absent from the
+// previous profile's. Pure set difference on the same parser — no model call,
+// no guessing — and it simply doesn't run when there is no previous dossier.
+function usePreviousAllyNames(dossiers) {
+  const prevId = dossiers?.[1]?.id || null
+  const [names, setNames] = useState(null)
+  useEffect(() => {
+    const prev = dossiers?.[1]
+    if (!prev) { setNames(null); return }
+    let cancelled = false
+    fetchDossierContent(prev).then(content => {
+      if (cancelled) return
+      if (!content) { setNames(null); return }
+      const found = [
+        ...parseAllies(parseSection(content, 8)),
+        ...parseAllies(parseSection(content, 9)),
+      ].map(a => a.name.trim().toLowerCase())
+      setNames(new Set(found))
+    })
+    return () => { cancelled = true }
+  }, [prevId]) // eslint-disable-line react-hooks/exhaustive-deps
+  return names
+}
+
 export function AlliesView({ candidate, dossiers, canIntel, alliesUpdated, nav }) {
   const { content, loading } = useDossierSection(dossiers, [8, 9])
+  const prevAllyNames = usePreviousAllyNames(dossiers)
 
   if (!canIntel) return <LockedView title="Allies" onSeePlans={() => nav('/plans')} />
 
@@ -577,6 +612,7 @@ export function AlliesView({ candidate, dossiers, canIntel, alliesUpdated, nav }
 
   const s8 = content?.[8] || ''
   const s9 = content?.[9] || ''
+  const newestDate = dossiers[0]?.generated_at ? fmtDate(dossiers[0].generated_at, 'MMM d') : null
   const allies = [...parseAllies(s8), ...parseAllies(s9)]
   const seen = new Set()
   const rows = allies.filter(a => {
@@ -609,7 +645,9 @@ export function AlliesView({ candidate, dossiers, canIntel, alliesUpdated, nav }
             right={alliesUpdated ? <NewBadge label="UPDATED" /> : null}
           />
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {rows.map((a, i) => (
+            {rows.map((a, i) => {
+              const isNewAlly = !!prevAllyNames && !prevAllyNames.has(a.name.trim().toLowerCase())
+              return (
               <div key={`${a.name}-${i}`} style={{
                 display: 'flex', alignItems: 'center', gap: 12,
                 padding: '11px 0', borderTop: `1px solid ${T.divider}`, minHeight: 44,
@@ -623,8 +661,14 @@ export function AlliesView({ candidate, dossiers, canIntel, alliesUpdated, nav }
                   <div style={{ fontSize: 12.5, fontWeight: 600 }}>{a.name}</div>
                   {a.role && <div style={{ fontSize: 11, color: T.faint, marginTop: 1 }}>{a.role}</div>}
                 </div>
+                {isNewAlly && newestDate && (
+                  <span style={{ marginLeft: 'auto', flexShrink: 0 }}>
+                    <NewBadge label={`New ${newestDate}`} />
+                  </span>
+                )}
               </div>
-            ))}
+              )
+            })}
           </div>
         </Card>
       )}

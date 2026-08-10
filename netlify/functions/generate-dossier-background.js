@@ -784,7 +784,7 @@ async function buildWeeklyDigest(dossierId, candidateId, newContent, candidateNa
           content: `Compare the PREVIOUS and NEW intelligence profiles for ${candidateName} and produce a week-in-review of genuinely NEW developments (items in NEW that are absent from PREVIOUS). Cover: news articles, podcast/radio/TV appearances, social media activity, controversies, polling, endorsements.
 
 Return STRICT JSON only, no prose, no markdown fences:
-{"summary": "2-3 plain-English sentences a busy campaign manager can skim — what actually happened this week; if nothing meaningful changed say so plainly", "items": [{"category": "news|social|podcast|controversy|polling|endorsement|other", "title": "short headline", "note": "one sentence"}]}
+{"summary": "2-3 plain-English sentences a busy campaign manager can skim — what actually happened this week; if nothing meaningful changed say so plainly", "items": [{"category": "news|social|podcast|controversy|polling|endorsement|other", "title": "short headline", "note": "one sentence", "source": "publication or platform name from the profile, or null", "date": "YYYY-MM-DD if the profile states one, else null — never guess"}]}
 
 Max 8 items, most important first. Empty items array if nothing new.
 
@@ -808,6 +808,8 @@ ${clip(newContent, 14000)}`
       category: String(i.category || 'other').slice(0, 20),
       title: String(i.title || '').slice(0, 160),
       note: String(i.note || '').slice(0, 300),
+      source: i.source ? String(i.source).slice(0, 80) : null,
+      date: /^\d{4}-\d{2}-\d{2}$/.test(String(i.date || '')) ? i.date : null,
     }))
     digest.summary = digest.summary.slice(0, 600)
     digest.generated_at = new Date().toISOString()

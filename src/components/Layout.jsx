@@ -40,10 +40,20 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.20.0'
+const APP_VERSION = 'v1.20.1'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.20.1',
+    date: 'July 21, 2026',
+    changes: [
+      'Weekly digest items now carry their source and date; unread dots are per-item',
+      'Allies flag genuinely new names since the prior refresh; Opposition cards get real headlines',
+      'Profile History: Compare any profile against its predecessor in a section-by-section diff',
+      'Profile header shows the district\u2019s counties',
+    ],
+  },
   {
     version: 'v1.20.0',
     date: 'July 21, 2026',

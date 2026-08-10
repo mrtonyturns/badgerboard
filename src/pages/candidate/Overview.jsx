@@ -16,6 +16,7 @@ import { candidateStatusLabel as statusLabel } from '../../lib/campaignEnums'
 import {
   T, Card, CardHead, EmptyState, CtaButton, TextLink, LivePulseDot,
   fmtDate, safeISO, nextMonday, Btn, CategoryPill, sectionTarget, Spinner,
+  digestItemMeta, isDigestItemUnread,
 } from './shared'
 
 // ── Status detection (unchanged rules from the previous page) ────────────────
@@ -262,7 +263,9 @@ export default function Overview({
                 </div>
                 {(digest.items || []).length > 0 && (
                   <div style={{ borderTop: `1px solid ${T.divider}`, padding: '6px 24px 14px' }}>
-                    {digest.items.map((it, i) => (
+                    {digest.items.map((it, i) => {
+                      const itemUnread = isDigestItemUnread(it, newest, unseen.lastViewed, isNewDossier)
+                      return (
                       <div
                         key={i}
                         className="cp-row"
@@ -279,17 +282,21 @@ export default function Overview({
                             {it.note ? ` — ${it.note}` : ''}
                           </div>
                           <div style={{ fontSize: 10.5, color: T.faint, marginTop: 3 }}>
-                            From the {fmtDate(newest.generated_at)} refresh
+                            {digestItemMeta(it, newest)}
                           </div>
                         </div>
-                        {isNewDossier && (
-                          <span style={{
-                            flexShrink: 0, marginLeft: 'auto', width: 7, height: 7, borderRadius: '50%',
-                            background: T.red, marginTop: 5,
-                          }} />
+                        {itemUnread && (
+                          <span
+                            aria-label="Unread"
+                            style={{
+                              flexShrink: 0, marginLeft: 'auto', width: 7, height: 7, borderRadius: '50%',
+                              background: T.red, marginTop: 5,
+                            }}
+                          />
                         )}
                       </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 )}
                 {(digest.items || []).length === 0 && (

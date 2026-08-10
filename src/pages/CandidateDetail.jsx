@@ -32,6 +32,7 @@ import { partyHex, candidateStatusLabel, CANDIDATE_STATUS_HEX } from '../lib/cam
 import {
   T, ProfileStyles, Btn, Spinner, TextLink,
   fmtDate, safeISO, categoryTarget, sectionTarget, useBioSummary,
+  isDigestItemUnread, useDistrictCounties,
 } from './candidate/shared'
 import Overview from './candidate/Overview'
 import { NewsFeedView, SwotView, OppositionView, AlliesView } from './candidate/IntelViews'
@@ -86,6 +87,11 @@ export default function CandidateDetail() {
   const viewMarkedRef = useRef(false)
 
   const bioSummary = useBioSummary(dossiers, candidate?.name, session)
+
+  // Counties covered by this candidate's district, from the static places map.
+  // Null (and nothing rendered) whenever the office doesn't resolve to an
+  // assembly-N / senate-N / congress-N key or the file can't be read.
+  const districtCounties = useDistrictCounties(candidate?.office)
 
   // ── data ────────────────────────────────────────────────────────────────────
   const fetchAll = async () => {
@@ -159,10 +165,15 @@ export default function CandidateDetail() {
   const unseen = useMemo(() => {
     const cutoff = lastViewed ? Date.parse(lastViewed) : null
     const isUnseenDossier = (d) => !!cutoff && !!d?.generated_at && Date.parse(d.generated_at) > cutoff
+    // Per-item rule: an item that carries its own date is unread on that date
+    // against viewed_at; items without one inherit their refresh's state. The
+    // count here and the dots on Overview therefore always agree.
     const items = []
     for (const d of dossiers) {
-      if (!isUnseenDossier(d)) continue
-      for (const it of (d.weekly_digest?.items || [])) items.push(it)
+      const dossierUnseen = isUnseenDossier(d)
+      for (const it of (d.weekly_digest?.items || [])) {
+        if (isDigestItemUnread(it, d, lastViewed, dossierUnseen)) items.push(it)
+      }
     }
     const byView = {}
     for (const it of items) {
@@ -471,6 +482,16 @@ export default function CandidateDetail() {
                     <>
                       <span style={{ color: '#C0BFBA' }}>·</span>
                       <span>{[candidate.office.city, candidate.office.county].filter(Boolean).join(', ')}</span>
+                    </>
+                  )}
+                  {districtCounties && districtCounties.length > 0 && (
+                    <>
+                      <span style={{ color: '#C0BFBA' }}>—</span>
+                      <span style={{ color: T.muted }} title={districtCounties.join(', ')}>
+                        {districtCounties.slice(0, 3).join(', ')}
+                        {districtCounties.length === 1 ? ' County' : ' counties'}
+                        {districtCounties.length > 3 ? ` +${districtCounties.length - 3} more` : ''}
+                      </span>
                     </>
                   )}
                 </>

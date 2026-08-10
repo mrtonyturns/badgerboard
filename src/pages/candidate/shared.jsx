@@ -20,7 +20,7 @@ export {
   officeLine, nextMonday, isMonitored, monitoringSlots, relativeTime,
 } from '../dashboard/shared'
 
-import { T } from '../dashboard/shared'
+import { T, fmtDate, safeISO } from '../dashboard/shared'
 
 // ── Page-level styles: keyframes + the SPEC §8 breakpoints ───────────────────
 // The sidebar / top bar collapse is owned by Layout.jsx. Everything here is
@@ -177,6 +177,107 @@ export function categoryTarget(category) {
     case 'news':
     default:            return ['intel', 'news']
   }
+}
+
+// ── Weekly digest item provenance ────────────────────────────────────────────
+// The monitoring digest may stamp each item with its own `source` (string) and
+// `date` (YYYY-MM-DD). Older digests carry neither, so the per-refresh line is
+// kept as the honest fallback. Nothing is guessed: a missing source is simply
+// not printed.
+export function digestItemMeta(item, dossier) {
+  const src = typeof item?.source === 'string' ? item.source.trim() : ''
+  const raw = typeof item?.date === 'string' ? item.date.trim() : ''
+  const when = raw ? fmtDate(raw, 'MMM d, yyyy') : ''
+  const parts = [src, when && when !== '—' ? when : ''].filter(Boolean)
+  if (parts.length) return parts.join(' · ')
+  return dossier?.generated_at
+    ? `From the ${fmtDate(dossier.generated_at)} refresh`
+    : 'Refresh date not recorded'
+}
+
+// Per-item unread rule. When the item carries its own date the dot is driven by
+// that date against profile_views.viewed_at; otherwise it falls back to the
+// per-refresh rule (was the whole dossier generated after the last view).
+export function isDigestItemUnread(item, dossier, lastViewed, dossierIsUnseen) {
+  const raw = typeof item?.date === 'string' ? item.date.trim() : ''
+  if (raw && lastViewed) {
+    const t = safeISO(raw)
+    const cutoff = Date.parse(lastViewed)
+    if (t && !Number.isNaN(cutoff)) return +t > cutoff
+  }
+  return !!dossierIsUnseen
+}
+
+// ── Weakness headlines ───────────────────────────────────────────────────────
+// Extraction, never invention: the bold headline on an opposition card is the
+// first sentence (or first clause) of the weakness itself, trimmed at a word
+// boundary to `max` characters with an ellipsis when it had to be cut.
+export function headlineFrom(text, max = 60) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!clean) return ''
+  const cut = clean.search(/[.!?](?:\s|$)|[;:–—]\s/)
+  let head = cut > 0 ? clean.slice(0, cut).trim() : clean
+  if (head.length <= max) return head.replace(/[,\-–—:;]+$/, '').trim()
+  const slice = head.slice(0, max + 1)
+  const sp = slice.lastIndexOf(' ')
+  head = (sp > 20 ? slice.slice(0, sp) : head.slice(0, max))
+  return head.replace(/[,\-–—:;]+$/, '').trim() + '…'
+}
+
+// ── District → counties (public/geodata/wi-district-places.json) ─────────────
+// Keys are assembly-N / senate-N / congress-N, built the same way
+// components/DistrictDashboard.jsx's districtKeyFor builds them — only here the
+// input is an offices row (level / office_type / name / district_number) rather
+// than a map click. Anything that doesn't resolve returns null and the caller
+// renders nothing.
+export function districtKeyForOffice(office) {
+  if (!office) return null
+  const name = String(office.name || '')
+  const hay = `${name} ${office.office_type || ''} ${office.district_name || ''}`.toLowerCase()
+  const num = Number.parseInt(
+    office.district_number != null && office.district_number !== ''
+      ? office.district_number
+      : (name.match(/district\s+(\d+)/i) || [])[1],
+    10,
+  )
+  if (!Number.isFinite(num) || num <= 0) return null
+  const level = String(office.level || '').toLowerCase()
+  const isUsSenate = /u\.?s\.?\s*senat|united states senat/.test(hay)
+  if (isUsSenate) return null // statewide, not a district in this dataset
+  if (level === 'federal' || /congress|u\.?s\.?\s*house|u\.?s\.?\s*representative/.test(hay)) {
+    return `congress-${num}`
+  }
+  if (/assembly/.test(hay)) return `assembly-${num}`
+  if (/senate/.test(hay) && (level === 'state' || /state/.test(hay))) return `senate-${num}`
+  return null
+}
+
+let _placesPromise = null
+function loadDistrictPlaces() {
+  if (!_placesPromise) {
+    _placesPromise = fetch('/geodata/wi-district-places.json')
+      .then(r => (r.ok ? r.json() : null))
+      .catch(() => null)
+  }
+  return _placesPromise
+}
+
+// Lazy-fetches the places map and returns the county list for this office, or
+// null when the office doesn't resolve to a district key / the file is absent.
+export function useDistrictCounties(office) {
+  const key = districtKeyForOffice(office)
+  const [counties, setCounties] = useState(null)
+  useEffect(() => {
+    if (!key) { setCounties(null); return }
+    let cancelled = false
+    loadDistrictPlaces().then(map => {
+      if (cancelled) return
+      const list = map?.[key]?.counties
+      setCounties(Array.isArray(list) && list.length ? list : null)
+    })
+    return () => { cancelled = true }
+  }, [key])
+  return counties
 }
 
 // ── Dossier content parsing (carried over from the previous page) ─────────────
@@ -358,6 +459,90 @@ export function parseSocialItems(content = '') {
   const section10 = parseSection(content, 10)
   if (!section10) return []
   return parseNewsItems(section10).map(it => ({ ...it, isSocial: true }))
+}
+
+// ── Dossier content, fetched once per id ─────────────────────────────────────
+// The list query already returns `content` on most rows; when it doesn't (or a
+// row was trimmed) the single-row query fills it in. Cached at module level so
+// opening the same comparison twice costs one request.
+const _contentCache = new Map()
+
+export async function fetchDossierContent(dossierOrId) {
+  if (!dossierOrId) return null
+  const id = typeof dossierOrId === 'string' ? dossierOrId : dossierOrId.id
+  const inline = typeof dossierOrId === 'object' ? dossierOrId.content : null
+  if (inline) { _contentCache.set(id, inline); return inline }
+  if (!id) return null
+  if (_contentCache.has(id)) return _contentCache.get(id)
+  try {
+    const { data } = await getDossier(id)
+    const content = data?.content || null
+    if (content) _contentCache.set(id, content)
+    return content
+  } catch {
+    return null
+  }
+}
+
+// ── Client-side refresh diff ─────────────────────────────────────────────────
+// Same deterministic algorithm as buildRefreshDiff() in
+// netlify/functions/generate-dossier-background.js — split on `## SECTION n`,
+// normalize lines, set-difference — with the actual added lines carried through
+// so the comparison modal can show them. No AI, no heuristics beyond the ones
+// the backend already applies.
+export const DIFF_SECTION_LABELS = {
+  1: 'News Feed', 2: 'Biography', 3: 'Timeline', 4: 'Political Record',
+  5: 'Financial', 6: 'Opposition', 7: 'Platform', 8: 'Affiliations',
+  9: 'Allies', 10: 'Social Media', 11: 'District', 12: 'SWOT',
+  13: 'Attack & Defense', 14: 'Sources',
+}
+
+export function splitSections(content) {
+  const map = {}
+  const re = /##\s*SECTION\s*(\d+)[^\n]*\n([\s\S]*?)(?=##\s*SECTION\s*\d+|$)/gi
+  let m
+  while ((m = re.exec(String(content || ''))) !== null) map[Number(m[1])] = m[2]
+  return map
+}
+
+// normalized line → original line, keeping the backend's >20 character filter
+// so boilerplate and blank lines never register as changes.
+function diffLineMap(text) {
+  const out = new Map()
+  for (const raw of String(text || '').split('\n')) {
+    const norm = raw.trim().toLowerCase().replace(/\s+/g, ' ')
+    if (norm.length > 20 && !out.has(norm)) out.set(norm, raw.trim())
+  }
+  return out
+}
+
+export function computeSectionDiff(prevContent, newContent, { maxLines = 10 } = {}) {
+  const A = splitSections(prevContent)
+  const B = splitSections(newContent)
+  const nums = [...new Set([...Object.keys(A), ...Object.keys(B)].map(Number))]
+    .filter(Number.isFinite).sort((a, b) => a - b)
+  const sections = []
+  for (const n of nums) {
+    const label = DIFF_SECTION_LABELS[n] || `Section ${n}`
+    const pa = diffLineMap(A[n]), pb = diffLineMap(B[n])
+    const addedLines = [...pb.keys()].filter(k => !pa.has(k)).map(k => pb.get(k))
+    const added = addedLines.length
+    const removed = [...pa.keys()].filter(k => !pb.has(k)).length
+    let status = 'unchanged', note = 'No change'
+    if (!(n in A) && (n in B))      { status = 'new';     note = 'Section added in this refresh' }
+    else if ((n in A) && !(n in B)) { status = 'updated'; note = 'Section no longer present' }
+    else if (added >= 3)            { status = 'new';     note = `${added} new lines of intelligence` }
+    else if (added > 0)             { status = 'updated'; note = `${added} new line${added === 1 ? '' : 's'}` }
+    else if (removed > 0)           { status = 'updated'; note = 'Content revised' }
+    sections.push({
+      section: `SECTION ${n}`, label, status,
+      new_items: status === 'unchanged' ? 0 : added,
+      note, removed,
+      added: addedLines.slice(0, maxLines),
+      added_total: added,
+    })
+  }
+  return { sections }
 }
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────

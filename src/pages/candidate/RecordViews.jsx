@@ -16,6 +16,7 @@ import {
 import {
   T, Card, EmptyState, CtaButton, TextLink, Btn, ViewHead, NewBadge,
   LockedView, Spinner, fmtDate, fmtInt, safeISO,
+  fetchDossierContent, computeSectionDiff,
 } from './shared'
 
 const RECORD_TYPES = ['bill', 'act', 'regulation', 'law', 'legal', 'vote', 'other']
@@ -565,14 +566,174 @@ export function IncumbentRecordView({ candidate, records, dossiers, userId, onRe
 
 // ═══ Profile History ══════════════════════════════════════════════════════════
 
+// ── Compare two profiles ─────────────────────────────────────────────────────
+// Same deterministic comparison the backend runs when it stores refresh_diff
+// (split on `## SECTION n`, normalized-line set difference), computed in the
+// browser on demand for any pair in the history. Nothing is generated: the
+// lines listed under a section are the literal lines the newer profile added.
+const CMP_CHIP = {
+  new:       { c: T.red,     bg: '#FBEAEA' },
+  updated:   { c: T.warmInk, bg: '#FDF3E3' },
+  unchanged: { c: T.muted,   bg: T.chip },
+}
+
+function CompareModal({ candidate, newer, older, onClose }) {
+  const [state, setState] = useState({ loading: true, error: '', diff: null })
+
+  useEffect(() => {
+    let cancelled = false
+    setState({ loading: true, error: '', diff: null })
+    Promise.all([fetchDossierContent(newer), fetchDossierContent(older)])
+      .then(([a, b]) => {
+        if (cancelled) return
+        if (!a || !b) {
+          setState({ loading: false, diff: null, error: 'One of these profiles has no stored content, so there is nothing to compare.' })
+          return
+        }
+        setState({ loading: false, error: '', diff: computeSectionDiff(b, a) })
+      })
+      .catch(e => { if (!cancelled) setState({ loading: false, diff: null, error: e.message || 'Could not load the profiles.' }) })
+    return () => { cancelled = true }
+  }, [newer?.id, older?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const sections = state.diff?.sections || []
+  const changed = sections.filter(s => s.status === 'new' || s.status === 'updated')
+  const unchanged = sections.filter(s => s.status !== 'new' && s.status !== 'updated')
+
+  return (
+    <div
+      role="presentation"
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(24,24,27,.45)', zIndex: 1000,
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: 20, overflowY: 'auto',
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Compare the ${fmtDate(newer.generated_at)} profile with the ${fmtDate(older.generated_at)} profile`}
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: '#fff', borderRadius: 16, border: `1px solid ${T.border}`, width: '100%',
+          maxWidth: 720, margin: 'auto', boxShadow: '0 18px 48px rgba(0,0,0,.18)',
+        }}
+      >
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 12,
+          padding: '18px 22px', borderBottom: `1px solid ${T.divider}`,
+        }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>What changed between these two profiles</div>
+            <div style={{ fontSize: 11.5, color: T.faint, marginTop: 3 }}>
+              {candidate?.name ? `${candidate.name} · ` : ''}
+              {fmtDate(newer.generated_at, 'MMM d, yyyy')} vs. {fmtDate(older.generated_at, 'MMM d, yyyy')}
+            </div>
+          </div>
+          <span style={{ marginLeft: 'auto' }}>
+            <Btn onClick={onClose} title="Close">Close</Btn>
+          </span>
+        </div>
+
+        <div style={{ padding: '16px 22px 22px', maxHeight: '70vh', overflowY: 'auto' }}>
+          {state.loading && <Spinner />}
+          {!state.loading && state.error && (
+            <EmptyState title="Comparison unavailable" body={state.error} />
+          )}
+          {!state.loading && !state.error && sections.length === 0 && (
+            <EmptyState
+              title="No sections to compare"
+              body="Neither profile is laid out in the numbered section format the comparison reads."
+            />
+          )}
+          {!state.loading && !state.error && sections.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {changed.length === 0 && (
+                <EmptyState
+                  title="Nothing moved between these refreshes"
+                  body="Every section came back with the same content."
+                />
+              )}
+              {changed.map(s => {
+                const st = CMP_CHIP[s.status] || CMP_CHIP.unchanged
+                const more = s.added_total - s.added.length
+                return (
+                  <div key={s.section} style={{
+                    border: `1px solid ${T.divider}`, borderRadius: 12, padding: '12px 14px',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 700 }}>{s.label}</span>
+                      <span style={{ fontSize: 10.5, color: T.faint }}>{s.section}</span>
+                      <span style={{
+                        marginLeft: 'auto', flexShrink: 0, fontSize: 10.5, fontWeight: 600,
+                        color: st.c, background: st.bg, borderRadius: 99, padding: '3px 10px',
+                      }}>
+                        {s.new_items > 0 ? `${s.new_items} new` : s.status === 'new' ? 'new' : 'updated'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 11, color: T.faint, marginTop: 3 }}>{s.note}</div>
+                    {s.added.length > 0 && (
+                      <ul style={{ margin: '9px 0 0', paddingLeft: 18, listStyle: 'disc' }}>
+                        {s.added.map((line, i) => (
+                          <li key={i} style={{ fontSize: 11.5, color: T.ink3, lineHeight: 1.5, margin: '3px 0' }}>
+                            {line.replace(/^[-*]\s+/, '')}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {more > 0 && (
+                      <div style={{ fontSize: 11, color: T.faint, marginTop: 6 }}>
+                        +{more} more added line{more === 1 ? '' : 's'} in this section
+                      </div>
+                    )}
+                    {s.added.length === 0 && s.removed > 0 && (
+                      <div style={{ fontSize: 11, color: T.faint, marginTop: 6 }}>
+                        {s.removed} line{s.removed === 1 ? '' : 's'} from the older profile are no longer present.
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+              {unchanged.length > 0 && (
+                <div style={{
+                  border: `1px solid ${T.divider}`, borderRadius: 12, padding: '12px 14px', background: T.hover,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: T.ink3 }}>
+                      {unchanged.map(s => s.label).join(' · ')}
+                    </span>
+                    <span style={{
+                      marginLeft: 'auto', flexShrink: 0, fontSize: 10.5, fontWeight: 600,
+                      color: CMP_CHIP.unchanged.c, background: '#fff', borderRadius: 99, padding: '3px 10px',
+                    }}>no change</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function ProfileHistoryView({ candidate, dossiers, canIntel, unseen, nav }) {
+  const [compare, setCompare] = useState(null) // { newer, older }
+
   if (!canIntel) return <LockedView title="Profile history" onSeePlans={() => nav('/plans')} />
 
   return (
+    <>
     <Card style={{ padding: '20px 24px' }}>
       <ViewHead
         title="Profile history"
-        sub="every generated profile, newest first"
+        sub="every generated profile, newest first · Compare diffs a profile against the one before it"
         right={<Btn kind="primary" onClick={() => nav(`/dossiers?candidate=${candidate.id}`)}>Regenerate profile</Btn>}
       />
       {!dossiers.length ? (
@@ -586,6 +747,7 @@ export function ProfileHistoryView({ candidate, dossiers, canIntel, unseen, nav 
           {dossiers.map((d, i) => {
             const n = (d.weekly_digest?.items || []).length
             const isNew = unseen.isUnseenDossier(d)
+            const predecessor = dossiers[i + 1] || null
             return (
               <div
                 key={d.id}
@@ -617,6 +779,15 @@ export function ProfileHistoryView({ candidate, dossiers, canIntel, unseen, nav 
                 <span style={{ marginLeft: 'auto', flexShrink: 0, fontSize: 10.5, color: T.faint }}>
                   {d.generated_by ? 'Manual' : 'Auto'}
                 </span>
+                {predecessor && (
+                  <span
+                    style={{ flexShrink: 0 }}
+                    title={`Compare with the ${fmtDate(predecessor.generated_at)} profile`}
+                    onClick={e => { e.stopPropagation(); setCompare({ newer: d, older: predecessor }) }}
+                  >
+                    <TextLink style={{ fontSize: 11.5, color: T.red, fontWeight: 600 }}>Compare →</TextLink>
+                  </span>
+                )}
                 <span style={{ flexShrink: 0, fontSize: 11.5, color: T.muted }}>Open profile →</span>
               </div>
             )
@@ -624,5 +795,14 @@ export function ProfileHistoryView({ candidate, dossiers, canIntel, unseen, nav 
         </div>
       )}
     </Card>
+    {compare && (
+      <CompareModal
+        candidate={candidate}
+        newer={compare.newer}
+        older={compare.older}
+        onClose={() => setCompare(null)}
+      />
+    )}
+    </>
   )
 }
