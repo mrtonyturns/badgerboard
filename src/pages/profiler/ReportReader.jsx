@@ -53,28 +53,26 @@ function scrollParentOf(node) {
 
 function useScrollSpy(ids, docRef, enabled) {
   const [active, setActive] = useState(ids[0] || '')
-  const scrollerRef = useRef(null)
   const key = ids.join('|')
 
   useEffect(() => {
     if (!enabled || !ids.length) return
-    const scroller = scrollParentOf(docRef.current)
-    scrollerRef.current = scroller
-    const target = scroller || window
-
+    // Viewport-relative spy, attached to window in the CAPTURE phase so it
+    // hears scrolls from ANY ancestor scroller (Layout's <main> in-app, the
+    // window on the share page) without having to know which one it is —
+    // resolving the scroller once at mount raced content load and captured
+    // null, which left the rail highlighting but never scrolling.
     const onScroll = () => {
-      const originTop = scroller ? scroller.getBoundingClientRect().top : 0
       let current = ids[0]
       for (const id of ids) {
         const el = document.getElementById(`pf-${id}`)
-        if (el && el.getBoundingClientRect().top - originTop <= 120) current = id
+        if (el && el.getBoundingClientRect().top <= 180) current = id
       }
       setActive(prev => (prev === current ? prev : current))
     }
-
-    target.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('scroll', onScroll, { capture: true, passive: true })
     onScroll()
-    return () => target.removeEventListener('scroll', onScroll)
+    return () => window.removeEventListener('scroll', onScroll, { capture: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, enabled])
 
@@ -82,7 +80,8 @@ function useScrollSpy(ids, docRef, enabled) {
     const el = document.getElementById(`pf-${id}`)
     if (!el) return
     setActive(id)
-    const scroller = scrollerRef.current
+    // Resolve the real scroll ancestor AT CLICK TIME, from the section itself.
+    const scroller = scrollParentOf(el)
     if (scroller) {
       const delta = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top
       scroller.scrollTo({ top: scroller.scrollTop + delta - 20, behavior: 'smooth' })
