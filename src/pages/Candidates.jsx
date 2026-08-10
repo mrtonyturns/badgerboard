@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Users, Plus, Search, Filter, ExternalLink, Edit2, Trash2, X, Phone, Mail, Globe, Telescope, Lock, Wand2, CheckCircle, AlertCircle, Map, LayoutList, Upload, Zap } from 'lucide-react'
 import { supabase, getCandidates, getOffices, getElections, createCandidate, deleteCandidate, updateCandidate } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
@@ -7,6 +7,7 @@ import { getUserTier, getUserBracket, getBracketConfig, getUserPlanType, getActi
 import LeafletMapView from '../components/LeafletMapView'
 import MapErrorBoundary from '../components/MapErrorBoundary'
 import LoadingBar from '../components/LoadingBar'
+import CityDemographicsPanel, { usePlaceLookup } from '../components/CityDemographicsPanel'
 
 const PARTIES   = ['Republican','Democrat','Independent','Libertarian','Green','Constitution','Nonpartisan','Other']
 const STATUSES  = ['exploring','declared','primary_winner','general','elected','lost','withdrawn']
@@ -88,6 +89,7 @@ const defaultForm = {
 
 export default function Candidates() {
   const { user, session } = useAuth()
+  const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const preFilterOfficeId = searchParams.get('officeId') || ''
 
@@ -164,6 +166,10 @@ export default function Candidates() {
       return false
     })
   })() : []
+
+  // Municipal-click demographics lookup — resolves to null (no-op) for
+  // non-municipal clicks, or once the JSON is loaded and no entry exists.
+  const { loading: placeLoading, place: cityPlace } = usePlaceLookup(selectedDistrict)
 
   // Group panel candidates by their office
   const panelByOffice = panelCandidates.reduce((acc, c) => {
@@ -666,8 +672,19 @@ export default function Candidates() {
                 />
               </MapErrorBoundary>
 
-              {/* Candidate district panel */}
-              {selectedDistrict && (
+              {/* Candidate district panel — municipal clicks with a Census demographics
+                  entry get the richer CityDemographicsPanel instead; everything else
+                  (county/state/federal, or a municipality with no data) keeps this
+                  original inline panel exactly as before. */}
+              {selectedDistrict && selectedDistrict.layerKey === 'municipal' && (cityPlace || placeLoading) ? (
+                <CityDemographicsPanel
+                  place={cityPlace}
+                  loading={placeLoading}
+                  panelOffices={Object.values(panelByOffice).map(g => g.office).filter(Boolean)}
+                  allCandidates={candidates}
+                  onClose={() => setSelectedDistrict(null)}
+                />
+              ) : selectedDistrict && (
                 <div style={{
                   position:'absolute', left:0, top:0, bottom:0,
                   width: 'min(300px, 85vw)', zIndex:2000,

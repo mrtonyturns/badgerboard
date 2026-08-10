@@ -9,6 +9,7 @@ import LeafletMapView from '../components/LeafletMapView'
 import MapErrorBoundary from '../components/MapErrorBoundary'
 import DistrictDashboard, { districtKeyFor } from '../components/DistrictDashboard'
 import LoadingBar from '../components/LoadingBar'
+import CityDemographicsPanel, { usePlaceLookup } from '../components/CityDemographicsPanel'
 
 const LEVELS     = ['', 'federal', 'state', 'county', 'municipal']
 const TYPES      = ['', 'executive', 'legislative', 'judicial', 'administrative']
@@ -453,6 +454,10 @@ export default function Offices() {
     [selectedDistrict, allOfficesUnfiltered]
   )
 
+  // Municipal-click demographics lookup — resolves to null (no-op) for
+  // non-municipal clicks, or once the JSON is loaded and no entry exists.
+  const { loading: placeLoading, place: cityPlace } = usePlaceLookup(selectedDistrict)
+
   const switchView = (mode) => {
     if (mode === 'map') setMapEverShown(true)
     setViewMode(mode)
@@ -623,15 +628,27 @@ export default function Offices() {
             />
           </MapErrorBoundary>
 
-          {/* District side panel (county/municipal) — state & federal open the full dashboard */}
+          {/* District side panel (county/municipal) — state & federal open the full dashboard.
+              Municipal clicks with a Census demographics entry get the richer
+              CityDemographicsPanel instead; everything else keeps DistrictPanel. */}
           {selectedDistrict && !districtKeyFor(selectedDistrict) && (
-            <DistrictPanel
-              district={selectedDistrict}
-              panelOffices={panelOffices}
-              allCandidates={allCandidates}
-              onClose={() => setSelectedDistrict(null)}
-              navigate={navigate}
-            />
+            selectedDistrict.layerKey === 'municipal' && (cityPlace || placeLoading) ? (
+              <CityDemographicsPanel
+                place={cityPlace}
+                loading={placeLoading}
+                panelOffices={panelOffices}
+                allCandidates={allCandidates}
+                onClose={() => setSelectedDistrict(null)}
+              />
+            ) : (
+              <DistrictPanel
+                district={selectedDistrict}
+                panelOffices={panelOffices}
+                allCandidates={allCandidates}
+                onClose={() => setSelectedDistrict(null)}
+                navigate={navigate}
+              />
+            )
           )}
         </div>
       )}

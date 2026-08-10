@@ -76,6 +76,7 @@ import VolunteerPortal from './pages/VolunteerPortal'
 import SharedDossier from './pages/SharedDossier'
 const Events = lazy(() => import('./pages/Events'))  // code-split: trims the initial bundle (M1)
 const Broadside = lazy(() => import('./pages/Broadside'))  // code-split: admin-only beta
+const CityDemographics = lazy(() => import('./pages/CityDemographics'))  // code-split: trims the initial bundle (M1)
 import ResetPassword from './pages/ResetPassword'
 
 const ProtectedRoute = ({ children }) => {
@@ -150,6 +151,7 @@ const AppRoutes = () => {
       >
         <Route index element={<Dashboard />} />
         <Route path="offices" element={<Offices />} />
+        <Route path="places/:countySlug/:nameSlug" element={<CityDemographics />} />
         <Route path="elections" element={<Elections />} />
         <Route path="elections/results/:id" element={<ElectionResultsRedirect />} />
         <Route path="elections/results" element={<Navigate to="/elections?tab=results" replace />} />

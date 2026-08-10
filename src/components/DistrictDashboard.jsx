@@ -7,6 +7,7 @@ import 'leaflet/dist/leaflet.css'
 import { X, Sparkles, ChevronRight, Loader2, Users, MapPin, RefreshCw } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { pointInGeometry, geometryBounds } from '../lib/geo'
+import { loadPlaceDemographics, placeKey, placePath } from '../lib/placeDemographics'
 
 // ── module-level data caches (fetched once per session) ──────────────────────
 let _demoCache = null, _presCache = null, _popCache = null
@@ -111,9 +112,24 @@ const fmtMargin = (m) => `${m >= 0 ? 'R' : 'D'}+${Math.abs(m).toFixed(0)}`
 const leanLabel = (m) => Math.abs(m) < 3 ? 'Toss-up' : `Leans ${m > 0 ? 'conservative' : 'liberal'}`
 
 // ── mini heat map ─────────────────────────────────────────────────────────────
-function DistrictHeatMap({ geometry, popPoints }) {
+// City dots with pop >= 1500 are clickable when a demographics entry exists
+// for them (same key contract as CityDemographicsPanel: placeKey(co, n)) —
+// clicking navigates to the full city demographics page. Dots for places with
+// no entry (small places, or the JSON hasn't loaded/doesn't exist) stay
+// non-interactive, matching current behavior.
+const MIN_CLICKABLE_POP = 1500
+
+function DistrictHeatMap({ geometry, popPoints, navigate }) {
   const ref = useRef(null)
   const mapRef = useRef(null)
+  const [places, setPlaces] = useState(null) // demographics places map, or null while loading/unavailable
+
+  useEffect(() => {
+    let alive = true
+    loadPlaceDemographics().then(data => { if (alive) setPlaces(data?.places || {}) })
+    return () => { alive = false }
+  }, [])
+
   useEffect(() => {
     if (!ref.current || mapRef.current || !geometry) return
     const map = L.map(ref.current, { scrollWheelZoom: false, zoomControl: true })
@@ -131,16 +147,28 @@ function DistrictHeatMap({ geometry, popPoints }) {
       if (!p.pop) return
       const g = Math.pow(p.pop / maxPop, 0.35)
       const radius = 700 + Math.sqrt(p.pop) * 55
+      const clickable = p.pop >= MIN_CLICKABLE_POP && !!places?.[placeKey(p.co, p.n)]
       L.circle([p.lat, p.lng], { radius: radius * 1.8, color: 'transparent', fillColor: heatColor(g), fillOpacity: 0.10 }).addTo(map)
-      L.circle([p.lat, p.lng], { radius, color: 'transparent', fillColor: heatColor(g), fillOpacity: 0.32 }).addTo(map)
-        .bindTooltip(`${p.n} — ${p.pop.toLocaleString()} residents`, { direction: 'top' })
+      const dot = L.circle([p.lat, p.lng], {
+        radius, color: 'transparent', fillColor: heatColor(g), fillOpacity: 0.32,
+        ...(clickable ? { className: 'dd-heatmap-clickable' } : {}),
+      }).addTo(map)
+        .bindTooltip(clickable ? `${p.n} — ${p.pop.toLocaleString()} residents · click for demographics` : `${p.n} — ${p.pop.toLocaleString()} residents`, { direction: 'top' })
+      if (clickable && navigate) {
+        dot.on('click', () => navigate(placePath(p.co, p.n)))
+      }
     })
     mapRef.current = map
     const ro = new ResizeObserver(() => { try { map.invalidateSize() } catch (_) {} })
     ro.observe(ref.current)
     return () => { ro.disconnect(); map.remove(); mapRef.current = null }
-  }, [geometry, popPoints])
-  return <div ref={ref} style={{ height: '100%', minHeight: 420, borderRadius: 14, overflow: 'hidden' }} />
+  }, [geometry, popPoints, places, navigate])
+  return (
+    <>
+      <div ref={ref} style={{ height: '100%', minHeight: 420, borderRadius: 14, overflow: 'hidden' }} className="dd-heatmap" />
+      <style>{`.dd-heatmap .dd-heatmap-clickable { cursor: pointer; }`}</style>
+    </>
+  )
 }
 
 // ── main component ────────────────────────────────────────────────────────────
@@ -347,7 +375,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
               <div style={{ ...S.card, display: 'flex', flexDirection: 'column' }}>
                 <div style={S.cardTitle}>District map — population density <span style={S.note}>Exact boundary</span></div>
                 <div style={{ flex: 1 }}>
-                  <DistrictHeatMap geometry={district.geometry} popPoints={statics?.pop} />
+                  <DistrictHeatMap geometry={district.geometry} popPoints={statics?.pop} navigate={navigate} />
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#64748B' }}>

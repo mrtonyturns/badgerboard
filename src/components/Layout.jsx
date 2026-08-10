@@ -40,10 +40,20 @@ import AnnouncementBanner from './AnnouncementBanner'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.17.0'
+const APP_VERSION = 'v1.18.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.18.0',
+    date: 'July 20, 2026',
+    changes: [
+      'City demographics: click any Wisconsin city, village, or town (1,500+ residents) on the map for an instant Census profile — 598 municipalities covered',
+      'Full city pages at /places with People, Income & Housing, and Education & Work stats plus city-vs-county-vs-state comparisons',
+      'District Dashboard city dots are now clickable through to full demographics',
+      'Broadside: searchable dossier picker in Intel Intake and a cleaner Start/Next/Repeat/End layout',
+    ],
+  },
   {
     version: 'v1.17.0',
     date: 'July 16, 2026',
