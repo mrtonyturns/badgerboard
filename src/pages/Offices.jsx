@@ -197,7 +197,7 @@ function OfficeHistoryModal({ office, onClose }) {
   }, [office.name])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
       <div className="fixed inset-0 bg-black/50" onClick={onClose} />
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
         <div className="p-6 border-b border-gray-100 flex items-start justify-between gap-4">
@@ -841,7 +841,7 @@ export default function Offices() {
 
       {/* ── Add Office Modal ── */}
       {isAdmin && showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-black/50" onClick={() => setShowModal(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b border-gray-100">

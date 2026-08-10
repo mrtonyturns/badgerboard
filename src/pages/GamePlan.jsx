@@ -512,7 +512,7 @@ function GeneratePlanModal({ open, onClose, onGenerate, generating, elections, c
             <SearchableSelect value={electionId} onChange={setElectionId}
               options={[...elections].sort((a, b) => parseISO(a.election_date) - parseISO(b.election_date))
                 .map(e => ({ value: e.id, label: `${e.name} — ${format(parseISO(e.election_date), 'MMM d, yyyy')}` }))}
-              placeholder={elections.length === 0 ? 'No elections — add one on the Calendar tab first' : 'Select election...'}
+              placeholder={elections.length === 0 ? 'No elections — add one on Campaign \u2192 Calendar first' : 'Select election...'}
               searchPlaceholder="Search elections..." />
           </div>
           <div>
@@ -980,33 +980,7 @@ export default function GamePlan() {
         </div>
       </div>
 
-      {/* ── Tab bar ── */}
-      <div className="flex gap-0 border-b border-gray-200">
-        {[
-          { key: 'milestones', label: 'Tasks', Icon: Target },
-          { key: 'calendar',   label: 'Calendar',   Icon: CalendarDays },
-          { key: 'results',    label: 'Results',     Icon: BarChart2, live: hasTodayElection },
-        ].map(({ key, label, Icon, live }) => (
-          <button
-            key={key}
-            onClick={() => key === 'results' ? goToResults(resolvedResultsId) : goToTab(key)}
-            className={`flex items-center gap-2 px-5 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
-              activeTab === key
-                ? 'border-brand-red text-brand-red'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            <Icon className="w-4 h-4" />
-            {label}
-            {live && (
-              <span className="relative flex h-2 w-2 ml-0.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
+      {/* Internal tab bar removed (v1.23) — Todo lives in the sidebar; Calendar and Results are Campaign top-bar tabs. ?tab= routing unchanged. */}
 
       {/* ══════════════════════════════════════════════════════════ */}
       {/* TASKS TAB — Todoist-style task manager                    */}
