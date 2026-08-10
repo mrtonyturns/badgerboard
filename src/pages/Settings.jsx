@@ -431,6 +431,10 @@ export default function Settings() {
 
   // ── Hero ────────────────────────────────────────────────────────────────────
   const displayName = savedName || user?.email?.split('@')[0] || 'Your account'
+  // Written by AccountPane's "Change photo" (a ≤96px JPEG data URL in
+  // user_metadata). Absent → the initial-letter tile.
+  const avatarUrl   = user?.user_metadata?.avatar_url || ''
+  const heroInitial = (savedName || user?.email || 'U').charAt(0).toUpperCase()
   const heroStats = useMemo(() => ([
     {
       label: 'PROFILES LEFT',
@@ -461,8 +465,8 @@ export default function Settings() {
           style={{
             flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 7,
             border: `1px solid ${on ? T.ink : T.field}`, background: on ? T.ink : '#fff',
-            color: on ? '#fff' : T.ink4, borderRadius: 99, padding: '7px 14px', minHeight: 44,
-            fontSize: 12.5, fontWeight: on ? 600 : 500, fontFamily: 'inherit',
+            color: on ? '#fff' : T.ink4, borderRadius: 99, padding: '7px 14px',
+            fontSize: 12.5, fontWeight: on ? 600 : 500, fontFamily: 'inherit', lineHeight: 1.35,
             cursor: 'pointer', whiteSpace: 'nowrap',
           }}
         >
@@ -480,8 +484,9 @@ export default function Settings() {
         data-on={on ? 'true' : 'false'}
         aria-current={on ? 'page' : undefined}
         style={{
+          // mockup: 8px 11px, radius 10, gap 10 — a ~38px item, not 44.
           display: 'flex', alignItems: 'center', gap: 10, width: '100%',
-          padding: '8px 11px', minHeight: 44, borderRadius: 10, border: 0,
+          padding: '8px 11px', borderRadius: 10, border: 0,
           background: on ? T.navy : 'transparent',
           boxShadow: on ? '0 4px 12px rgba(13,21,38,.2)' : 'none',
           cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
@@ -522,6 +527,24 @@ export default function Settings() {
           background: 'radial-gradient(circle, rgba(165,28,36,.38) 0%, rgba(165,28,36,0) 70%)',
         }} />
         <div className="st-hero" style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 16 }}>
+          {/* Avatar — photo if one is set, otherwise the initial-letter tile. */}
+          {avatarUrl ? (
+            <img
+              src={avatarUrl}
+              alt=""
+              style={{
+                flex: 'none', width: 48, height: 48, borderRadius: '50%', objectFit: 'cover',
+                border: '1px solid rgba(255,255,255,.22)', display: 'block',
+              }}
+            />
+          ) : (
+            <span aria-hidden="true" style={{
+              flex: 'none', width: 48, height: 48, borderRadius: '50%', background: T.red,
+              border: '1px solid rgba(255,255,255,.22)', color: '#fff',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 19, fontWeight: 700, lineHeight: 1,
+            }}>{heroInitial}</span>
+          )}
           <div style={{ flex: 1, minWidth: 180 }}>
             <div style={{
               fontSize: 21, fontWeight: 700, color: '#fff', letterSpacing: '-.3px',
@@ -539,7 +562,7 @@ export default function Settings() {
                 border: '1px solid rgba(255,255,255,.12)', borderRadius: 12,
                 padding: '9px 13px', textAlign: 'center',
               }}>
-                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.8px', color: '#9AA4B8' }}>{h.label}</div>
+                <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.8px', color: '#9AA4B8' }}>{h.label}</div>
                 <div style={{ fontSize: 17, fontWeight: 800, color: '#fff', lineHeight: 1.15, marginTop: 3 }}>{h.value}</div>
               </div>
             ))}
@@ -561,7 +584,7 @@ export default function Settings() {
           {NAV_GROUPS.map(group => (
             <div key={group.label}>
               <div style={{
-                fontSize: 11, fontWeight: 700, letterSpacing: '1.2px',
+                fontSize: 10, fontWeight: 700, letterSpacing: '1.2px',
                 color: T.faint, padding: '0 10px 7px',
               }}>{group.label}</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -648,7 +671,7 @@ export default function Settings() {
           position: 'fixed', bottom: 22, left: '50%', transform: 'translateX(-50%)', zIndex: 40,
           display: 'flex', alignItems: 'center', gap: 14,
           background: T.navy, color: '#fff', borderRadius: 99,
-          padding: '8px 12px 8px 20px', boxShadow: '0 14px 34px rgba(13,21,38,.34)',
+          padding: '11px 14px 11px 20px', boxShadow: '0 14px 34px rgba(13,21,38,.34)',
           animation: 'stRise .22s ease', maxWidth: 'calc(100vw - 32px)',
         }}>
           <span style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: 'nowrap' }}>
@@ -661,10 +684,11 @@ export default function Settings() {
             style={{
               background: 'none', border: 0, color: '#B7BECD', fontSize: 12, fontWeight: 600,
               fontFamily: 'inherit', cursor: savingProfile ? 'not-allowed' : 'pointer',
-              minHeight: 44, padding: '0 4px', whiteSpace: 'nowrap',
+              padding: '6px 4px', whiteSpace: 'nowrap',
             }}
           >Discard</button>
-          <Btn kind="primary" onClick={saveChanges} disabled={savingProfile}>
+          <Btn kind="primary" onClick={saveChanges} disabled={savingProfile}
+            style={{ padding: '8px 17px', fontSize: 12.5 }}>
             {savingProfile ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</> : 'Save changes'}
           </Btn>
         </div>

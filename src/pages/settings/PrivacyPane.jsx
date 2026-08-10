@@ -108,7 +108,9 @@ export default function PrivacyPane({
             Your subscription cancels at the same time. If you only want to stop paying, change your plan
             instead — your work stays put.
           </Note>
-          <Btn kind="danger" onClick={onDeleteAccount}>Delete my account</Btn>
+          <Btn kind="danger" onClick={onDeleteAccount} style={{ padding: '9px 18px', fontSize: 12.5 }}>
+            Delete my account
+          </Btn>
         </CardBody>
       </Card>
     </>

@@ -161,7 +161,7 @@ export default function CalendarsPane({ user }) {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
             <div style={{
               flex: 1, minWidth: 220, border: `1px solid ${T.field}`, borderRadius: 10,
-              padding: '12px 13px', fontSize: 12, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              padding: '10px 13px', fontSize: 12, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
               color: T.ink3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
               display: 'flex', alignItems: 'center',
             }}>
@@ -171,7 +171,8 @@ export default function CalendarsPane({ user }) {
               kind="primary"
               onClick={copy}
               disabled={!feedUrl}
-              style={copied ? { background: T.green, borderRadius: 10 } : { borderRadius: 10 }}
+              // mockup: radius 10, padding 10px 18px, 12.5px
+              style={{ borderRadius: 10, padding: '10px 18px', fontSize: 12.5, ...(copied ? { background: T.green } : null) }}
             >
               {copied ? <><Check style={{ width: 14, height: 14 }} /> Copied</> : <><Copy style={{ width: 14, height: 14 }} /> Copy URL</>}
             </Btn>
@@ -248,7 +249,7 @@ export default function CalendarsPane({ user }) {
                         onFocus={e => e.target.select()}
                         className="st-input"
                         style={{
-                          flex: 1, minWidth: 200, boxSizing: 'border-box', minHeight: 44,
+                          flex: 1, minWidth: 200, boxSizing: 'border-box', lineHeight: 1.35,
                           border: `1px solid ${T.field}`, borderRadius: 10, padding: '10px 13px',
                           fontSize: 12, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                           color: T.ink3, background: '#fff', outline: 'none',
@@ -260,7 +261,7 @@ export default function CalendarsPane({ user }) {
                       {p.key === 'apple' && feedUrl && (
                         <a href={webcalUrl} className="st-btn" style={{
                           background: T.navy, color: '#fff', borderRadius: 99, padding: '8px 15px',
-                          fontSize: 12, fontWeight: 600, minHeight: 44, display: 'inline-flex',
+                          fontSize: 12, fontWeight: 600, lineHeight: 1.35, display: 'inline-flex',
                           alignItems: 'center', whiteSpace: 'nowrap', textDecoration: 'none',
                         }}>Open in Apple Calendar</a>
                       )}

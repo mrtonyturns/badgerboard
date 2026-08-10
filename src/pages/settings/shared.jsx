@@ -5,9 +5,18 @@
 // same reason the Profiler copies them: those modules pull in page-level trees
 // (and Leaflet, via the dashboard) at import time. Keep the three in sync.
 //
-// Two hard rules from the review rounds are enforced here rather than left to
-// each call site: nothing renders below 11px, and no grey lighter than #71717A
-// is used for text on white.
+// SIZING IS THE MOCKUP, LITERALLY.
+// settings-handoff/mockups/settings.dc.html is the spec. Where an earlier review
+// rule disagreed with the mockup, the mockup wins:
+//   • Type may go below 11px — badge pills are 9.5px, rail group labels 10px,
+//     hero stat labels 9.5px, exactly as the mockup renders them.
+//   • Controls are sized by their own padding. There is NO 44px minimum: it made
+//     every button, input, rail item and toggle row ~20% taller than the mockup.
+// Still enforced: no grey lighter than #71717A for text on white.
+//
+// FONT: every control sets fontFamily:'inherit' (belt-and-suspenders on top of
+// the `.st-shell` rule in SettingsStyles) so button/input/select/textarea — which
+// do not inherit font-family by default — stay on Geist.
 
 import React from 'react'
 
@@ -50,9 +59,6 @@ export const cardStyle = {
   overflow: 'hidden',
 }
 
-// Minimum interactive target. Applied to every button/row control.
-export const TAP = 44
-
 export const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || `${one}s`)}`
 
 /** Money, always grouped: $3,990 — never $3990. */
@@ -70,6 +76,11 @@ export function SettingsStyles() {
     <style>{`
       @keyframes stRise { 0% { transform: translate(-50%, 14px); opacity: 0 } 100% { transform: translate(-50%, 0); opacity: 1 } }
       @keyframes stSpin { 0% { transform: rotate(0) } 100% { transform: rotate(360deg) } }
+      /* button/input/select/textarea do NOT inherit font-family by default.
+         Tailwind's preflight normally handles it; this makes the settings tree
+         independent of that, so Geist can never fall back to Inter here. */
+      .st-shell, .st-shell button, .st-shell input, .st-shell select,
+      .st-shell textarea, .st-shell optgroup { font-family: ${T.font} }
       .st-nav      { transition: background .16s ease }
       .st-nav:hover:not([data-on="true"]) { background: #F1F0EC }
       .st-btn      { transition: background .15s ease, border-color .15s ease }
@@ -102,7 +113,7 @@ export function SettingsStyles() {
 export function SettingsShell({ children }) {
   return (
     <div
-      className="-m-4 md:-m-6 lg:-m-8 p-4 md:p-6 lg:p-8"
+      className="st-shell -mx-4 -mt-2 -mb-4 md:-mx-6 md:-mb-6 lg:-mx-8 lg:-mb-8 px-4 pt-4 pb-4 md:px-6 md:pb-6 lg:px-8 lg:pb-8"
       style={{ background: T.page, minHeight: '100%', fontFamily: T.font, color: T.ink }}
     >
       <SettingsStyles />
@@ -125,12 +136,13 @@ export function Card({ title, desc, right, children, tone, style }) {
       {(title || desc) && (
         <header style={{
           display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap',
-          padding: '18px 24px 14px',
+          padding: '18px 24px 14px',          // mockup
           borderBottom: `1px solid ${danger ? '#FDEAEA' : T.divider}`,
+          fontFamily: 'inherit',
         }}>
           <div style={{ minWidth: 0, flex: 1 }}>
-            {title && <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: danger ? T.redHot : T.ink }}>{title}</h2>}
-            {desc && <p style={{ fontSize: 12.5, color: T.ink4, margin: '3px 0 0', lineHeight: 1.55 }}>{desc}</p>}
+            {title && <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0, fontFamily: 'inherit', color: danger ? T.redHot : T.ink }}>{title}</h2>}
+            {desc && <p style={{ fontSize: 12.5, color: T.ink4, margin: '3px 0 0', lineHeight: 1.55, fontFamily: 'inherit' }}>{desc}</p>}
           </div>
           {right}
         </header>
@@ -141,19 +153,21 @@ export function Card({ title, desc, right, children, tone, style }) {
 }
 
 export function CardBody({ children, style }) {
-  return <div style={{ padding: '16px 24px 18px', ...style }}>{children}</div>
+  // mockup: 16px 24px 18px
+  return <div style={{ padding: '16px 24px 18px', fontFamily: 'inherit', ...style }}>{children}</div>
 }
 
 /**
  * Label / description on the left, one control on the right. Stacks below 900px
- * (see `.st-row` above) — the control keeps its 44px target either way.
+ * (see `.st-row` above). Mockup: 14px 24px, gap 14, title 13/600, desc 12.
  */
 export function Row({ title, desc, badge, control, last, children }) {
   return (
     <div className="st-row" style={{
       display: 'flex', alignItems: 'center', gap: 14,
-      padding: '13px 24px',
+      padding: '14px 24px',
       borderBottom: last ? 'none' : `1px solid ${T.line}`,
+      fontFamily: 'inherit',
     }}>
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -191,12 +205,13 @@ export function Btn({ children, onClick, kind = 'ghost', disabled, style, title,
       onMouseEnter={e => { if (!disabled) e.currentTarget.style.background = k.hover }}
       onMouseLeave={e => { e.currentTarget.style.background = k.background }}
       style={{
+        // mockup: padding 8px 15px, 12px/600, pill radius. No minimum height —
+        // the mockup's buttons are ~33px tall, not 44.
         background: k.background, color: k.color, border: k.border,
         borderRadius: 99, padding: '8px 15px', fontSize: 12, fontWeight: 600,
-        fontFamily: 'inherit', lineHeight: 1.2,
+        fontFamily: 'inherit', lineHeight: 1.35,
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.55 : 1,
-        minHeight: TAP,
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
         whiteSpace: 'nowrap',           // "Manage billing" never breaks mid-phrase
         flex: 'none',
@@ -206,7 +221,7 @@ export function Btn({ children, onClick, kind = 'ghost', disabled, style, title,
   )
 }
 
-/** Text-only action (Discard, Rotate URL, Cancel plan). Still a 44px target. */
+/** Text-only action (Discard, Rotate URL, Cancel plan). Mockup: 12px/600. */
 export function LinkBtn({ children, onClick, color = T.faint, disabled, style }) {
   return (
     <button
@@ -214,7 +229,7 @@ export function LinkBtn({ children, onClick, color = T.faint, disabled, style })
       onClick={onClick}
       disabled={disabled}
       style={{
-        background: 'none', border: 0, padding: '0 2px', minHeight: TAP,
+        background: 'none', border: 0, padding: '6px 2px',
         fontSize: 12, fontWeight: 600, fontFamily: 'inherit', color,
         cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.55 : 1,
         whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -224,12 +239,13 @@ export function LinkBtn({ children, onClick, color = T.faint, disabled, style })
   )
 }
 
+/** Badge. Mockup: 9.5px/700, padding 2px 8px, pill radius. */
 export function Pill({ children, c = T.ink4, bg = T.chip, style }) {
   return (
     <span style={{
-      fontSize: 11, fontWeight: 700, color: c, background: bg, letterSpacing: '.2px',
-      borderRadius: 99, padding: '2px 8px', whiteSpace: 'nowrap', lineHeight: 1.45,
-      display: 'inline-block', flex: 'none', ...style,
+      fontSize: 9.5, fontWeight: 700, color: c, background: bg, letterSpacing: '.2px',
+      borderRadius: 99, padding: '2px 8px', whiteSpace: 'nowrap', lineHeight: 1.6,
+      fontFamily: 'inherit', display: 'inline-block', flex: 'none', ...style,
     }}>{children}</span>
   )
 }
@@ -250,8 +266,10 @@ export function Toggle({ on, onChange, disabled, label, title }) {
       disabled={disabled}
       onClick={onChange}
       style={{
+        // mockup: a 40×23 track, nothing around it. The old 44px minimum was
+        // what made every toggle row taller than the mockup's.
         marginLeft: 'auto', flex: 'none', background: 'none', border: 0,
-        padding: '0 0 0 10px', minHeight: TAP,
+        padding: '0 0 0 10px', fontFamily: 'inherit',
         display: 'flex', alignItems: 'center',
         cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.55 : 1,
       }}
@@ -282,7 +300,8 @@ export function ChoicePill({ label, on, onClick, disabled }) {
         border: `1px solid ${on ? T.ink : T.field}`,
         background: on ? T.ink : '#fff',
         color: on ? '#fff' : T.ink3,
-        borderRadius: 9, padding: '8px 15px', minHeight: TAP,
+        // mockup: radius 9, padding 8px 15px, 12px
+        borderRadius: 9, padding: '8px 15px', lineHeight: 1.35,
         fontSize: 12, fontWeight: on ? 600 : 500, fontFamily: 'inherit',
         cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.55 : 1,
         whiteSpace: 'nowrap',
@@ -293,26 +312,28 @@ export function ChoicePill({ label, on, onClick, disabled }) {
 
 export function Field({ label, hint, style, inputStyle, ...props }) {
   return (
-    <label style={{ display: 'block', minWidth: 0, ...style }}>
-      <span style={{ display: 'block', fontSize: 11.5, fontWeight: 600, color: T.ink3, marginBottom: 6 }}>{label}</span>
+    <label style={{ display: 'block', minWidth: 0, fontFamily: 'inherit', ...style }}>
+      <span style={{ display: 'block', fontSize: 11.5, fontWeight: 600, color: T.ink3, marginBottom: 6, fontFamily: 'inherit' }}>{label}</span>
       <input
         className="st-input"
         {...props}
         style={{
-          width: '100%', boxSizing: 'border-box', minHeight: TAP,
+          // mockup: border #DEDEDA, radius 10, padding 10px 13px, 13px — a
+          // ~38px field, not the 44px one the old tap minimum forced.
+          width: '100%', boxSizing: 'border-box', lineHeight: 1.35,
           border: `1px solid ${T.field}`, borderRadius: 10, padding: '10px 13px',
           fontSize: 13, fontFamily: 'inherit', color: T.ink, background: '#fff',
           outline: 'none',
           ...inputStyle,
         }}
       />
-      {hint && <span style={{ display: 'block', fontSize: 11, color: T.muted, marginTop: 5 }}>{hint}</span>}
+      {hint && <span style={{ display: 'block', fontSize: 11, color: T.muted, marginTop: 5, fontFamily: 'inherit' }}>{hint}</span>}
     </label>
   )
 }
 
 export function Note({ children, style }) {
-  return <p style={{ fontSize: 12, color: T.ink4, lineHeight: 1.55, margin: 0, ...style }}>{children}</p>
+  return <p style={{ fontSize: 12, color: T.ink4, lineHeight: 1.55, margin: 0, fontFamily: 'inherit', ...style }}>{children}</p>
 }
 
 /** Inline success / error / info message. */
@@ -327,11 +348,12 @@ export function Msg({ type = 'info', children, onDismiss }) {
       display: 'flex', alignItems: 'flex-start', gap: 10,
       background: tone.bg, border: `1px solid ${tone.br}`, borderRadius: 12,
       padding: '11px 14px', fontSize: 12.5, lineHeight: 1.55, color: tone.c, fontWeight: 500,
+      fontFamily: 'inherit',
     }}>
       <span style={{ minWidth: 0, flex: 1 }}>{children}</span>
       {onDismiss && (
         <button type="button" onClick={onDismiss} aria-label="Dismiss"
-          style={{ background: 'none', border: 0, color: tone.c, cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: 0, lineHeight: 1.4 }}>
+          style={{ background: 'none', border: 0, color: tone.c, cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: 0, lineHeight: 1.4, fontFamily: 'inherit' }}>
           Dismiss
         </button>
       )}

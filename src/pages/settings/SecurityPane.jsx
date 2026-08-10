@@ -95,8 +95,9 @@ export default function SecurityPane({ user }) {
   const eyeBtn = (shown, set) => (
     <button type="button" onClick={() => set(v => !v)} aria-label={shown ? 'Hide password' : 'Show password'}
       style={{
-        position: 'absolute', right: 6, top: 24, width: 40, height: 44,
-        background: 'none', border: 0, color: T.faint, cursor: 'pointer',
+        // sits over the input, which is now the mockup's ~38px field (was 44)
+        position: 'absolute', right: 6, top: 20, width: 38, height: 38,
+        background: 'none', border: 0, color: T.faint, cursor: 'pointer', fontFamily: 'inherit',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
       {shown ? <EyeOff style={{ width: 16, height: 16 }} /> : <Eye style={{ width: 16, height: 16 }} />}
@@ -155,6 +156,7 @@ export default function SecurityPane({ user }) {
               kind="primary"
               onClick={changePassword}
               disabled={saving || !currentPw || !newPw || !confirmPw}
+              style={{ padding: '9px 18px', fontSize: 12.5 }}   // mockup
             >
               {saving ? <><Spinner color="#fff" /> Updating…</> : 'Update password'}
             </Btn>

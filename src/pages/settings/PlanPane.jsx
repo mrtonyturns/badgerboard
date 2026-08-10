@@ -293,7 +293,7 @@ export default function PlanPane({
                   className="st-btn"
                   style={{
                     display: 'flex', alignItems: 'center', gap: 7, borderRadius: 99, border: 0,
-                    padding: '6px 14px', minHeight: 36, fontSize: 12, fontFamily: 'inherit',
+                    padding: '6px 14px', fontSize: 12, fontFamily: 'inherit', lineHeight: 1.35,
                     fontWeight: on ? 600 : 500, color: on ? T.ink : T.ink4,
                     background: on ? '#fff' : 'transparent',
                     boxShadow: on ? '0 1px 2px rgba(0,0,0,.06)' : 'none',
@@ -339,7 +339,8 @@ export default function PlanPane({
                   {p.isCurrent ? (
                     <span style={{
                       display: 'block', textAlign: 'center', background: T.line, border: `1px solid ${T.line}`,
-                      color: T.faint, borderRadius: 99, padding: '11px 14px', fontSize: 12, fontWeight: 600,
+                      color: T.faint, borderRadius: 99, padding: '8px 14px', fontSize: 12, fontWeight: 600,
+                      lineHeight: 1.35,
                     }}>{p.btn}</span>
                   ) : (
                     <Btn
