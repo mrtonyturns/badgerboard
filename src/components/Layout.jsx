@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Building2, CalendarDays, Target, Users, ListChecks,
   FileText, Settings, LogOut, Menu, X, ChevronRight,
   User, CreditCard, Shield, ChevronDown, Tag, DoorOpen, UserCheck,
-  ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink, Users2, Swords, BarChart2,
+  ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink, Users2, Swords, BarChart2, FlaskConical,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import BluejackLogo from './BluejackLogo'
@@ -40,10 +40,19 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.21.1'
+const APP_VERSION = 'v1.22.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.22.0',
+    date: 'July 21, 2026',
+    changes: [
+      'Cleaner sidebar: five main tabs — Dashboard, Intelligence, AI Tools, Campaign, and a Beta tab for testers — with each section\u2019s pages as tabs across the top of the page',
+      'Main tabs remember the page you last used in each section',
+      'Beta tab (Polling, Broadside, Compare) appears only for accounts with beta access',
+    ],
+  },
   {
     version: 'v1.21.1',
     date: 'July 21, 2026',
@@ -276,6 +285,42 @@ const navItems = [
   // { to: '/door-knocking', icon: DoorOpen,      label: 'Door Knocking', badge: 'Beta', adminOnly: true },
 ]
 
+// ─── Consolidated navigation (v1.22) ─────────────────────────────────────────
+// The sidebar shows five main tabs; a section's pages render as a horizontal
+// tab strip at the top of the content area. Routes are unchanged — this is a
+// pure navigation-chrome consolidation. The Beta tab is visible only to beta
+// testers and admins, matching how its features were already gated.
+const NAV_SECTIONS = [
+  { key: 'dashboard',    label: 'Dashboard',    icon: LayoutDashboard, direct: '/' },
+  { key: 'intelligence', label: 'Intelligence', icon: Building2, paths: ['/offices', '/candidates'], extraMatch: ['/places', '/elections'] },
+  { key: 'ai',           label: 'AI Tools',     icon: Sparkles,  paths: ['/profiler', '/prospecting'], extraMatch: ['/dossiers'] },
+  { key: 'campaign',     label: 'Campaign',     icon: Target,    paths: ['/game-plan', '/events', '/voter-lists', '/campaign-connect'] },
+  { key: 'beta',         label: 'Beta',         icon: FlaskConical, betaOnly: true, paths: ['/polling', '/broadside', '/compare'] },
+]
+const NAV_ITEM_BY_PATH = Object.fromEntries(navItems.map(i => [i.to, i]))
+
+function navItemVisible(item, { isAdmin, isBeta, tierConfig }) {
+  if (!item) return false
+  if (item.adminOnly && !isAdmin) return false
+  if (item.feature && !(isAdmin || isBeta || tierConfig?.features?.[item.feature])) return false
+  if (item.betaOnly && !(isAdmin || isBeta)) return false
+  if (item.webOnly && isNativeApp) return false
+  return true
+}
+
+function sectionItems(section, gates) {
+  return (section.paths || []).map(p => NAV_ITEM_BY_PATH[p]).filter(i => navItemVisible(i, gates))
+}
+
+function sectionForPath(pathname) {
+  if (pathname === '/') return NAV_SECTIONS[0]
+  for (const sec of NAV_SECTIONS) {
+    const all = [...(sec.paths || []), ...(sec.extraMatch || [])]
+    if (all.some(p => pathname === p || pathname.startsWith(p + '/'))) return sec
+  }
+  return null
+}
+
 // ─── NavItem ─────────────────────────────────────────────────────────────────
 // Defined at module level so React never sees a new component type on re-render.
 const NavItem = React.memo(function NavItem({ item, onNavigate }) {
@@ -343,7 +388,7 @@ function ChangelogPopover({ onClose }) {
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 // Also module-level. Receives everything it needs via props.
-const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, onNavigate, onSignOut, tierConfig }) {
+const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, onNavigate, onSignOut, tierConfig, currentSectionKey, onGoSection }) {
   const [showChangelog, setShowChangelog] = useState(false)
   return (
     <div className="flex flex-col h-full bg-brand-navy">
@@ -357,34 +402,38 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, onNavigate, onSig
         </p>
       </div>
 
-      {/* Navigation */}
+      {/* Navigation — five main tabs; pages live in the top tab strip (v1.22) */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3">Intelligence</p>
-        {navItems.slice(0, 4).map(item => (
-          <NavItem key={item.to} item={item} onNavigate={onNavigate} />
-        ))}
-        <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">AI Tools</p>
-        {navItems.slice(4, 10).filter(item =>
-          (!item.adminOnly || isAdmin) &&
-          // Plan-feature gate (v1.18.2): beta users and admins resolve to the top
-          // plan via getUserTier, so tierConfig covers paid + beta + admin.
-          (!item.feature || isAdmin || isBeta || tierConfig?.features?.[item.feature]) &&
-          // Beta-only features: hidden entirely unless beta tester or admin
-          (!item.betaOnly || isAdmin || isBeta) &&
-          !(item.webOnly && isNativeApp)
-        ).map(item => (
-          <NavItem key={item.to} item={item} onNavigate={onNavigate} />
-        ))}
-        <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">Outreach</p>
-        {navItems.slice(10, 12).map(item => (
-          <NavItem key={item.to} item={item} onNavigate={onNavigate} />
-        ))}
-        {/* Field Ops group hidden (Door Knocking parked) — restore with the nav item to re-enable
-        <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">Field Ops</p>
-        {navItems.slice(9).filter(item => !item.adminOnly || isAdmin).map(item => (
-          <NavItem key={item.to} item={item} onNavigate={onNavigate} />
-        ))}
-        */}
+        {NAV_SECTIONS.map(sec => {
+          if (sec.betaOnly && !(isAdmin || isBeta)) return null
+          if (sec.direct) {
+            const item = { to: sec.direct, icon: sec.icon, label: sec.label, end: sec.direct === '/' }
+            return <NavItem key={sec.key} item={item} onNavigate={onNavigate} />
+          }
+          const items = sectionItems(sec, { isAdmin, isBeta, tierConfig })
+          if (!items.length) return null
+          const active = currentSectionKey === sec.key
+          const hasNews = items.some(i => i.badge && i.badge !== 'Beta')
+          const Icon = sec.icon
+          return (
+            <button
+              key={sec.key}
+              type="button"
+              onClick={() => onGoSection(sec, items)}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
+                active ? 'bg-brand-red text-white' : 'text-white/70 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              <Icon className="w-4 h-4 flex-shrink-0" />
+              <span>{sec.label}</span>
+              {sec.key === 'beta' ? (
+                <span className="ml-auto text-xs bg-white/20 text-white px-1.5 py-0.5 rounded-full">Beta</span>
+              ) : hasNews ? (
+                <span className="ml-auto w-1.5 h-1.5 rounded-full bg-white/70" aria-hidden="true" />
+              ) : null}
+            </button>
+          )
+        })}
       </nav>
 
       {/* Bottom section */}
@@ -727,12 +776,58 @@ function SupportChatWidget() {
   )
 }
 
+// ─── Section tab strip (v1.22) ────────────────────────────────────────────────
+// The pages of the active sidebar section, as horizontal tabs under the header.
+function SectionTabs({ items }) {
+  if (!items || !items.length) return null
+  return (
+    <div
+      className="bg-white border-b border-gray-200 px-4 md:px-6 lg:px-8 flex items-center gap-1 overflow-x-auto flex-shrink-0"
+      role="tablist"
+      aria-label="Section pages"
+    >
+      {items.map(item => {
+        const Icon = item.icon
+        return (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            className={({ isActive }) =>
+              `flex items-center gap-1.5 px-3 text-sm font-medium whitespace-nowrap border-b-2 -mb-px transition-colors ${
+                isActive ? 'border-brand-red text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-800'
+              }`
+            }
+            style={{ minHeight: 44 }}
+          >
+            <Icon className="w-4 h-4" />
+            {item.label}
+            {item.badge && item.badge !== 'Beta' && (
+              <span className="text-xs bg-red-50 text-brand-red px-1.5 py-0.5 rounded-full font-semibold" style={{ fontSize: 11 }}>
+                {item.badge}
+              </span>
+            )}
+          </NavLink>
+        )
+      })}
+    </div>
+  )
+}
+
 // ─── Layout ───────────────────────────────────────────────────────────────────
 export default function Layout() {
   const { user, signOut, isAdmin } = useAuth()
   // Full-bleed routes own the whole content area (no padding, no outer scroll)
   const { pathname } = useLocation()
   const fullBleed = pathname.startsWith('/broadside')
+
+  // ── Consolidated nav (v1.22): active section + remembered sub-tab ──────────
+  const activeSection = sectionForPath(pathname)
+  const currentSectionKey = activeSection?.key || null
+  useEffect(() => {
+    if (!activeSection || activeSection.direct) return
+    const owner = (activeSection.paths || []).find(p => pathname === p || pathname.startsWith(p + '/'))
+    if (owner) { try { sessionStorage.setItem('bb_nav_' + activeSection.key, owner) } catch { /* private mode */ } }
+  }, [pathname, activeSection])
 
   // v1.24.1: page titles live in the top bar (the formerly blank strip),
   // so pages start their content immediately — no duplicated headers.
@@ -785,11 +880,24 @@ export default function Layout() {
   // a new function reference being created on each Layout render.
   const onNavigate = useCallback(() => setSidebarOpen(false), [])
 
+  // Main-tab click: open the section's remembered page, else its first page.
+  const onGoSection = useCallback((sec, items) => {
+    let target = items[0]?.to
+    try {
+      const remembered = sessionStorage.getItem('bb_nav_' + sec.key)
+      if (remembered && items.some(i => i.to === remembered)) target = remembered
+    } catch { /* private mode */ }
+    if (target) navigate(target)
+    setSidebarOpen(false)
+  }, [navigate])
+
   return (
     <div className="flex h-screen overflow-hidden bg-brand-gray">
       {/* Sidebar — visible on md+ (iPad portrait and up) */}
       <aside className="hidden md:flex md:flex-col w-64 flex-shrink-0">
         <Sidebar
+          currentSectionKey={currentSectionKey}
+          onGoSection={onGoSection}
           isAdmin={isAdmin}
           isBeta={isBetaActive(user)}
           onNavigate={onNavigate}
@@ -804,6 +912,8 @@ export default function Layout() {
           <div className="fixed inset-0 bg-black/60" onClick={() => setSidebarOpen(false)} />
           <div className="relative flex flex-col w-72 max-w-xs">
             <Sidebar
+              currentSectionKey={currentSectionKey}
+              onGoSection={onGoSection}
               isAdmin={isAdmin}
               isBeta={isBetaActive(user)}
               onNavigate={onNavigate}
@@ -932,6 +1042,11 @@ export default function Layout() {
             </div>
           </div>
         </header>
+
+        {/* Section pages (consolidated nav v1.22) */}
+        {activeSection && !activeSection.direct && (
+          <SectionTabs items={sectionItems(activeSection, { isAdmin, isBeta: isBetaActive(user), tierConfig })} />
+        )}
 
         {/* Offline indicator */}
         <OfflineBanner />
