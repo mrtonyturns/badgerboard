@@ -81,12 +81,16 @@ function useScrollSpy(ids, docRef, enabled) {
     if (!el) return
     setActive(id)
     // Resolve the real scroll ancestor AT CLICK TIME, from the section itself.
+    // Instant (behavior:'auto') on purpose: smooth programmatic scrolling
+    // silently no-ops on this container in Chrome (verified live — both
+    // scrollTo and scrollIntoView with behavior:'smooth' leave scrollTop
+    // untouched while instant scrolling works). Working beats pretty.
     const scroller = scrollParentOf(el)
     if (scroller) {
       const delta = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top
-      scroller.scrollTo({ top: scroller.scrollTop + delta - 20, behavior: 'smooth' })
+      scroller.scrollTo({ top: scroller.scrollTop + delta - 20, behavior: 'auto' })
     } else {
-      window.scrollTo({ top: window.scrollY + el.getBoundingClientRect().top - 20, behavior: 'smooth' })
+      window.scrollTo({ top: window.scrollY + el.getBoundingClientRect().top - 20, behavior: 'auto' })
     }
   }, [])
 
