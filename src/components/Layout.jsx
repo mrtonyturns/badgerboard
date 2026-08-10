@@ -316,6 +316,9 @@ const NAV_SECTIONS = [
     { to: '/game-plan?tab=results',  icon: BarChart2,    label: 'Results',  q: { path: '/game-plan', tab: 'results' } },
     { to: '/events',      icon: CalendarDays, label: 'Events', badge: 'New' },
     { to: '/voter-lists', icon: UserCheck,    label: 'Voter Lists' },
+    // Candidate-side users get Campaign Connect on every paid plan; free
+    // (Scout) does not. Action-plan users find it under the Action tab instead.
+    { to: '/campaign-connect', icon: Users2, label: 'Campaign Connect', paidOnly: true, hideForActionPlan: true },
   ] },
   { key: 'action', label: 'Action', icon: ListChecks, actionOnly: true, items: [
     { to: '/prospecting',      icon: ListChecks, label: 'Prospecting' },
@@ -328,9 +331,11 @@ const NAV_SECTIONS = [
   ] },
 ]
 
-function navItemVisible(item, { isAdmin, isBeta, tierConfig }) {
+function navItemVisible(item, { isAdmin, isBeta, isPaid, isActionPlan, tierConfig }) {
   if (!item) return false
   if (item.adminOnly && !isAdmin) return false
+  if (item.paidOnly && !(isPaid || isAdmin)) return false
+  if (item.hideForActionPlan && isActionPlan && !isAdmin) return false
   if (item.feature && !(isAdmin || isBeta || tierConfig?.features?.[item.feature])) return false
   if (item.betaOnly && !(isAdmin || isBeta)) return false
   if (item.webOnly && isNativeApp) return false
@@ -353,8 +358,11 @@ function itemBasePath(item) {
 
 // Which section owns the current location. /game-plan splits on ?tab —
 // calendar/results belong to Campaign, the task board is Todo.
-function sectionForLocation(pathname, tab) {
+function sectionForLocation(pathname, tab, isActionPlan = false) {
   if (pathname === '/') return NAV_SECTIONS[0]
+  if (pathname === '/campaign-connect' || pathname.startsWith('/campaign-connect/')) {
+    return NAV_SECTIONS.find(x => x.key === (isActionPlan ? 'action' : 'campaign'))
+  }
   if (pathname === '/game-plan' || pathname.startsWith('/game-plan/')) {
     return (tab === 'calendar' || tab === 'results')
       ? NAV_SECTIONS.find(x => x.key === 'campaign')
@@ -438,7 +446,7 @@ function ChangelogPopover({ onClose }) {
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 // Also module-level. Receives everything it needs via props.
-const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, isActionPlan, onNavigate, onSignOut, tierConfig, currentSectionKey, onGoSection }) {
+const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, isActionPlan, isPaid, onNavigate, onSignOut, tierConfig, currentSectionKey, onGoSection }) {
   const [showChangelog, setShowChangelog] = useState(false)
   return (
     <div className="flex flex-col h-full bg-brand-navy">
@@ -455,7 +463,7 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, isActionPlan, onN
       {/* Navigation — main tabs; pages live in the top tab strip (v1.23) */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
         {NAV_SECTIONS.map(sec => {
-          const gates = { isAdmin, isBeta, isActionPlan, tierConfig }
+          const gates = { isAdmin, isBeta, isActionPlan, isPaid, tierConfig }
           if (!sectionVisible(sec, gates)) return null
           if (sec.direct) {
             const item = { to: sec.direct.to, icon: sec.icon, label: sec.label, end: sec.direct.end }
@@ -884,9 +892,10 @@ export default function Layout() {
   // ── Consolidated nav (v1.23): active section + remembered sub-tab ──────────
   const { search } = useLocation()
   const gpTab = new URLSearchParams(search).get('tab')
-  const activeSection = sectionForLocation(pathname, gpTab)
-  const currentSectionKey = activeSection?.key || null
   const isActionPlan = getUserPlanType(user) === 'action'
+  const isPaid = getUserTier(user) !== 'scout'
+  const activeSection = sectionForLocation(pathname, gpTab, isActionPlan)
+  const currentSectionKey = activeSection?.key || null
   useEffect(() => {
     if (!activeSection || activeSection.direct) return
     const owner = (activeSection.items || []).find(i => {
@@ -969,6 +978,7 @@ export default function Layout() {
           currentSectionKey={currentSectionKey}
           onGoSection={onGoSection}
           isActionPlan={isActionPlan}
+          isPaid={isPaid}
           isAdmin={isAdmin}
           isBeta={isBetaActive(user)}
           onNavigate={onNavigate}
@@ -986,6 +996,7 @@ export default function Layout() {
               currentSectionKey={currentSectionKey}
               onGoSection={onGoSection}
               isActionPlan={isActionPlan}
+              isPaid={isPaid}
               isAdmin={isAdmin}
               isBeta={isBetaActive(user)}
               onNavigate={onNavigate}
@@ -1117,7 +1128,7 @@ export default function Layout() {
 
         {/* Section pages (consolidated nav v1.23) */}
         {activeSection && !activeSection.direct && (() => {
-          const items = sectionItems(activeSection, { isAdmin, isBeta: isBetaActive(user), tierConfig })
+          const items = sectionItems(activeSection, { isAdmin, isBeta: isBetaActive(user), isPaid, isActionPlan, tierConfig })
           if (items.length < 2) return null
           return <SectionTabs items={items} pathname={pathname} tab={gpTab} />
         })()}
