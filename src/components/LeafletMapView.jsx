@@ -9,6 +9,7 @@ import {
   WI_SENATE_CENTROIDS,
   WI_ASSEMBLY_CENTROIDS,
 } from '../lib/wiDistricts'
+import { loadPlaceDemographics, placeKey, displayName, fmtNum, fmtMoney, fmtPct } from '../lib/placeDemographics'
 
 // Alias to the centroid maps — all values computed from the real GeoJSON boundary files
 const WI_COUNTY_COORDS  = WI_COUNTY_CENTROIDS
@@ -185,6 +186,9 @@ export default function LeafletMapView({
   offices,
   activeLayer = '',
   onDistrictClick,   // (info: { name, sublabel, layerKey } | null) => void
+  onLearnMore,        // optional: (countyName, cityName) => void — "Learn more" in hover lightbox
+  initialView,         // optional: { center: [lat,lng], zoom } — applied once on map init
+  onViewChange,        // optional: ({ center: [lat,lng], zoom }) => void — debounced on moveend/zoomend
 }) {
   const containerRef       = useRef(null)
   const mapRef             = useRef(null)
@@ -194,13 +198,78 @@ export default function LeafletMapView({
   const geoDataCache       = useRef({})
   const selectedRef        = useRef(null)   // { lyr, geoLayer, source }
   const onClickRef         = useRef(onDistrictClick)
+  const onLearnMoreRef     = useRef(onLearnMore)
+  const onViewChangeRef    = useRef(onViewChange)
   const citycentroidsRef   = useRef({})     // normalized city name → [lat, lng]
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError]   = useState(null)
   const [layerReloadKey, setLayerReloadKey] = useState(0)
 
-  // Keep callback ref fresh across re-renders
+  // ── Hover lightbox (municipal layer, cities with a demographics entry) ─────
+  const hoverTimerRef = useRef(null)   // pending 1.5s dwell timer
+  const hoverTargetRef = useRef(null)  // the leaflet layer currently pending/showing a card
+  const hideTimerRef  = useRef(null)   // short grace timer before hiding (lets cursor reach the card)
+  const lastPointRef  = useRef(null)   // last known container point for the hovered layer
+  const [hoverCard, setHoverCard] = useState(null) // { county, name, place, x, y }
+
+  const clearHoverTimer = () => { if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null } }
+  const clearHideTimer  = () => { if (hideTimerRef.current)  { clearTimeout(hideTimerRef.current);  hideTimerRef.current  = null } }
+
+  const hideHoverCard = () => {
+    clearHoverTimer(); clearHideTimer()
+    hoverTargetRef.current = null
+    setHoverCard(null)
+  }
+
+  const handleMuniMouseOver = (e, name, county) => {
+    clearHideTimer()
+    if (hoverTargetRef.current === e.target) return // already pending/showing for this feature
+    clearHoverTimer()
+    hoverTargetRef.current = e.target
+    lastPointRef.current = e.containerPoint
+    loadPlaceDemographics().then(data => {
+      if (hoverTargetRef.current !== e.target) return // moved off before data resolved
+      const key = placeKey(county, name)
+      const place = data?.places?.[key]
+      if (!place) return // no demographics entry — no lightbox, default tooltip stands
+      clearHoverTimer()
+      hoverTimerRef.current = setTimeout(() => {
+        if (hoverTargetRef.current !== e.target) return // moved off before dwell elapsed
+        const pt = lastPointRef.current || e.containerPoint
+        try { e.target.closeTooltip() } catch (_) {}
+        const CARD_W = 230, CARD_H = 210
+        let x = pt.x + 14, y = pt.y + 14
+        const rect = containerRef.current?.getBoundingClientRect()
+        if (rect) {
+          if (x + CARD_W > rect.width)  x = pt.x - CARD_W - 14
+          if (y + CARD_H > rect.height) y = pt.y - CARD_H - 14
+          x = Math.max(6, x); y = Math.max(6, y)
+        }
+        setHoverCard({ county, name, place, x, y })
+      }, 1500)
+    }).catch(() => {})
+  }
+
+  const handleMuniMouseMove = (e) => {
+    if (hoverTargetRef.current === e.target) lastPointRef.current = e.containerPoint
+  }
+
+  const handleMuniMouseOut = (e) => {
+    if (hoverTargetRef.current !== e.target) return
+    clearHoverTimer()
+    clearHideTimer()
+    // Short grace period — lets the cursor travel from the polygon edge onto the card
+    // without the card disappearing first (card itself cancels this on mouseenter).
+    hideTimerRef.current = setTimeout(() => {
+      hoverTargetRef.current = null
+      setHoverCard(null)
+    }, 180)
+  }
+
+  // Keep callback refs fresh across re-renders
   useEffect(() => { onClickRef.current = onDistrictClick })
+  useEffect(() => { onLearnMoreRef.current = onLearnMore })
+  useEffect(() => { onViewChangeRef.current = onViewChange })
 
   // ── 0. Preload city centroids from municipal GeoJSON ───────────────────────
   // Done once at mount so municipal office dots have accurate coordinates.
@@ -227,7 +296,9 @@ export default function LeafletMapView({
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
 
-    const map = L.map(containerRef.current, { center: [44.5, -89.5], zoom: 7 })
+    const initCenter = Array.isArray(initialView?.center) ? initialView.center : [44.5, -89.5]
+    const initZoom   = typeof initialView?.zoom === 'number' ? initialView.zoom : 7
+    const map = L.map(containerRef.current, { center: initCenter, zoom: initZoom })
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -239,6 +310,7 @@ export default function LeafletMapView({
 
     // Clicking the map background deselects the current district
     map.on('click', () => {
+      hideHoverCard()
       if (selectedRef.current) {
         const { lyr, geoLayer } = selectedRef.current
         try { geoLayer.resetStyle(lyr) } catch (_) {}
@@ -246,6 +318,23 @@ export default function LeafletMapView({
         onClickRef.current?.(null)
       }
     })
+
+    // Hide the hover lightbox on any pan/zoom so it doesn't float over stale content
+    map.on('movestart zoomstart', () => hideHoverCard())
+
+    // Debounced view-change notifications (center/zoom) — lets the host page persist
+    // the current map view (e.g. to sessionStorage) for back-navigation restoration.
+    let viewChangeTimer = null
+    const emitViewChange = () => {
+      if (viewChangeTimer) clearTimeout(viewChangeTimer)
+      viewChangeTimer = setTimeout(() => {
+        if (!mapRef.current) return
+        const c = mapRef.current.getCenter()
+        onViewChangeRef.current?.({ center: [c.lat, c.lng], zoom: mapRef.current.getZoom() })
+      }, 400)
+    }
+    map.on('moveend zoomend', emitViewChange)
+    map._bbViewChangeTimer = () => { if (viewChangeTimer) clearTimeout(viewChangeTimer) }
 
     requestAnimationFrame(() => requestAnimationFrame(() => map.invalidateSize()))
 
@@ -282,9 +371,11 @@ export default function LeafletMapView({
 
     return () => {
       try { map._bbResizeObserver?.disconnect() } catch (_) {}
+      try { map._bbViewChangeTimer?.() } catch (_) {}
       map.remove()
       mapRef.current = null
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ── 2. Dot markers ─────────────────────────────────────────────────────────
@@ -408,6 +499,9 @@ export default function LeafletMapView({
     if (!map) return
     let cancelled = false
 
+    // Hide any pending/visible hover lightbox — it belongs to the layer being replaced
+    hideHoverCard()
+
     // Clear any active selection before switching layers
     if (selectedRef.current) {
       const { lyr, geoLayer } = selectedRef.current
@@ -469,14 +563,22 @@ export default function LeafletMapView({
                 // Only patch the specific hover properties — never change weight/dash
                 e.target.setStyle(source.hoverStyle)
               }
+              if (capturedLayerKey === 'municipal' && county) {
+                handleMuniMouseOver(e, name, county)
+              }
+            },
+            mousemove(e) {
+              if (capturedLayerKey === 'municipal') handleMuniMouseMove(e)
             },
             mouseout(e) {
               if (selectedRef.current?.lyr !== e.target) {
                 geoLayer.resetStyle(e.target)
               }
+              if (capturedLayerKey === 'municipal') handleMuniMouseOut(e)
             },
             click(e) {
               L.DomEvent.stopPropagation(e)
+              hideHoverCard()
 
               // Deselect previous feature
               if (selectedRef.current) {
@@ -591,6 +693,58 @@ export default function LeafletMapView({
           </div>
         ))}
       </div>
+
+      {/* Hover lightbox — municipal polygons with a demographics entry, shown after
+          a ~1.5s dwell. Clicking Learn more delegates to the optional onLearnMore prop. */}
+      {hoverCard && (
+        <div
+          onMouseEnter={() => clearHideTimer()}
+          onMouseLeave={() => hideHoverCard()}
+          style={{
+            position:'absolute', left:hoverCard.x, top:hoverCard.y, zIndex:2500,
+            width:230, background:'white', borderRadius:12,
+            boxShadow:'0 8px 28px rgba(0,0,0,0.22)', border:'1px solid rgba(0,0,0,0.06)',
+            pointerEvents:'auto', overflow:'hidden',
+          }}
+        >
+          <div style={{ padding:'10px 12px 8px', borderBottom:'1px solid #f1f5f9' }}>
+            <div style={{ fontSize:10, fontWeight:700, textTransform:'uppercase', letterSpacing:0.4, color:'#64748b', marginBottom:2 }}>
+              {hoverCard.place.county ? `${hoverCard.place.county} County` : 'Wisconsin'}
+            </div>
+            <div style={{ fontSize:13.5, fontWeight:800, color:'#0f2540', lineHeight:1.25 }}>
+              {displayName(hoverCard.place)}
+            </div>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, padding:'8px 10px' }}>
+            {[
+              ['Population', fmtNum(hoverCard.place.pop)],
+              ['Median age', hoverCard.place.median_age == null ? '—' : hoverCard.place.median_age],
+              ['Median HH income', fmtMoney(hoverCard.place.median_hh_income)],
+              ['Home ownership', fmtPct(hoverCard.place.ownership_pct)],
+            ].map(([label, value]) => (
+              <div key={label} style={{ background:'#f8fafc', borderRadius:8, padding:'5px 7px' }}>
+                <div style={{ fontSize:9, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:0.3 }}>{label}</div>
+                <div style={{ fontSize:12, fontWeight:800, color:'#0f172a', marginTop:1 }}>{value}</div>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const { county, name } = hoverCard
+              hideHoverCard()
+              onLearnMoreRef.current?.(county, name)
+            }}
+            style={{
+              width:'100%', border:'none', borderTop:'1px solid #f1f5f9', background:'#0f2540',
+              color:'white', fontSize:11.5, fontWeight:700, padding:'8px 10px', cursor:'pointer',
+              display:'flex', alignItems:'center', justifyContent:'center', gap:5,
+            }}
+          >
+            Learn more →
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -10,6 +10,42 @@ import MapErrorBoundary from '../components/MapErrorBoundary'
 import DistrictDashboard, { districtKeyFor } from '../components/DistrictDashboard'
 import LoadingBar from '../components/LoadingBar'
 import CityDemographicsPanel, { usePlaceLookup } from '../components/CityDemographicsPanel'
+import { placePath } from '../lib/placeDemographics'
+
+// ── Map view/selection persistence (sessionStorage) ───────────────────────────
+// Lets "Back" from a city-demographics page (or any navigation away and back)
+// restore the exact prior map state instead of resetting to the whole-state view.
+const OFFICES_MAP_CTX_KEY = 'bb_map_ctx_offices'
+
+function readMapCtx(key) {
+  try {
+    const raw = sessionStorage.getItem(key)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return (parsed && typeof parsed === 'object') ? parsed : null
+  } catch (_) {
+    return null
+  }
+}
+
+function writeMapCtx(key, payload) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify(payload))
+  } catch (_) {
+    // Likely quota exceeded (e.g. a large selectedDistrict.geometry) — retry without geometry
+    try {
+      const slim = {
+        ...payload,
+        selectedDistrict: payload.selectedDistrict
+          ? { ...payload.selectedDistrict, geometry: undefined }
+          : null,
+      }
+      sessionStorage.setItem(key, JSON.stringify(slim))
+    } catch (_) {
+      // give up silently — restoring the map view is a nicety, not critical
+    }
+  }
+}
 
 const LEVELS     = ['', 'federal', 'state', 'county', 'municipal']
 const TYPES      = ['', 'executive', 'legislative', 'judicial', 'administrative']
@@ -414,10 +450,21 @@ export default function Offices() {
   const [fetchError, setFetchError]   = useState(null)
   const [sortField, setSortField]     = useState(null)
   const [sortDir, setSortDir]         = useState('asc')
-  const [viewMode, setViewMode]       = useState('map')
+
+  // Restored once, synchronously, from sessionStorage — safe against stale/malformed
+  // payloads (readMapCtx already try/catches the parse).
+  const [restoredMapCtx] = useState(() => readMapCtx(OFFICES_MAP_CTX_KEY))
+
+  const [viewMode, setViewMode]       = useState(() =>
+    (restoredMapCtx?.viewMode === 'table' || restoredMapCtx?.viewMode === 'map') ? restoredMapCtx.viewMode : 'map')
   const [mapEverShown, setMapEverShown] = useState(true)
-  const [activeLayer, setActiveLayer]   = useState('')
-  const [selectedDistrict, setSelectedDistrict] = useState(null)
+  const [activeLayer, setActiveLayer]   = useState(() =>
+    typeof restoredMapCtx?.activeLayer === 'string' ? restoredMapCtx.activeLayer : '')
+  const [selectedDistrict, setSelectedDistrict] = useState(() =>
+    (restoredMapCtx?.selectedDistrict && typeof restoredMapCtx.selectedDistrict === 'object') ? restoredMapCtx.selectedDistrict : null)
+  const [mapView, setMapView] = useState(() =>
+    (restoredMapCtx?.view && Array.isArray(restoredMapCtx.view.center) && typeof restoredMapCtx.view.zoom === 'number')
+      ? restoredMapCtx.view : null)
   const searchDebounceRef = useRef(null)
 
   const [form, setForm] = useState({
@@ -445,6 +492,12 @@ export default function Offices() {
   useEffect(() => {
     getOffices({}).then(({ data }) => setAllOfficesUnfiltered(data || []))
   }, [])
+
+  // Persist map context (layer, selection, view) whenever it changes so that
+  // navigating to a city page and back restores the exact prior map state.
+  useEffect(() => {
+    writeMapCtx(OFFICES_MAP_CTX_KEY, { activeLayer, viewMode, selectedDistrict, view: mapView })
+  }, [activeLayer, viewMode, selectedDistrict, mapView])
 
   const fetchOffices = async () => {
     setLoading(true)
@@ -637,6 +690,9 @@ export default function Offices() {
               offices={allOfficesUnfiltered}
               activeLayer={activeLayer}
               onDistrictClick={handleDistrictClick}
+              initialView={mapView}
+              onViewChange={setMapView}
+              onLearnMore={(county, name) => navigate(placePath(county, name))}
             />
           </MapErrorBoundary>
 

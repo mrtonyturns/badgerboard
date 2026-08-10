@@ -9,6 +9,42 @@ import SearchableSelect from '../components/SearchableSelect'
 import MapErrorBoundary from '../components/MapErrorBoundary'
 import LoadingBar from '../components/LoadingBar'
 import CityDemographicsPanel, { usePlaceLookup } from '../components/CityDemographicsPanel'
+import { placePath } from '../lib/placeDemographics'
+
+// ── Map view/selection persistence (sessionStorage) ───────────────────────────
+// Lets "Back" from a city-demographics page (or any navigation away and back)
+// restore the exact prior map state instead of resetting to the whole-state view.
+const CANDIDATES_MAP_CTX_KEY = 'bb_map_ctx_candidates'
+
+function readMapCtx(key) {
+  try {
+    const raw = sessionStorage.getItem(key)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return (parsed && typeof parsed === 'object') ? parsed : null
+  } catch (_) {
+    return null
+  }
+}
+
+function writeMapCtx(key, payload) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify(payload))
+  } catch (_) {
+    // Likely quota exceeded (e.g. a large selectedDistrict.geometry) — retry without geometry
+    try {
+      const slim = {
+        ...payload,
+        selectedDistrict: payload.selectedDistrict
+          ? { ...payload.selectedDistrict, geometry: undefined }
+          : null,
+      }
+      sessionStorage.setItem(key, JSON.stringify(slim))
+    } catch (_) {
+      // give up silently — restoring the map view is a nicety, not critical
+    }
+  }
+}
 
 // Party list, status enum and the display-only label map (DB keeps 'exploring',
 // users see 'Not Known') live in lib/campaignEnums.js so the plan dashboards
@@ -112,10 +148,19 @@ export default function Candidates() {
   const [autofilling, setAutofilling] = useState(false)
   const [autofillNote, setAutofillNote] = useState('')
   const [showDiscover, setShowDiscover] = useState(false)
-  const [viewMode, setViewMode] = useState('table')
-  const [mapEverShown, setMapEverShown] = useState(false)
-  const [activeLayer, setActiveLayer] = useState('')
-  const [selectedDistrict, setSelectedDistrict] = useState(null)
+  // Restored once, synchronously, from sessionStorage — safe against stale/malformed
+  // payloads (readMapCtx already try/catches the parse).
+  const [restoredMapCtx] = useState(() => readMapCtx(CANDIDATES_MAP_CTX_KEY))
+
+  const [viewMode, setViewMode] = useState(() => restoredMapCtx?.viewMode === 'map' ? 'map' : 'table')
+  const [mapEverShown, setMapEverShown] = useState(() => restoredMapCtx?.viewMode === 'map')
+  const [activeLayer, setActiveLayer] = useState(() =>
+    typeof restoredMapCtx?.activeLayer === 'string' ? restoredMapCtx.activeLayer : '')
+  const [selectedDistrict, setSelectedDistrict] = useState(() =>
+    (restoredMapCtx?.selectedDistrict && typeof restoredMapCtx.selectedDistrict === 'object') ? restoredMapCtx.selectedDistrict : null)
+  const [mapView, setMapView] = useState(() =>
+    (restoredMapCtx?.view && Array.isArray(restoredMapCtx.view.center) && typeof restoredMapCtx.view.zoom === 'number')
+      ? restoredMapCtx.view : null)
 
   const switchView = (mode) => {
     if (mode === 'map') setMapEverShown(true)
@@ -128,6 +173,12 @@ export default function Candidates() {
   }
 
   const handleDistrictClick = (info) => setSelectedDistrict(info)
+
+  // Persist map context (layer, selection, view) whenever it changes so that
+  // navigating to a city page and back restores the exact prior map state.
+  useEffect(() => {
+    writeMapCtx(CANDIDATES_MAP_CTX_KEY, { activeLayer, viewMode, selectedDistrict, view: mapView })
+  }, [activeLayer, viewMode, selectedDistrict, mapView])
 
   const LAYER_BUTTONS = [
     { key: 'federal',   label: 'Federal',   activeCls: 'bg-blue-600 text-white border-blue-600',    dotColor: '#1d4ed8' },
@@ -666,6 +717,9 @@ export default function Candidates() {
                   candidates={candidates}
                   activeLayer={activeLayer}
                   onDistrictClick={handleDistrictClick}
+                  initialView={mapView}
+                  onViewChange={setMapView}
+                  onLearnMore={(county, name) => navigate(placePath(county, name))}
                 />
               </MapErrorBoundary>
 

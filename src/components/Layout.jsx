@@ -40,10 +40,18 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.19.0'
+const APP_VERSION = 'v1.19.1'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.19.1',
+    date: 'July 21, 2026',
+    changes: [
+      'Map remembers where you were: coming back from a city page restores your exact layer, zoom, and selected district or county',
+      'Hover any city (1,500+) for about a second and a quick demographics card pops up — Learn more jumps straight to the full city page',
+    ],
+  },
   {
     version: 'v1.19.0',
     date: 'July 21, 2026',
