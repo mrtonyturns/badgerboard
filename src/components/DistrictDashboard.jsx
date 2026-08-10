@@ -8,6 +8,7 @@ import { X, Sparkles, ChevronRight, Loader2, Users, MapPin, RefreshCw } from 'lu
 import { supabase } from '../lib/supabase'
 import { pointInGeometry, geometryBounds } from '../lib/geo'
 import { loadPlaceDemographics, placeKey, placePath } from '../lib/placeDemographics'
+import DistrictElectionHistory from './DistrictElectionHistory'
 
 // ── module-level data caches (fetched once per session) ──────────────────────
 let _demoCache = null, _presCache = null, _popCache = null
@@ -194,7 +195,6 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
   const [histLoading, setHistLoading] = useState(false)
   const [histErr, setHistErr]   = useState(null)
   const [voters, setVoters]     = useState(null)
-  const [expanded, setExpanded] = useState({})
   const [showAllElig, setShowAllElig] = useState(false)
 
   // static data + DB contests + cached history + voters
@@ -204,7 +204,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
 
     const num = id?.num
     const baseSel = supabase.from('election_contests')
-      .select('id, office, district, seats, election:elections(id, name, election_date), results:election_results(candidate_name, party, votes, vote_pct, winner, declared)')
+      .select('id, office, district, seats, election:elections(id, name, election_date, type), results:election_results(candidate_name, party, votes, vote_pct, winner, declared)')
     if (id?.chamber === 'county') {
       baseSel.eq('county', id.countyName).limit(60).then(({ data }) => { if (alive) setContests(data || []) })
     } else if (id?.chamber === 'ussenate') {
@@ -298,7 +298,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
   const people = history?.people || []
   const entries = history?.entries || []
   const current = entries.find(e => e.current)
-  const currentBio = people.find(p => p.name === current?.name)?.bio
+  const hasContestResults = contests.some(c => (c.results || []).length > 0)
   const leanPct = lean ? Math.max(6, Math.min(94, 50 + lean.score * 1.6)) : 50
   const eligShown = showAllElig ? (eligible || []) : (eligible || []).slice(0, 4)
 
@@ -408,7 +408,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
               <div style={S.card}>
                 <div style={S.cardTitle}>Office history <span style={S.note}>{id.chamber === 'county' ? 'County Sheriff · 15 years' : '15 years'}</span></div>
 
-                {!history && !histLoading && (
+                {!history && !hasContestResults && !histLoading && (
                   <div style={{ textAlign: 'center', padding: '28px 10px' }}>
                     <Sparkles size={26} style={{ color: '#8B0000', margin: '0 auto 10px' }} />
                     <p style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>{id.chamber === 'county' ? 'Research this county\'s flagship seat' : "Research this seat's history"}</p>
@@ -430,24 +430,10 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
                   </div>
                 )}
 
-                {history && !histLoading && (
+                {(history || hasContestResults) && !histLoading && (
                   <>
-                    {entries.length > 1 && (
-                      <>
-                        <div style={{ fontSize: 10.5, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 5 }}>Party control</div>
-                        <div style={{ display: 'flex', gap: 3, marginBottom: 12 }}>
-                          {[...entries].reverse().map((e, i) => (
-                            <div key={i} title={`${e.year} — ${e.name} (${e.party})`}
-                              style={{ flex: 1, height: 22, borderRadius: 5, background: PARTY_COLOR[e.party] || '#64748B', opacity: e.current ? 1 : 0.55, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9.5, fontWeight: 800, color: '#fff', cursor: 'default' }}>
-                              '{String(e.year).slice(2)}
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-
                     {current && (
-                      <div style={{ background: 'linear-gradient(135deg, #12203A, #0A1628)', borderRadius: 14, padding: 15, color: '#fff', marginBottom: 10 }}>
+                      <div style={{ background: 'linear-gradient(135deg, #12203A, #0A1628)', borderRadius: 14, padding: 15, color: '#fff', marginBottom: 12 }}>
                         <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#FCA5A5' }}>Current officeholder</div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 8 }}>
                           <div style={{ width: 44, height: 44, borderRadius: 13, background: PARTY_COLOR[current.party] || '#64748B', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 900, flexShrink: 0 }}>
@@ -468,55 +454,21 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
                             </div>
                           </>
                         )}
-                        {currentBio && <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.75)', lineHeight: 1.55, marginTop: 10, fontWeight: 500 }}>{currentBio}</div>}
-                        <button onClick={() => goProfiler(current.name, currentBio)} style={{ marginTop: 11, background: '#B91C1C', color: '#fff', fontSize: 11.5, fontWeight: 800, padding: '8px 13px', borderRadius: 9, border: 'none', cursor: 'pointer' }}>
+                        <button onClick={() => goProfiler(current.name, null)} style={{ marginTop: 11, background: '#B91C1C', color: '#fff', fontSize: 11.5, fontWeight: 800, padding: '8px 13px', borderRadius: 9, border: 'none', cursor: 'pointer' }}>
                           Create full profile in Profiler →
                         </button>
                       </div>
                     )}
 
-                    {entries.filter(e => !e.current).map((e, i) => {
-                      const k = `${e.year}-${e.name}`
-                      const bio = people.find(p => p.name === e.name)?.bio
-                      return (
-                        <div key={k} onClick={() => setExpanded(x => ({ ...x, [k]: !x[k] }))}
-                          style={{ border: '1.5px solid #EDF1F6', borderRadius: 12, padding: '11px 13px', marginBottom: 8, cursor: 'pointer', background: '#fff', transition: 'all .15s' }}
-                          onMouseEnter={ev => { ev.currentTarget.style.borderColor = '#B91C1C' }}
-                          onMouseLeave={ev => { ev.currentTarget.style.borderColor = '#EDF1F6' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                            <div style={{ width: 30, height: 30, borderRadius: 9, background: PARTY_COLOR[e.party] || '#64748B', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 900, color: '#fff', flexShrink: 0 }}>
-                              {e.name.split(' ').map(w => w[0]).slice(0, 2).join('')}
-                            </div>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontSize: 13.5, fontWeight: 800, color: '#0F172A' }}>{e.name}</div>
-                              <div style={{ fontSize: 10.5, fontWeight: 800, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{e.election} · {e.result}</div>
-                            </div>
-                            <ChevronRight size={14} style={{ marginLeft: 'auto', color: '#CBD5E1', transform: expanded[k] ? 'rotate(90deg)' : 'none', transition: 'transform .15s', flexShrink: 0 }} />
-                          </div>
-                          {e.vote_pct != null && (
-                            <>
-                              <div style={{ height: 5, borderRadius: 99, background: '#F1F5F9', marginTop: 8, overflow: 'hidden' }}>
-                                <div style={{ height: '100%', borderRadius: 99, background: PARTY_COLOR[e.party] || '#94A3B8', width: `${e.vote_pct}%` }} />
-                              </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, fontWeight: 700, color: '#94A3B8', marginTop: 3 }}>
-                                <span>{e.opponent ? `vs. ${e.opponent}` : e.party}</span><span>{e.vote_pct}%</span>
-                              </div>
-                            </>
-                          )}
-                          {expanded[k] && (
-                            <div style={{ marginTop: 9 }}>
-                              {bio && <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.55, fontWeight: 500 }}>{bio}</div>}
-                              <button onClick={ev => { ev.stopPropagation(); goProfiler(e.name, bio) }} style={{ ...S.btn, marginTop: 8, fontSize: 11.5, padding: '6px 11px' }}>Create full profile →</button>
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                    {history.note && <div style={{ fontSize: 11.5, color: '#94A3B8', fontWeight: 600, marginTop: 4 }}>{history.note}</div>}
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
-                      <span style={{ fontSize: 11.5, color: '#94A3B8', fontWeight: 600 }}>✦ AI-researched, saved for all users</span>
+                    <DistrictElectionHistory contests={contests} history={history} PARTY_COLOR={PARTY_COLOR} onProfiler={goProfiler} />
+
+                    {history?.note && <div style={{ fontSize: 11.5, color: '#94A3B8', fontWeight: 600, marginTop: 4 }}>{history.note}</div>}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
+                      <span style={{ fontSize: 11.5, color: '#94A3B8', fontWeight: 600 }}>
+                        {history ? '✦ AI-researched, saved for all users' : hasContestResults ? 'From live election results' : ''}
+                      </span>
                       <button onClick={() => researchHistory(true)} title="Re-run the AI research" style={{ background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 700 }}>
-                        <RefreshCw size={11} /> Refresh
+                        <RefreshCw size={11} /> {history ? 'Refresh' : 'Research officeholders'}
                       </button>
                     </div>
                   </>

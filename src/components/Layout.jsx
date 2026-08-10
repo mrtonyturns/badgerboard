@@ -40,10 +40,18 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.19.1'
+const APP_VERSION = 'v1.19.2'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.19.2',
+    date: 'July 21, 2026',
+    changes: [
+      'District office history redesigned: real election results with color-coded candidates — vote totals, percentages, and one segmented bar per general and per party primary',
+      'Officeholder bios removed from the history view — name, party, and the numbers that matter',
+    ],
+  },
   {
     version: 'v1.19.1',
     date: 'July 21, 2026',
