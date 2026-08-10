@@ -572,6 +572,7 @@ export default function ReportReader({
   headerExtra = null,
   verdicts = null,
   onVerdict = null,
+  onSectionChange = null,
 }) {
   const [mode, setMode]   = useState('full')
   const [vOnly, setVOnly] = useState(false)
@@ -598,8 +599,20 @@ export default function ReportReader({
     return filterToUnverified(report.sections)
   }, [report, vOnly])
 
+  // Let the host remember which section is in view (refresh-proof reading spot).
+  const onSectionChangeRef = useRef(onSectionChange)
+  onSectionChangeRef.current = onSectionChange
+
   const railIds = useMemo(() => visible.map(s => s.id), [visible])
   const { active, scrollToSection } = useScrollSpy(railIds, docRef, true)
+
+  // Report the in-view section upward: rail clicks land instantly via
+  // scrollToSection's setActive; scroll changes settle through this debounce.
+  useEffect(() => {
+    if (!active) return
+    const t = setTimeout(() => onSectionChangeRef.current?.(active), 800)
+    return () => clearTimeout(t)
+  }, [active])
 
   const office = candidate.office || candidate.offices || null
   const officeLabel = office
