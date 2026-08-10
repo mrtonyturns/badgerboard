@@ -271,14 +271,16 @@ export default function Candidates() {
       const { data, error } = await getCandidates({
         search: search || undefined,
         party: partyFilter || undefined,
-        status: statusFilter !== '__monitored__' ? (statusFilter || undefined) : undefined,
+        status: undefined,   // status filter removed — monitoring filters are client-side
         office_id: officeFilter || undefined,
       })
       if (error) { console.error('Failed to load candidates:', error); setLoading(false); return }
-      // Client-side filter for "Show active only" (monitored candidates)
+      // Client-side monitoring filters
       const filtered = statusFilter === '__monitored__'
         ? (data || []).filter(c => c.section_timestamps?.monitoring === true)
-        : (data || [])
+        : statusFilter === '__unmonitored__'
+          ? (data || []).filter(c => c.section_timestamps?.monitoring !== true)
+          : (data || [])
       setCandidates(filtered)
     } catch (err) {
       console.error('fetchData error:', err)
@@ -654,9 +656,13 @@ export default function Candidates() {
           <SearchableSelect className="sm:w-40" value={partyFilter} onChange={setPartyFilter}
             options={[{ value: '', label: 'All Parties' }, ...PARTIES.map(p => ({ value: p, label: p }))]}
             placeholder="All Parties" />
-          <SearchableSelect className="sm:w-40" value={statusFilter} onChange={setStatusFilter}
-            options={[{ value: '', label: 'All Statuses' }, ...STATUSES.map(s => ({ value: s, label: statusLabel(s) }))]}
-            placeholder="All Statuses" />
+          <SearchableSelect className="sm:w-44" value={statusFilter} onChange={setStatusFilter}
+            options={[
+              { value: '', label: 'All Candidates' },
+              { value: '__monitored__', label: 'Monitoring on' },
+              { value: '__unmonitored__', label: 'Monitoring off' },
+            ]}
+            placeholder="All Candidates" />
         </div>
         {/* Office filter badge — shown when navigated from district panel */}
         {officeFilter && (
@@ -782,9 +788,9 @@ export default function Candidates() {
                                   <div style={{ fontSize:13, fontWeight:600, color:'#111', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.name}</div>
                                   {c.party && <div style={{ fontSize:11, color:'#6b7280' }}>{c.party}</div>}
                                 </div>
-                                {c.status && (
-                                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium flex-shrink-0 ${statusCls[c.status] || 'bg-gray-100 text-gray-500'}`} style={{ fontSize:10 }}>
-                                    {statusLabel(c.status)}
+                                {c.section_timestamps?.monitoring === true && (
+                                  <span className="text-xs px-1.5 py-0.5 rounded-full font-semibold flex-shrink-0 bg-emerald-100 text-emerald-700" style={{ fontSize:10 }}>
+                                    Monitoring
                                   </span>
                                 )}
                               </div>
@@ -819,7 +825,7 @@ export default function Candidates() {
                         <th className="table-header">Candidate</th>
                         <th className="table-header hidden md:table-cell">Office / District</th>
                         <th className="table-header hidden lg:table-cell">Election</th>
-                        <th className="table-header">Status</th>
+                        <th className="table-header">Monitoring</th>
                         <th className="table-header hidden sm:table-cell">Contact</th>
                         <th className="table-header">Actions</th>
                       </tr>
@@ -857,13 +863,14 @@ export default function Candidates() {
                           </td>
                           <td className="table-cell">
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColor(c.status)}`}>
-                                {statusLabel(c.status)}
-                              </span>
-                              {c.section_timestamps?.monitoring === true && (
-                                <span className="flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold" title="Active monitoring — weekly profile refresh enabled">
+                              {c.section_timestamps?.monitoring === true ? (
+                                <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold" title="Active monitoring — weekly profile refresh enabled">
                                   <Zap className="w-2.5 h-2.5" />
-                                  Active
+                                  Monitoring
+                                </span>
+                              ) : (
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium" title="Active monitoring is off for this candidate">
+                                  Not monitored
                                 </span>
                               )}
                             </div>

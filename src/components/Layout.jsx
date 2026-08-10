@@ -40,10 +40,17 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.20.1'
+const APP_VERSION = 'v1.20.2'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.20.2',
+    date: 'July 21, 2026',
+    changes: [
+      'Candidates list: the Status column and filter are replaced by Active Monitoring — see and filter by who is being refreshed weekly at a glance',
+    ],
+  },
   {
     version: 'v1.20.1',
     date: 'July 21, 2026',
