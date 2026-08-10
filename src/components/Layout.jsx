@@ -40,10 +40,18 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.24.1'
+const APP_VERSION = 'v1.24.2'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.24.2',
+    date: 'August 10, 2026',
+    changes: [
+      'Signed-in devices is real: every session with device, IP and last-active, a THIS DEVICE badge, per-device sign-out, and one link to sign out everywhere else',
+      'Settings hero centered to spec; account fields prefill with your saved name and organization',
+    ],
+  },
   {
     version: 'v1.24.1',
     date: 'August 10, 2026',

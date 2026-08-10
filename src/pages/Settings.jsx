@@ -430,11 +430,10 @@ export default function Settings() {
   }
 
   // ── Hero ────────────────────────────────────────────────────────────────────
+  // Centred: name + email stacked, the three stat tiles in a row beneath them.
+  // There is deliberately NO avatar tile here — the only photo control lives in
+  // the "Your account" card, where it can be changed.
   const displayName = savedName || user?.email?.split('@')[0] || 'Your account'
-  // Written by AccountPane's "Change photo" (a ≤96px JPEG data URL in
-  // user_metadata). Absent → the initial-letter tile.
-  const avatarUrl   = user?.user_metadata?.avatar_url || ''
-  const heroInitial = (savedName || user?.email || 'U').charAt(0).toUpperCase()
   const heroStats = useMemo(() => ([
     {
       label: 'PROFILES LEFT',
@@ -526,26 +525,11 @@ export default function Settings() {
           position: 'absolute', top: -120, right: '18%', width: 320, height: 320, borderRadius: '50%',
           background: 'radial-gradient(circle, rgba(165,28,36,.38) 0%, rgba(165,28,36,0) 70%)',
         }} />
-        <div className="st-hero" style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 16 }}>
-          {/* Avatar — photo if one is set, otherwise the initial-letter tile. */}
-          {avatarUrl ? (
-            <img
-              src={avatarUrl}
-              alt=""
-              style={{
-                flex: 'none', width: 48, height: 48, borderRadius: '50%', objectFit: 'cover',
-                border: '1px solid rgba(255,255,255,.22)', display: 'block',
-              }}
-            />
-          ) : (
-            <span aria-hidden="true" style={{
-              flex: 'none', width: 48, height: 48, borderRadius: '50%', background: T.red,
-              border: '1px solid rgba(255,255,255,.22)', color: '#fff',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 19, fontWeight: 700, lineHeight: 1,
-            }}>{heroInitial}</span>
-          )}
-          <div style={{ flex: 1, minWidth: 180 }}>
+        <div style={{
+          position: 'relative', display: 'flex', flexDirection: 'column',
+          alignItems: 'center', gap: 14,
+        }}>
+          <div style={{ maxWidth: '100%', minWidth: 0, textAlign: 'center' }}>
             <div style={{
               fontSize: 21, fontWeight: 700, color: '#fff', letterSpacing: '-.3px',
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
@@ -555,7 +539,9 @@ export default function Settings() {
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
             }}>{user?.email}</div>
           </div>
-          <div className="st-herostats" style={{ marginLeft: 'auto', flex: 'none', display: 'flex', gap: 9 }}>
+          <div style={{
+            display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: 9,
+          }}>
             {heroStats.map(h => (
               <div key={h.label} style={{
                 minWidth: 96, background: 'rgba(255,255,255,.07)',

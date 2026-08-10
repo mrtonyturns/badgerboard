@@ -2,16 +2,24 @@
 //
 // Display name and organization are NOT saved on blur: they feed the shell's
 // unsaved-changes bar (Settings.jsx), which is the only thing that writes them.
+// Their initial values come from the SAME place that save path writes —
+// user_metadata.display_name and user_metadata.business — so the bar diffs
+// against what is actually stored. See Settings.jsx → metaName / metaOrg.
 //
 // The photo is the exception — it saves immediately, because there is no text
 // field to hold it. It is stored INLINE as a data URL in user_metadata
 // (avatar_url) rather than in Storage: no bucket, no policy, no public object
 // to leak. That only works because the image is downscaled to a 96px square
 // JPEG first, which lands around 3–8KB. See shrinkToDataUrl().
+//
+// Signed-in devices is real, not a stub: supabase/migrations/
+// 20260810000001_session_list_rpc.sql exposes auth.sessions to its own owner
+// through get_my_sessions() / revoke_my_session(). We show the raw IP because
+// we have no geolocation — a wrong city is worse than an honest address.
 
-import React, { useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
-import { Card, CardBody, Row, Field, Btn, LinkBtn, Pill, Note, Msg, Spinner, StubPill, T } from './shared'
+import { Card, CardBody, Row, Field, Btn, LinkBtn, Pill, Note, Msg, Spinner, T } from './shared'
 
 const SUPPORT_EMAIL = 'support@badgerboardwi.com'
 
@@ -52,25 +60,203 @@ function shrinkToDataUrl(file) {
   })
 }
 
-const fmtDate = (v) => {
-  const t = v ? new Date(v).getTime() : NaN
-  return Number.isFinite(t)
-    ? new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    : null
-}
-const fmtDateTime = (v) => {
-  const t = v ? new Date(v).getTime() : NaN
-  return Number.isFinite(t)
-    ? new Date(t).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
-    : null
+// ── User-agent → a name you can recognise ─────────────────────────────────────
+// Deliberately tiny and local: no ua-parser dependency for one line of text.
+// ORDER MATTERS. Edge and Opera both put "Chrome" in their UA, and every iOS
+// browser puts "Safari" in its own, so the specific tokens are tested first.
+
+function browserOf(ua) {
+  if (/\bEdg(e|A|iOS)?\//i.test(ua))       return 'Edge'
+  if (/\bOPR\/|\bOpera[\s/]/i.test(ua))    return 'Opera'
+  if (/\bSamsungBrowser\//i.test(ua))      return 'Samsung Internet'
+  if (/\bFirefox\/|\bFxiOS\//i.test(ua))   return 'Firefox'
+  if (/\bCriOS\/|\bChrome\//i.test(ua))    return 'Chrome'
+  if (/\bSafari\//i.test(ua))              return 'Safari'
+  return null
 }
 
+function platformOf(ua) {
+  if (/\biPhone\b/i.test(ua))                  return 'iPhone'
+  if (/\biPad\b/i.test(ua))                    return 'iPad'
+  if (/\bAndroid\b/i.test(ua))                 return 'Android'
+  if (/\bCrOS\b/.test(ua))                     return 'ChromeOS'
+  if (/\bWindows\b/i.test(ua))                 return 'Windows'
+  if (/\bMac OS X\b|\bMacintosh\b/i.test(ua))  return 'macOS'
+  if (/\bLinux\b/i.test(ua))                   return 'Linux'
+  return null
+}
+
+/** "Chrome · macOS", "Safari · iPhone", or an honest "Unknown device". */
+export function deviceLabel(userAgent) {
+  const ua = (userAgent || '').trim()
+  if (!ua) return 'Unknown device'
+  const browser  = browserOf(ua)
+  const platform = platformOf(ua)
+  if (browser && platform) return `${browser} · ${platform}`
+  return browser || platform || 'Unknown device'
+}
+
+/** "Active now" / "Active 42m ago" / "Active 2h ago" / "Active 3d ago". */
+function activeLabel(lastActive, isCurrent) {
+  if (isCurrent) return 'Active now'
+  const t = lastActive ? new Date(lastActive).getTime() : NaN
+  if (!Number.isFinite(t)) return 'Last active unknown'
+  const mins = Math.floor((Date.now() - t) / 60000)
+  if (mins < 1)  return 'Active now'
+  if (mins < 60) return `Active ${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `Active ${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `Active ${days}d ago`
+  return `Active ${new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+}
+
+// ── Signed-in devices ─────────────────────────────────────────────────────────
+
+function SessionsCard() {
+  const [rows, setRows]       = useState([])
+  const [loading, setLoading] = useState(true)
+  const [failed, setFailed]   = useState(false)
+  const [busyId, setBusyId]   = useState(null)
+  const [allBusy, setAllBusy] = useState(false)
+  const [msg, setMsg]         = useState(null)
+  const alive = useRef(true)
+
+  const load = useCallback(async ({ quiet } = {}) => {
+    if (!quiet) { setLoading(true); setFailed(false) }
+    if (!supabase) { if (alive.current) { setLoading(false); setFailed(true) } return }
+    const { data, error } = await supabase.rpc('get_my_sessions')
+    if (!alive.current) return
+    setLoading(false)
+    if (error) { setFailed(true); setRows([]); return }
+    setFailed(false)
+    setRows(Array.isArray(data) ? data : [])
+  }, [])
+
+  useEffect(() => {
+    alive.current = true
+    load()
+    return () => { alive.current = false }
+  }, [load])
+
+  const revoke = async (id) => {
+    setBusyId(id); setMsg(null)
+    const { data, error } = await supabase.rpc('revoke_my_session', { sid: id })
+    if (!alive.current) return
+    setBusyId(null)
+    // The function refuses the current session server-side and returns false;
+    // never claim a sign-out the database did not perform.
+    if (error || data === false) {
+      setMsg({ type: 'error', text: 'That device could not be signed out. Please try again.' })
+      return
+    }
+    setRows(list => list.filter(r => r.id !== id))
+    setMsg({ type: 'success', text: 'That device was signed out.' })
+  }
+
+  const signOutOthers = async () => {
+    setAllBusy(true); setMsg(null)
+    const { error } = await supabase.auth.signOut({ scope: 'others' })
+    if (!alive.current) return
+    if (error) {
+      setAllBusy(false)
+      setMsg({ type: 'error', text: 'Those devices could not be signed out. Please try again.' })
+      return
+    }
+    await load({ quiet: true })
+    if (!alive.current) return
+    setAllBusy(false)
+    setMsg({ type: 'success', text: 'Every other device was signed out.' })
+  }
+
+  const others = rows.filter(r => !r.is_current).length
+
+  return (
+    <Card
+      title="Signed-in devices"
+      desc="Sign out anywhere you don't recognize. Opposition research is sensitive — treat a stray session as a leak."
+    >
+      {msg && (
+        <div style={{ padding: '14px 24px 0' }}>
+          <Msg type={msg.type} onDismiss={() => setMsg(null)}>{msg.text}</Msg>
+        </div>
+      )}
+
+      {loading && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 9,
+          padding: '14px 24px', fontSize: 12.5, color: T.muted,
+        }}>
+          <Spinner size={13} /> Loading sessions…
+        </div>
+      )}
+
+      {!loading && failed && (
+        <CardBody style={{ padding: '14px 24px 18px' }}>
+          <Msg type="error">Couldn't load your sessions — try again.</Msg>
+          <div style={{ marginTop: 12 }}>
+            <Btn onClick={() => load()}>Try again</Btn>
+          </div>
+        </CardBody>
+      )}
+
+      {!loading && !failed && rows.length === 0 && (
+        <CardBody style={{ padding: '14px 24px 18px' }}>
+          <Note>No signed-in sessions are on record for this account.</Note>
+        </CardBody>
+      )}
+
+      {!loading && !failed && rows.map(s => (
+        <div key={s.id} className="st-row" style={{
+          display: 'flex', alignItems: 'center', gap: 14,
+          padding: '14px 24px', borderBottom: `1px solid ${T.line}`,
+          fontFamily: 'inherit',
+        }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{deviceLabel(s.user_agent)}</span>
+              {s.is_current && <Pill c={T.green} bg={T.greenBg}>THIS DEVICE</Pill>}
+            </div>
+            <div style={{ fontSize: 11.5, color: T.muted, marginTop: 2, wordBreak: 'break-word' }}>
+              {(s.ip || 'Location unknown')} · {activeLabel(s.last_active, s.is_current)}
+            </div>
+          </div>
+          {!s.is_current && (
+            <Btn
+              ctl
+              kind="danger"
+              onClick={() => revoke(s.id)}
+              disabled={busyId === s.id || allBusy}
+              style={{ marginLeft: 'auto', padding: '7px 14px' }}
+            >
+              {busyId === s.id ? <><Spinner size={12} color={T.redHot} /> Signing out…</> : 'Sign out'}
+            </Btn>
+          )}
+        </div>
+      ))}
+
+      {!loading && !failed && others > 0 && (
+        <div style={{ padding: '13px 24px' }}>
+          <LinkBtn
+            color={T.redHot}
+            onClick={signOutOthers}
+            disabled={allBusy || busyId !== null}
+            style={{ padding: 0 }}
+          >
+            {allBusy ? <><Spinner size={12} color={T.redHot} /> Signing out…</> : 'Sign out of all other devices'}
+          </LinkBtn>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ── Pane ──────────────────────────────────────────────────────────────────────
+
 export default function AccountPane({ user, savedName = '', nameField, orgField, onName, onOrg }) {
-  const email       = user?.email || ''
-  const shownName   = savedName || email.split('@')[0] || 'Your account'
-  const initial     = (savedName || email || 'U').charAt(0).toUpperCase()
-  const memberSince = fmtDate(user?.created_at)
-  const lastSignIn  = fmtDateTime(user?.last_sign_in_at)
+  const email     = user?.email || ''
+  const shownName = savedName || email.split('@')[0] || 'Your account'
+  const initial   = (savedName || email || 'U').charAt(0).toUpperCase()
 
   // ── Photo ───────────────────────────────────────────────────────────────────
   // `pending` shows the new photo the instant it is saved, without waiting for
@@ -134,7 +320,8 @@ export default function AccountPane({ user, savedName = '', nameField, orgField,
         desc="How you appear inside Badger Board and to anyone you share work with."
       >
         <CardBody style={{ padding: '18px 24px' }}>
-          {/* Mockup: 56px avatar · gap 15 · name 15/700 · email 12.5 · pill on the right */}
+          {/* Mockup: 56px avatar · gap 15 · name 15/700 · email 12.5 · pill on the right.
+              `.st-row` stacks this below 900px and `.st-ctl` takes the pill full-width. */}
           <div className="st-row" style={{ display: 'flex', alignItems: 'center', gap: 15, marginBottom: 20 }}>
             {avatarUrl ? (
               <img
@@ -160,7 +347,9 @@ export default function AccountPane({ user, savedName = '', nameField, orgField,
               {avatarUrl && !photoBusy && (
                 <LinkBtn color={T.muted} onClick={() => savePhoto('')}>Remove</LinkBtn>
               )}
-              <Btn onClick={() => fileRef.current?.click()} disabled={photoBusy}>
+              {/* flex:'1 1 auto' — content width beside the name at desktop, full
+                  width once `.st-ctl` goes to 100% below 900px. */}
+              <Btn onClick={() => fileRef.current?.click()} disabled={photoBusy} style={{ flex: '1 1 auto' }}>
                 {photoBusy ? <><Spinner /> Saving…</> : 'Change photo'}
               </Btn>
             </div>
@@ -181,6 +370,8 @@ export default function AccountPane({ user, savedName = '', nameField, orgField,
             </div>
           )}
 
+          {/* Values are prefilled by Settings.jsx from user_metadata
+              (display_name / business) — the same keys saveChanges() writes. */}
           <div className="st-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Field
               label="Display name"
@@ -199,9 +390,6 @@ export default function AccountPane({ user, savedName = '', nameField, orgField,
               autoComplete="organization"
             />
           </div>
-          <Note style={{ marginTop: 10, fontSize: 11.5, color: T.muted }}>
-            Changes are held until you save them from the bar at the bottom of the page.
-          </Note>
         </CardBody>
 
         <Row
@@ -212,49 +400,7 @@ export default function AccountPane({ user, savedName = '', nameField, orgField,
         />
       </Card>
 
-      <Card title="Account details" desc="What Badger Board records about this login.">
-        <CardBody>
-          <dl style={{ margin: 0, display: 'grid', gap: 9 }}>
-            {[
-              ['User ID', user?.id || 'Unknown', true],
-              ['Member since', memberSince || 'Unknown', false],
-              ['Last sign-in', lastSignIn || 'Unknown', false],
-            ].map(([k, v, mono]) => (
-              <div key={k} style={{ display: 'flex', gap: 12, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                <dt style={{ flex: 'none', width: 108, fontSize: 11.5, fontWeight: 600, color: T.ink3 }}>{k}</dt>
-                <dd style={{
-                  margin: 0, minWidth: 0, fontSize: 12.5, color: T.ink4, wordBreak: 'break-all',
-                  fontFamily: mono ? 'ui-monospace, SFMono-Regular, Menlo, monospace' : 'inherit',
-                }}>{v}</dd>
-              </div>
-            ))}
-          </dl>
-        </CardBody>
-      </Card>
-
-      {/* Signed-in devices — STUB. Supabase does not expose a session list to the
-          client, so there is nothing real to render here yet. Everything below
-          is either a fact we actually hold (last sign-in) or plainly labelled
-          as unavailable. Nothing implies you can sign another device out. */}
-      <Card
-        title="Signed-in devices"
-        desc="Opposition research is sensitive — a stray session is a leak."
-        right={<StubPill />}
-      >
-        <Row
-          title="This device"
-          badge={<Pill c={T.green} bg={T.greenBg}>SIGNED IN</Pill>}
-          desc={lastSignIn ? `Signed in ${lastSignIn}.` : 'Signed in now.'}
-          last
-        />
-        <div style={{ padding: '13px 24px', background: T.hover, borderTop: `1px solid ${T.divider}` }}>
-          <Note>
-            Badger Board cannot yet list your other sessions or sign them out remotely. If you think
-            someone else has your password, change it under Security — and contact support so we can
-            end every session on the account.
-          </Note>
-        </div>
-      </Card>
+      <SessionsCard />
     </>
   )
 }

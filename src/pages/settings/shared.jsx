@@ -67,9 +67,8 @@ export const money = (n) => `$${Number(n).toLocaleString('en-US')}`
 /**
  * Page keyframes + breakpoints, scoped to this page's own markup.
  *
- * The hero and the plan header stack at 1180px, not 900: their right-hand
- * blocks need ~1150px to sit beside the text. The rail becomes a chip row at
- * 900px.
+ * The plan header stacks at 1180px, not 900: its right-hand block needs
+ * ~1150px to sit beside the text. The rail becomes a chip row at 900px.
  */
 export function SettingsStyles() {
   return (
@@ -88,8 +87,8 @@ export function SettingsStyles() {
       .st-link     { color: ${T.ink}; text-decoration: underline; text-underline-offset: 2px }
       .st-link:hover { color: ${T.red} }
       @media (max-width: 1180px) {
-        .st-hero      { flex-wrap: wrap !important }
-        .st-herostats { margin-left: 0 !important; width: 100%; flex-wrap: wrap }
+        /* The hero is a centred column at every width now (name/email stacked,
+           stat tiles wrapping beneath), so it needs no breakpoint of its own. */
         .st-planhdr   { flex-wrap: wrap !important }
         .st-planhdr .st-ctl { margin-left: 0 !important; width: 100% }
       }
