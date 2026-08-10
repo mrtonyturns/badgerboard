@@ -2,14 +2,14 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation, Link } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, CalendarDays, Target, Users, ListChecks,
-  FileText, Settings, LogOut, Menu, X, ChevronRight, Bell,
+  FileText, Settings, LogOut, Menu, X, ChevronRight,
   User, CreditCard, Shield, ChevronDown, Tag, DoorOpen, UserCheck,
-  ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink, Users2, Swords,
+  ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink, Users2, Swords, BarChart2,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import BluejackLogo from './BluejackLogo'
 import BadgerBoardLogo from './BadgerBoardLogo'
-import { getUserTier, getTierConfig } from '../lib/tiers'
+import { getUserTier, getTierConfig, isBetaActive } from '../lib/tiers'
 import { isNativeApp } from '../lib/native'
 
 // ── Offline banner ─────────────────────────────────────────────────────────────
@@ -36,22 +36,42 @@ function OfflineBanner() {
     </div>
   )
 }
-import AnnouncementBanner from './AnnouncementBanner'
+import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.18.0'
+const APP_VERSION = 'v1.19.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
   {
-    version: 'v1.18.0',
-    date: 'July 20, 2026',
+    version: 'v1.19.0',
+    date: 'July 21, 2026',
     changes: [
       'City demographics: click any Wisconsin city, village, or town (1,500+ residents) on the map for an instant Census profile — 598 municipalities covered',
       'Full city pages at /places with People, Income & Housing, and Education & Work stats plus city-vs-county-vs-state comparisons',
       'District Dashboard city dots are now clickable through to full demographics',
       'Broadside: searchable dossier picker in Intel Intake and a cleaner Start/Next/Repeat/End layout',
+    ],
+  },
+  {
+    version: 'v1.18.2',
+    date: 'July 21, 2026',
+    changes: [
+      'Broadside is out of beta: now included with every paid plan (Monitor and up, both plan families)',
+      'Events: smarter political-lean identification — known Wisconsin organizations are classified deterministically and uncertain hosts are checked against public campaign-finance, lobbying, and fundraising registries',
+    ],
+  },
+  {
+    version: 'v1.18.0',
+    date: 'July 21, 2026',
+    changes: [
+      'New pricing: Candidate plans now $79 / $119 / $189 and Action brackets updated — existing subscribers keep their founder rate',
+      'Campaign plan now includes 6 AI profiles per month (up from 4)',
+      'Free 30/60/90-day trial giveaways: admins can grant full plan access with no card; accounts return to Scout automatically when the trial ends',
+      'Beta mode: per-user and platform-wide switches that unlock every feature (including Broadside) while enabled',
+      'Game Plan now unlocks at Monitor — Scout shows it locked with an upgrade path',
+      'Action plans: active-candidate monitoring is now hard-capped at your bracket size with a one-click bracket upgrade prompt',
     ],
   },
   {
@@ -186,8 +206,9 @@ const navItems = [
   { to: '/prospecting', icon: ListChecks,      label: 'Prospecting'   },
   { to: '/voter-lists', icon: UserCheck,       label: 'Voter Lists'   },
   { to: '/profiler',    icon: FileText,        label: 'Profiler'      },
-  { to: '/compare',     icon: Scale,           label: 'Compare'       },
-  { to: '/broadside',   icon: Swords,          label: 'Broadside',     badge: 'Beta', adminOnly: true, webOnly: true },
+  { to: '/compare',     icon: Scale,           label: 'Compare',       badge: 'Beta' },
+  { to: '/broadside',   icon: Swords,          label: 'Broadside',     feature: 'broadside', webOnly: true, badge: 'Beta' },
+  { to: '/polling',     icon: BarChart2,       label: 'Polling',       badge: 'Beta', betaOnly: true },
   { to: '/events',      icon: CalendarDays,    label: 'Events',        badge: 'New' },
   { to: '/campaign-connect', icon: Users2,     label: 'Campaign Connect' },
   // Door Knocking hidden from UI (feature parked — restore this line to re-enable)
@@ -261,7 +282,7 @@ function ChangelogPopover({ onClose }) {
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 // Also module-level. Receives everything it needs via props.
-const Sidebar = React.memo(function Sidebar({ isAdmin, onNavigate, onSignOut, tierConfig }) {
+const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, onNavigate, onSignOut, tierConfig }) {
   const [showChangelog, setShowChangelog] = useState(false)
   return (
     <div className="flex flex-col h-full bg-brand-navy">
@@ -282,11 +303,19 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, onNavigate, onSignOut, ti
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">AI Tools</p>
-        {navItems.slice(4, 9).filter(item => (!item.adminOnly || isAdmin) && !(item.webOnly && isNativeApp)).map(item => (
+        {navItems.slice(4, 10).filter(item =>
+          (!item.adminOnly || isAdmin) &&
+          // Plan-feature gate (v1.18.2): beta users and admins resolve to the top
+          // plan via getUserTier, so tierConfig covers paid + beta + admin.
+          (!item.feature || isAdmin || isBeta || tierConfig?.features?.[item.feature]) &&
+          // Beta-only features: hidden entirely unless beta tester or admin
+          (!item.betaOnly || isAdmin || isBeta) &&
+          !(item.webOnly && isNativeApp)
+        ).map(item => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         <p className="text-white/30 text-xs font-semibold uppercase tracking-wider px-4 mb-3 mt-5">Outreach</p>
-        {navItems.slice(9, 11).map(item => (
+        {navItems.slice(10, 12).map(item => (
           <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
         {/* Field Ops group hidden (Door Knocking parked) — restore with the nav item to re-enable
@@ -643,6 +672,29 @@ export default function Layout() {
   // Full-bleed routes own the whole content area (no padding, no outer scroll)
   const { pathname } = useLocation()
   const fullBleed = pathname.startsWith('/broadside')
+
+  // v1.24.1: page titles live in the top bar (the formerly blank strip),
+  // so pages start their content immediately — no duplicated headers.
+  const PAGE_HEADERS = [
+    { match: /^\/offices/,          title: 'Offices & Districts',    sub: 'All political offices tracked across Wisconsin' },
+    { match: /^\/elections/,        title: 'Elections',              sub: 'Wisconsin election calendar & live results' },
+    { match: /^\/game-plan/,        title: 'Game Plan',              sub: 'Campaign tasks & election calendar' },
+    { match: /^\/candidates\/.+/,  title: 'Candidates',             sub: 'Candidate profile' },
+    { match: /^\/candidates/,       title: 'Candidates',             sub: 'All tracked candidates across Wisconsin' },
+    { match: /^\/prospecting/,      title: 'Prospecting Lists',      sub: 'AI-powered candidate prospecting for political marketing outreach' },
+    { match: /^\/voter-lists/,      title: 'Voter Lists',            sub: 'Upload voter CSV files, map addresses, and build targeted prospect lists' },
+    { match: /^\/(dossiers|profiler)/, title: 'Profiler',            sub: 'AI-generated 14-section political intelligence reports' },
+    { match: /^\/compare/,          title: 'Candidate Comparison',   sub: 'Side-by-side intelligence on two candidates', badge: 'Beta' },
+    { match: /^\/events/,           title: 'District Events',        sub: 'Community events where your campaign should show up' },
+    { match: /^\/campaign-connect/, title: 'Campaign Connect',       sub: 'Two accounts, one campaign' },
+    { match: /^\/broadside/,        title: 'Broadside',              sub: 'Take the hit before it\u2019s real', badge: 'Beta' },
+    { match: /^\/polling/,          title: 'Polling',                sub: 'AI-estimated district opinion snapshots', badge: 'Beta' },
+    { match: /^\/settings/,         title: 'Settings',               sub: 'Manage your profile, billing, and account security' },
+    { match: /^\/plans/,            title: 'Plans & Pricing',        sub: 'Choose the plan that fits your operation' },
+    { match: /^\/admin/,            title: 'Admin Panel',            sub: 'Platform health, accounts, billing & controls' },
+    { match: /^\/$/,                title: 'Intelligence Dashboard', sub: 'Wisconsin statewide political tracking' },
+  ]
+  const pageHeader = PAGE_HEADERS.find(h => h.match.test(pathname)) || null
   const navigate           = useNavigate()
   const [sidebarOpen, setSidebarOpen]   = useState(false)
   const [profileOpen, setProfileOpen]   = useState(false)
@@ -678,6 +730,7 @@ export default function Layout() {
       <aside className="hidden md:flex md:flex-col w-64 flex-shrink-0">
         <Sidebar
           isAdmin={isAdmin}
+          isBeta={isBetaActive(user)}
           onNavigate={onNavigate}
           onSignOut={handleSignOut}
           tierConfig={tierConfig}
@@ -691,6 +744,7 @@ export default function Layout() {
           <div className="relative flex flex-col w-72 max-w-xs">
             <Sidebar
               isAdmin={isAdmin}
+              isBeta={isBetaActive(user)}
               onNavigate={onNavigate}
               onSignOut={handleSignOut}
               tierConfig={tierConfig}
@@ -718,20 +772,24 @@ export default function Layout() {
             <Menu className="w-5 h-5 text-gray-600" />
           </button>
 
+          {pageHeader && (
+            <div className="min-w-0 flex items-baseline gap-3">
+              <h1 className="text-lg md:text-xl font-bold text-gray-900 whitespace-nowrap flex items-center gap-2">
+                {pageHeader.title}
+                {pageHeader.badge && (
+                  <span className="text-[9px] font-extrabold uppercase tracking-wider bg-purple-600 text-white px-1.5 py-0.5 rounded-full">{pageHeader.badge}</span>
+                )}
+              </h1>
+              <p className="hidden lg:block text-xs text-gray-400 truncate">{pageHeader.sub}</p>
+            </div>
+          )}
 
           <div className="ml-auto flex items-center gap-3">
             {/* Dossier generation status indicator */}
             <DossierStatusIndicator />
 
-            <button
-              type="button"
-              disabled
-              title="Notifications — coming soon"
-              aria-label="Notifications (coming soon)"
-              className="relative p-2 rounded-lg opacity-40 cursor-not-allowed"
-            >
-              <Bell className="w-4 h-4 text-gray-500" />
-            </button>
+            {/* v1.19.2: all announcements land here; success ones also pop up 10s */}
+            <NotificationCenter />
 
             {/* Profile dropdown */}
             <div className="relative" ref={profileRef}>
@@ -813,9 +871,6 @@ export default function Layout() {
             </div>
           </div>
         </header>
-
-        {/* Announcement banner (above page content) */}
-        <AnnouncementBanner />
 
         {/* Offline indicator */}
         <OfflineBanner />

@@ -27,17 +27,34 @@ async function verifyUser(authHeader) {
   return await res.json()
 }
 
-function getUserPlan(user) {
-  if (!user) return 'scout'
-  if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'agency'
-  const p = user?.app_metadata?.plan
-  // Normalize new-format plan keys introduced in v1.14 pricing overhaul
+const { resolveEntitlement, getMonthlyProfileBase } = require('./_entitlements')
+
+// Resolve the user's canonical entitlement; admins short-circuit to the top plan
+async function getUserEntitlement(user) {
+  if (!user) return { plan: 'scout', bracket: 'b1' }
+  if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return { plan: 'a_campaign', bracket: 'ent' }
+  return resolveEntitlement(user)
+}
+
+// Legacy internal bucket — kept for the response's `tier` field
+function toLegacyBucket(plan) {
   const PLAN_MAP = {
     c_monitor: 'monitor',  a_monitor: 'monitor',
     c_active:  'campaign', a_active:  'campaign',
     c_campaign:'campaign', a_campaign:'agency',
   }
-  return PLAN_MAP[p] || (['scout', 'monitor', 'campaign', 'agency'].includes(p) ? p : 'scout')
+  return PLAN_MAP[plan] || (['scout', 'monitor', 'campaign', 'agency'].includes(plan) ? plan : 'scout')
+}
+
+async function countMonthToDateDossiers(userId) {
+  const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/dossiers?generated_by=eq.${userId}&generated_at=gte.${monthStart.toISOString()}&select=id`,
+    { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
+  )
+  if (!res.ok) throw new Error(`dossier count failed (${res.status})`)
+  const rows = await res.json()
+  return Array.isArray(rows) ? rows.length : 0
 }
 
 exports.handler = async (event) => {
@@ -106,11 +123,41 @@ exports.handler = async (event) => {
   if (!user) {
     return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authenticated' }) }
   }
-  const userPlan = getUserPlan(user)
+  const entitlement = await getUserEntitlement(user)
+  const userPlan = toLegacyBucket(entitlement.plan)
+  const isAdminCaller = ADMIN_EMAILS.includes(user.email?.toLowerCase())
 
   // ── Durable per-user rate limit ───────────────────────────────────────────────
   const limited = await enforceRateLimit(user.id, 'generate-dossier', headers)
   if (limited) return limited
+
+  // ── Audit fix (#1): server-side monthly profile-limit check ──────────────────
+  // This is the synchronous leg the user actually sees (the background function
+  // enforces the same limit as defense in depth, but its response is discarded
+  // by Netlify's 202 fire-and-forget). Base allotment + banked credits.
+  if (!isAdminCaller) {
+    try {
+      const base = getMonthlyProfileBase(entitlement.plan, entitlement.bracket)
+      if (Number.isFinite(base)) {
+        const bank = Math.max(0, Number(user?.app_metadata?.profile_credits) || 0)
+        const monthCount = await countMonthToDateDossiers(user.id)
+        if (monthCount >= base + bank) {
+          return {
+            statusCode: 403,
+            headers,
+            body: JSON.stringify({
+              error: `You've used all ${base + bank} of your profile generations for this month. Upgrade your plan or purchase profile credits to generate more.`,
+              limit: base + bank,
+              used: monthCount,
+            }),
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[generate-dossier] Limit check failed:', e.message)
+      return { statusCode: 503, headers, body: JSON.stringify({ error: 'Could not verify your profile allotment — please try again in a moment.' }) }
+    }
+  }
 
   // Determine the background function URL from trusted env var (never user-controlled headers)
   const siteUrl = process.env.URL || process.env.SITE_URL || 'https://www.badgerboardwi.com'

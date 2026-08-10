@@ -3,7 +3,7 @@
  * Server-side proxy for BROADSIDE's LLM "actor" — writes the opponent's next
  * spoken line. Keeps ANTHROPIC_API_KEY out of the browser (handoff priority #1).
  *
- * ADMIN-ONLY BETA: gated with requireAdmin while Broadside is admin-only.
+ * PLAN-GATED (v1.18.2): requireBroadside — paid plans, beta users, and admins.
  * When the feature opens to paid tiers, switch to requireUser + a tier check
  * (see discover-candidates.js for the pattern).
  *
@@ -14,7 +14,8 @@
  * a mode, never an arbitrary model string.
  */
 
-const { json, requireAdmin } = require('./_shared')
+const { json, requireBroadside } = require('./_shared')
+const { logAiUsage } = require('./_ai-usage')
 const { enforceRateLimit } = require('./_rate-limit')
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
@@ -35,7 +36,7 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: HEADERS, body: '' }
   if (event.httpMethod !== 'POST')    return json(405, { error: 'Method not allowed' }, HEADERS)
 
-  const auth = await requireAdmin(event)
+  const auth = await requireBroadside(event)
   if (auth.errorResponse) return { ...auth.errorResponse, headers: { ...HEADERS, ...auth.errorResponse.headers } }
   const { user } = auth
 
@@ -79,6 +80,7 @@ exports.handler = async (event) => {
       return json(502, { error: 'brain-upstream-error' }, HEADERS)
     }
     const j = await r.json()
+    logAiUsage({ userId: user.id, endpoint: 'broadside', provider: 'anthropic', model: MODELS[mode], inputTokens: j?.usage?.input_tokens || 0, outputTokens: j?.usage?.output_tokens || 0 })
     const text = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join(' ').trim()
     if (!text) return json(502, { error: 'brain-empty' }, HEADERS)
     return json(200, { text }, HEADERS)

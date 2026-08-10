@@ -69,6 +69,7 @@ import {
   getVoterSavedLists, createVoterSavedList, updateVoterSavedList, deleteVoterSavedList,
 } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import SearchableSelect from '../components/SearchableSelect'
 import { parseCsvRows } from '../lib/csv'
 import LoadingBar from '../components/LoadingBar'
 
@@ -304,10 +305,17 @@ export default function VoterLists() {
       if (!newList?.id) { setError('Failed to create voter list record.'); setUploading(false); return }
 
       // Strip raw_data before inserting (avoids large payloads) and batch in 200-row chunks
-      const rows = csvPreview.map(({ raw_data, ...r }) => ({ ...r, voter_list_id: newList.id }))
+      // created_by is REQUIRED by the voters RLS insert policy (migration
+      // 20260422000004) — without it every chunk is rejected with 403.
+      const rows = csvPreview.map(({ raw_data, ...r }) => ({ ...r, voter_list_id: newList.id, created_by: user?.id }))
       const totalChunks = Math.ceil(rows.length / 200)
       for (let i = 0; i < rows.length; i += 200) {
-        await createVoters(rows.slice(i, i + 200))
+        const { error: insertErr } = await createVoters(rows.slice(i, i + 200))
+        if (insertErr) {
+          setError(`Upload failed at row ${i + 1}: ${insertErr.message}`)
+          setUploading(false)
+          return
+        }
         setUploadProgress({ done: Math.floor(i / 200) + 1, total: totalChunks })
       }
 
@@ -433,13 +441,7 @@ export default function VoterLists() {
           <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600 font-bold ml-3">✕</button>
         </div>
       )}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Users className="w-6 h-6 text-brand-red" /> Voter Lists
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">Upload voter CSV files, map addresses, and build targeted prospect lists</p>
-        </div>
+      <div className="flex items-start justify-end">
         <button onClick={() => setShowUploadModal(true)} className="btn-primary flex items-center gap-2">
           <Upload className="w-4 h-4" /> Upload CSV
         </button>
@@ -593,14 +595,13 @@ export default function VoterLists() {
                 >
                   {DISTRICT_TYPES.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
                 </select>
-                <select
-                  className="input text-xs py-1.5 w-40"
+                <SearchableSelect
+                  className="w-40"
+                  buttonClassName="text-xs py-1.5"
                   value={districtFilter.value}
-                  onChange={e => setDistrictFilter(p => ({ ...p, value: e.target.value }))}
-                >
-                  <option value="">All {districtFilter.type.replace(/_/g,' ')}</option>
-                  {districtValues.map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
+                  onChange={v => setDistrictFilter(p => ({ ...p, value: v }))}
+                  options={[{ value: '', label: `All ${districtFilter.type.replace(/_/g,' ')}` }, ...districtValues.map(v => ({ value: v, label: v }))]}
+                  placeholder={`All ${districtFilter.type.replace(/_/g,' ')}`} />
                 <button
                   onClick={() => setShowSuppressed(s => !s)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${showSuppressed ? 'bg-orange-50 border-orange-200 text-orange-700' : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'}`}

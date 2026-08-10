@@ -13,6 +13,7 @@ import {
   Maximize2, Minimize2, EyeOff } from 'lucide-react'
 import { getCandidates, getDossiers, getDossier, createDossier, deleteDossier, createCandidate, updateCandidate, getOffices } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import SearchableSelect from '../components/SearchableSelect'
 import { getUserTier, getTierConfig, isLiteProfileOnly, LITE_PROFILE_FREE_SECTIONS, getUserBracket, getProfileLimit, getEffectiveProfileLimit } from '../lib/tiers'
 import { filterSections } from '../lib/profileContent'
 import { supabase } from '../lib/supabase'
@@ -60,6 +61,58 @@ const SECTION_THEMES = {
 }
 
 // ─── Parse markdown sections ──────────────────────────────────────────────────
+// Pull the PROFILE SNAPSHOT block out of the report so it renders as the
+// animated intro card instead of as body text. Returns { snapshot, rest }.
+function extractSnapshot(content = '') {
+  if (!content) return { snapshot: '', rest: content }
+  const m = content.match(/##\s*PROFILE SNAPSHOT\s*\n([\s\S]*?)(?=\n##\s|$)/i)
+  if (!m) return { snapshot: '', rest: content }
+  const snapshot = m[1]
+    .replace(/\*\*\[[^\]]*\]\*\*/g, '')   // strip any stray badges
+    .replace(/[*#>_`]/g, '')               // strip markdown emphasis
+    .replace(/\s+/g, ' ')
+    .trim()
+  const rest = content.replace(m[0], '').replace(/^\s*\n/, '').trim()
+  return { snapshot, rest }
+}
+
+// Typewriter intro card — types the snapshot out on first open, fast.
+function SnapshotCard({ text }) {
+  const [shown, setShown]   = useState(0)
+  const [done, setDone]     = useState(false)
+  const reduceMotion = typeof window !== 'undefined'
+    && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+
+  useEffect(() => {
+    if (!text) return
+    if (reduceMotion) { setShown(text.length); setDone(true); return }
+    setShown(0); setDone(false)
+    let i = 0
+    // ~18ms/char, but step 2 chars at a time so long snapshots finish quickly
+    const id = setInterval(() => {
+      i += 2
+      if (i >= text.length) { setShown(text.length); setDone(true); clearInterval(id) }
+      else setShown(i)
+    }, 18)
+    return () => clearInterval(id)
+  }, [text, reduceMotion])
+
+  if (!text) return null
+  return (
+    <div className="mx-4 mt-3 mb-1 rounded-2xl border border-brand-red/15 bg-gradient-to-br from-red-50/70 via-white to-white px-5 py-4 shadow-sm animate-[snapfade_.5s_ease]">
+      <style>{`@keyframes snapfade{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}`}</style>
+      <div className="flex items-center gap-2 mb-1.5">
+        <Sparkles className="w-3.5 h-3.5 text-brand-red" />
+        <span className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-brand-red">Snapshot</span>
+      </div>
+      <p className="text-[15px] leading-relaxed text-gray-800 font-medium">
+        {text.slice(0, shown)}
+        {!done && <span className="inline-block w-[2px] h-[1.05em] align-[-0.15em] ml-0.5 bg-brand-red animate-pulse" />}
+      </p>
+    </div>
+  )
+}
+
 function parseSections(content = '') {
   if (!content) return [{ id: 'overview', label: 'Overview', content, index: 0 }]
 
@@ -258,6 +311,13 @@ function buildPrintHtml(dossier, sections) {
   const title = dossier.title || 'Political Profile'
   const candidate = dossier.candidate
   const generatedAt = dossier.generated_at ? format(new Date(dossier.generated_at), 'MMMM d, yyyy') : ''
+  const { snapshot } = extractSnapshot(dossier.content)
+  const snapshotHtml = snapshot
+    ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:16px 18px;margin-bottom:24px;">
+         <div style="font-size:0.65rem;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:#b91c1c;margin-bottom:6px;">Snapshot</div>
+         <div style="font-size:1rem;line-height:1.55;color:#1f2937;font-weight:500;">${escapeHtml(snapshot)}</div>
+       </div>`
+    : ''
 
   const sectionsHtml = sections.map(s => `
     <section style="page-break-inside:avoid;margin-bottom:32px;">
@@ -292,6 +352,7 @@ function buildPrintHtml(dossier, sections) {
       ${generatedAt ? ` · Generated ${generatedAt}` : ''}
     </div>
   </div>
+  ${snapshotHtml}
   ${sectionsHtml}
   <div class="footer">
     Badger Board · AI-Generated Political Intelligence · The Bluejack Group · Verify all information through official sources before use.
@@ -598,7 +659,7 @@ function Section6Upsell({ content }) {
           >
             Upgrade to Unlock →
           </Link>
-          <p className="text-xs text-gray-400 mt-3">Campaign from $69/mo · Agency from $119/mo</p>
+          <p className="text-xs text-gray-400 mt-3">Action plans from $89/mo</p>
         </div>
       </div>
     </div>
@@ -937,17 +998,21 @@ function StaleBanner({ generatedAt, onRegenerate, regenerating }) {
   )
 }
 
-// ─── Share Modal (Agency only) ────────────────────────────────────────────────
+// ─── Share Modal (v1.19: consolidated sharing — PDF export + timed links) ─────
+// Expiry range: minimum 1 hour, maximum 7 days.
 const EXPIRY_OPTIONS = [
-  { value: '24h', label: '24 Hours' },
-  { value: '7d',  label: '7 Days'   },
-  { value: '30d', label: '30 Days'  },
+  { value: 1,   label: '1 Hour'   },
+  { value: 3,   label: '3 Hours'  },
+  { value: 12,  label: '12 Hours' },
+  { value: 24,  label: '24 Hours' },
+  { value: 72,  label: '3 Days'   },
+  { value: 168, label: '7 Days'   },
 ]
 
-function ShareModal({ dossier, onClose }) {
+function ShareModal({ dossier, onClose, onExportPdf }) {
   const { user }                    = useAuth()
   const [step, setStep]             = useState('disclosure') // disclosure | create | manage
-  const [expiresIn, setExpiresIn]   = useState('7d')
+  const [expiresIn, setExpiresIn]   = useState(24)
   const [creating, setCreating]     = useState(false)
   const [newLink, setNewLink]       = useState(null) // { share_url, expires_at, id }
   const [copied, setCopied]         = useState(false)
@@ -987,7 +1052,7 @@ function ShareModal({ dossier, onClose }) {
       const res = await fetch('/.netlify/functions/create-dossier-share', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ dossier_id: dossier.id, expires_in: expiresIn }),
+        body: JSON.stringify({ dossier_id: dossier.id, expires_hours: expiresIn }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error || 'Failed to create link'); setCreating(false); return }
@@ -1029,8 +1094,7 @@ function ShareModal({ dossier, onClose }) {
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
           <div className="flex items-center gap-2">
             <Link2 className="w-4 h-4 text-brand-navy" />
-            <span className="text-sm font-bold text-gray-900">Share Temporary Profile Link</span>
-            <span className="text-xs bg-purple-100 text-purple-700 font-bold px-2 py-0.5 rounded-full">Agency</span>
+            <span className="text-sm font-bold text-gray-900">Share Profile</span>
           </div>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600">
             <X className="w-4 h-4" />
@@ -1039,7 +1103,31 @@ function ShareModal({ dossier, onClose }) {
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
 
-          {/* ── Step: Disclosure ──────────────────────────────────────────── */}
+          {/* ── Option 1: Export PDF ─────────────────────────────────────── */}
+          {step === 'disclosure' && (
+            <button
+              onClick={() => { onExportPdf?.(); onClose() }}
+              className="w-full flex items-center gap-3 p-4 bg-gray-50 border border-gray-200 rounded-xl hover:border-gray-300 hover:bg-gray-100 transition-all text-left"
+            >
+              <div className="w-9 h-9 rounded-lg bg-brand-navy/10 flex items-center justify-center flex-shrink-0">
+                <Download className="w-4 h-4 text-brand-navy" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-gray-900">Export as PDF</p>
+                <p className="text-xs text-gray-500">Download a printable copy of this profile</p>
+              </div>
+            </button>
+          )}
+
+          {step === 'disclosure' && (
+            <div className="flex items-center gap-3">
+              <div className="flex-1 h-px bg-gray-200" />
+              <span className="text-xs text-gray-400 font-semibold">OR SHARE A TIMED LINK</span>
+              <div className="flex-1 h-px bg-gray-200" />
+            </div>
+          )}
+
+          {/* ── Option 2: Generate timed link ─────────────────────────────── */}
           {step === 'disclosure' && (
             <>
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-2">
@@ -1056,13 +1144,13 @@ function ShareModal({ dossier, onClose }) {
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-semibold text-gray-700">Link Expiration</label>
-                <div className="flex gap-2">
+                <label className="text-xs font-semibold text-gray-700">Link active for</label>
+                <div className="grid grid-cols-3 gap-2">
                   {EXPIRY_OPTIONS.map(opt => (
                     <button
                       key={opt.value}
                       onClick={() => setExpiresIn(opt.value)}
-                      className={`flex-1 py-2.5 px-3 rounded-xl border text-xs font-semibold transition-all ${
+                      className={`py-2.5 px-3 rounded-xl border text-xs font-semibold transition-all ${
                         expiresIn === opt.value
                           ? 'bg-brand-navy text-white border-brand-navy shadow-sm'
                           : 'bg-gray-50 text-gray-600 border-gray-200 hover:border-gray-300'
@@ -1072,7 +1160,7 @@ function ShareModal({ dossier, onClose }) {
                     </button>
                   ))}
                 </div>
-                <p className="text-xs text-gray-400">After this time, the link will stop working automatically.</p>
+                <p className="text-xs text-gray-400">After this time, the link stops working automatically. Minimum 1 hour, maximum 7 days.</p>
               </div>
 
               {error && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
@@ -1096,7 +1184,7 @@ function ShareModal({ dossier, onClose }) {
                 <span className="text-sm font-bold text-green-800">Link Created</span>
                 <span className="text-xs text-green-600 ml-auto flex items-center gap-1">
                   <Clock className="w-3 h-3" />
-                  Expires {EXPIRY_OPTIONS.find(o => o.value === expiresIn)?.label}
+                  Active for {EXPIRY_OPTIONS.find(o => o.value === expiresIn)?.label}
                 </span>
               </div>
               <div className="flex items-center gap-2 bg-white border border-green-200 rounded-lg px-3 py-2">
@@ -1144,7 +1232,7 @@ function ShareModal({ dossier, onClose }) {
               {activeShares.map(share => {
                 const url = `${APP_URL}/temporary-dossier/${share.token}`
                 const expired = new Date(share.expires_at) < new Date()
-                const expiresLabel = expired ? 'Expired' : `Expires ${new Date(share.expires_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+                const expiresLabel = expired ? 'Expired' : `Expires ${new Date(share.expires_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
                 return (
                   <div key={share.id} className="flex items-center gap-3 p-3 bg-gray-50 border border-gray-200 rounded-xl">
                     <div className="flex-1 min-w-0">
@@ -1346,11 +1434,12 @@ function GenerationStrip({ startedAt, candidateName }) {
   )
 }
 
-function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan }) {
+function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan, initialSection }) {
   const { isAdmin } = useAuth()
   const [showEmpty, setShowEmpty] = useState(false)
   const [expanded, setExpanded]   = useState(false)
-  const allSections = parseSections(dossier.content)
+  const { snapshot, rest: bodyContent } = extractSnapshot(dossier.content)
+  const allSections = parseSections(bodyContent)
   const { sections, hiddenCount } = filterSections(allSections, showEmpty)
   const [activeSection, setActiveSection]   = useState(sections[0]?.id)
 
@@ -1368,7 +1457,8 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
   const [showShareModal, setShowShareModal] = useState(false)
   const [annotations, saveAnnotation]       = useAnnotations(dossier.id)
   const annotationCount = Object.keys(annotations).length
-  const isAgency = ['agency', 'a_monitor', 'a_active', 'a_campaign'].includes(userPlan)
+  // v1.19: sharing is available on all paid plans (Share button always shown;
+  // link generation is plan-gated server-side, PDF export works everywhere)
   const isLite   = isLiteProfileOnly(userPlan)
   const liteFreeNums = new Set((LITE_PROFILE_FREE_SECTIONS || []).map(s => s.sectionNumber))
   const sectionRefs = useRef({})
@@ -1395,6 +1485,16 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
       setActiveSection(id)
     }
   }
+
+  // Deep link: land on the requested section once content is rendered
+  const initialScrolledRef = useRef(false)
+  useEffect(() => {
+    if (!initialSection || initialScrolledRef.current) return
+    initialScrolledRef.current = true
+    const t = setTimeout(() => { try { scrollToSection(initialSection) } catch {} }, 600)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSection])
 
   const handleCopy = () => {
     navigator.clipboard.writeText(dossier.content)
@@ -1483,24 +1583,19 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
             <Scale className="w-3.5 h-3.5" />
             Review {flaggedCount > 0 && <span className={`ml-0.5 px-1.5 py-0.5 rounded-full text-xs font-bold ${showReviewer ? 'bg-white/20' : 'bg-amber-100 text-amber-800'}`}>{flaggedCount}</span>}
           </button>
-          {isAgency && (
-            <button
-              onClick={() => setShowShareModal(true)}
-              className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold transition-all text-white"
-              style={{ background: '#B91C1C' }}
-              title="Share temporary profile link (Agency)"
-            >
-              <Link2 className="w-3.5 h-3.5" />
-              Share
-            </button>
-          )}
+          {/* v1.19: consolidated sharing — one button opens PDF export + timed-link options */}
+          <button
+            onClick={() => setShowShareModal(true)}
+            className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold transition-all text-white"
+            style={{ background: '#B91C1C' }}
+            title="Export PDF or share a timed link"
+          >
+            <Link2 className="w-3.5 h-3.5" />
+            Share
+          </button>
           <button onClick={handleCopy} className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold bg-white/10 text-white hover:bg-white/20 transition-all">
             {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
             {copied ? 'Copied' : 'Copy'}
-          </button>
-          <button onClick={handleExportPdf} className="text-xs flex items-center gap-1 py-1.5 px-2.5 rounded-lg font-bold bg-white/10 text-white hover:bg-white/20 transition-all">
-            <Download className="w-3.5 h-3.5" />
-            Export PDF
           </button>
           {dossier.candidate_id && (
             <Link to={`/candidates/${dossier.candidate_id}`} className="text-xs py-1.5 px-2.5 rounded-lg font-bold bg-white/10 text-white hover:bg-white/20 transition-all">
@@ -1510,6 +1605,38 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
         </div>
         </div>
       </div>
+
+      {/* Animated snapshot intro — types out on open */}
+      {snapshot && <SnapshotCard text={snapshot} />}
+
+      {/* What's new this week — from the Monday monitoring digest */}
+      {dossier.weekly_digest?.summary && (
+        <div className="mx-4 mt-2 mb-1 rounded-2xl border border-brand-navy/15 bg-gradient-to-br from-blue-50/60 via-white to-white px-5 py-4">
+          <div className="flex items-center gap-2 mb-1.5">
+            <RefreshCw className="w-3.5 h-3.5 text-brand-navy" />
+            <span className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-brand-navy">What&apos;s new this week</span>
+            {dossier.weekly_digest.generated_at && (
+              <span className="text-[10px] text-gray-400 font-semibold ml-auto">
+                {new Date(dossier.weekly_digest.generated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              </span>
+            )}
+          </div>
+          <p className="text-sm leading-relaxed text-gray-700 font-medium">{dossier.weekly_digest.summary}</p>
+          {(dossier.weekly_digest.items || []).length > 0 && (
+            <div className="mt-2.5 flex flex-wrap gap-1.5">
+              {dossier.weekly_digest.items.map((it, i) => (
+                <span key={i} title={it.note || ''} className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-200 rounded-full px-3 py-1">
+                  <span className={`w-1.5 h-1.5 rounded-full ${
+                    it.category === 'controversy' ? 'bg-red-500' : it.category === 'news' ? 'bg-blue-500'
+                    : it.category === 'podcast' ? 'bg-purple-500' : it.category === 'social' ? 'bg-sky-400'
+                    : it.category === 'polling' ? 'bg-teal-500' : it.category === 'endorsement' ? 'bg-green-500' : 'bg-gray-400'}`} />
+                  {it.title}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Disclaimer banner */}
       <div className="py-2 px-4 flex-shrink-0">
@@ -1669,7 +1796,7 @@ function DossierViewer({ dossier, onRegenerate, regenerating, onDelete, userPlan
 
       {/* Share modal */}
       {showShareModal && (
-        <ShareModal dossier={dossier} onClose={() => setShowShareModal(false)} />
+        <ShareModal dossier={dossier} onClose={() => setShowShareModal(false)} onExportPdf={handleExportPdf} />
       )}
     </div>
   )
@@ -1798,6 +1925,22 @@ export default function Dossiers() {
     fetchData()
     getOffices().then(({ data }) => setOffices(data || []))
   }, [])
+
+  // Deep link from the weekly monitoring digest email:
+  // /profiler?candidate=<id>&section=section-1 — open that candidate's latest
+  // profile and land on the requested section.
+  const deepLinkedRef = useRef(false)
+  const initSection = searchParams.get('section')
+  useEffect(() => {
+    if (deepLinkedRef.current || !initCandidateId || !dossiers.length) return
+    const latest = dossiers
+      .filter(d => d.candidate_id === initCandidateId)
+      .sort((a, b) => new Date(b.generated_at) - new Date(a.generated_at))[0]
+    if (!latest) return
+    deepLinkedRef.current = true
+    openDossier(latest.id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dossiers, initCandidateId])
 
   // ── Resume polling after page refresh ─────────────────────────────────────
   // If the context shows a generation was in progress when the page refreshed,
@@ -1936,13 +2079,16 @@ export default function Dossiers() {
         ? { ...candidate, research_context: researchContext.trim() }
         : candidate
 
-      // Call background function directly — Netlify returns 202 immediately, runs async
-      const res = await fetch('/.netlify/functions/generate-dossier-background', {
+      // Audit fix (#1): go through the synchronous trigger, not the background
+      // endpoint directly. Netlify answers background invocations with 202
+      // before the handler runs, so limit/auth errors were invisible — the UI
+      // just polled for 5 minutes and "timed out". The sync trigger validates
+      // auth + the monthly profile limit and returns a real error immediately.
+      const res = await fetch('/.netlify/functions/generate-dossier', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ candidate: candidateWithCtx, candidate_id: cid }),
       })
-      // Background functions return 202 (accepted) or 200. Anything else is an error.
       if (!res.ok && res.status !== 202) {
         let errMsg = 'Failed to start generation'
         try { const j = await res.json(); errMsg = j.error || errMsg } catch {}
@@ -2070,7 +2216,9 @@ export default function Dossiers() {
         // Get pre-existing dossier IDs for this candidate
         const { data: beforeD } = await getDossiers(cid)
         const beforeBulkIds = new Set((beforeD || []).map(d => d.id))
-        const res = await fetch('/.netlify/functions/generate-dossier-background', {
+        // Audit fix (#1): sync trigger surfaces limit/auth errors immediately
+        // (a direct background POST always gets 202 — errors were invisible)
+        const res = await fetch('/.netlify/functions/generate-dossier', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bulkToken}` },
           body: JSON.stringify({ candidate, candidate_id: cid }),
@@ -2153,13 +2301,7 @@ export default function Dossiers() {
         />
       )}
 
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <FileText className="w-6 h-6 text-brand-red" /> Profiler
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">AI-generated 14-section political intelligence reports</p>
-        </div>
+      <div className="flex flex-col sm:flex-row sm:items-end justify-end gap-4">
         <div className="sm:w-80">
           <DossierUsageBar used={dossiersUsed} limit={effectiveProfileLimit} />
         </div>
@@ -2246,14 +2388,13 @@ export default function Dossiers() {
             <div className="space-y-3">
               <div>
                 <label className="label text-xs">Select Candidate</label>
-                <select className="input" value={candidateId} onChange={e => setCandidateId(e.target.value)}>
-                  <option value="">Choose candidate...</option>
-                  {(Array.isArray(candidates) ? candidates : []).map(c => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}{c.party ? ` (${c.party})` : ''} — {c.office?.name || 'No office'}
-                    </option>
-                  ))}
-                </select>
+                <SearchableSelect value={candidateId} onChange={setCandidateId}
+                  options={(Array.isArray(candidates) ? candidates : []).map(c => ({
+                    value: c.id,
+                    label: `${c.name}${c.party ? ` (${c.party})` : ''} — ${c.office?.name || 'No office'}`,
+                  }))}
+                  placeholder="Choose candidate..."
+                  searchPlaceholder="Search candidates..." />
               </div>
 
               {selectedCandidate && (
@@ -2323,7 +2464,7 @@ export default function Dossiers() {
                   feature="Profile Generation"
                   hook={`You've used your ${effectiveProfileLimit} profile${effectiveProfileLimit === 1 ? '' : 's'} this month. Research firms charge $500–$2,000 for a single candidate profile. Upgrading your plan gives you more.`}
                   plan="Campaign"
-                  price="from $69/mo"
+                  price="from $89/mo"
                   benefits={[
                     'More profiles per month — upgrade your active candidate tier',
                     'Automated weekly refresh for active candidates',
@@ -2344,7 +2485,7 @@ export default function Dossiers() {
                       <><Sparkles className="w-4 h-4" /> Generate AI Profile</>
                     )}
                   </button>
-                  <p className="text-xs text-gray-400 text-center">14-section report · 2–4 minutes · Claude AI + live web search</p>
+                  <p className="text-xs text-gray-400 text-center">14-section report · 2–4 minutes · Grok + Perplexity + Claude scour the web, news &amp; social media</p>
                   {generating && <GenerationStrip startedAt={generationStartedAt} candidateName={candidates.find(c => c.id === pendingCandidateId)?.name || candidates.find(c => c.id === candidateId)?.name} />}
                 </>
               )}
@@ -2595,6 +2736,7 @@ export default function Dossiers() {
             </div>
           ) : (
             <DossierViewer
+              initialSection={deepLinkedRef.current ? initSection : null}
               key={selected.id}
               dossier={selected}
               onRegenerate={handleRegenerate}

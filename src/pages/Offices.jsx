@@ -25,7 +25,11 @@ const levelColors = {
 
 const PANEL_HEADER_BG = {
   federal:   { bg:'#dbeafe', color:'#1e40af', badge:'bg-blue-100 text-blue-800' },
+  congress:  { bg:'#dbeafe', color:'#1e40af', badge:'bg-blue-100 text-blue-800' },
+  ussenate:  { bg:'#cffafe', color:'#155e75', badge:'bg-cyan-100 text-cyan-800' },
   state:     { bg:'#fee2e2', color:'#991b1b', badge:'bg-red-100 text-red-700' },
+  senate:    { bg:'#fee2e2', color:'#991b1b', badge:'bg-red-100 text-red-700' },
+  assembly:  { bg:'#ffedd5', color:'#9a3412', badge:'bg-orange-100 text-orange-700' },
   county:    { bg:'#ede9fe', color:'#5b21b6', badge:'bg-purple-100 text-purple-700' },
   municipal: { bg:'#dcfce7', color:'#14532d', badge:'bg-green-100 text-green-700' },
 }
@@ -64,18 +68,28 @@ function matchOffices(district, allOffices) {
   const { name, sublabel, layerKey } = district
   const num = parseInt((name.match(/\d+/) || [])[0])
 
-  if (layerKey === 'federal') {
-    // Match federal offices by district number (or statewide federal offices)
+  if (layerKey === 'congress' || layerKey === 'federal') {
+    // U.S. House: match federal offices by district number (legacy 'federal'
+    // layer key also included statewide federal offices)
     return allOffices.filter(o => {
       if (o.level !== 'federal') return false
       if (num && o.district_number != null) return parseInt(o.district_number) === num
-      return true // include statewide federal (US Senate)
+      if (layerKey === 'congress') return num == null && !/senate|senator/i.test(o.name || '')
+      return true
     })
   }
 
-  if (layerKey === 'state') {
+  if (layerKey === 'ussenate') {
+    // U.S. Senate is statewide — match federal offices with no district that
+    // look like Senate seats (or any statewide federal office as fallback)
+    const statewide = allOffices.filter(o => o.level === 'federal' && o.district_number == null)
+    const senate = statewide.filter(o => /senate|senator/i.test(o.name || ''))
+    return senate.length ? senate : statewide
+  }
+
+  if (layerKey === 'senate' || layerKey === 'assembly' || layerKey === 'state') {
     if (!num) return []
-    const isSenate = sublabel === 'State Senate District'
+    const isSenate = layerKey === 'senate' || sublabel === 'State Senate District'
     return allOffices.filter(o => {
       if (o.level !== 'state') return false
       if (parseInt(o.district_number) !== num) return false
@@ -527,11 +541,15 @@ export default function Offices() {
   const levelOrder = ['federal','state','county','municipal']
   const thClass    = 'table-header cursor-pointer select-none hover:bg-gray-100 transition-colors'
 
+  // v1.19.1: state split into Assembly / State Senate, federal split into
+  // Congress (U.S. House) / U.S. Senate (statewide) — each its own toggle.
   const LAYER_BUTTONS = [
-    { key:'federal',   label:'Federal',   activeCls:'bg-blue-600 text-white border-blue-600',    dotColor:'#1d4ed8' },
-    { key:'state',     label:'State',     activeCls:'bg-brand-red text-white border-brand-red',   dotColor:'#dc2626' },
-    { key:'county',    label:'County',    activeCls:'bg-purple-600 text-white border-purple-600', dotColor:'#7c3aed' },
-    { key:'municipal', label:'Municipal', activeCls:'bg-green-600 text-white border-green-600',   dotColor:'#16a34a' },
+    { key:'congress',  label:'Congress',     activeCls:'bg-blue-600 text-white border-blue-600',    dotColor:'#1d4ed8' },
+    { key:'ussenate',  label:'U.S. Senate',  activeCls:'bg-cyan-700 text-white border-cyan-700',    dotColor:'#0e7490' },
+    { key:'senate',    label:'State Senate', activeCls:'bg-brand-red text-white border-brand-red',  dotColor:'#dc2626' },
+    { key:'assembly',  label:'Assembly',     activeCls:'bg-orange-600 text-white border-orange-600', dotColor:'#ea580c' },
+    { key:'county',    label:'County',       activeCls:'bg-purple-600 text-white border-purple-600', dotColor:'#7c3aed' },
+    { key:'municipal', label:'Municipal',    activeCls:'bg-green-600 text-white border-green-600',   dotColor:'#16a34a' },
   ]
 
   return (
@@ -539,12 +557,6 @@ export default function Offices() {
       <LoadingBar loading={loading} />
       {/* ── Header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Building2 className="w-6 h-6 text-brand-red" /> Offices & Districts
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">All political offices tracked across Wisconsin</p>
-        </div>
         <div className="sm:ml-auto flex items-center gap-2">
           <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
             <button onClick={() => switchView('table')}

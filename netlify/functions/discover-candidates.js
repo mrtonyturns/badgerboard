@@ -3,6 +3,7 @@
 // ANTHROPIC_API_KEY must be set in Netlify environment variables
 
 const { enforceRateLimit } = require('./_rate-limit')
+const { logAiUsage } = require('./_ai-usage')
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const SUPABASE_URL      = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
@@ -55,7 +56,7 @@ exports.handler = async (event) => {
   const caller = await authRes.json()
   const plan = ADMIN_EMAILS.includes(caller.email?.toLowerCase())
     ? 'agency'
-    : (caller?.app_metadata?.plan || 'scout')
+    : (await require('./_entitlements').resolveEntitlement(caller)).plan  // v1.18: honors beta + trials
   if (!CAMPAIGN_PLUS.includes(plan)) {
     return { statusCode: 403, headers, body: JSON.stringify({ error: 'Campaign plan or higher required.' }) }
   }
@@ -145,6 +146,7 @@ Include 5-15 candidates if available. If fewer are known, include only those wit
     }
 
     const data    = await response.json()
+    logAiUsage({ userId: caller?.id, endpoint: 'prospecting', provider: 'anthropic', model: MODEL, inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
     const rawText = ((data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')) || '[]'
 
     let candidates = []

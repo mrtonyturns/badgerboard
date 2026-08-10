@@ -10,6 +10,7 @@ import { supabase } from '../lib/supabase'
 import {
   getUserPlan, getUserBracket, getPlanConfig, getBracketConfig,
   PLAN_CONFIG, MONTHLY_PRICES, getProfileLimit, getEffectiveProfileLimit,
+  getEntitlementSource, getActiveTrial,
 } from '../lib/tiers'
 import { isNativeApp } from '../lib/native'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -302,6 +303,8 @@ export default function Settings() {
   const planConfig   = getPlanConfig(userPlan) || getPlanConfig('scout')
   const bracketCfg   = getBracketConfig(userBracket)
   const dossierLimit = getEffectiveProfileLimit(user)
+  const entSource    = getEntitlementSource(user)   // admin | beta | trial | paid | free
+  const activeTrial  = getActiveTrial(user)
 
   // Live monthly price for current plan+bracket
   const currentPrice = (() => {
@@ -552,7 +555,18 @@ export default function Settings() {
         },
         body: JSON.stringify({ userId: user?.id, email: user?.email }),
       })
-      const json = res.ok ? await res.json() : {}
+      // Audit fix (#2): never show "cancelled" unless the server actually
+      // confirmed it — a 401/500 here previously produced a success banner
+      // while Stripe kept billing.
+      if (!res.ok) {
+        let errText = 'We couldn\'t cancel your subscription. Please try again, or use "Manage billing" to cancel through the billing portal.'
+        try { const j = await res.json(); if (j?.error) errText = `${j.error} — please try again or use "Manage billing" to cancel through the billing portal.` } catch { /* keep default */ }
+        setBillingMsg({ type: 'error', text: errText })
+        setCancelStep(null)
+        setDeleteLoading(false)
+        return
+      }
+      const json = await res.json()
       // Refresh JWT so the app immediately reflects Scout plan (no stale tier in UI)
       await refreshSession?.()
       setCancelStep(null)
@@ -561,8 +575,7 @@ export default function Settings() {
         text: json.message || 'Your subscription has been cancelled. You\'ve been moved to the free Scout plan — all your data is safe.',
       })
     } catch {
-      // Fallback: open billing portal to let them cancel themselves
-      handleManageBilling()
+      setBillingMsg({ type: 'error', text: 'Could not reach the server to cancel. Please try again, or use "Manage billing" to cancel through the billing portal.' })
       setCancelStep(null)
     }
     setDeleteLoading(false)
@@ -581,9 +594,12 @@ export default function Settings() {
         },
         body: JSON.stringify({ userId: user?.id, email: user?.email }),
       })
-      const json = res.ok ? await res.json() : {}
-      if (json.error) {
-        setDeleteMsg({ type: 'error', text: json.error })
+      // Audit fix (#2): a non-2xx here previously signed the user out as if
+      // the account were deleted while it (and its Stripe subscription) lived on.
+      let json = {}
+      try { json = await res.json() } catch { /* non-JSON error body */ }
+      if (!res.ok || json.error) {
+        setDeleteMsg({ type: 'error', text: json.error || `Account deletion failed (HTTP ${res.status}). Please try again or contact support — your account has NOT been deleted.` })
       } else {
         // Sign out and redirect — account is gone
         try {
@@ -602,12 +618,7 @@ export default function Settings() {
 
   return (
     <div className="space-y-8 max-w-2xl">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-          <SettingsIcon className="w-6 h-6 text-brand-red" /> Settings
-        </h1>
-        <p className="text-gray-500 text-sm mt-1">Manage your profile, billing, and account security</p>
-      </div>
+      {/* Header lives in the top bar (v1.24.1) */}
 
       {/* ── Billing message banner ─────────────────────────────────────────── */}
       {billingMsg && (
@@ -754,16 +765,38 @@ export default function Settings() {
 
           <div className="flex items-center justify-between gap-4 mb-4">
             <div>
-              <p className="text-2xl font-black text-gray-900">{planConfig.name}</p>
+              <p className="text-2xl font-black text-gray-900 flex items-center gap-2">
+                {planConfig.name}
+                {entSource === 'beta' && (
+                  <span className="text-[10px] font-bold uppercase tracking-wide bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full">Beta access</span>
+                )}
+                {entSource === 'trial' && activeTrial && (
+                  <span className="text-[10px] font-bold uppercase tracking-wide bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
+                    Free trial · {activeTrial.daysLeft}d left
+                  </span>
+                )}
+              </p>
               {userPlan !== 'scout' && ['a_monitor','a_active','a_campaign','monitor','campaign','agency'].includes(userPlan) && (
                 <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
                   <Users className="w-3.5 h-3.5" />
                   {bracketCfg.label} active candidates
                 </p>
               )}
+              {entSource === 'trial' && activeTrial && (
+                <p className="text-xs text-purple-700 mt-1">
+                  Trial ends {new Date(activeTrial.endsAt).toLocaleDateString()} — you'll move to the free Scout plan automatically.
+                </p>
+              )}
+              {entSource === 'beta' && (
+                <p className="text-xs text-indigo-700 mt-1">
+                  Full access while the beta program is on — no charge.
+                </p>
+              )}
             </div>
             <div className="text-right flex-shrink-0">
-              {currentPrice ? (
+              {entSource === 'beta' || entSource === 'trial' ? (
+                <p className="text-xl font-black text-gray-400">Free</p>
+              ) : currentPrice ? (
                 <>
                   <p className="text-3xl font-black text-brand-red leading-none">
                     ${currentPrice}

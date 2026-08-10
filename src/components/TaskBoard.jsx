@@ -22,6 +22,7 @@ import {
   createTasksBatch, createTaskSectionsBatch, primeTaskCaches, subscribeTaskChanges,
 } from '../lib/supabase'
 import { recurrenceLabel, nextOccurrence } from '../lib/recurrence.js'
+import SearchableSelect from './SearchableSelect'
 import { parseQuickAdd } from '../lib/quickAdd'
 import LoadingBar from './LoadingBar'
 
@@ -332,17 +333,19 @@ function TaskDetailModal({ task, tasks, projects, sections, labels, onClose, onS
           {/* Project / section */}
           <div>
             <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Project</label>
-            <select value={projectId} onChange={(e) => { setProjectId(e.target.value); setSectionId('') }}
-              className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2 bg-white">
-              <option value="">Inbox</option>
-              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <div className="mt-1">
+              <SearchableSelect value={projectId} onChange={v => { setProjectId(v); setSectionId('') }}
+                options={[{ value: '', label: 'Inbox' }, ...projects.map(p => ({ value: p.id, label: p.name }))]}
+                placeholder="Inbox" buttonClassName="text-sm"
+                searchPlaceholder="Search projects…" />
+            </div>
             {projectSections.length > 0 && (
-              <select value={sectionId || ''} onChange={(e) => setSectionId(e.target.value)}
-                className="mt-2 w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2 bg-white">
-                <option value="">No section</option>
-                {projectSections.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+              <div className="mt-2">
+                <SearchableSelect value={sectionId || ''} onChange={setSectionId}
+                  options={[{ value: '', label: 'No section' }, ...projectSections.map(s => ({ value: s.id, label: s.name }))]}
+                  placeholder="No section" buttonClassName="text-sm"
+                  searchPlaceholder="Search sections…" />
+              </div>
             )}
           </div>
 
@@ -544,14 +547,12 @@ function TemplateModal({ onClose, onGenerate }) {
         ) : elections.length === 0 ? (
           <p className="text-sm text-gray-500 py-4">No elections found — add one on the Calendar tab first.</p>
         ) : (
-          <select value={electionId} onChange={(e) => setElectionId(e.target.value)}
-            className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 mb-5 bg-white">
-            {elections.map(e => (
-              <option key={e.id} value={e.id}>
-                {e.name} — {e.election_date ? format(parseISO(e.election_date), 'MMM d, yyyy') : 'no date'}
-              </option>
-            ))}
-          </select>
+          <div className="mb-5">
+            <SearchableSelect value={electionId} onChange={setElectionId}
+              options={elections.map(e => ({ value: e.id, label: `${e.name} — ${e.election_date ? format(parseISO(e.election_date), 'MMM d, yyyy') : 'no date'}` }))}
+              placeholder="Select election…" buttonClassName="text-sm"
+              searchPlaceholder="Search elections…" />
+          </div>
         )}
         <div className="flex justify-end gap-2">
           <button onClick={onClose} className="text-sm text-gray-500 px-4 py-2 rounded-lg hover:bg-gray-100">Cancel</button>
@@ -977,24 +978,41 @@ export default function TaskBoard() {
 
       {/* ══ Sidebar ══ */}
       <aside className="w-56 flex-shrink-0 bg-gray-50/80 border-r border-gray-200 p-3 hidden md:flex flex-col gap-0.5 overflow-y-auto">
-        {/* Campaign Connect plan switcher */}
+        {/* Campaign Connect — Candidates section (v1.20): action-plan users
+            with active links see each connected candidate here and can open
+            their plan. Tasks added while a candidate's plan is open are
+            written to THAT candidate's account (owner_id = candidate,
+            created_by = manager) and appear for them instantly. */}
         {planOwners.length > 1 && (
-          <div className="mb-2">
-            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider px-3 mb-1">Viewing plan</label>
-            <select
-              value={activePlan?.id || ''}
-              onChange={(e) => switchPlan(e.target.value)}
-              className="w-full text-xs font-medium border border-gray-200 rounded-lg px-2 py-1.5 bg-white truncate"
-            >
-              {planOwners.map(o => (
-                <option key={o.id} value={o.id}>{o.self ? 'My plan' : o.label}</option>
-              ))}
-            </select>
+          <div className="mb-3">
+            <div className="px-3 mb-1">
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Candidates</span>
+            </div>
+            {planOwners.map(o => {
+              const isActive = activePlan?.id === o.id
+              return (
+                <button key={o.id} onClick={() => switchPlan(o.id)}
+                  className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-sm transition-colors text-left min-w-0
+                    ${isActive ? 'bg-brand-red/10 text-brand-red font-medium' : 'text-gray-700 hover:bg-gray-100'}`}
+                  title={o.self ? 'Your own plan' : `${o.label} — ${o.canEdit ? 'can add & manage tasks' : 'view only'}`}>
+                  {o.self
+                    ? <Inbox className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />
+                    : <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-extrabold text-white flex-shrink-0 ${isActive ? 'bg-brand-red' : 'bg-brand-navy/70'}`}>
+                        {(o.label || '?')[0].toUpperCase()}
+                      </span>}
+                  <span className="flex-1 truncate">{o.self ? 'My plan' : o.label}</span>
+                  {!o.self && !o.canEdit && <span className="text-[9px] text-gray-400 uppercase">view</span>}
+                </button>
+              )
+            })}
             {activePlan && !activePlan.self && (
-              <p className="px-1 mt-1 text-[10px] text-gray-400">
-                Connected candidate {activePlan.canEdit ? '· can manage' : '· view only'}
+              <p className="px-3 mt-1.5 text-[10px] leading-snug text-brand-red/80 bg-brand-red/5 rounded-lg py-1.5">
+                Viewing {activePlan.label}&apos;s plan — {activePlan.canEdit
+                  ? 'tasks you add appear on their account.'
+                  : 'view only.'}
               </p>
             )}
+            <div className="border-b border-gray-200 mt-3" />
           </div>
         )}
         {[
@@ -1082,15 +1100,12 @@ export default function TaskBoard() {
 
         {/* Mobile plan switcher */}
         {planOwners.length > 1 && (
-          <select
-            value={activePlan?.id || ''}
-            onChange={(e) => switchPlan(e.target.value)}
-            className="md:hidden w-full text-xs font-medium border border-gray-200 rounded-lg px-2 py-2 bg-white mb-3"
-          >
-            {planOwners.map(o => (
-              <option key={o.id} value={o.id}>{o.self ? 'My plan' : `Plan: ${o.label}`}</option>
-            ))}
-          </select>
+          <div className="md:hidden mb-3">
+            <SearchableSelect value={activePlan?.id || ''} onChange={switchPlan}
+              options={planOwners.map(o => ({ value: o.id, label: o.self ? 'My plan' : `Plan: ${o.label}` }))}
+              placeholder="Select plan" buttonClassName="text-xs font-medium"
+              searchPlaceholder="Search plans…" />
+          </div>
         )}
 
         {/* Mobile view switcher */}

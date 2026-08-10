@@ -51,6 +51,96 @@ const VALID_PLANS     = [...CANDIDATE_PLANS, ...ACTION_PLANS, ...LEGACY_PLANS]
 const VALID_BRACKETS  = ['b1', 'b2_5', 'b6', 'b11', 'b26', 'b51']
 const VALID_BILLING   = ['monthly', 'quarterly', 'semiannual', 'annual']
 
+// v1.18 raised-price catalog (pricing_gen v2026_07, minted 2026-07-21).
+// Takes precedence over the founder-era STRIPE_PRICES below; a same-named
+// env var overrides both. Old subscriptions keep renewing on legacy IDs.
+const STRIPE_PRICES_V2 = {
+  STRIPE_PRICE_A_ACTIVE_B11_A:       'price_1TvY02HGi9vK03bujF62n6Qn',
+  STRIPE_PRICE_A_ACTIVE_B11_M:       'price_1TvY01HGi9vK03buhHrjCPU9',
+  STRIPE_PRICE_A_ACTIVE_B11_Q:       'price_1TvY02HGi9vK03buUMdbLqet',
+  STRIPE_PRICE_A_ACTIVE_B11_S:       'price_1TvY02HGi9vK03buaMVaeGSu',
+  STRIPE_PRICE_A_ACTIVE_B1_A:        'price_1TvXzyHGi9vK03bu2qcYazMZ',
+  STRIPE_PRICE_A_ACTIVE_B1_M:        'price_1TvXzxHGi9vK03buje068LSW',
+  STRIPE_PRICE_A_ACTIVE_B1_Q:        'price_1TvXzxHGi9vK03buGFoPsQCP',
+  STRIPE_PRICE_A_ACTIVE_B1_S:        'price_1TvXzxHGi9vK03buaqzWfooj',
+  STRIPE_PRICE_A_ACTIVE_B26_A:       'price_1TvY04HGi9vK03buEXhnX2ar',
+  STRIPE_PRICE_A_ACTIVE_B26_M:       'price_1TvY03HGi9vK03bu3xrlcgDF',
+  STRIPE_PRICE_A_ACTIVE_B26_Q:       'price_1TvY03HGi9vK03buGm2dfFKp',
+  STRIPE_PRICE_A_ACTIVE_B26_S:       'price_1TvY04HGi9vK03buvMHAyRMP',
+  STRIPE_PRICE_A_ACTIVE_B2_5_A:      'price_1TvXzzHGi9vK03bul9xalrZ0',
+  STRIPE_PRICE_A_ACTIVE_B2_5_M:      'price_1TvXzyHGi9vK03buUq0KY0RT',
+  STRIPE_PRICE_A_ACTIVE_B2_5_Q:      'price_1TvXzzHGi9vK03buzBaWjyiP',
+  STRIPE_PRICE_A_ACTIVE_B2_5_S:      'price_1TvXzzHGi9vK03buYkCgHP8d',
+  STRIPE_PRICE_A_ACTIVE_B51_A:       'price_1TvY06HGi9vK03buasMWY1h4',
+  STRIPE_PRICE_A_ACTIVE_B51_M:       'price_1TvY05HGi9vK03buzySbvFpd',
+  STRIPE_PRICE_A_ACTIVE_B51_Q:       'price_1TvY05HGi9vK03buCPrVudk7',
+  STRIPE_PRICE_A_ACTIVE_B51_S:       'price_1TvY05HGi9vK03bujdO6Ts5p',
+  STRIPE_PRICE_A_ACTIVE_B6_A:        'price_1TvY01HGi9vK03burEeap243',
+  STRIPE_PRICE_A_ACTIVE_B6_M:        'price_1TvY00HGi9vK03bun1A2CC6x',
+  STRIPE_PRICE_A_ACTIVE_B6_Q:        'price_1TvY00HGi9vK03buBe3wU5CW',
+  STRIPE_PRICE_A_ACTIVE_B6_S:        'price_1TvY01HGi9vK03bucFHpVPMT',
+  STRIPE_PRICE_A_CAMPAIGN_B11_A:     'price_1TvY0CHGi9vK03bumANfcTVA',
+  STRIPE_PRICE_A_CAMPAIGN_B11_M:     'price_1TvY0BHGi9vK03buhCj1MVBu',
+  STRIPE_PRICE_A_CAMPAIGN_B11_Q:     'price_1TvY0CHGi9vK03buuhndoB7I',
+  STRIPE_PRICE_A_CAMPAIGN_B11_S:     'price_1TvY0CHGi9vK03buGXKSHNTv',
+  STRIPE_PRICE_A_CAMPAIGN_B1_A:      'price_1TvY07HGi9vK03bu2SJBU6UB',
+  STRIPE_PRICE_A_CAMPAIGN_B1_M:      'price_1TvY06HGi9vK03buRECSNca3',
+  STRIPE_PRICE_A_CAMPAIGN_B1_Q:      'price_1TvY07HGi9vK03buYfE9P1Yr',
+  STRIPE_PRICE_A_CAMPAIGN_B1_S:      'price_1TvY07HGi9vK03bugVZt67o0',
+  STRIPE_PRICE_A_CAMPAIGN_B26_A:     'price_1TvY0EHGi9vK03bucTUIF2bl',
+  STRIPE_PRICE_A_CAMPAIGN_B26_M:     'price_1TvY0DHGi9vK03buIpt8TQlJ',
+  STRIPE_PRICE_A_CAMPAIGN_B26_Q:     'price_1TvY0DHGi9vK03bunsR8xul3',
+  STRIPE_PRICE_A_CAMPAIGN_B26_S:     'price_1TvY0EHGi9vK03bul5VkQh07',
+  STRIPE_PRICE_A_CAMPAIGN_B2_5_A:    'price_1TvY09HGi9vK03buHmb8XZYK',
+  STRIPE_PRICE_A_CAMPAIGN_B2_5_M:    'price_1TvY08HGi9vK03buUG7nkGdh',
+  STRIPE_PRICE_A_CAMPAIGN_B2_5_Q:    'price_1TvY08HGi9vK03buCn7kNzwY',
+  STRIPE_PRICE_A_CAMPAIGN_B2_5_S:    'price_1TvY09HGi9vK03buyarTS9BF',
+  STRIPE_PRICE_A_CAMPAIGN_B51_A:     'price_1TvY0GHGi9vK03but3d3vwaG',
+  STRIPE_PRICE_A_CAMPAIGN_B51_M:     'price_1TvY0EHGi9vK03buUkfX56cU',
+  STRIPE_PRICE_A_CAMPAIGN_B51_Q:     'price_1TvY0FHGi9vK03buNRdYFS8a',
+  STRIPE_PRICE_A_CAMPAIGN_B51_S:     'price_1TvY0FHGi9vK03bumOLjT3Nf',
+  STRIPE_PRICE_A_CAMPAIGN_B6_A:      'price_1TvY0BHGi9vK03buzZki46cx',
+  STRIPE_PRICE_A_CAMPAIGN_B6_M:      'price_1TvY0AHGi9vK03bu9QrteFcd',
+  STRIPE_PRICE_A_CAMPAIGN_B6_Q:      'price_1TvY0AHGi9vK03buPz8Nz9ef',
+  STRIPE_PRICE_A_CAMPAIGN_B6_S:      'price_1TvY0AHGi9vK03buDqGPrwCL',
+  STRIPE_PRICE_A_MONITOR_B11_A:      'price_1TvXztHGi9vK03buyPdQJhHx',
+  STRIPE_PRICE_A_MONITOR_B11_M:      'price_1TvXzsHGi9vK03buIQQaF9H5',
+  STRIPE_PRICE_A_MONITOR_B11_Q:      'price_1TvXzsHGi9vK03buEJfZFdFI',
+  STRIPE_PRICE_A_MONITOR_B11_S:      'price_1TvXzsHGi9vK03butqVefax5',
+  STRIPE_PRICE_A_MONITOR_B1_A:       'price_1TvXzoHGi9vK03buwbhByScN',
+  STRIPE_PRICE_A_MONITOR_B1_M:       'price_1TvXznHGi9vK03buO529HYr8',
+  STRIPE_PRICE_A_MONITOR_B1_Q:       'price_1TvXznHGi9vK03buzr0swMra',
+  STRIPE_PRICE_A_MONITOR_B1_S:       'price_1TvXzoHGi9vK03bubcQVz1QX',
+  STRIPE_PRICE_A_MONITOR_B26_A:      'price_1TvXzuHGi9vK03buWmDQNlQQ',
+  STRIPE_PRICE_A_MONITOR_B26_M:      'price_1TvXztHGi9vK03buxcXNU5kM',
+  STRIPE_PRICE_A_MONITOR_B26_Q:      'price_1TvXzuHGi9vK03buwH7cnwi7',
+  STRIPE_PRICE_A_MONITOR_B26_S:      'price_1TvXzuHGi9vK03buzu4b1I1c',
+  STRIPE_PRICE_A_MONITOR_B2_5_A:     'price_1TvXzqHGi9vK03buOuhR8pnf',
+  STRIPE_PRICE_A_MONITOR_B2_5_M:     'price_1TvXzpHGi9vK03bu85JE6FqS',
+  STRIPE_PRICE_A_MONITOR_B2_5_Q:     'price_1TvXzpHGi9vK03buHPCTmSV9',
+  STRIPE_PRICE_A_MONITOR_B2_5_S:     'price_1TvXzpHGi9vK03bu3yeBeZGi',
+  STRIPE_PRICE_A_MONITOR_B51_A:      'price_1TvXzwHGi9vK03buGFN5RHPN',
+  STRIPE_PRICE_A_MONITOR_B51_M:      'price_1TvXzvHGi9vK03buGIkqnsml',
+  STRIPE_PRICE_A_MONITOR_B51_Q:      'price_1TvXzvHGi9vK03buro1quRR9',
+  STRIPE_PRICE_A_MONITOR_B51_S:      'price_1TvXzwHGi9vK03bujCeHGm8z',
+  STRIPE_PRICE_A_MONITOR_B6_A:       'price_1TvXzrHGi9vK03buwWbmouDx',
+  STRIPE_PRICE_A_MONITOR_B6_M:       'price_1TvXzqHGi9vK03bu71qmkDa1',
+  STRIPE_PRICE_A_MONITOR_B6_Q:       'price_1TvXzrHGi9vK03buPe1ECOjs',
+  STRIPE_PRICE_A_MONITOR_B6_S:       'price_1TvXzrHGi9vK03bumI6ucvHt',
+  STRIPE_PRICE_C_ACTIVE_A:           'price_1TvXzkHGi9vK03bu6a1NPSp6',
+  STRIPE_PRICE_C_ACTIVE_M:           'price_1TvXzjHGi9vK03buU5NMpJo7',
+  STRIPE_PRICE_C_ACTIVE_Q:           'price_1TvXzkHGi9vK03buL3vKjQT8',
+  STRIPE_PRICE_C_ACTIVE_S:           'price_1TvXzkHGi9vK03bu6NaGEBQr',
+  STRIPE_PRICE_C_CAMPAIGN_A:         'price_1TvXzmHGi9vK03buecV4BTTP',
+  STRIPE_PRICE_C_CAMPAIGN_M:         'price_1TvXzlHGi9vK03bu0KQriS7E',
+  STRIPE_PRICE_C_CAMPAIGN_Q:         'price_1TvXzlHGi9vK03bukrHmGD0E',
+  STRIPE_PRICE_C_CAMPAIGN_S:         'price_1TvXzmHGi9vK03buDdyi38oP',
+  STRIPE_PRICE_C_MONITOR_A:          'price_1TvXzjHGi9vK03busVh0Eymw',
+  STRIPE_PRICE_C_MONITOR_M:          'price_1TvXziHGi9vK03buy8muc7vT',
+  STRIPE_PRICE_C_MONITOR_Q:          'price_1TvXziHGi9vK03buA7kMXsfR',
+  STRIPE_PRICE_C_MONITOR_S:          'price_1TvXziHGi9vK03buc4H3aOYF',
+}
+
 // Baked-in price IDs — keep in sync with create-checkout-session.js
 const STRIPE_PRICES = {
   STRIPE_PRICE_C_MONITOR_M:        'price_1TYwcxHGi9vK03buLmtrjdhT',
@@ -171,19 +261,30 @@ function planType(plan) {
 }
 
 // Build a reverse map: Stripe price ID → { plan, plan_type, bracket, billing }
-// Scans all STRIPE_PRICE_* env vars at startup.
+//
+// v1.18 pricing update: BOTH the env var (new/raised price IDs, set after
+// running admin-stripe-setup) AND the baked-in legacy IDs above are mapped.
+// Grandfathered founder-rate subscriptions keep renewing on the old price IDs,
+// so their webhook events must keep resolving forever — never remove the
+// baked-in map.
 function buildPriceMap() {
   const map = {}
   const billingKeys = [['M', 'monthly'], ['Q', 'quarterly'], ['A', 'annual'], ['S', 'semiannual']]
 
+  const addBoth = (envKey, entry) => {
+    const legacyId = STRIPE_PRICES[envKey]
+    const v2Id     = STRIPE_PRICES_V2[envKey]
+    const envId    = process.env[envKey]
+    if (legacyId) map[legacyId] = entry
+    if (v2Id && v2Id !== legacyId) map[v2Id] = entry
+    if (envId && envId !== legacyId && envId !== v2Id) map[envId] = entry
+  }
+
   // Candidate plans (no bracket): STRIPE_PRICE_C_MONITOR_M, etc.
   for (const plan of CANDIDATE_PLANS) {
     for (const [billingKey, billing] of billingKeys) {
-      const envKey  = `STRIPE_PRICE_${plan.toUpperCase()}_${billingKey}`
-      const priceId = STRIPE_PRICES[envKey]
-      if (priceId) {
-        map[priceId] = { plan, plan_type: 'candidate', bracket: null, billing }
-      }
+      const envKey = `STRIPE_PRICE_${plan.toUpperCase()}_${billingKey}`
+      addBoth(envKey, { plan, plan_type: 'candidate', bracket: null, billing })
     }
   }
 
@@ -191,11 +292,8 @@ function buildPriceMap() {
   for (const plan of ACTION_PLANS) {
     for (const bracket of VALID_BRACKETS) {
       for (const [billingKey, billing] of billingKeys) {
-        const envKey  = `STRIPE_PRICE_${plan.toUpperCase()}_${bracket.toUpperCase()}_${billingKey}`
-        const priceId = STRIPE_PRICES[envKey]
-        if (priceId) {
-          map[priceId] = { plan, plan_type: 'action', bracket, billing }
-        }
+        const envKey = `STRIPE_PRICE_${plan.toUpperCase()}_${bracket.toUpperCase()}_${billingKey}`
+        addBoth(envKey, { plan, plan_type: 'action', bracket, billing })
       }
     }
   }
@@ -204,11 +302,8 @@ function buildPriceMap() {
   for (const plan of LEGACY_PLANS) {
     for (const bracket of VALID_BRACKETS) {
       for (const [billingKey, billing] of billingKeys) {
-        const envKey  = `STRIPE_PRICE_${plan.toUpperCase()}_${bracket.toUpperCase()}_${billingKey}`
-        const priceId = STRIPE_PRICES[envKey]
-        if (priceId) {
-          map[priceId] = { plan, plan_type: 'action', bracket, billing }
-        }
+        const envKey = `STRIPE_PRICE_${plan.toUpperCase()}_${bracket.toUpperCase()}_${billingKey}`
+        addBoth(envKey, { plan, plan_type: 'action', bracket, billing })
       }
     }
   }
@@ -310,18 +405,76 @@ async function updateSupabasePaymentStatus(supabaseUserId, paymentStatus) {
   return res.json()
 }
 
+// ── Webhook signing secret resolution ────────────────────────────────────────
+// Prefers the STRIPE_WEBHOOK_SECRET env var. Falls back to the app_secrets
+// table (RLS enabled with NO policies → readable only by the service role).
+// Cached per container so the DB is hit once per cold start.
+let _cachedWebhookSecret = null
+async function getWebhookSecret() {
+  if (process.env.STRIPE_WEBHOOK_SECRET) return process.env.STRIPE_WEBHOOK_SECRET
+  if (_cachedWebhookSecret) return _cachedWebhookSecret
+  try {
+    const res = await fetch(
+      `${process.env.SUPABASE_URL}/rest/v1/app_secrets?key=eq.stripe_webhook_secret&select=value`,
+      {
+        headers: {
+          apikey:        process.env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+      }
+    )
+    if (!res.ok) return null
+    const rows = await res.json()
+    _cachedWebhookSecret = rows?.[0]?.value || null
+    return _cachedWebhookSecret
+  } catch (err) {
+    console.error('[stripe-webhook] secret lookup failed:', err.message)
+    return null
+  }
+}
+
+// Audit fix (#9): GoTrue's admin users endpoint IGNORES an ?email= filter —
+// the old version got page 1 of ALL users and took users[0], an arbitrary
+// account, which the payment_failed fallback then locked. Paginate and
+// exact-match the email (same pattern as admin-set-tier.js); return null
+// rather than ever guessing.
 async function findSupabaseUserByEmail(email) {
-  const res = await fetch(
-    `${process.env.SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(email)}`,
-    {
-      headers: {
-        apikey:        process.env.SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-      },
+  const target = String(email || '').toLowerCase()
+  if (!target) return null
+  try {
+    for (let page = 1; page <= 20; page++) {
+      const res = await fetch(
+        `${process.env.SUPABASE_URL}/auth/v1/admin/users?page=${page}&per_page=200`,
+        {
+          headers: {
+            apikey:        process.env.SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+          },
+        }
+      )
+      if (!res.ok) return null
+      const json = await res.json()
+      const users = json?.users || []
+      const match = users.find(u => (u.email || '').toLowerCase() === target)
+      if (match) return match
+      if (users.length < 200) break  // last page
     }
-  )
-  const json = await res.json()
-  return json?.users?.[0] || null
+  } catch (e) {
+    console.error('[stripe-webhook] findSupabaseUserByEmail failed:', e.message)
+  }
+  return null
+}
+
+// Audit fix (#9): Stripe API v2025+ (Basil) moved subscription_details to
+// invoice.parent.subscription_details — the old top-level read resolved
+// undefined on current payloads, so receipts never sent and payment_failed
+// always dropped into the (broken) email fallback. Read the new path first,
+// with legacy fallbacks for older API versions.
+function invoiceUserId(invoice) {
+  return invoice?.parent?.subscription_details?.metadata?.supabase_user_id
+      || invoice?.subscription_details?.metadata?.supabase_user_id
+      || invoice?.metadata?.supabase_user_id
+      || null
 }
 
 // ── Credit helpers ────────────────────────────────────────────────────────────
@@ -401,12 +554,18 @@ exports.handler = async (event) => {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
   const sig    = event.headers['stripe-signature']
 
+  const webhookSecret = await getWebhookSecret()
+  if (!webhookSecret) {
+    console.error('[stripe-webhook] No signing secret available (env STRIPE_WEBHOOK_SECRET or app_secrets row missing)')
+    return { statusCode: 500, body: 'Webhook not configured' }
+  }
+
   let stripeEvent
   try {
     stripeEvent = stripe.webhooks.constructEvent(
       event.body,
       sig,
-      process.env.STRIPE_WEBHOOK_SECRET
+      webhookSecret
     )
   } catch (err) {
     console.error('Webhook signature verification failed:', err.message)
@@ -481,6 +640,9 @@ exports.handler = async (event) => {
           // Clear downgrade lock if user is re-subscribing
           payment_status: 'active',
           downgraded_at:  null,
+          // Stale voluntary-downgrade marker must not survive into a new sub
+          // (it would skip the lockout on a future REAL cancellation)
+          voluntary_downgrade: null,
         })
 
         // Send plan activated email
@@ -531,15 +693,23 @@ exports.handler = async (event) => {
         const billing = metaBilling || mapped?.billing
 
         if (plan) {
-          console.log(`Updating to ${plan}/${bracket}/${billing} for user ${supabaseUserId}`)
+          // Audit fix (#6): payment_status must FOLLOW the subscription's real
+          // status. The old unconditional 'active' write meant any
+          // subscription.updated during delinquency (Stripe fires one alongside
+          // invoice.payment_failed, on past_due→unpaid, and when the customer
+          // toggles cancel-at-period-end) cleared the past_due lockout and
+          // restored access without payment.
+          const subStatus = sub.status
+          const statusFields = ['active', 'trialing'].includes(subStatus)
+            ? { payment_status: 'active', downgraded_at: null }
+            : ['past_due', 'unpaid'].includes(subStatus)
+              ? { payment_status: 'past_due' }
+              : {}  // incomplete/canceled etc. — leave payment_status untouched
+          console.log(`Updating to ${plan}/${bracket}/${billing} (sub status: ${subStatus}) for user ${supabaseUserId}`)
           await updateSupabasePlan(supabaseUserId, plan, bracket, billing, {
             stripe_customer_id: sub.customer,
             stripe_subscription_id: sub.id,
-          }, {
-            // Clear any downgrade lock when the subscription becomes active again
-            payment_status: 'active',
-            downgraded_at:  null,
-          })
+          }, statusFields)
 
           // Send plan updated email
           try {
@@ -578,6 +748,25 @@ exports.handler = async (event) => {
           break
         }
 
+        // Audit fix (#7): a VOLUNTARY "keep my data — move to Scout" downgrade
+        // cancels the Stripe sub, which fires this same event. The old handler
+        // then stamped payment_status 'inactive' + downgraded_at, throwing every
+        // voluntary downgrader into the deletion-countdown lockout.
+        // downgrade-to-free.js now sets voluntary_downgrade=true before
+        // cancelling; when we see it, honor the good-standing Scout state.
+        const existingUser = await getSupabaseUser(supabaseUserId)
+        if (existingUser?.app_metadata?.voluntary_downgrade) {
+          console.log(`Voluntary downgrade for ${supabaseUserId} — Scout in good standing, no lockout`)
+          const cleanMeta = { ...existingUser.app_metadata, plan: 'scout', plan_type: 'candidate', payment_status: 'active', downgraded_at: null, stripe_subscription_id: null }
+          delete cleanMeta.voluntary_downgrade
+          await fetch(`${process.env.SUPABASE_URL}/auth/v1/admin/users/${supabaseUserId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` },
+            body: JSON.stringify({ app_metadata: cleanMeta }),
+          })
+          break
+        }
+
         console.log(`Subscription cancelled — downgrading to scout for user ${supabaseUserId}`)
         await updateSupabasePlan(supabaseUserId, 'scout', null, null, null, {
           payment_status:        'inactive',
@@ -606,8 +795,7 @@ exports.handler = async (event) => {
       // ── Invoice payment failed — mark account past_due ───────────────────
       case 'invoice.payment_failed': {
         const invoice        = stripeEvent.data.object
-        const supabaseUserId = invoice.subscription_details?.metadata?.supabase_user_id
-                            || invoice.metadata?.supabase_user_id
+        const supabaseUserId = invoiceUserId(invoice)
 
         console.warn(`Payment failed for customer ${invoice.customer}, attempt ${invoice.attempt_count}`)
 
@@ -709,8 +897,7 @@ exports.handler = async (event) => {
       // ── Invoice payment succeeded — clear any past_due flag ──────────────
       case 'invoice.payment_succeeded': {
         const invoice        = stripeEvent.data.object
-        const supabaseUserId = invoice.subscription_details?.metadata?.supabase_user_id
-                            || invoice.metadata?.supabase_user_id
+        const supabaseUserId = invoiceUserId(invoice)
 
         if (supabaseUserId && !(await isAdminUser(supabaseUserId))) {
           try {
@@ -745,6 +932,18 @@ exports.handler = async (event) => {
     return { statusCode: 200, body: JSON.stringify({ received: true }) }
   } catch (err) {
     console.error('Webhook handler error:', err.message)
+    // Audit fix (#8): the idempotency row was inserted BEFORE handling, so a
+    // transient failure here used to permanently swallow the event — Stripe's
+    // retry hit the 409 and was treated as a processed duplicate, silently
+    // dropping paid credit grants and plan activations. Release the row so the
+    // retry actually reprocesses.
+    try {
+      await fetch(
+        `${process.env.SUPABASE_URL}/rest/v1/stripe_webhook_events?id=eq.${encodeURIComponent(stripeEvent.id)}`,
+        { method: 'DELETE', headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` } }
+      )
+      console.log(`[stripe-webhook] released idempotency row for ${stripeEvent.id} — Stripe retry will reprocess`)
+    } catch (e) { console.warn('[stripe-webhook] failed to release idempotency row:', e.message) }
     return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }
 }

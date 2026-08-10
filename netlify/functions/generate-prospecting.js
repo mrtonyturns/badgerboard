@@ -3,6 +3,7 @@
 // ANTHROPIC_API_KEY must be set in Netlify environment variables
 
 const { enforceRateLimit } = require('./_rate-limit')
+const { logAiUsage } = require('./_ai-usage')
 const { ADMIN_EMAILS } = require('./_config')
 const { PLAN_CONFIG } = require('../../src/lib/tiers.js')
 // Tier gating — prospecting is an Action-plan entitlement (tiers.js features.prospecting)
@@ -65,7 +66,7 @@ exports.handler = async (event) => {
   // ── Tier check — Action plan (prospecting entitlement) required ───────────────
   const callerPlan = ADMIN_EMAILS.includes(caller.email?.toLowerCase())
     ? 'a_campaign'
-    : ((caller?.app_metadata?.plan || 'scout').toLowerCase())
+    : (await require('./_entitlements').resolveEntitlement(caller)).plan  // v1.18: honors beta + trials
   if (!PROSPECTING_PLANS.includes(callerPlan)) {
     return { statusCode: 403, headers, body: JSON.stringify({ error: 'Action plan required for AI prospecting.' }) }
   }
@@ -213,6 +214,7 @@ Sort candidates by priority (high first, then medium, then low). Include ALL can
     }
 
     const data = await response.json()
+    logAiUsage({ userId: caller?.id, endpoint: 'prospecting', provider: 'anthropic', model: MODEL, inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
     const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
 
     if (!text) throw new Error('No content returned from Claude')

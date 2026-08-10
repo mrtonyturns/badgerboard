@@ -105,13 +105,13 @@ async function retryInvoice(stripe, userId) {
   const customer = await findCustomer(stripe, email);
   if (!customer) throw new Error('Customer not found');
 
-  const invoices = await stripe.invoices.list({
-    customer: customer.id,
-    status: ['open', 'uncollectible'],
-    limit: 1,
-  });
-
-  const invoice = invoices.data[0];
+  // Audit fix (#19): Stripe's invoices.list takes a SINGLE status string —
+  // passing an array threw on every call, so "Retry invoice" never worked.
+  // Check 'open' first (retryable), then fall back to 'uncollectible'.
+  let invoice = (await stripe.invoices.list({ customer: customer.id, status: 'open', limit: 1 })).data[0]
+  if (!invoice) {
+    invoice = (await stripe.invoices.list({ customer: customer.id, status: 'uncollectible', limit: 1 })).data[0]
+  }
   if (!invoice) throw new Error('No open invoices found');
 
   await stripe.invoices.pay(invoice.id);
@@ -184,7 +184,23 @@ async function applyCredit(stripe, userId, amountCents, description) {
   };
 }
 
+// Audit fix (#4): server-side validation — the admin UI once sent bracket keys
+// (b2, b3, b6-as-26-50…) that either wrote garbage into app_metadata or moved
+// live subscriptions to the wrong price. Never trust the picker.
+const VALID_PLAN_KEYS = ['scout', 'free', 'c_monitor', 'c_active', 'c_campaign', 'a_monitor', 'a_active', 'a_campaign', 'monitor', 'campaign', 'agency'];
+const VALID_BRACKET_KEYS = ['b1', 'b2_5', 'b6', 'b11', 'b26', 'b51', 'ent'];
+
+function validatePlanBracket(plan, bracket) {
+  if (plan && !VALID_PLAN_KEYS.includes(String(plan).toLowerCase())) {
+    throw new Error(`Invalid plan key "${plan}". Valid: ${VALID_PLAN_KEYS.join(', ')}`);
+  }
+  if (bracket && !VALID_BRACKET_KEYS.includes(String(bracket))) {
+    throw new Error(`Invalid bracket key "${bracket}". Valid: ${VALID_BRACKET_KEYS.join(', ')}`);
+  }
+}
+
 async function updatePlan(stripe, userId, plan, bracket) {
+  validatePlanBracket(plan, bracket);
   const email = await getUserEmail(userId);
   if (!email) throw new Error('User not found');
 
@@ -225,6 +241,7 @@ async function updatePlan(stripe, userId, plan, bracket) {
 
   // ── 2. Also update Stripe subscription if one exists (paid plans) ──────────
   // Free/scout users have no Stripe sub — we still succeed after the metadata update above.
+  if (!stripe) return { updated: true, stripe: 'not_configured' };
   const FREE_PLANS = ['scout', 'free'];
   if (FREE_PLANS.includes(plan?.toLowerCase())) {
     // Downgrading to free: cancel Stripe sub at period end if one exists
@@ -254,7 +271,14 @@ async function updatePlan(stripe, userId, plan, bracket) {
     return { updated: true, stripe: 'no_active_subscription' };
   }
 
-  const priceKey = `STRIPE_PRICE_${plan.toUpperCase()}_${(bracket || 'b1').toUpperCase()}_M`;
+  // Candidate-plan price keys have no bracket segment (STRIPE_PRICE_C_ACTIVE_M);
+  // Action-plan keys do (STRIPE_PRICE_A_ACTIVE_B1_M). The old code always
+  // appended the bracket, producing keys like STRIPE_PRICE_C_ACTIVE_B1_M that
+  // don't exist — so candidate-plan changes silently never synced to Stripe.
+  const CANDIDATE_PLAN_KEYS = ['c_monitor', 'c_active', 'c_campaign'];
+  const priceKey = CANDIDATE_PLAN_KEYS.includes(plan.toLowerCase())
+    ? `STRIPE_PRICE_${plan.toUpperCase()}_M`
+    : `STRIPE_PRICE_${plan.toUpperCase()}_${(bracket || 'b1').toUpperCase()}_M`;
   const priceId = process.env[priceKey];
   if (!priceId) {
     // Price not configured — metadata was updated but Stripe not synced
@@ -295,6 +319,7 @@ async function grantTrial(stripe, userId, days) {
 }
 
 async function createUser(email, password, plan, bracket) {
+  validatePlanBracket(plan, bracket);
   // Create user in Supabase Auth
   const res = await fetch(`${process.env.SUPABASE_URL}/auth/v1/admin/users`, {
     method: 'POST',
@@ -331,13 +356,24 @@ export const handler = async (event) => {
     return { statusCode: 401, body: JSON.stringify({ error: 'Unauthorized' }) };
   }
 
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+  // Degrade gracefully when Stripe isn't configured: metadata-backed actions
+  // still work, and read actions report the gap instead of 500ing on every
+  // account (the old behavior behind the admin panel's "Failed to load billing
+  // data" / "everyone Past Due" symptoms).
+  const stripeKey = process.env.STRIPE_SECRET_KEY;
+  const stripe = stripeKey ? new Stripe(stripeKey) : null;
 
   try {
     const { action, ...params } = JSON.parse(event.body || '{}');
 
+    const STRIPE_REQUIRED = ['cancel_subscription', 'retry_invoice', 'portal_link', 'apply_credit', 'grant_trial'];
+    if (!stripe && STRIPE_REQUIRED.includes(action)) {
+      return { statusCode: 503, body: JSON.stringify({ error: 'Stripe is not configured (STRIPE_SECRET_KEY missing)' }) };
+    }
+
     switch (action) {
       case 'get_subscription': {
+        if (!stripe) return { statusCode: 200, body: JSON.stringify({ subscription: null, stripe_unavailable: true }) };
         const result = await getSubscription(stripe, params.user_id);
         return { statusCode: 200, body: JSON.stringify(result) };
       }
@@ -358,6 +394,7 @@ export const handler = async (event) => {
       }
 
       case 'payment_history': {
+        if (!stripe) return { statusCode: 200, body: JSON.stringify({ invoices: [], stripe_unavailable: true }) };
         const result = await paymentHistory(stripe, params.user_id);
         return { statusCode: 200, body: JSON.stringify(result) };
       }
@@ -394,6 +431,10 @@ export const handler = async (event) => {
     }
   } catch (err) {
     console.error('Admin billing error:', err);
+    // Validation errors are safe (and necessary) to show the admin verbatim
+    if (String(err.message || '').startsWith('Invalid plan key') || String(err.message || '').startsWith('Invalid bracket key')) {
+      return { statusCode: 400, body: JSON.stringify({ error: err.message }) };
+    }
     return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) };
   }
 };

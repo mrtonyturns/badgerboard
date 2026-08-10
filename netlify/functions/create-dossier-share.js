@@ -10,7 +10,9 @@ const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 const APP_URL          = process.env.APP_URL || 'https://www.badgerboardwi.com'
 
 const { ADMIN_EMAILS, corsHeaders } = require('./_config')
-const AGENCY_PLANS = ['agency']
+// v1.19: share links are available on ALL paid plans (previously Agency-only).
+// Scout stays blocked — its lite profile is the free-tier conversion gate.
+const SHARE_PLANS = ['monitor', 'campaign', 'agency']
 
 // CORS headers are computed per-request via corsHeaders() to restrict to production origin
 
@@ -25,9 +27,12 @@ async function verifyUser(authHeader) {
   return await res.json()
 }
 
-function getUserPlan(user) {
+async function getUserPlan(user) {
   if (!user) return 'scout'
   if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'agency'
+  // v1.18: resolve through the shared entitlement layer (beta + trials)
+  const resolved = (await require('./_entitlements').resolveEntitlement(user)).plan
+  user = { ...user, app_metadata: { ...(user.app_metadata || {}), plan: resolved } }
   const p = user?.app_metadata?.plan
   // Normalize v1.14 plan keys so Action-plan (a_campaign) users aren't misread as scout.
   const PLAN_MAP = {
@@ -65,11 +70,18 @@ function generateToken() {
 }
 
 // ─── Expiry calculator ────────────────────────────────────────────────────────
-function calcExpiry(expiresIn) {
-  const now = Date.now()
-  const map = { '24h': 24 * 60 * 60 * 1000, '7d': 7 * 24 * 60 * 60 * 1000, '30d': 30 * 24 * 60 * 60 * 1000 }
-  const ms = map[expiresIn] || map['7d']
-  return new Date(now + ms).toISOString()
+// v1.19: expiry is a number of HOURS, minimum 1 hour, maximum 7 days (168h).
+// Legacy string presets still accepted ('30d' now clamps to the 7-day cap).
+const MIN_HOURS = 1
+const MAX_HOURS = 168
+const LEGACY_MAP = { '24h': 24, '7d': 168, '30d': 168 }
+
+function resolveExpiryHours(body) {
+  let hours = null
+  if (body.expires_hours != null) hours = Number(body.expires_hours)
+  else if (typeof body.expires_in === 'string') hours = LEGACY_MAP[body.expires_in] ?? null
+  if (!Number.isFinite(hours)) return null
+  return Math.min(MAX_HOURS, Math.max(MIN_HOURS, Math.round(hours)))
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -81,9 +93,9 @@ exports.handler = async (event) => {
   // Auth
   const user = await verifyUser(event.headers?.authorization || event.headers?.Authorization)
   if (!user) return { statusCode: 401, headers: CORS, body: JSON.stringify({ error: 'Unauthorized' }) }
-  const plan = getUserPlan(user)
-  if (!AGENCY_PLANS.includes(plan)) {
-    return { statusCode: 403, headers: CORS, body: JSON.stringify({ error: 'Shareable links are available on the Agency plan only.' }) }
+  const plan = await getUserPlan(user)
+  if (!SHARE_PLANS.includes(plan)) {
+    return { statusCode: 403, headers: CORS, body: JSON.stringify({ error: 'Shareable links are available on paid Badger Board plans. Upgrade to share profiles.' }) }
   }
 
   // Parse body
@@ -92,11 +104,12 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
 
-  const { dossier_id, expires_in } = body
+  const { dossier_id } = body
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
   if (!dossier_id || !UUID.test(dossier_id)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'valid dossier_id is required' }) }
-  if (!['24h', '7d', '30d'].includes(expires_in)) {
-    return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'expires_in must be 24h, 7d, or 30d' }) }
+  const expiryHours = resolveExpiryHours(body)
+  if (expiryHours == null) {
+    return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'expires_hours must be a number between 1 (1 hour) and 168 (7 days)' }) }
   }
 
   // Verify the dossier belongs to this user
@@ -113,7 +126,7 @@ exports.handler = async (event) => {
 
   // Generate token and insert
   const token     = generateToken()
-  const expiresAt = calcExpiry(expires_in)
+  const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString()
 
   const insert = await supa('dossier_shares', 'POST', {
     token,
@@ -134,11 +147,11 @@ exports.handler = async (event) => {
     statusCode: 200,
     headers: CORS,
     body: JSON.stringify({
-      id:         share.id,
-      token:      share.token,
-      share_url:  shareUrl,
-      expires_at: share.expires_at,
-      expires_in,
+      id:            share.id,
+      token:         share.token,
+      share_url:     shareUrl,
+      expires_at:    share.expires_at,
+      expires_hours: expiryHours,
     }),
   }
 }

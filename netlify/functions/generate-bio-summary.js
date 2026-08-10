@@ -8,6 +8,7 @@
  */
 
 const { enforceRateLimit } = require('./_rate-limit')
+const { logAiUsage } = require('./_ai-usage')
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const SUPABASE_URL      = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
@@ -144,6 +145,7 @@ ${cleaned || 'No biographical data found in dossier.'}`
   }
 
   const data = await res.json()
+  logAiUsage({ userId: null, endpoint: 'candidates', provider: 'anthropic', model: MODEL, inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
   return data.content?.[0]?.text?.trim() || ''
 }
 

@@ -3,7 +3,30 @@
 // using Perplexity (web research) + Claude (structuring), then caches the result
 // in district_intel so the AI cost is paid once per district.
 
+import crypto from 'crypto'
+import { logAiUsage } from './_ai-usage.js'
 import { enforceRateLimit } from './_rate-limit.js'
+import { ADMIN_EMAILS } from './_config.js'
+
+// Audit fix (#17): the two-step flow (research → structure) round-trips the
+// Perplexity research through the CLIENT to dodge the gateway timeout — which
+// let any authenticated user substitute arbitrary "research" and poison the
+// globally-shared district_intel cache (fake incumbents/parties/results served
+// as ground truth to every user, plus a prompt-injection path into the
+// structuring model). Step 1 now returns an HMAC over (district_key, research);
+// step 2 refuses any research payload whose signature doesn't verify.
+const SIGN_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+const signResearch = (districtKey, research) =>
+  crypto.createHmac('sha256', SIGN_KEY).update(`${districtKey}\n${research}`).digest('hex')
+const sigOk = (districtKey, research, sig) => {
+  if (!sig || typeof sig !== 'string') return false
+  const expected = signResearch(districtKey, research)
+  const A = Buffer.from(expected)
+  const B = Buffer.from(String(sig))
+  return A.length === B.length && crypto.timingSafeEqual(A, B)
+}
+
+const DISTRICT_KEY_RE = /^[\w:.\-]{1,80}$/
 
 export const handler = async (event) => {
   const headers = {
@@ -29,8 +52,10 @@ export const handler = async (event) => {
     headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${authHeader.slice(7)}` },
   })
   if (!authRes.ok) return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid token' }) }
-  const uid = (await authRes.json())?.id
+  const authUser = await authRes.json()
+  const uid = authUser?.id
   if (!uid) return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid token' }) }
+  const isAdmin = ADMIN_EMAILS.includes((authUser.email || '').toLowerCase())
 
   // ── Durable per-user rate limit ─────────────────────────────────────────────
   const limited = await enforceRateLimit(uid, 'research-district-history', headers)
@@ -40,9 +65,31 @@ export const handler = async (event) => {
   try { body = JSON.parse(event.body || '{}') } catch {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
-  const { district_key, layer, district_name, office_label, force, step, research: providedResearch } = body
-  if (!district_key || !district_name || !office_label) {
+  const { district_key, layer, district_name: rawDistrictName, office_label: rawOfficeLabel, force: rawForce, step, research: providedResearch, research_sig } = body
+  if (!district_key || !rawDistrictName || !rawOfficeLabel) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'district_key, district_name, office_label required' }) }
+  }
+  // Audit fix (#17): district_key is the sole PK of a shared cache table —
+  // validate its shape so arbitrary strings can't mint or overwrite rows.
+  if (!DISTRICT_KEY_RE.test(district_key)) {
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid district_key' }) }
+  }
+  const district_name = String(rawDistrictName).slice(0, 120)
+  const office_label  = String(rawOfficeLabel).slice(0, 120)
+  // Signed pass-through: reject tampered/foreign research outright
+  if (providedResearch && !sigOk(district_key, providedResearch, research_sig)) {
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid research payload — restart the research' }) }
+  }
+  // Force-refresh cooldown: non-admins can't hammer regeneration of a cached
+  // district (each run is real Perplexity+Claude spend on a shared row).
+  let force = Boolean(rawForce)
+  if (force && !isAdmin) {
+    const freshRes = await fetch(`${SUPABASE_URL}/rest/v1/district_intel?district_key=eq.${encodeURIComponent(district_key)}&select=history_at`, {
+      headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
+    })
+    const freshRows = await freshRes.json().catch(() => [])
+    const at = freshRows?.[0]?.history_at ? Date.parse(freshRows[0].history_at) : 0
+    if (at && Date.now() - at < 24 * 60 * 60 * 1000) force = false  // fresh enough — serve cache
   }
 
   const sb = (path, opts = {}) => fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
@@ -84,6 +131,7 @@ export const handler = async (event) => {
       })
       if (pRes.ok) {
         const pData = await pRes.json()
+        logAiUsage({ userId: uid, endpoint: 'district-intel', provider: 'perplexity', model: 'sonar', inputTokens: pData?.usage?.prompt_tokens || 0, outputTokens: pData?.usage?.completion_tokens || 0 })
         research = pData.choices?.[0]?.message?.content || null
       }
     } catch (e) { console.warn('[district-history] Perplexity failed:', e.message) }
@@ -92,7 +140,8 @@ export const handler = async (event) => {
     return { statusCode: 502, headers, body: JSON.stringify({ error: 'Research service unavailable — try again shortly' }) }
   }
   if (step === 'research') {
-    return { statusCode: 200, headers, body: JSON.stringify({ step: 'research', research }) }
+    // Signed so step 2 can verify the payload came from us, not the client
+    return { statusCode: 200, headers, body: JSON.stringify({ step: 'research', research, research_sig: signResearch(district_key, research) }) }
   }
 
   // ── Step 2: Claude structures the research into JSON ───────────────────────
@@ -135,6 +184,7 @@ ${research}`,
     return { statusCode: 502, headers, body: JSON.stringify({ error: 'Structuring failed', detail: t.slice(0, 200) }) }
   }
   const cData = await claudeRes.json()
+  logAiUsage({ userId: uid, endpoint: 'district-intel', provider: 'anthropic', model: CLAUDE_MODEL, inputTokens: cData?.usage?.input_tokens || 0, outputTokens: cData?.usage?.output_tokens || 0 })
   let history
   try {
     const raw = (cData.content?.find(b => b.type === 'text')?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()

@@ -292,6 +292,218 @@ async function updateStats(params, authHeader) {
   return { statusCode: 200, body: JSON.stringify({ updated: updateRes.ok, stats: patch }) }
 }
 
+// ─── Action: log_knock ────────────────────────────────────────────────────────
+// Audit fix (#3): the portal used to insert door_knocks directly with the anon
+// browser client — RLS rejected the insert, the result was never checked, and
+// every volunteer knock was silently dropped while "Logged!" showed. This
+// action inserts via the service role AND increments the volunteer's stats in
+// one authorized call. list_id comes from the volunteer's own row (never the
+// client) so a volunteer cannot write knocks into someone else's list.
+// The portal's outcome values differ from the door_knocks.status CHECK
+// constraint ('contacted','not_home','refused','moved','wrong_address',
+// 'do_not_knock') — the old direct insert would have violated the CHECK even
+// without RLS. Map portal values to DB values; canonical DB values pass through.
+const KNOCK_STATUS_MAP = {
+  contact:       'contacted',      // portal "Spoke With Voter"
+  no_answer:     'not_home',       // portal "No Answer"
+  not_home:      'not_home',       // portal "Left Lit"
+  refused:       'refused',
+  moved:         'wrong_address',  // portal value 'moved' is labeled "Wrong Address"
+  contacted:     'contacted',
+  wrong_address: 'wrong_address',
+  do_not_knock:  'do_not_knock',
+}
+
+async function logKnock(params, authHeader) {
+  const { volunteer_id, address, status, support_level = null, notes = null } = params
+  if (!volunteer_id || !isUuid(volunteer_id)) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'valid volunteer_id required' }) }
+  }
+  const cleanAddress = typeof address === 'string' ? address.trim().slice(0, 300) : ''
+  if (!cleanAddress) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'address required' }) }
+  }
+  const cleanStatus = KNOCK_STATUS_MAP[status] || 'not_home'
+  // contacts_made should track actual voter conversations, not the raw status string
+  const madeContact = cleanStatus === 'contacted'
+
+  // Fetch the volunteer row — authorization + server-side list_id in one read
+  const res = await sb(`/volunteers?id=eq.${encodeURIComponent(volunteer_id)}&select=id,list_id,user_id,email,session_token,doors_knocked,contacts_made`)
+  const rows = await res.json()
+  if (!rows?.length) {
+    return { statusCode: 404, body: JSON.stringify({ error: 'Volunteer not found' }) }
+  }
+  const vol = rows[0]
+
+  // Authorize exactly like update_stats: session_token match OR matching JWT email
+  const providedToken = params.session_token || (authHeader || '').replace('Bearer ', '')
+  const tokenOk = vol.session_token && providedToken && providedToken === vol.session_token
+  let jwtOk = false
+  if (!tokenOk) {
+    const jwtEmail = await emailFromJwt(authHeader)
+    jwtOk = jwtEmail && vol.email && jwtEmail === String(vol.email).toLowerCase()
+  }
+  if (!tokenOk && !jwtOk) {
+    return { statusCode: 401, body: JSON.stringify({ error: 'Unauthorized' }) }
+  }
+
+  if (!vol.list_id) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'No walk list assigned to this volunteer yet' }) }
+  }
+
+  // Insert the knock via the service role (bypasses the RLS that silently
+  // dropped the old client-side insert)
+  const insertRes = await sb('/door_knocks', {
+    method: 'POST',
+    body: JSON.stringify({
+      list_id: vol.list_id,
+      address: cleanAddress,
+      status: cleanStatus,
+      support_level: Number.isInteger(support_level) && support_level >= 1 && support_level <= 5 ? support_level : null,
+      notes: typeof notes === 'string' && notes.trim() ? notes.trim().slice(0, 2000) : null,
+      knocked_at: new Date().toISOString(),
+      knocked_by: vol.user_id || null,
+    }),
+  })
+  if (!insertRes.ok) {
+    const err = await insertRes.text()
+    console.error('[volunteer-auth] log_knock insert failed:', err)
+    return { statusCode: 500, body: JSON.stringify({ error: 'Failed to save the door knock — please try again' }) }
+  }
+
+  // Increment stats in the same action (atomic from the portal's point of view)
+  const statsPatch = {
+    doors_knocked: (vol.doors_knocked || 0) + 1,
+    contacts_made: (vol.contacts_made || 0) + (madeContact ? 1 : 0),
+    last_active: new Date().toISOString(),
+    status: 'active',
+  }
+  const statsRes = await sb(`/volunteers?id=eq.${encodeURIComponent(volunteer_id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(statsPatch),
+  })
+  if (!statsRes.ok) {
+    console.error('[volunteer-auth] log_knock stats update failed:', await statsRes.text())
+  }
+
+  return {
+    statusCode: 200,
+    body: JSON.stringify({
+      logged: true,
+      stats_updated: statsRes.ok,
+      doors_knocked: statsPatch.doors_knocked,
+      contacts_made: statsPatch.contacts_made,
+    }),
+  }
+}
+
+// ─── Volunteer chat + notifications (audit fix #15) ──────────────────────────
+// RLS on volunteer_messages / volunteer_notifications grants access only to
+// the coordinator's auth.uid(), so the portal's direct anon-client reads and
+// writes silently returned nothing: chat loaded empty, sends failed, realtime
+// never delivered, mark-read updated 0 rows. These service-role actions are
+// the volunteer-side access path the RLS migration comment promised but never
+// implemented — each authorized by session_token/JWT and scoped to the
+// volunteer's OWN list_id (read server-side, never from the client).
+
+// Shared authorizer for self-service actions: loads the volunteer row and
+// verifies session_token (or matching JWT email). Returns { vol } or { err }.
+async function authorizeVolunteer(params, authHeader) {
+  const { volunteer_id } = params
+  if (!volunteer_id || !isUuid(volunteer_id)) {
+    return { err: { statusCode: 400, body: JSON.stringify({ error: 'valid volunteer_id required' }) } }
+  }
+  const res = await sb(`/volunteers?id=eq.${encodeURIComponent(volunteer_id)}&select=id,name,list_id,email,session_token`)
+  const rows = await res.json()
+  if (!rows?.length) {
+    return { err: { statusCode: 404, body: JSON.stringify({ error: 'Volunteer not found' }) } }
+  }
+  const vol = rows[0]
+  const providedToken = params.session_token || (authHeader || '').replace('Bearer ', '')
+  const tokenOk = vol.session_token && providedToken && providedToken === vol.session_token
+  let jwtOk = false
+  if (!tokenOk) {
+    const jwtEmail = await emailFromJwt(authHeader)
+    jwtOk = jwtEmail && vol.email && jwtEmail === String(vol.email).toLowerCase()
+  }
+  if (!tokenOk && !jwtOk) {
+    return { err: { statusCode: 401, body: JSON.stringify({ error: 'Unauthorized' }) } }
+  }
+  return { vol }
+}
+
+async function getMessages(params, authHeader) {
+  const { vol, err } = await authorizeVolunteer(params, authHeader)
+  if (err) return err
+  if (!vol.list_id) return { statusCode: 200, body: JSON.stringify({ messages: [] }) }
+  const res = await sb(`/volunteer_messages?list_id=eq.${encodeURIComponent(vol.list_id)}&select=*&order=created_at.asc&limit=100`)
+  const messages = await res.json()
+  return { statusCode: 200, body: JSON.stringify({ messages: Array.isArray(messages) ? messages : [] }) }
+}
+
+async function sendMessage(params, authHeader) {
+  const { vol, err } = await authorizeVolunteer(params, authHeader)
+  if (err) return err
+  if (!vol.list_id) return { statusCode: 400, body: JSON.stringify({ error: 'No walk list assigned' }) }
+  const content = typeof params.content === 'string' ? params.content.trim().slice(0, 2000) : ''
+  if (!content) return { statusCode: 400, body: JSON.stringify({ error: 'content required' }) }
+  // Sender identity comes from the volunteer's own row, never the client
+  const res = await sb('/volunteer_messages', {
+    method: 'POST',
+    body: JSON.stringify({
+      list_id: vol.list_id,
+      sender_id: vol.id,
+      sender_type: 'volunteer',
+      sender_name: vol.name,
+      content,
+    }),
+  })
+  if (!res.ok) {
+    console.error('[volunteer-auth] send_message failed:', await res.text())
+    return { statusCode: 500, body: JSON.stringify({ error: 'Message could not be sent — try again' }) }
+  }
+  const rows = await res.json()
+  return { statusCode: 200, body: JSON.stringify({ sent: true, message: rows?.[0] || null }) }
+}
+
+async function getNotifications(params, authHeader) {
+  const { vol, err } = await authorizeVolunteer(params, authHeader)
+  if (err) return err
+  if (!vol.list_id) return { statusCode: 200, body: JSON.stringify({ notifications: [] }) }
+  // Broadcast (list-wide) plus notifications targeted at this volunteer
+  const res = await sb(
+    `/volunteer_notifications?list_id=eq.${encodeURIComponent(vol.list_id)}&or=(volunteer_id.is.null,volunteer_id.eq.${encodeURIComponent(vol.id)})&select=*&order=created_at.desc&limit=30`
+  )
+  const notifications = await res.json()
+  return { statusCode: 200, body: JSON.stringify({ notifications: Array.isArray(notifications) ? notifications : [] }) }
+}
+
+async function markNotifRead(params, authHeader) {
+  const { vol, err } = await authorizeVolunteer(params, authHeader)
+  if (err) return err
+  const { notif_id } = params
+  if (!notif_id || !isUuid(notif_id)) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'valid notif_id required' }) }
+  }
+  // Scope: the notification must belong to this volunteer's list (or be
+  // targeted at them) — a volunteer can't touch other lists' notifications.
+  const nRes = await sb(`/volunteer_notifications?id=eq.${encodeURIComponent(notif_id)}&select=id,list_id,volunteer_id,read_by`)
+  const nRows = await nRes.json()
+  const notif = nRows?.[0]
+  if (!notif) return { statusCode: 404, body: JSON.stringify({ error: 'Notification not found' }) }
+  const mine = notif.list_id === vol.list_id || notif.volunteer_id === vol.id
+  if (!mine) return { statusCode: 403, body: JSON.stringify({ error: 'Forbidden' }) }
+  const readBy = Array.isArray(notif.read_by) ? notif.read_by : []
+  if (!readBy.includes(vol.id)) {
+    const upd = await sb(`/volunteer_notifications?id=eq.${encodeURIComponent(notif_id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ read_by: [...readBy, vol.id] }),
+    })
+    if (!upd.ok) return { statusCode: 500, body: JSON.stringify({ error: 'Could not mark as read' }) }
+  }
+  return { statusCode: 200, body: JSON.stringify({ read: true }) }
+}
+
 // ─── Action: get_volunteers_for_list ─────────────────────────────────────────
 async function getVolunteersForList(params, coordinatorId) {
   const { list_id } = params
@@ -379,6 +591,11 @@ export const handler = async (event) => {
   if (action === 'verify_token') return verifyToken(params)
   if (action === 'get_volunteer') return getVolunteer(params, selfAuthHeader)
   if (action === 'update_stats')  return updateStats(params, selfAuthHeader)
+  if (action === 'log_knock')     return logKnock(params, selfAuthHeader)
+  if (action === 'get_messages')      return getMessages(params, selfAuthHeader)
+  if (action === 'send_message')      return sendMessage(params, selfAuthHeader)
+  if (action === 'get_notifications') return getNotifications(params, selfAuthHeader)
+  if (action === 'mark_notif_read')   return markNotifRead(params, selfAuthHeader)
 
   // All other actions require coordinator auth
   const authHeader = event.headers.authorization || ''

@@ -203,11 +203,12 @@ function FAQItem({ q, a }) {
 const C_FEATURES = [
   { section: 'AI Profiles',
     rows: [
-      { label: 'Profiles per month',          scout: 'Lite (1×)', c_monitor: '1',    c_active: '2',    c_campaign: '4'    },
+      { label: 'Profiles per month',          scout: 'Lite (1×)', c_monitor: '1',    c_active: '2',    c_campaign: '6'    },
       { label: 'Full 14-section report',      scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'A la carte credit packs',     scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Campaign Intelligence briefs',scout: false,       c_monitor: false,  c_active: true,   c_campaign: true   },
       { label: 'AI candidate discovery',      scout: false,       c_monitor: false,  c_active: true,   c_campaign: true   },
+      { label: 'Broadside — AI opposition sparring', scout: false, c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Weekly auto-refresh',         scout: false,       c_monitor: false,  c_active: false,  c_campaign: true   },
     ],
   },
@@ -215,7 +216,7 @@ const C_FEATURES = [
     rows: [
       { label: 'Dashboard',                   scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Active candidate slots',      scout: '0',         c_monitor: '0',    c_active: '1',    c_campaign: '3'    },
-      { label: 'Game Plan',                   scout: '1 only',    c_monitor: true,   c_active: true,   c_campaign: true   },
+      { label: 'Game Plan',                   scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Compare tool',                scout: false,       c_monitor: false,  c_active: true,   c_campaign: true   },
       { label: 'CSV bulk import',             scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Social media links',          scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
@@ -237,13 +238,14 @@ const A_FEATURES = [
       { label: 'Profiles per month',          a_monitor: '1 per candidate', a_active: '2 per candidate', a_campaign: '4 per candidate' },
       { label: 'Campaign Intelligence briefs',a_monitor: true,           a_active: true,             a_campaign: true           },
       { label: 'AI candidate discovery',      a_monitor: true,           a_active: true,             a_campaign: true           },
+      { label: 'Broadside — AI opposition sparring', a_monitor: true,    a_active: true,             a_campaign: true           },
       { label: 'Weekly auto-refresh',         a_monitor: false,          a_active: true,             a_campaign: true           },
       { label: 'Bulk Profiler (CSV runs)',     a_monitor: false,          a_active: false,            a_campaign: 'With credits' },
     ],
   },
   { section: 'Candidate Tools',
     rows: [
-      { label: 'Active candidates',           a_monitor: 'By bracket',   a_active: 'By bracket',     a_campaign: 'By bracket'   },
+      { label: 'Active candidates (hard cap)', a_monitor: 'Up to bracket size', a_active: 'Up to bracket size', a_campaign: 'Up to bracket size' },
       { label: 'Multi-Candidate Game Plan',   a_monitor: true,           a_active: true,             a_campaign: true           },
       { label: 'Compare tool',                a_monitor: false,          a_active: true,             a_campaign: true           },
       { label: 'Prospecting lists',           a_monitor: true,           a_active: true,             a_campaign: true           },
@@ -275,6 +277,14 @@ const FAQS = [
     a: 'An active candidate is someone flagged for continuous monitoring. They appear on your dashboard, count toward your bracket on the Action Plan, and on eligible tiers receive a fresh AI profile every Friday. Candidate Plan has fixed active candidate slots (0, 1, or 3 depending on tier).',
   },
   {
+    q: 'How many candidates can I monitor on the Action Plan?',
+    a: "Exactly as many as your bracket covers — the bracket is a hard cap. On the 2–5 bracket you can have up to 5 active candidates, on the 6–10 bracket up to 10, and so on. When every slot is in use, activating another candidate requires upgrading your bracket (which takes effect immediately) or deactivating someone first.",
+  },
+  {
+    q: 'Which plans include the Game Plan?',
+    a: 'Game Plan — the campaign milestone timeline, election calendar, and task board — is included on every paid plan, starting with Monitor. The free Scout plan does not include Game Plan.',
+  },
+  {
     q: "What's in a full AI profile?",
     a: "Each profile is a 14-section report covering news coverage, biography, political timeline, voting record, campaign finance, controversies, policy positions, organizational affiliations, political network, social media, digital presence, media strategy, attack and defense vectors, and verification flags.",
   },
@@ -289,6 +299,14 @@ const FAQS = [
   {
     q: 'What are bulk profile credits?',
     a: 'Bulk credits enable the Bulk Profiler — a tool that generates profiles for a CSV list of candidates at once. Each run consumes bulk credits. Your monthly pool (1–4 profiles per candidate depending on tier) is separate and cannot be used for bulk runs.',
+  },
+  {
+    q: 'Do you offer free trials?',
+    a: 'Yes — we grant 30, 60, and 90-day full-access trials, no credit card required. When a trial ends, your account moves to the free Scout plan automatically and every candidate, profile, and list you built stays intact. Contact us to request one.',
+  },
+  {
+    q: 'What is beta mode?',
+    a: 'Selected accounts get beta access: every feature on the platform, free of charge, while the beta program is running. When beta access ends, the account returns to its regular plan or free Scout, with all data preserved.',
   },
   {
     q: 'What happens to my data if I cancel?',
@@ -306,6 +324,7 @@ const C_CARD_FEATURES = {
   ],
   c_monitor: [
     '1 full AI profile per month',
+    'Game Plan',
     'CSV import & social links',
     'A la carte credit packs',
   ],
@@ -316,7 +335,7 @@ const C_CARD_FEATURES = {
     'Compare tool',
   ],
   c_campaign: [
-    '4 profiles per month',
+    '6 profiles per month',
     '3 active candidate slots',
     'Weekly auto-refresh',
     '2 user seats',
@@ -372,6 +391,32 @@ export default function Pricing() {
   const userPlan          = user ? getUserPlan(user)     : null
   const userPlanType      = user ? getUserPlanType(user) : null
   const userBracket       = user ? getUserBracket(user)  : null
+  const userBilling       = (user?.app_metadata?.billing) || 'monthly'
+
+  // Audit fix (#12): "current" must mean plan AND bracket AND billing period
+  // all match. The old plan-key-only check disabled the CTA for bracket
+  // upgrades and billing switches — the only self-serve path to
+  // update-subscription — showing subscribers a dead "Current plan" button.
+  const BILLING_LABELS = { monthly: 'monthly', quarterly: 'quarterly', semiannual: 'semi-annual', annual: 'annual' }
+  const candidateCardState = (pk, selBilling) => {
+    const samePlan = userPlan === pk && userPlanType === 'candidate'
+    if (!samePlan) return { current: false, ctaLabel: null }
+    if (pk === 'scout') return { current: true, ctaLabel: null }
+    const current = selBilling === userBilling
+    return { current, ctaLabel: current ? null : `Switch to ${BILLING_LABELS[selBilling] || selBilling} billing` }
+  }
+  const actionCardState = (pk, selBracket, selBilling) => {
+    const samePlan = userPlan === pk && userPlanType === 'action'
+    if (!samePlan) return { current: false, ctaLabel: null }
+    const current = selBracket === (userBracket || 'b1') && selBilling === userBilling
+    if (current) return { current: true, ctaLabel: null }
+    return {
+      current: false,
+      ctaLabel: selBracket !== (userBracket || 'b1')
+        ? 'Change bracket'
+        : `Switch to ${BILLING_LABELS[selBilling] || selBilling} billing`,
+    }
+  }
 
   const [tab,             setTab]             = useState(userPlanType === 'action' ? 'action' : 'candidate')
   const [billing,         setBilling]         = useState('monthly')
@@ -457,7 +502,7 @@ export default function Pricing() {
   const PlanCard = ({
     planKey, name, basePrice, highlighted,
     features, current, onSelect, note, isEnt, loading,
-    profilesPerMo, userSeats,
+    profilesPerMo, userSeats, ctaLabel,
   }) => {
     const effectivePrice = basePrice != null ? cEffective(basePrice) : (isEnt ? null : aEffective(planKey))
     const bSub = basePrice != null
@@ -544,6 +589,7 @@ export default function Pricing() {
             : isCurrent   ? 'Current plan'
             : isEnt       ? 'Contact sales'
             : planKey === 'scout' ? 'Get started free'
+            : ctaLabel    ? ctaLabel
             : user        ? 'Switch plan'
             : 'Get started'}
         </button>
@@ -662,6 +708,7 @@ export default function Pricing() {
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
             {CANDIDATE_PLAN_ORDER.map(pk => {
               const plan = CANDIDATE_PLAN_CONFIG[pk]
+              const cardState = candidateCardState(pk, billing)
               return (
                 <PlanCard
                   key={pk}
@@ -670,10 +717,11 @@ export default function Pricing() {
                   basePrice={plan.monthlyPrice}
                   highlighted={pk === 'c_active'}
                   features={C_CARD_FEATURES[pk]}
-                  current={userPlan === pk && userPlanType === 'candidate'}
+                  current={cardState.current}
+                  ctaLabel={cardState.ctaLabel}
                   loading={checkoutLoading}
                   onSelect={(key) => checkout({ plan: key, billing }, key)}
-                  note={pk === 'scout' ? 'Includes a lite profile — biography and political record sections visible.' : null}
+                  note={pk === 'scout' ? 'Includes a lite profile — biography and political record sections visible. Game Plan, Compare, full 14-section profiles, and CSV import unlock on paid plans.' : null}
                 />
               )
             })}
@@ -745,12 +793,16 @@ export default function Pricing() {
               label:       CANDIDATE_PLAN_CONFIG[pk].name,
               price:       pk === 'scout' ? 'Free' : `$${cEffective(CANDIDATE_PLAN_CONFIG[pk].monthlyPrice)}`,
               highlighted: pk === 'c_active',
-              current:     userPlan === pk && userPlanType === 'candidate',
+              current:     candidateCardState(pk, billing).current,
               loading:     checkoutLoading,
               isEnt:       false,
               onSelect:    (key) => checkout({ plan: key, billing }, key),
             }))}
           />
+          <p className="text-xs text-gray-400 mt-3 text-center">
+            Prospecting lists and the Offices section are exclusive to the Action Plan.
+            Game Plan unlocks at Monitor. Active-candidate slots are a hard limit — deactivate a candidate or upgrade to add more.
+          </p>
         </>
       )}
 
@@ -792,7 +844,8 @@ export default function Pricing() {
                   basePrice={null}
                   highlighted={pk === 'a_active'}
                   features={A_CARD_FEATURES[pk]}
-                  current={userPlan === pk && userPlanType === 'action'}
+                  current={actionCardState(pk, bracket, billing).current}
+                  ctaLabel={actionCardState(pk, bracket, billing).ctaLabel}
                   loading={checkoutLoading}
                   isEnt={bracket === 'ent'}
                   onSelect={(key) => checkout({ plan: key, bracket, billing }, key)}
@@ -933,13 +986,17 @@ export default function Pricing() {
                 label:       ACTION_PLAN_CONFIG[pk].name,
                 price:       bracket === 'ent' ? 'Custom' : eff != null ? `$${eff}` : '—',
                 highlighted: pk === 'a_active',
-                current:     userPlan === pk && userPlanType === 'action',
+                current:     actionCardState(pk, bracket, billing).current,
                 loading:     checkoutLoading,
                 isEnt:       bracket === 'ent',
                 onSelect:    (key) => checkout({ plan: key, bracket, billing }, key),
               }
             })}
           />
+          <p className="text-xs text-gray-400 mt-3 text-center">
+            Your bracket is a hard cap on active candidates — when every slot is in use, upgrade your bracket
+            (instant) or deactivate a candidate to free a slot. Bulk Profiler requires bulk credits, purchased separately.
+          </p>
         </>
       )}
 

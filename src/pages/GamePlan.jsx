@@ -28,55 +28,37 @@ import {
 } from '../lib/supabase'
 import ElectionResultsBoard from './ElectionResultsBoard'
 import LoadingBar from '../components/LoadingBar'
+import SearchableSelect from '../components/SearchableSelect'
 import TaskBoard from '../components/TaskBoard'
+import UpgradePrompt from '../components/UpgradePrompt'
+import { useAuth } from '../contexts/AuthContext'
+import { getUserPlan, hasFeature, PLAN_CONFIG } from '../lib/tiers'
+import {
+  PHASES as PHASE_BASE,
+  MILESTONE_CATEGORIES as CATEGORIES,
+  MILESTONE_STATUSES as STATUSES,
+  ELECTION_TYPE_LABELS, ELECTION_TYPE_COLORS,
+} from '../lib/campaignEnums'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
+// Phase data (keys, labels, colors) lives in lib/campaignEnums.js so the plan
+// dashboards use the same vocabulary. Icons are attached here — lucide
+// components don't belong in a shared data module.
 
-const PHASES = [
-  { key: 'planning',      label: 'Planning',       icon: Target,      dot: 'bg-purple-500', text: 'text-purple-700', headerBg: 'bg-purple-50',  borderL: 'border-l-purple-400', progressBg: 'bg-purple-500' },
-  { key: 'filing',        label: 'Filing',         icon: Scale,       dot: 'bg-orange-500', text: 'text-orange-700', headerBg: 'bg-orange-50',  borderL: 'border-l-orange-400', progressBg: 'bg-orange-500' },
-  { key: 'voter_contact', label: 'Voter Contact',  icon: Megaphone,   dot: 'bg-blue-500',   text: 'text-blue-700',   headerBg: 'bg-blue-50',    borderL: 'border-l-blue-400',   progressBg: 'bg-blue-500'   },
-  { key: 'fundraising',   label: 'Fundraising',    icon: DollarSign,  dot: 'bg-emerald-500',text: 'text-emerald-700',headerBg: 'bg-emerald-50', borderL: 'border-l-emerald-400',progressBg: 'bg-emerald-500'},
-  { key: 'gotv',          label: 'GOTV',           icon: Flag,        dot: 'bg-red-500',    text: 'text-red-700',    headerBg: 'bg-red-50',     borderL: 'border-l-red-400',    progressBg: 'bg-red-500'    },
-  { key: 'election_day',  label: 'Election Day',   icon: CalendarDays,dot: 'bg-slate-500',  text: 'text-slate-700',  headerBg: 'bg-slate-50',   borderL: 'border-l-slate-400',  progressBg: 'bg-slate-500'  },
-]
+const PHASE_ICONS = {
+  planning:      Target,
+  filing:        Scale,
+  voter_contact: Megaphone,
+  fundraising:   DollarSign,
+  gotv:          Flag,
+  election_day:  CalendarDays,
+}
+
+const PHASES = PHASE_BASE.map(p => ({ ...p, icon: PHASE_ICONS[p.key] }))
 
 const PHASE_MAP = Object.fromEntries(PHASES.map(p => [p.key, p]))
 
-const CATEGORIES = [
-  { key: 'recruitment', label: 'Recruitment' },
-  { key: 'legal',       label: 'Legal / Filing' },
-  { key: 'outreach',    label: 'Voter Outreach' },
-  { key: 'finance',     label: 'Finance' },
-  { key: 'media',       label: 'Media / Comms' },
-  { key: 'admin',       label: 'Administration' },
-  { key: 'general',     label: 'General' },
-]
-
-const STATUSES = [
-  { key: 'upcoming',    label: 'Upcoming',    },
-  { key: 'in_progress', label: 'In Progress', },
-  { key: 'complete',    label: 'Complete',    },
-  { key: 'overdue',     label: 'Overdue',     },
-  { key: 'skipped',     label: 'Skipped',     },
-]
-
 const STATUS_MAP = Object.fromEntries(STATUSES.map(s => [s.key, s]))
-
-const ELECTION_TYPE_LABELS = {
-  primary:        'Partisan Primary',
-  general:        'General Election',
-  spring_primary: 'Spring Primary',
-  spring_general: 'Spring General',
-  special:        'Special Election',
-}
-const ELECTION_TYPE_COLORS = {
-  primary:        { bg: 'bg-orange-500', light: 'bg-orange-100 text-orange-800', border: 'border-orange-300' },
-  general:        { bg: 'bg-blue-600',   light: 'bg-blue-100 text-blue-800',     border: 'border-blue-300' },
-  spring_primary: { bg: 'bg-purple-600', light: 'bg-purple-100 text-purple-800', border: 'border-purple-300' },
-  spring_general: { bg: 'bg-emerald-600',light: 'bg-emerald-100 text-emerald-800',border:'border-emerald-300' },
-  special:        { bg: 'bg-yellow-500', light: 'bg-yellow-100 text-yellow-800', border: 'border-yellow-300' },
-}
 
 // ── Standard Wisconsin campaign plan template ─────────────────────────────────
 // Day offsets are relative to election day (negative = days before).
@@ -448,24 +430,23 @@ function MilestoneModal({ open, onClose, onSave, editing, candidates, elections,
           {candidates.length > 0 && (
             <div>
               <label className="label">Candidate <span className="text-gray-400 font-normal">(optional)</span></label>
-              <select className="input" value={form.candidate_id} onChange={f('candidate_id')}>
-                <option value="">All candidates</option>
-                {candidates.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+              <SearchableSelect value={form.candidate_id} onChange={v => f('candidate_id')({ target: { value: v } })}
+                options={[{ value: '', label: 'All candidates' }, ...candidates.map(c => ({ value: c.id, label: c.name }))]}
+                placeholder="All candidates"
+                searchPlaceholder="Search candidates..." />
             </div>
           )}
 
           {elections && elections.length > 0 && (
             <div>
               <label className="label">Election <span className="text-gray-400 font-normal">(optional)</span></label>
-              <select className="input" value={form.election_id} onChange={f('election_id')}>
-                <option value="">Not tied to a specific election</option>
-                {elections.map(e => (
-                  <option key={e.id} value={e.id}>
-                    {e.name}{e.election_date ? ` · ${format(parseISO(e.election_date), 'MMM d, yyyy')}` : ''}
-                  </option>
-                ))}
-              </select>
+              <SearchableSelect value={form.election_id} onChange={v => f('election_id')({ target: { value: v } })}
+                options={[
+                  { value: '', label: 'Not tied to a specific election' },
+                  ...elections.map(e => ({ value: e.id, label: `${e.name}${e.election_date ? ` · ${format(parseISO(e.election_date), 'MMM d, yyyy')}` : ''}` })),
+                ]}
+                placeholder="Not tied to a specific election"
+                searchPlaceholder="Search elections..." />
             </div>
           )}
 
@@ -528,21 +509,18 @@ function GeneratePlanModal({ open, onClose, onGenerate, generating, elections, c
         <div className="p-6 space-y-4">
           <div>
             <label className="label">Election *</label>
-            <select className="input" value={electionId} onChange={e => setElectionId(e.target.value)}>
-              {elections.length === 0 && <option value="">No elections — add one on the Calendar tab first</option>}
-              {[...elections].sort((a, b) => parseISO(a.election_date) - parseISO(b.election_date)).map(e => (
-                <option key={e.id} value={e.id}>
-                  {e.name} — {format(parseISO(e.election_date), 'MMM d, yyyy')}
-                </option>
-              ))}
-            </select>
+            <SearchableSelect value={electionId} onChange={setElectionId}
+              options={[...elections].sort((a, b) => parseISO(a.election_date) - parseISO(b.election_date))
+                .map(e => ({ value: e.id, label: `${e.name} — ${format(parseISO(e.election_date), 'MMM d, yyyy')}` }))}
+              placeholder={elections.length === 0 ? 'No elections — add one on the Calendar tab first' : 'Select election...'}
+              searchPlaceholder="Search elections..." />
           </div>
           <div>
             <label className="label">Candidate (optional)</label>
-            <select className="input" value={candidateId} onChange={e => setCandidateId(e.target.value)}>
-              <option value="">All / campaign-wide</option>
-              {candidates.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <SearchableSelect value={candidateId} onChange={setCandidateId}
+              options={[{ value: '', label: 'All / campaign-wide' }, ...candidates.map(c => ({ value: c.id, label: c.name }))]}
+              placeholder="All / campaign-wide"
+              searchPlaceholder="Search candidates..." />
           </div>
           <p className="text-xs text-gray-400">
             Dates are estimates based on a typical WI race calendar — filing windows and finance
@@ -723,8 +701,13 @@ function ElectionRow({ election, onEdit, onDelete, deleting, onViewResults, onVi
 // Main GamePlan component
 // ─────────────────────────────────────────────────────────────────────────────
 export default function GamePlan() {
+  const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = searchParams.get('tab') || 'milestones'
+
+  // ── Plan gate — Game Plan unlocks at Monitor (locked on Scout) ────────────
+  const userPlan = getUserPlan(user)
+  const gamePlanUnlocked = hasFeature(userPlan, 'gameplan')
 
   const _rawElection = searchParams.get('election')
   const selectedResultsId = (_rawElection && _rawElection !== 'null' && _rawElection !== 'undefined')
@@ -955,16 +938,39 @@ export default function GamePlan() {
   // ─────────────────────────────────────────────────────────────────────────
   // Render
   // ─────────────────────────────────────────────────────────────────────────
+
+  // Locked state — Scout doesn't include Game Plan (unlocks at Monitor)
+  if (!gamePlanUnlocked) {
+    return (
+      <div className="space-y-5">
+        <div className="flex items-center gap-4">
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">Game Plan</h1>
+            <p className="text-gray-400 text-sm mt-0.5">Campaign tasks &amp; election calendar</p>
+          </div>
+        </div>
+        <UpgradePrompt
+          feature="Game Plan"
+          hook="Winning campaigns run on a plan — milestones, filing deadlines, voter contact, fundraising, and GOTV in one timeline. Unlock it in 60 seconds."
+          plan={PLAN_CONFIG.c_monitor.name}
+          price={PLAN_CONFIG.c_monitor.price}
+          benefits={[
+            'Full campaign milestone timeline with phases',
+            'Election calendar & filing deadline tracking',
+            'Task board with quick-add and progress tracking',
+            'Plus full AI profiles, CSV import & social links',
+          ]}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-5">
       <LoadingBar loading={loading} />
 
-      {/* ── Page header ── */}
+      {/* ── Page header lives in the top bar (v1.24.1) ── */}
       <div className="flex items-center gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Game Plan</h1>
-          <p className="text-gray-400 text-sm mt-0.5">Campaign tasks &amp; election calendar</p>
-        </div>
         <div className="ml-auto flex items-center gap-2">
           {activeTab === 'calendar' && (
             <button onClick={() => { setEditingElect(null); setShowElect(true) }} className="btn-primary flex items-center gap-2 text-sm">

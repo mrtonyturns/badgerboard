@@ -17,6 +17,7 @@ import {
   BarChart2, AlertCircle, Radio,
 } from 'lucide-react'
 import { getElections, createElection, updateElection, deleteElection } from '../lib/supabase'
+import { useAuth } from '../contexts/AuthContext'
 import ElectionResultsBoard from './ElectionResultsBoard'
 import LoadingBar from '../components/LoadingBar'
 
@@ -63,6 +64,10 @@ export default function Elections() {
   const [deleting,    setDeleting]    = useState(null)
   const [form,        setForm]        = useState(defaultForm)
   const [yearFilter,  setYearFilter]  = useState(String(new Date().getFullYear()))
+  const [writeError,  setWriteError]  = useState(null)
+  // Audit fix (#13): election writes are admin-only (RLS blocks everyone else
+  // and the server function requires admin) — hide write controls accordingly.
+  const { isAdmin } = useAuth()
 
   // ── Load elections ──────────────────────────────────────────────────────────
   useEffect(() => { fetchElections() }, [])
@@ -96,17 +101,30 @@ export default function Elections() {
   const handleSave = async (evt) => {
     evt.preventDefault()
     setSaving(true)
+    setWriteError(null)
     const payload = { ...form, year: parseInt(form.year), filing_deadline: form.filing_deadline || null }
-    if (editing) { await updateElection(editing.id, payload) } else { await createElection(payload) }
-    setShowModal(false)
+    // Audit fix (#13): check the result — the old code closed the modal and
+    // refetched no matter what, so RLS-blocked writes looked like success
+    // while the election silently never changed.
+    const { error } = editing ? await updateElection(editing.id, payload) : await createElection(payload)
     setSaving(false)
+    if (error) {
+      setWriteError(`Couldn't save the election: ${error.message}`)
+      return
+    }
+    setShowModal(false)
     fetchElections()
   }
 
   const handleDelete = async (id) => {
     setDeleting(id)
-    await deleteElection(id)
+    setWriteError(null)
+    const { error } = await deleteElection(id)
     setDeleting(null)
+    if (error) {
+      setWriteError(`Couldn't delete the election: ${error.message}`)
+      return
+    }
     fetchElections()
   }
 
@@ -194,16 +212,20 @@ export default function Elections() {
                   <BarChart2 className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">Results</span>
                 </button>
-                <button onClick={() => openEdit(election)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors">
-                  <Edit2 className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => { if (window.confirm('Delete this election?')) handleDelete(election.id) }}
-                  disabled={deleting === election.id}
-                  className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-brand-red transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                {isAdmin && (
+                  <>
+                    <button onClick={() => openEdit(election)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors">
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => { if (window.confirm('Delete this election?')) handleDelete(election.id) }}
+                      disabled={deleting === election.id}
+                      className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-brand-red transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
@@ -242,18 +264,21 @@ export default function Elections() {
       <LoadingBar loading={loading} />
       {/* ── Page header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <CalendarDays className="w-6 h-6 text-brand-red" /> Elections
-          </h1>
-          <p className="text-gray-500 text-sm mt-1">Wisconsin election calendar &amp; live results</p>
-        </div>
-        {activeTab === 'calendar' && (
+        {activeTab === 'calendar' && isAdmin && (
           <button onClick={openAdd} className="btn-primary sm:ml-auto flex items-center gap-2">
             <Plus className="w-4 h-4" /> Add Election
           </button>
         )}
       </div>
+
+      {/* Write error banner */}
+      {writeError && (
+        <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
+          <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <span className="flex-1">{writeError}</span>
+          <button onClick={() => setWriteError(null)} className="text-red-400 hover:text-red-600"><X className="w-4 h-4" /></button>
+        </div>
+      )}
 
       {/* ── Tab bar ── */}
       <div className="flex gap-1 border-b border-gray-200">
@@ -369,7 +394,7 @@ export default function Elections() {
                 <div className="text-center py-16">
                   <CalendarDays className="w-12 h-12 text-gray-200 mx-auto mb-3" />
                   <p className="text-gray-400 font-medium">No elections found</p>
-                  <button onClick={openAdd} className="btn-primary text-sm mt-4">Add First Election</button>
+                  {isAdmin && <button onClick={openAdd} className="btn-primary text-sm mt-4">Add First Election</button>}
                 </div>
               )}
             </div>

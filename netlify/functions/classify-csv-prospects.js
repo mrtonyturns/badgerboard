@@ -16,6 +16,7 @@ const MODEL             = 'claude-haiku-4-5-20251001'
 // Tier gating — CSV prospect classification is part of Prospecting, an
 // Action-plan entitlement (tiers.js features.prospecting — single source of truth).
 const { PLAN_CONFIG } = require('../../src/lib/tiers.js')
+const { logAiUsage } = require('./_ai-usage')
 const { ADMIN_EMAILS } = require('./_config')
 const PROSPECTING_PLANS = Object.keys(PLAN_CONFIG).filter(k => PLAN_CONFIG[k]?.features?.prospecting)
 
@@ -123,6 +124,7 @@ No markdown, no explanation outside the JSON array.`
   }
 
   const data = await res.json()
+  logAiUsage({ userId: null, endpoint: 'prospecting', provider: 'anthropic', model: MODEL, inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
   const raw  = data.content?.[0]?.text?.trim() || '[]'
 
   // Strip any accidental markdown fences
@@ -160,7 +162,7 @@ exports.handler = async (event) => {
   // tiers.js 'prospecting' entitlement and the Prospecting page UI gate)
   const plan = ADMIN_EMAILS.includes((user.email || '').toLowerCase())
     ? 'a_campaign'
-    : (user.app_metadata?.plan || 'scout').toLowerCase()
+    : (await require('./_entitlements').resolveEntitlement(user)).plan  // v1.18: honors beta + trials
   if (!PROSPECTING_PLANS.includes(plan)) {
     return { statusCode: 403, headers: HEADERS, body: JSON.stringify({ error: 'Action plan required for AI prospect classification.' }) }
   }

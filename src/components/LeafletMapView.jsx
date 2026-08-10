@@ -109,8 +109,11 @@ function bboxCentroid(geometry) {
 }
 
 // ── Bundled GeoJSON — served from /public/geodata/ ───────────────────────────
+// v1.19.1: state split into Assembly / Senate layers, federal split into
+// Congress (U.S. House districts) / U.S. Senate (statewide) — each with its
+// own toggle and its own district dashboard popup.
 const DISTRICT_LAYERS = {
-  federal: {
+  congress: {
     color: '#1d4ed8',
     sources: [{
       url: '/geodata/wi-congressional-simplified.geojson',
@@ -120,24 +123,39 @@ const DISTRICT_LAYERS = {
       sublabel: 'Congressional District',
     }],
   },
-  state: {
+  ussenate: {
+    color: '#0e7490',
+    sources: [{
+      // v1.23.7: clean dissolved statewide polygon (union of the 33 senate
+      // districts, islands kept, zero interior slivers). The old
+      // wi-outline.geojson had 110 leftover interior hole-rings from a bad
+      // dissolve that rendered as broken dashes across the state.
+      url: '/geodata/wi-statewide.geojson',
+      style:      { color: '#0e7490', weight: 2,   opacity: 0.85, fillOpacity: 0.15, fillColor: '#0e7490' },
+      hoverStyle: { fillOpacity: 0.25 },
+      selectStyle:{ fillOpacity: 0.52 },
+      sublabel: 'U.S. Senate — Statewide',
+    }],
+  },
+  senate: {
     color: '#dc2626',
-    sources: [
-      {
-        url: '/geodata/wi-state-senate-simplified.geojson',
-        style:      { color: '#dc2626', weight: 2,   opacity: 0.8,  fillOpacity: 0.12, fillColor: '#dc2626' },
-        hoverStyle: { fillOpacity: 0.25 },
-        selectStyle:{ fillOpacity: 0.48 },
-        sublabel: 'State Senate District',
-      },
-      {
-        url: '/geodata/wi-state-assembly-simplified.geojson',
-        style:      { color: '#dc2626', weight: 1,   opacity: 0.7,  fillOpacity: 0.08, fillColor: '#dc2626', dashArray: '5 4' },
-        hoverStyle: { fillOpacity: 0.22, dashArray: null },
-        selectStyle:{ fillOpacity: 0.45, dashArray: null },
-        sublabel: 'State Assembly District',
-      },
-    ],
+    sources: [{
+      url: '/geodata/wi-state-senate-simplified.geojson',
+      style:      { color: '#dc2626', weight: 2,   opacity: 0.8,  fillOpacity: 0.12, fillColor: '#dc2626' },
+      hoverStyle: { fillOpacity: 0.25 },
+      selectStyle:{ fillOpacity: 0.48 },
+      sublabel: 'State Senate District',
+    }],
+  },
+  assembly: {
+    color: '#ea580c',
+    sources: [{
+      url: '/geodata/wi-state-assembly-simplified.geojson',
+      style:      { color: '#ea580c', weight: 1.5, opacity: 0.8,  fillOpacity: 0.10, fillColor: '#ea580c' },
+      hoverStyle: { fillOpacity: 0.25 },
+      selectStyle:{ fillOpacity: 0.48 },
+      sublabel: 'State Assembly District',
+    }],
   },
   county: {
     color: '#7c3aed',
@@ -362,7 +380,7 @@ export default function LeafletMapView({
               const feat = (data.features || []).find(f => pointInGeometry(coords[1], coords[0], f.geometry))
               if (feat) {
                 onClickRef.current?.({
-                  name: feat.properties?.NAME || '',
+                  name: feat.properties?.NAME || feat.properties?.name || '',
                   sublabel: source.sublabel,
                   layerKey: capturedLayer,
                   county: feat.properties?.COUNTY_NAME || null,
@@ -424,6 +442,12 @@ export default function LeafletMapView({
         const res = await fetch(source.url)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         data = await res.json()
+        // Defensive: Census/TIGER exports can include a statewide "…not
+        // defined" filler polygon that covers the whole state — rendered on
+        // top it swallows every district click (the v1.23.5 Senate-map bug).
+        if (Array.isArray(data?.features)) {
+          data = { ...data, features: data.features.filter(f => !/not defined/i.test(f?.properties?.NAME || f?.properties?.name || '')) }
+        }
         geoDataCache.current[source.url] = data
       }
       if (cancelled || !mapRef.current) return
@@ -433,7 +457,7 @@ export default function LeafletMapView({
       const geoLayer = L.geoJSON(data, {
         style: () => ({ ...source.style }),
         onEachFeature(feature, lyr) {
-          const name = feature.properties?.NAME || ''
+          const name = feature.properties?.NAME || feature.properties?.name || ''
           // Municipal layer extras (regenerated geodata): county + city/town/village type.
           // Towns share names across counties, so county is required for precise matching.
           const county = feature.properties?.COUNTY_NAME || null

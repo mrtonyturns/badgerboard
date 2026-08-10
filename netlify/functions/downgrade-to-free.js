@@ -125,19 +125,36 @@ export const handler = async (event) => {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
 
   try {
-    // Find and cancel the active Stripe subscription for this user
+    // Audit fix (#7): mark the downgrade as VOLUNTARY before cancelling, so the
+    // customer.subscription.deleted webhook the cancellation fires knows not to
+    // apply the inactive/deletion-countdown lockout to a "keep my data" user.
+    try {
+      const cur = await getSupabaseUser(userId)
+      await fetch(`${process.env.SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` },
+        body: JSON.stringify({ app_metadata: { ...(cur?.app_metadata || {}), voluntary_downgrade: true } }),
+      })
+    } catch (e) { console.warn('voluntary_downgrade flag write failed:', e.message) }
+
+    // Find and cancel the user's Stripe subscription(s). Audit fix (#20 class):
+    // include trialing/past_due/unpaid/paused — a past_due sub left uncancelled
+    // here would keep retrying charges after the user moved to Scout. Resolve
+    // via stored customer id first (email can diverge from Stripe).
+    const CANCELLABLE = ['active', 'trialing', 'past_due', 'unpaid', 'paused', 'incomplete']
+    const metaNow = (await getSupabaseUser(userId))?.app_metadata || {}
+    const customerIds = new Set()
+    if (metaNow.stripe_customer_id) customerIds.add(metaNow.stripe_customer_id)
     if (verifiedEmail) {
       const customers = await stripe.customers.list({ email: verifiedEmail, limit: 5 })
-      for (const customer of customers.data) {
-        const subs = await stripe.subscriptions.list({
-          customer: customer.id,
-          status:   'active',
-          limit:    10,
-        })
-        for (const sub of subs.data) {
-          await stripe.subscriptions.cancel(sub.id)
-          console.log(`Cancelled subscription ${sub.id} (customer ${customer.id})`)
-        }
+      for (const c of customers.data) customerIds.add(c.id)
+    }
+    for (const customerId of customerIds) {
+      const subs = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 20 })
+      for (const sub of subs.data) {
+        if (!CANCELLABLE.includes(sub.status)) continue
+        await stripe.subscriptions.cancel(sub.id)
+        console.log(`Cancelled subscription ${sub.id} (${sub.status}, customer ${customerId})`)
       }
     }
 

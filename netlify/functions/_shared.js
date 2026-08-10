@@ -69,4 +69,22 @@ async function requireUser(event) {
   return { user }
 }
 
-module.exports = { cors, json, serviceClient, requireAdmin, requireUser, ALLOWED_ORIGIN }
+/**
+ * Verify the caller's JWT AND that their effective plan includes Broadside
+ * (v1.18.2: all paid plans). Resolves through _entitlements, so admins and
+ * beta-mode users (→ a_campaign) pass automatically, as do active trials.
+ */
+const BROADSIDE_PLANS = ['c_monitor', 'c_active', 'c_campaign', 'a_monitor', 'a_active', 'a_campaign']
+async function requireBroadside(event) {
+  const res = await requireUser(event)
+  if (res.errorResponse) return res
+  if (ADMIN_EMAILS.includes((res.user.email || '').toLowerCase())) return res
+  const { resolveEntitlement } = require('./_entitlements')
+  const { plan } = await resolveEntitlement(res.user)
+  if (!BROADSIDE_PLANS.includes(plan)) {
+    return { errorResponse: json(403, { error: 'Broadside is included with paid Badger Board plans. Upgrade to unlock it.' }) }
+  }
+  return res
+}
+
+module.exports = { cors, json, serviceClient, requireAdmin, requireUser, requireBroadside, ALLOWED_ORIGIN }

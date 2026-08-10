@@ -26,7 +26,7 @@ export const CANDIDATE_PLAN_CONFIG = {
       dashboard:          true,
       elections:          true,
       doorKnocking:       true,
-      gameplan:           true,   // 1 candidate, no sorting
+      gameplan:           false,  // locked on Scout — unlocks at Monitor (v1.18 pricing update)
       compare:            false,
       prospecting:        false,
       offices:            false,
@@ -38,10 +38,12 @@ export const CANDIDATE_PLAN_CONFIG = {
       socialLinks:        false,
       weeklyProfile:      false,
       creditPacks:        false,
+      broadside:          false,  // paid-plan feature (v1.18.2)
     },
     unlocks: [],
     nextUnlocks: [
       'Full AI profile generation',
+      'Game Plan',
       '1 user seat',
     ],
   },
@@ -50,8 +52,8 @@ export const CANDIDATE_PLAN_CONFIG = {
     key:                  'c_monitor',
     planType:             'candidate',
     name:                 'Monitor',
-    price:                '$59 / mo',
-    monthlyPrice:         59,
+    price:                '$79 / mo',
+    monthlyPrice:         79,
     profileLimit:         1,
     liteProfileOnly:      false,
     userLimit:            1,
@@ -72,9 +74,11 @@ export const CANDIDATE_PLAN_CONFIG = {
       socialLinks:        true,
       weeklyProfile:      false,
       creditPacks:        true,
+      broadside:          true,   // v1.18.2: included in all paid plans
     },
     unlocks: [
       'Full AI profile generation',
+      'Game Plan',
       'CSV import',
       'Social media links',
     ],
@@ -89,8 +93,8 @@ export const CANDIDATE_PLAN_CONFIG = {
     key:                  'c_active',
     planType:             'candidate',
     name:                 'Active',
-    price:                '$89 / mo',
-    monthlyPrice:         89,
+    price:                '$119 / mo',
+    monthlyPrice:         119,
     profileLimit:         2,
     liteProfileOnly:      false,
     userLimit:            1,
@@ -111,6 +115,7 @@ export const CANDIDATE_PLAN_CONFIG = {
       socialLinks:        true,
       weeklyProfile:      false,
       creditPacks:        true,
+      broadside:          true,   // v1.18.2: included in all paid plans
     },
     unlocks: [
       '2 profiles / month',
@@ -120,7 +125,7 @@ export const CANDIDATE_PLAN_CONFIG = {
       'Compare tool',
     ],
     nextUnlocks: [
-      '4 profiles / month',
+      '6 profiles / month',
       '2 user seats',
       '3 active candidates',
     ],
@@ -130,9 +135,9 @@ export const CANDIDATE_PLAN_CONFIG = {
     key:                  'c_campaign',
     planType:             'candidate',
     name:                 'Campaign',
-    price:                '$139 / mo',
-    monthlyPrice:         139,
-    profileLimit:         4,
+    price:                '$189 / mo',
+    monthlyPrice:         189,
+    profileLimit:         6,
     liteProfileOnly:      false,
     userLimit:            2,
     activeCandidateLimit: 3,
@@ -152,9 +157,10 @@ export const CANDIDATE_PLAN_CONFIG = {
       socialLinks:        true,
       weeklyProfile:      true,
       creditPacks:        true,
+      broadside:          true,   // v1.18.2: included in all paid plans
     },
     unlocks: [
-      '4 profiles / month',
+      '6 profiles / month',
       '2 user seats',
       '3 active candidates',
       'Weekly auto-refresh',
@@ -173,7 +179,7 @@ export const ACTION_PLAN_CONFIG = {
     key:                   'a_monitor',
     planType:              'action',
     name:                  'Monitor',
-    price:                 'From $69 / mo',
+    price:                 'From $89 / mo',
     profilesPerCandidate:  1,      // × bracket size = monthly profile pool
     liteProfileOnly:       false,
     userLimit:             1,
@@ -195,6 +201,7 @@ export const ACTION_PLAN_CONFIG = {
       socialLinks:        true,
       weeklyProfile:      false,
       bulkCredits:        false,
+      broadside:          true,   // v1.18.2: included in all paid plans
     },
     unlocks: [
       'Prospecting',
@@ -214,7 +221,7 @@ export const ACTION_PLAN_CONFIG = {
     key:                   'a_active',
     planType:              'action',
     name:                  'Active',
-    price:                 'From $119 / mo',
+    price:                 'From $149 / mo',
     profilesPerCandidate:  2,
     liteProfileOnly:       false,
     userLimit:             2,
@@ -236,6 +243,7 @@ export const ACTION_PLAN_CONFIG = {
       socialLinks:        true,
       weeklyProfile:      true,
       bulkCredits:        false,
+      broadside:          true,   // v1.18.2: included in all paid plans
     },
     unlocks: [
       '2 profiles per candidate / month',
@@ -256,7 +264,7 @@ export const ACTION_PLAN_CONFIG = {
     key:                   'a_campaign',
     planType:              'action',
     name:                  'Campaign',
-    price:                 'From $159 / mo',
+    price:                 'From $219 / mo',
     profilesPerCandidate:  4,
     liteProfileOnly:       false,
     userLimit:             Infinity,
@@ -278,6 +286,7 @@ export const ACTION_PLAN_CONFIG = {
       socialLinks:        true,
       weeklyProfile:      true,
       bulkCredits:        true,
+      broadside:          true,   // v1.18.2: included in all paid plans
     },
     unlocks: [
       '4 profiles per candidate / month',
@@ -318,10 +327,15 @@ export const BRACKET_CONFIG = {
 
 // ─── Action Plan pricing matrix (monthly base rates) ─────────────────────────
 
+// v1.18 pricing update (approved 2026-07-21) — prior founder-era rates:
+//   a_monitor  { b1: 69,  b2_5: 99,  b6: 129, b11: 169, b26: 219, b51: 299 }
+//   a_active   { b1: 119, b2_5: 149, b6: 199, b11: 269, b26: 389, b51: 549 }
+//   a_campaign { b1: 159, b2_5: 249, b6: 349, b11: 479, b26: 699, b51: 999 }
+// Existing subscriptions keep their old Stripe price (grandfathered founder rate).
 export const ACTION_MONTHLY_PRICES = {
-  a_monitor: { b1: 69,  b2_5: 99,  b6: 129, b11: 169, b26: 219, b51: 299, ent: null },
-  a_active:  { b1: 119, b2_5: 149, b6: 199, b11: 269, b26: 389, b51: 549, ent: null },
-  a_campaign:{ b1: 159, b2_5: 249, b6: 349, b11: 479, b26: 699, b51: 999, ent: null },
+  a_monitor: { b1: 89,  b2_5: 129, b6: 169, b11: 229, b26: 299, b51: 399,  ent: null },
+  a_active:  { b1: 149, b2_5: 199, b6: 269, b11: 359, b26: 529, b51: 749,  ent: null },
+  a_campaign:{ b1: 219, b2_5: 339, b6: 469, b11: 649, b26: 949, b51: 1349, ent: null },
 }
 
 // Legacy alias
@@ -455,11 +469,77 @@ function ent(user) {
   return user?.app_metadata ?? {}
 }
 
+// ─── Beta mode ────────────────────────────────────────────────────────────────
+// Two layers:
+//   1. Per-user flag:   app_metadata.beta_mode === true (service-role writable)
+//   2. Global switch:   app_settings table, key 'beta_mode_enabled' — fetched by
+//      AuthContext on load and pushed here via setGlobalBetaEnabled().
+// While beta is active for a user they resolve to the top plan (a_campaign,
+// 'ent' bracket = every feature, unlimited slots). The moment either layer
+// turns off, the resolver falls straight through to trial → paid → scout.
+
+export const BETA_PLAN    = 'a_campaign'
+export const BETA_BRACKET = 'ent'
+
+let _globalBetaEnabled = true  // optimistic default until AuthContext fetches the setting
+
+export function setGlobalBetaEnabled(v) { _globalBetaEnabled = v !== false }
+export function getGlobalBetaEnabled()  { return _globalBetaEnabled }
+
+export function isBetaActive(user) {
+  return _globalBetaEnabled && ent(user).beta_mode === true
+}
+
+// ─── Free trials (30/60/90-day giveaways) ─────────────────────────────────────
+// Stored in app_metadata (service-role writable only):
+//   trial_plan, trial_bracket, trial_started_at, trial_ends_at (ISO), trial_granted_by
+// A trial is an overlay: while active, the user resolves to the trial plan if it
+// outranks their paid plan. At expiry the daily cron clears the fields and the
+// resolver falls back to paid plan or scout automatically — client-side we also
+// treat a past trial_ends_at as inactive, so access ends on time even before
+// the cron runs.
+
+export function getActiveTrial(user) {
+  const e = ent(user)
+  if (!e.trial_plan || !e.trial_ends_at) return null
+  if (!PLAN_CONFIG[e.trial_plan]) return null
+  const endsAt = Date.parse(e.trial_ends_at)
+  if (!Number.isFinite(endsAt) || endsAt <= Date.now()) return null
+  return {
+    plan:     e.trial_plan,
+    bracket:  e.trial_bracket && BRACKET_CONFIG[e.trial_bracket] ? e.trial_bracket : 'b1',
+    endsAt,
+    daysLeft: Math.max(1, Math.ceil((endsAt - Date.now()) / 86400000)),
+  }
+}
+
+// ─── Resolver ─────────────────────────────────────────────────────────────────
+// Priority: admin > beta > trial (if it outranks paid) > paid > scout
+
+function rawPaidPlan(user) {
+  const p = ent(user).plan
+  return p && PLAN_CONFIG[p] ? p : 'scout'
+}
+
 export function getUserPlan(user) {
   if (!user) return 'scout'
   if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'a_campaign'
-  const p = ent(user).plan
-  return p && PLAN_CONFIG[p] ? p : 'scout'
+  if (isBetaActive(user)) return BETA_PLAN
+  const paid  = rawPaidPlan(user)
+  const trial = getActiveTrial(user)
+  if (trial && PLAN_ORDER.indexOf(trial.plan) > PLAN_ORDER.indexOf(paid)) return trial.plan
+  return paid
+}
+
+// Where the user's current access comes from — for badges in Settings/Admin UI.
+export function getEntitlementSource(user) {
+  if (!user) return 'free'
+  if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'admin'
+  if (isBetaActive(user)) return 'beta'
+  const paid  = rawPaidPlan(user)
+  const trial = getActiveTrial(user)
+  if (trial && PLAN_ORDER.indexOf(trial.plan) > PLAN_ORDER.indexOf(paid)) return 'trial'
+  return paid === 'scout' ? 'free' : 'paid'
 }
 
 export function getUserPlanType(user) {
@@ -468,6 +548,14 @@ export function getUserPlanType(user) {
 }
 
 export function getUserBracket(user) {
+  if (user && !ADMIN_EMAILS.includes(user.email?.toLowerCase())) {
+    if (isBetaActive(user)) return BETA_BRACKET
+    const source = getEntitlementSource(user)
+    if (source === 'trial') {
+      const trial = getActiveTrial(user)
+      if (trial?.bracket) return trial.bracket
+    }
+  }
   const b = ent(user).bracket
   return b && BRACKET_CONFIG[b] ? b : 'b1'
 }

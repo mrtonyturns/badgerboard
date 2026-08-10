@@ -37,9 +37,11 @@ import {
   ExternalLink,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import SearchableSelect from '../components/SearchableSelect'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { ADMIN_EMAILS } from '../lib/tiers'
+import { sanitizeAnnouncementHtml } from '../lib/sanitize'
 import ElectionResultsAdmin from './ElectionResultsAdmin'
 
 const AdminDashboard = () => {
@@ -93,17 +95,26 @@ const AdminDashboard = () => {
     [session?.access_token]
   )
 
+  // Trials + beta mode (v1.18) — admin-manage-access function
+  const accessCall = useCallback(
+    async (action, params = {}) => {
+      const res = await fetch('/.netlify/functions/admin-manage-access', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({ action, ...params }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      return res.json()
+    },
+    [session?.access_token]
+  )
+
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="border-b border-gray-200 bg-white">
-        <div className="max-w-7xl mx-auto px-6 py-6">
-          <div className="flex items-center gap-3">
-            <Shield className="w-8 h-8 text-red-700" />
-            <h1 className="text-3xl font-bold text-gray-900">Admin Panel</h1>
-          </div>
-        </div>
-      </div>
+      {/* Header lives in the top bar (v1.24.1) */}
 
       {/* Tab Navigation */}
       <div className="border-b border-gray-200 bg-white sticky top-0 z-10">
@@ -140,7 +151,7 @@ const AdminDashboard = () => {
       <div className="max-w-7xl mx-auto px-6 py-8">
         {activeTab === 'health' && <PlatformHealthTab apiCall={apiCall} showToast={showToast} onNavigate={setActiveTab} />}
         {activeTab === 'accounts' && <AccountManagementTab apiCall={apiCall} showToast={showToast} user={user} />}
-        {activeTab === 'billing' && <BillingPlansTab billingCall={billingCall} apiCall={apiCall} showToast={showToast} />}
+        {activeTab === 'billing' && <BillingPlansTab billingCall={billingCall} apiCall={apiCall} accessCall={accessCall} showToast={showToast} />}
         {activeTab === 'ai-costs' && <AICostsTab apiCall={apiCall} showToast={showToast} />}
         {activeTab === 'errors' && <ErrorLogsTab apiCall={apiCall} showToast={showToast} />}
         {activeTab === 'elections' && <ElectionResultsAdmin showToast={showToast} />}
@@ -336,7 +347,37 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
     editEmail: null,
     changePassword: null,
     notes: null,
+    deleteAccount: null,
   })
+  const [deleteConfirmText, setDeleteConfirmText] = useState('')
+  const [deletingAccount, setDeletingAccount] = useState(false)
+
+  // v1.21.1: admin account deletion — routes through the existing
+  // delete-account function (cancels ALL Stripe subscriptions first, refuses
+  // to orphan billing, blocks admin accounts server-side).
+  const handleDeleteAccount = async () => {
+    const target = modals.deleteAccount
+    if (!target || deletingAccount) return
+    setDeletingAccount(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/.netlify/functions/delete-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ userId: target.id }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || 'Deletion failed')
+      setUsers(prev => prev.filter(u => u.id !== target.id))
+      setModals({ ...modals, deleteAccount: null })
+      setDeleteConfirmText('')
+      showToast(`Account ${target.email} permanently deleted`)
+    } catch (err) {
+      console.error(err)
+      showToast(`Delete failed: ${err.message} — account NOT deleted`, 'error')
+    }
+    setDeletingAccount(false)
+  }
 
   useEffect(() => {
     const fetch = async () => {
@@ -377,24 +418,48 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
     setSelected(newSelected)
   }
 
-  const handleBulkAction = async (action) => {
-    if (!window.confirm(`Are you sure you want to ${action} for ${selected.size} user(s)?`)) return
+  // Audit fix (#19): every handler below used to call actions the backend
+  // never implemented (bulk_*, update_user_email, change_user_password,
+  // lock_payment, get_user_activity, add_user_note) or send params the backend
+  // doesn't read (send_reset with user_id instead of email) — all of them
+  // 400'd while the UI toasted success. Aligned with the implemented actions:
+  // update_user / send_reset(email) / toggle_payment(user_id, lock) /
+  // user_activity / add_note.
 
+  const emailForUser = (userId) => users.find(u => u.id === userId)?.email || null
+
+  const handleBulkAction = async (action) => {
+    if (!window.confirm(`Are you sure you want to ${action.replace('_', ' ')} for ${selected.size} user(s)?`)) return
+
+    const ids = Array.from(selected)
+    let ok = 0, failed = 0
+    for (const uid of ids) {
+      try {
+        if (action === 'lock_payment')        await apiCall('toggle_payment', { user_id: uid, lock: true })
+        else if (action === 'unlock_payment') await apiCall('toggle_payment', { user_id: uid, lock: false })
+        else if (action === 'send_reset') {
+          const email = emailForUser(uid)
+          if (!email) throw new Error('no email')
+          await apiCall('send_reset', { email })
+        } else throw new Error(`Unknown bulk action: ${action}`)
+        ok++
+      } catch (err) {
+        console.error(`[bulk ${action}] ${uid}:`, err)
+        failed++
+      }
+    }
+    setSelected(new Set())
     try {
-      await apiCall(`bulk_${action}`, { user_ids: Array.from(selected) })
-      setSelected(new Set())
       const data = await apiCall('users')
       setUsers(Array.isArray(data) ? data : (data?.users || []))
-      showToast(`Bulk action completed`)
-    } catch (err) {
-      console.error(err)
-      showToast('Action failed', 'error')
-    }
+    } catch {}
+    if (failed) showToast(`${ok} succeeded, ${failed} FAILED — check console`, 'error')
+    else showToast(`Bulk action completed for ${ok} user(s)`)
   }
 
   const handleEditEmail = async (userId, newEmail) => {
     try {
-      await apiCall('update_user_email', { user_id: userId, new_email: newEmail })
+      await apiCall('update_user', { user_id: userId, email: newEmail })
       const data = await apiCall('users')
       setUsers(Array.isArray(data) ? data : (data?.users || []))
       setModals({ ...modals, editEmail: null })
@@ -407,7 +472,7 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
 
   const handleChangePassword = async (userId, newPassword) => {
     try {
-      await apiCall('change_user_password', { user_id: userId, new_password: newPassword })
+      await apiCall('update_user', { user_id: userId, password: newPassword })
       setModals({ ...modals, changePassword: null })
       showToast('Password changed')
     } catch (err) {
@@ -419,7 +484,9 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
   const handleSendReset = async (userId) => {
     if (!window.confirm('Send password reset email?')) return
     try {
-      await apiCall('send_reset', { user_id: userId })
+      const email = emailForUser(userId)
+      if (!email) throw new Error('User email not found')
+      await apiCall('send_reset', { email })
       showToast('Reset email sent')
     } catch (err) {
       console.error(err)
@@ -430,7 +497,7 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
   const handleTogglePaymentLock = async (userId, isLocked) => {
     if (!window.confirm(`${isLocked ? 'Unlock' : 'Lock'} payment for this user?`)) return
     try {
-      await apiCall(isLocked ? 'unlock_payment' : 'lock_payment', { user_id: userId })
+      await apiCall('toggle_payment', { user_id: userId, lock: !isLocked })
       const data = await apiCall('users')
       setUsers(Array.isArray(data) ? data : (data?.users || []))
       showToast(`Payment ${isLocked ? 'unlocked' : 'locked'}`)
@@ -446,8 +513,9 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
     } else {
       try {
         if (!activityData[userId]) {
-          const data = await apiCall('get_user_activity', { user_id: userId })
-          setActivityData({ ...activityData, [userId]: (Array.isArray(data) ? data : []).slice(0, 20) })
+          const data = await apiCall('user_activity', { user_id: userId })
+          const rows = Array.isArray(data) ? data : (data?.activity || [])
+          setActivityData({ ...activityData, [userId]: rows.slice(0, 20) })
         }
         setExpandedActivity(userId)
       } catch (err) {
@@ -459,7 +527,7 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
 
   const handleAddNote = async (userId, noteText) => {
     try {
-      await apiCall('add_user_note', { user_id: userId, note: noteText })
+      await apiCall('add_note', { user_id: userId, note: noteText })
       setModals({ ...modals, notes: null })
       showToast('Note added')
     } catch (err) {
@@ -576,16 +644,30 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-gray-600">{u.plan || 'Free'}</td>
+                  <td className="px-4 py-3 text-gray-600">
+                    {u.plan || 'Free'}
+                    {u.beta_mode && (
+                      <span className="ml-1.5 px-1.5 py-0.5 bg-indigo-100 text-indigo-800 text-[10px] rounded-full font-semibold align-middle">Beta</span>
+                    )}
+                    {u.trial_plan && u.trial_ends_at && Date.parse(u.trial_ends_at) > Date.now() && (
+                      <span className="ml-1.5 px-1.5 py-0.5 bg-purple-100 text-purple-800 text-[10px] rounded-full font-semibold align-middle">Trial</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
+                    {/* payment_status is only set once Stripe has reported something.
+                        null/undefined = no billing problem → show Active (fixes the
+                        every-account-shows-Past-Due bug: the old code read u.status,
+                        a field the API never returned). */}
                     <span
                       className={`px-2 py-1 text-xs rounded-full font-medium ${
-                        u.status === 'active'
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-amber-100 text-amber-800'
+                        u.payment_status === 'past_due'
+                          ? 'bg-amber-100 text-amber-800'
+                          : u.payment_status === 'inactive'
+                            ? 'bg-gray-100 text-gray-600'
+                            : 'bg-green-100 text-green-800'
                       }`}
                     >
-                      {u.status === 'active' ? 'Active' : 'Past Due'}
+                      {u.payment_status === 'past_due' ? 'Past Due' : u.payment_status === 'inactive' ? 'Cancelled' : 'Active'}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-gray-600">{new Date(u.created_at).toLocaleDateString()}</td>
@@ -635,6 +717,13 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
                         title="View/add notes"
                       >
                         <StickyNote className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => setModals({ ...modals, deleteAccount: u })}
+                        className="p-1 text-red-600 hover:bg-red-50 rounded transition"
+                        title="Delete account"
+                      >
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   </td>
@@ -696,6 +785,50 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
           onAddNote={(noteText) => handleAddNote(modals.notes.id, noteText)}
           onClose={() => setModals({ ...modals, notes: null })}
         />
+      )}
+
+      {/* Delete Account Modal — type the email to confirm */}
+      {modals.deleteAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <Trash2 className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-900">Permanently delete account</h3>
+                <p className="text-xs text-gray-500">{modals.deleteAccount.email}</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 leading-relaxed mb-3">
+              This cancels <strong>every Stripe subscription</strong> on the account, then permanently deletes the user and their data. It cannot be undone. If billing can&apos;t be cancelled, the deletion is aborted automatically.
+            </p>
+            <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+              Type the account email to confirm:
+            </label>
+            <input
+              value={deleteConfirmText}
+              onChange={(e) => setDeleteConfirmText(e.target.value)}
+              placeholder={modals.deleteAccount.email}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-600 mb-4"
+            />
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => { setModals({ ...modals, deleteAccount: null }); setDeleteConfirmText('') }}
+                className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteAccount}
+                disabled={deletingAccount || deleteConfirmText.trim().toLowerCase() !== (modals.deleteAccount.email || '').toLowerCase()}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {deletingAccount ? 'Deleting…' : 'Delete permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
@@ -855,12 +988,13 @@ const NotesModal = ({ user, onAddNote, onClose }) => {
 }
 
 // TAB 3: Billing & Plans
-const BillingPlansTab = ({ billingCall, apiCall, showToast }) => {
+const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
   const [users, setUsers] = useState([])
   const [selectedUser, setSelectedUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [subscriptionData, setSubscriptionData] = useState(null)
   const [paymentHistory, setPaymentHistory] = useState([])
+  const [globalBeta, setGlobalBeta] = useState(null)   // null = loading
 
   const [modals, setModals] = useState({
     applyCredit: false,
@@ -882,18 +1016,27 @@ const BillingPlansTab = ({ billingCall, apiCall, showToast }) => {
     }
 
     fetch()
-  }, [apiCall, showToast])
+    // Global beta switch state (best-effort)
+    accessCall('get_global_beta')
+      .then(r => setGlobalBeta(Boolean(r?.enabled)))
+      .catch(() => setGlobalBeta(true))
+  }, [apiCall, accessCall, showToast])
 
   const handleSelectUser = async (u) => {
+    // Always open the detail panel — Stripe data is supplementary. A user with
+    // no Stripe customer (free/trial/beta) or a missing Stripe key must not
+    // block the panel (this was the old "Failed to load billing data" bug).
+    setSelectedUser(u)
+    setSubscriptionData({ subscription: null })
+    setPaymentHistory([])
     try {
       const data = await billingCall('get_subscription', { user_id: u.id })
-      setSelectedUser(u)
       setSubscriptionData(data)
       const history = await billingCall('payment_history', { user_id: u.id })
       setPaymentHistory(history?.invoices || [])
     } catch (err) {
       console.error(err)
-      showToast('Failed to load billing data', 'error')
+      showToast('Stripe billing data unavailable for this account', 'error')
     }
   }
 
@@ -949,7 +1092,7 @@ const BillingPlansTab = ({ billingCall, apiCall, showToast }) => {
 
   const handleChangePlan = async (plan, bracket) => {
     try {
-      await billingCall('change_plan', { user_id: selectedUser.id, plan, bracket })
+      const result = await billingCall('change_plan', { user_id: selectedUser.id, plan, bracket })
       // Refresh Stripe subscription data
       const data = await billingCall('get_subscription', { user_id: selectedUser.id })
       setSubscriptionData(data)
@@ -959,25 +1102,117 @@ const BillingPlansTab = ({ billingCall, apiCall, showToast }) => {
       // Also update the users list sidebar so the new plan shows immediately
       setUsers(prev => prev.map(u => u.id === selectedUser.id ? updatedUser : u))
       setModals({ ...modals, changePlan: false })
-      showToast(`Plan updated to ${plan} — changes take effect on user's next login`)
+      // Audit fix (#4): surface the Stripe sync result instead of a blanket
+      // success — "price_not_configured" / "no_subscription" states were
+      // previously hidden behind a success toast.
+      const stripeNote = {
+        subscription_updated: 'Stripe subscription moved to the new price.',
+        subscription_scheduled_for_cancellation: 'Stripe subscription will cancel at period end.',
+        no_stripe_customer: 'No Stripe customer — metadata updated only (no billing change).',
+        no_active_subscription: 'No active Stripe subscription — metadata updated only.',
+        no_subscription: 'No Stripe subscription — metadata updated only.',
+        not_configured: 'Stripe not configured — metadata updated only.',
+      }[result?.stripe] || (String(result?.stripe || '').startsWith('price_not_configured')
+        ? `⚠ Stripe price missing for this plan/bracket (${result.stripe}) — billing NOT changed.`
+        : null)
+      showToast(`Plan set to ${plan}${bracket ? ` (${bracket})` : ''}. ${stripeNote || ''}`.trim(),
+        String(result?.stripe || '').startsWith('price_not_configured') ? 'error' : 'success')
     } catch (err) {
       console.error(err)
       showToast('Failed to change plan', 'error')
     }
   }
 
-  const handleGrantTrial = async (days) => {
-    if (!window.confirm(`Grant ${days}-day free trial to ${selectedUser.email}?`)) return
+  // ── Trials + beta (v1.18 internal entitlements — no card, no Stripe) ──────
+  const [trialPlan, setTrialPlan]       = useState('c_campaign')
+  const [trialBracket, setTrialBracket] = useState('b1')
+  const [accessBusy, setAccessBusy]     = useState(false)
+
+  const refreshSelectedUser = async () => {
     try {
-      await billingCall('grant_trial', { user_id: selectedUser.id, days })
-      const data = await billingCall('get_subscription', { user_id: selectedUser.id })
-      setSubscriptionData(data)
-      showToast(`${days}-day trial granted`)
+      const data = await apiCall('users')
+      const list = Array.isArray(data) ? data : (data?.users || [])
+      setUsers(list)
+      const updated = list.find(x => x.id === selectedUser?.id)
+      if (updated) setSelectedUser(updated)
+    } catch { /* list refresh is best-effort */ }
+  }
+
+  const handleGrantTrial = async (days) => {
+    const planLabel = trialPlan.startsWith('a_') ? `${trialPlan} (${trialBracket})` : trialPlan
+    if (!window.confirm(`Grant ${selectedUser.email} a free ${days}-day ${planLabel} trial? No card required — they auto-return to Scout when it ends.`)) return
+    setAccessBusy(true)
+    try {
+      await accessCall('grant_trial', {
+        user_id: selectedUser.id,
+        plan:    trialPlan,
+        bracket: trialPlan.startsWith('a_') ? trialBracket : undefined,
+        days,
+      })
+      await refreshSelectedUser()
+      showToast(`${days}-day ${planLabel} trial granted`)
     } catch (err) {
       console.error(err)
       showToast('Failed to grant trial', 'error')
+    } finally {
+      setAccessBusy(false)
     }
   }
+
+  const handleRevokeTrial = async () => {
+    if (!window.confirm(`End ${selectedUser.email}'s trial now? They immediately drop back to their paid plan or Scout.`)) return
+    setAccessBusy(true)
+    try {
+      await accessCall('revoke_trial', { user_id: selectedUser.id })
+      await refreshSelectedUser()
+      showToast('Trial revoked')
+    } catch (err) {
+      console.error(err)
+      showToast('Failed to revoke trial', 'error')
+    } finally {
+      setAccessBusy(false)
+    }
+  }
+
+  const handleToggleUserBeta = async () => {
+    const enabling = !(selectedUser?.beta_mode === true)
+    if (!window.confirm(enabling
+      ? `Turn beta mode ON for ${selectedUser.email}? They get every feature (including Broadside) while it's on.`
+      : `Turn beta mode OFF for ${selectedUser.email}? They immediately drop back to their paid plan or Scout.`)) return
+    setAccessBusy(true)
+    try {
+      await accessCall('set_beta', { user_id: selectedUser.id, enabled: enabling })
+      await refreshSelectedUser()
+      showToast(`Beta mode ${enabling ? 'enabled' : 'disabled'} for ${selectedUser.email}`)
+    } catch (err) {
+      console.error(err)
+      showToast('Failed to update beta mode', 'error')
+    } finally {
+      setAccessBusy(false)
+    }
+  }
+
+  const handleToggleGlobalBeta = async () => {
+    const enabling = !globalBeta
+    if (!window.confirm(enabling
+      ? 'Turn the GLOBAL beta switch ON? Users with the per-user beta flag regain full access.'
+      : 'Turn the GLOBAL beta switch OFF? Every beta user immediately loses beta access and drops to their paid plan or Scout.')) return
+    setAccessBusy(true)
+    try {
+      await accessCall('set_global_beta', { enabled: enabling })
+      setGlobalBeta(enabling)
+      showToast(`Global beta mode ${enabling ? 'ON' : 'OFF'}`)
+    } catch (err) {
+      console.error(err)
+      showToast('Failed to update global beta switch', 'error')
+    } finally {
+      setAccessBusy(false)
+    }
+  }
+
+  // Active trial info for the selected user (from Supabase metadata via users list)
+  const selTrialEndsAt = selectedUser?.trial_ends_at ? Date.parse(selectedUser.trial_ends_at) : null
+  const selTrialActive = Boolean(selectedUser?.trial_plan && selTrialEndsAt && selTrialEndsAt > Date.now())
 
   if (loading) {
     return <Spinner />
@@ -1015,11 +1250,17 @@ const BillingPlansTab = ({ billingCall, apiCall, showToast }) => {
             {/* Subscription Details */}
             <div className="bg-white rounded-lg shadow p-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Subscription Details</h3>
+              {!subscriptionData.subscription_id && (
+                <p className="text-sm text-gray-500 mb-4">
+                  No active Stripe subscription — this account is on {selectedUser.plan && selectedUser.plan !== 'scout' ? `plan “${selectedUser.plan}” via admin/manual assignment` : 'the free Scout plan'}
+                  {selTrialActive ? ' with an active free trial' : ''}{selectedUser.beta_mode ? ' and has beta mode on' : ''}.
+                </p>
+              )}
               <div className="space-y-3 mb-6">
                 <div className="flex justify-between">
                   <span className="text-gray-600">Status</span>
                   <span className={`font-medium ${subscriptionData.status === 'active' ? 'text-green-600' : 'text-amber-600'}`}>
-                    {subscriptionData.status}
+                    {subscriptionData.status || '—'}
                   </span>
                 </div>
                 <div className="flex justify-between">
@@ -1063,29 +1304,123 @@ const BillingPlansTab = ({ billingCall, apiCall, showToast }) => {
               </div>
             </div>
 
-            {/* Free Trial Management */}
+            {/* Free Trial Management (v1.18 — internal entitlement, no card) */}
             <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Free Trial</h3>
-              <p className="text-sm text-gray-600 mb-4">Grant this user a free trial period. Their card will be charged automatically when the trial ends.</p>
-              <div className="flex flex-wrap gap-2">
-                {[7, 30, 90].map(days => (
-                  <button
-                    key={days}
-                    onClick={() => handleGrantTrial(days)}
-                    className="px-4 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition font-medium"
-                  >
-                    {days}-Day Trial
-                  </button>
-                ))}
-              </div>
-              {subscriptionData?.trial_end && (
-                <div className="mt-3 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+              <h3 className="text-lg font-semibold text-gray-900 mb-1">Free Trial Giveaway</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Grant full access to any plan — no card required. When the trial ends the account
+                automatically returns to {`the user's paid plan or free Scout`}, and their data stays intact.
+              </p>
+
+              {selTrialActive ? (
+                <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg flex items-center justify-between gap-3 flex-wrap">
                   <p className="text-sm text-purple-900 font-medium">
-                    Trial active — ends {new Date(subscriptionData.trial_end).toLocaleDateString()}
-                    {' '}({Math.max(0, Math.ceil((new Date(subscriptionData.trial_end) - new Date()) / 86400000))} days remaining)
+                    Trial active: <strong>{selectedUser.trial_plan}</strong>
+                    {selectedUser.trial_bracket ? ` (${selectedUser.trial_bracket})` : ''} — ends{' '}
+                    {new Date(selTrialEndsAt).toLocaleDateString()}{' '}
+                    ({Math.max(1, Math.ceil((selTrialEndsAt - Date.now()) / 86400000))} days left)
                   </p>
+                  <button
+                    onClick={handleRevokeTrial}
+                    disabled={accessBusy}
+                    className="px-3 py-1.5 bg-red-700 text-white text-xs font-semibold rounded hover:bg-red-800 transition disabled:opacity-50"
+                  >
+                    End trial now
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap gap-3">
+                    <select
+                      value={trialPlan}
+                      onChange={(e) => setTrialPlan(e.target.value)}
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    >
+                      <option value="c_monitor">Monitor (Candidate)</option>
+                      <option value="c_active">Active (Candidate)</option>
+                      <option value="c_campaign">Campaign (Candidate)</option>
+                      <option value="a_monitor">Monitor (Action)</option>
+                      <option value="a_active">Active (Action)</option>
+                      <option value="a_campaign">Campaign (Action)</option>
+                    </select>
+                    {trialPlan.startsWith('a_') && (
+                      <select
+                        value={trialBracket}
+                        onChange={(e) => setTrialBracket(e.target.value)}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      >
+                        <option value="b1">1 candidate</option>
+                        <option value="b2_5">2–5 candidates</option>
+                        <option value="b6">6–10 candidates</option>
+                        <option value="b11">11–25 candidates</option>
+                        <option value="b26">26–50 candidates</option>
+                        <option value="b51">51–100 candidates</option>
+                      </select>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {[30, 60, 90].map(days => (
+                      <button
+                        key={days}
+                        onClick={() => handleGrantTrial(days)}
+                        disabled={accessBusy}
+                        className="px-4 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition font-medium disabled:opacity-50"
+                      >
+                        {days}-Day Free Trial
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
+            </div>
+
+            {/* Beta Mode (v1.18) */}
+            <div className="bg-white rounded-lg shadow p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-1">Beta Mode</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Beta users get <strong>every feature</strong> (top plan + Broadside) while their flag AND the
+                global switch are on. Turning either off drops them straight back to their paid plan or Scout.
+              </p>
+
+              <div className="flex items-center justify-between gap-3 p-3 border border-gray-200 rounded-lg mb-3">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">This user: {selectedUser.email}</p>
+                  <p className="text-xs text-gray-500">
+                    {selectedUser?.beta_mode === true
+                      ? (globalBeta === false ? 'Flag ON — but global switch is OFF, so no beta access right now' : 'Beta access active')
+                      : 'No beta access'}
+                  </p>
+                </div>
+                <button
+                  onClick={handleToggleUserBeta}
+                  disabled={accessBusy}
+                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition disabled:opacity-50 ${
+                    selectedUser?.beta_mode === true
+                      ? 'bg-red-700 text-white hover:bg-red-800'
+                      : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                  }`}
+                >
+                  {selectedUser?.beta_mode === true ? 'Turn beta OFF' : 'Turn beta ON'}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 p-3 border border-amber-200 bg-amber-50 rounded-lg">
+                <div>
+                  <p className="text-sm font-semibold text-amber-900">Global beta switch (all users)</p>
+                  <p className="text-xs text-amber-700">
+                    {globalBeta === null ? 'Loading…' : globalBeta ? 'ON — per-user flags are honored' : 'OFF — all beta access suspended platform-wide'}
+                  </p>
+                </div>
+                <button
+                  onClick={handleToggleGlobalBeta}
+                  disabled={accessBusy || globalBeta === null}
+                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition disabled:opacity-50 ${
+                    globalBeta ? 'bg-red-700 text-white hover:bg-red-800' : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                  }`}
+                >
+                  {globalBeta ? 'Turn global beta OFF' : 'Turn global beta ON'}
+                </button>
+              </div>
             </div>
 
             {/* Payment History */}
@@ -1238,28 +1573,31 @@ const ApplyCreditModal = ({ onSave, onClose }) => {
 const PLAN_FAMILIES = {
   candidate: [
     { key: 'scout',      label: 'Scout',    price: 'Free',       desc: '1 lite profile' },
-    { key: 'c_monitor',  label: 'Monitor',  price: '$59/mo',     desc: '1 full profile/mo' },
-    { key: 'c_active',   label: 'Active',   price: '$89/mo',     desc: '2 profiles/mo, compare, intel' },
-    { key: 'c_campaign', label: 'Campaign', price: '$139/mo',    desc: '4 profiles/mo, 2 seats, weekly auto-refresh' },
+    { key: 'c_monitor',  label: 'Monitor',  price: '$79/mo',     desc: '1 full profile/mo' },
+    { key: 'c_active',   label: 'Active',   price: '$119/mo',    desc: '2 profiles/mo, compare, intel' },
+    { key: 'c_campaign', label: 'Campaign', price: '$189/mo',    desc: '6 profiles/mo, 2 seats, weekly auto-refresh' },
   ],
   action: [
-    { key: 'a_monitor',  label: 'Monitor',  price: 'From $69/mo',  desc: '15 profiles/mo, prospecting, offices' },
-    { key: 'a_active',   label: 'Active',   price: 'From $119/mo', desc: '30 profiles/mo, 2 seats, compare' },
-    { key: 'a_campaign', label: 'Campaign', price: 'From $159/mo', desc: '50 profiles/mo, unlimited seats, bulk profiler' },
+    { key: 'a_monitor',  label: 'Monitor',  price: 'From $89/mo',  desc: '1 profile per candidate/mo, prospecting, offices' },
+    { key: 'a_active',   label: 'Active',   price: 'From $149/mo', desc: '2 profiles per candidate/mo, 2 seats, compare' },
+    { key: 'a_campaign', label: 'Campaign', price: 'From $219/mo', desc: '4 profiles per candidate/mo, unlimited seats, bulk profiler' },
   ],
 }
 
 const ACTION_PLAN_KEYS = PLAN_FAMILIES.action.map(p => p.key)
 
+// Audit fix (#4): these MUST be the canonical bracket keys from tiers.js.
+// The old b1-b8 set collided with the server's real keys — picking
+// "26–50 candidates" sent 'b6', which server-side is the 6–10 tier, silently
+// moving live Stripe subscriptions to the wrong (cheaper) price.
 const BRACKET_OPTIONS = [
   { key: 'b1',   label: '1 candidate' },
-  { key: 'b2',   label: '2–3 candidates' },
-  { key: 'b3',   label: '4–5 candidates' },
-  { key: 'b4',   label: '6–10 candidates' },
-  { key: 'b5',   label: '11–25 candidates' },
-  { key: 'b6',   label: '26–50 candidates' },
-  { key: 'b7',   label: '51–100 candidates' },
-  { key: 'b8',   label: '100+ candidates' },
+  { key: 'b2_5', label: '2–5 candidates' },
+  { key: 'b6',   label: '6–10 candidates' },
+  { key: 'b11',  label: '11–25 candidates' },
+  { key: 'b26',  label: '26–50 candidates' },
+  { key: 'b51',  label: '51–100 candidates' },
+  { key: 'ent',  label: '100+ (enterprise)' },
 ]
 
 const ChangePlanModal = ({ currentPlan, currentBracket, onSave, onClose }) => {
@@ -1367,21 +1705,39 @@ const ChangePlanModal = ({ currentPlan, currentBracket, onSave, onClose }) => {
 }
 
 // TAB 4: AI Costs
+// ─── AI Costs (v1.20 rebuild) ─────────────────────────────────────────────────
+// Real metering from the ai_usage table: every AI call logs actual token
+// counts and computed cost. Shows where spend comes from (app section),
+// which provider it goes to, and which users drive it.
+const ENDPOINT_LABELS = {
+  'profiler':       'Profiler — AI profiles',
+  'events':         'District Events research',
+  'district-intel': 'District Intelligence',
+  'broadside':      'Broadside sparring',
+  'support-chat':   'Support chat',
+  'campaign-intel': 'Campaign Intel & SWOT',
+  'prospecting':    'Prospecting & discovery',
+  'candidates':     'Candidate tools',
+}
+const PROVIDER_META = {
+  anthropic:  { label: 'Anthropic (Claude)',    color: '#D97757' },
+  perplexity: { label: 'Perplexity (research)', color: '#1FB8CD' },
+  xai:        { label: 'xAI (Grok)',            color: '#0F172A' },
+}
+const fmtUsd = (v) => v >= 100 ? `$${v.toFixed(0)}` : v >= 1 ? `$${v.toFixed(2)}` : `$${(v || 0).toFixed(3)}`
+const fmtTok = (v) => v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(0)}k` : String(v || 0)
+
 const AICostsTab = ({ apiCall, showToast }) => {
-  const [costs, setCosts] = useState(null)
-  const [total, setTotal] = useState(0)
+  const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [userSort, setUserSort] = useState('cost')   // 'cost' | 'alpha'
   const [hoveredIndex, setHoveredIndex] = useState(null)
 
   useEffect(() => {
-    const fetch = async () => {
+    const fetchCosts = async () => {
       try {
         setLoading(true)
-        const data = await apiCall('ai_costs')
-        const categories = Array.isArray(data) ? data : (data?.categories || [])
-        const normalized = categories.map(c => ({ ...c, cost: c.estimated_cost ?? c.cost ?? 0 }))
-        setCosts(normalized)
-        setTotal(data?.total ?? normalized.reduce((s, c) => s + (c.cost || 0), 0))
+        setData(await apiCall('ai_costs'))
       } catch (err) {
         console.error(err)
         showToast('Failed to load AI costs', 'error')
@@ -1389,95 +1745,190 @@ const AICostsTab = ({ apiCall, showToast }) => {
         setLoading(false)
       }
     }
-    fetch()
+    fetchCosts()
   }, [apiCall, showToast])
 
   if (loading) return <Spinner />
 
-  // Even if DB returned nothing, costs should have fixed estimates from backend
-  const hasCosts = costs && costs.length > 0
+  if (!data?.tracking) {
+    return (
+      <div className="bg-white rounded-2xl shadow p-10 text-center">
+        <BarChart2 className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+        <p className="font-bold text-gray-900">Cost metering isn&apos;t set up yet</p>
+        <p className="text-sm text-gray-500 mt-1 max-w-md mx-auto">{data?.error || 'Run the ai_usage migration in the Supabase SQL editor, then reload. Every AI call will start logging real token counts and costs.'}</p>
+      </div>
+    )
+  }
+
+  const t = data.totals || {}
+  const maxDaily = Math.max(0.0001, ...(data.daily || []).map(d => d.cost))
+  const maxEndpoint = Math.max(0.0001, ...(data.by_endpoint || []).map(e => e.cost))
+  const users = [...(data.by_user || [])].sort((a, b) =>
+    userSort === 'alpha' ? String(a.email).localeCompare(String(b.email)) : b.cost - a.cost)
+  const donutData = (data.by_provider || []).map(p => ({
+    label: PROVIDER_META[p.key]?.label || p.key, cost: p.cost,
+  }))
+
+  const tiles = [
+    { label: 'Last 30 days',  value: fmtUsd(t.last_30d || 0),  sub: `${(t.calls_30d || 0).toLocaleString()} AI calls`, grad: 'from-red-600 to-rose-800' },
+    { label: 'Month to date', value: fmtUsd(t.month_to_date || 0), sub: 'resets on the 1st', grad: 'from-slate-800 to-slate-950' },
+    { label: 'Tokens (30d)',  value: fmtTok(t.tokens_30d || 0), sub: 'input + output', grad: 'from-sky-600 to-indigo-800' },
+    { label: 'Last 90 days',  value: fmtUsd(t.last_90d || 0),  sub: `${(data.tracked_rows || 0).toLocaleString()} logged calls`, grad: 'from-emerald-600 to-teal-800' },
+  ]
 
   return (
     <div className="space-y-6">
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white rounded-lg shadow p-6 border-l-4 border-red-500">
-          <p className="text-gray-500 text-sm font-medium">Total Estimated Spend</p>
-          <p className="text-3xl font-bold text-red-700 mt-1">${total.toFixed(2)}</p>
-          <p className="text-xs text-gray-400 mt-1">All-time across all AI services</p>
+      {/* ── Stat tiles ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {tiles.map(tile => (
+          <div key={tile.label} className={`relative overflow-hidden rounded-2xl bg-gradient-to-br ${tile.grad} text-white p-5 shadow-lg`}>
+            <p className="text-[11px] font-bold uppercase tracking-wider text-white/60">{tile.label}</p>
+            <p className="text-3xl font-black mt-1 tabular-nums">{tile.value}</p>
+            <p className="text-[11px] font-semibold text-white/50 mt-1">{tile.sub}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Daily spend chart (30d) ── */}
+      <div className="bg-white rounded-2xl shadow p-6">
+        <div className="flex items-baseline justify-between mb-4">
+          <h3 className="text-base font-bold text-gray-900">Daily spend — last 30 days</h3>
+          <span className="text-xs text-gray-400 font-semibold">hover a bar for detail</span>
         </div>
-        <div className="bg-white rounded-lg shadow p-6 border-l-4 border-blue-500">
-          <p className="text-gray-500 text-sm font-medium">Dynamic (logged calls)</p>
-          <p className="text-3xl font-bold text-gray-900 mt-1">
-            ${(costs || []).filter(c => c.count !== null).reduce((s, c) => s + (c.cost || 0), 0).toFixed(2)}
-          </p>
-          <p className="text-xs text-gray-400 mt-1">From generation_logs table</p>
+        {(data.daily || []).length === 0 ? (
+          <p className="text-sm text-gray-400 text-center py-8">No AI calls logged yet — costs appear here as the app is used.</p>
+        ) : (
+          <div className="flex items-end gap-[3px] h-36">
+            {data.daily.map(d => (
+              <div key={d.date} className="flex-1 group relative flex flex-col justify-end h-full">
+                <div className="bg-gradient-to-t from-red-700 to-rose-400 rounded-t-md min-h-[3px] transition-all group-hover:from-red-800 group-hover:to-rose-500"
+                  style={{ height: `${Math.max(3, (d.cost / maxDaily) * 100)}%` }} />
+                <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:block bg-gray-900 text-white text-[10px] font-bold px-2 py-1 rounded-md whitespace-nowrap z-10">
+                  {new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {fmtUsd(d.cost)}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* ── Cost by app section ── */}
+        <div className="bg-white rounded-2xl shadow p-6">
+          <h3 className="text-base font-bold text-gray-900 mb-4">Where the spend comes from <span className="text-xs font-semibold text-gray-400">(30d, by app section)</span></h3>
+          {(data.by_endpoint || []).length === 0 && <p className="text-sm text-gray-400 py-6 text-center">Nothing logged yet</p>}
+          <div className="space-y-3">
+            {(data.by_endpoint || []).map(e => (
+              <div key={e.key}>
+                <div className="flex items-baseline justify-between mb-1">
+                  <span className="text-sm font-bold text-gray-800">{ENDPOINT_LABELS[e.key] || e.key}</span>
+                  <span className="text-sm font-black text-gray-900 tabular-nums">{fmtUsd(e.cost)}</span>
+                </div>
+                <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-brand-navy to-sky-600 rounded-full" style={{ width: `${Math.max(2, (e.cost / maxEndpoint) * 100)}%` }} />
+                </div>
+                <p className="text-[11px] text-gray-400 font-semibold mt-0.5">
+                  {e.calls.toLocaleString()} calls · {fmtTok(e.input_tokens + e.output_tokens)} tokens
+                  {t.last_30d > 0 ? ` · ${((e.cost / t.last_30d) * 100).toFixed(0)}% of spend` : ''}
+                </p>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="bg-white rounded-lg shadow p-6 border-l-4 border-amber-500">
-          <p className="text-gray-500 text-sm font-medium">Fixed Baseline Estimates</p>
-          <p className="text-3xl font-bold text-gray-900 mt-1">
-            ${(costs || []).filter(c => c.count === null).reduce((s, c) => s + (c.cost || 0), 0).toFixed(2)}
-          </p>
-          <p className="text-xs text-gray-400 mt-1">Background jobs &amp; Perplexity</p>
+
+        {/* ── Cost by provider ── */}
+        <div className="bg-white rounded-2xl shadow p-6">
+          <h3 className="text-base font-bold text-gray-900 mb-4">Spend by AI platform <span className="text-xs font-semibold text-gray-400">(30d)</span></h3>
+          {donutData.length ? (
+            <DonutChart data={donutData} hoveredIndex={hoveredIndex} setHoveredIndex={setHoveredIndex} />
+          ) : (
+            <p className="text-sm text-gray-400 py-6 text-center">Nothing logged yet</p>
+          )}
+          <div className="mt-4 space-y-2">
+            {(data.by_provider || []).map(p => (
+              <div key={p.key} className="flex items-center gap-2.5 text-sm">
+                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: PROVIDER_META[p.key]?.color || '#94a3b8' }} />
+                <span className="font-bold text-gray-800 flex-1">{PROVIDER_META[p.key]?.label || p.key}</span>
+                <span className="text-gray-400 text-xs font-semibold">{p.calls.toLocaleString()} calls</span>
+                <span className="font-black text-gray-900 tabular-nums w-20 text-right">{fmtUsd(p.cost)}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
-      {hasCosts ? (
-        <>
-          {/* Donut Chart */}
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-6">Cost Breakdown by Category</h3>
-            <DonutChart data={costs} hoveredIndex={hoveredIndex} setHoveredIndex={setHoveredIndex} />
-          </div>
-
-          {/* Detail Table */}
-          <div className="bg-white rounded-lg shadow overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <h3 className="text-lg font-semibold text-gray-900">Cost Detail</h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Category</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Model / Service</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Calls</th>
-                    <th className="px-4 py-3 text-right font-semibold text-gray-700">Est. Cost</th>
-                    <th className="px-4 py-3 text-right font-semibold text-gray-700">% of Total</th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-700">Notes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...costs].sort((a, b) => (b.cost || 0) - (a.cost || 0)).map((c) => (
-                    <tr key={`${c.label}|${c.model || ''}`} className="border-b border-gray-100 hover:bg-gray-50">
-                      <td className="px-4 py-3 font-medium text-gray-900">{c.label}</td>
-                      <td className="px-4 py-3 text-gray-500 text-xs font-mono">{c.model || '—'}</td>
-                      <td className="px-4 py-3 text-gray-600">{c.count !== null ? c.count.toLocaleString() : <span className="text-gray-400 italic">fixed estimate</span>}</td>
-                      <td className="px-4 py-3 text-right font-semibold text-gray-900">${(c.cost || 0).toFixed(4)}</td>
-                      <td className="px-4 py-3 text-right text-gray-500">
-                        {total > 0 ? (((c.cost || 0) / total) * 100).toFixed(1) + '%' : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-gray-400 text-xs">{c.note || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot className="bg-gray-50 border-t-2 border-gray-300">
-                  <tr>
-                    <td colSpan={3} className="px-4 py-3 font-bold text-gray-900">Total</td>
-                    <td className="px-4 py-3 text-right font-bold text-red-700">${total.toFixed(4)}</td>
-                    <td colSpan={2} className="px-4 py-3 text-right text-gray-400 text-xs">All estimates are approximations</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </div>
-        </>
-      ) : (
-        <div className="bg-white rounded-lg shadow p-8 text-center text-gray-500">
-          <p className="font-medium">No cost data available</p>
-          <p className="text-sm mt-1">The generation_logs table may not be set up yet. Fixed estimates will appear here once the backend is configured.</p>
+      {/* ── Models table ── */}
+      <div className="bg-white rounded-2xl shadow overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100"><h3 className="text-base font-bold text-gray-900">By model <span className="text-xs font-semibold text-gray-400">(30d)</span></h3></div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-left text-xs font-bold text-gray-500 uppercase tracking-wide">
+              <tr><th className="px-6 py-3">Model</th><th className="px-4 py-3 text-right">Calls</th><th className="px-4 py-3 text-right">Input tokens</th><th className="px-4 py-3 text-right">Output tokens</th><th className="px-6 py-3 text-right">Cost</th></tr>
+            </thead>
+            <tbody>
+              {(data.by_model || []).map(m => (
+                <tr key={m.key} className="border-t border-gray-50 hover:bg-gray-50/60">
+                  <td className="px-6 py-3 font-mono text-xs font-bold text-gray-800">{m.key}{m.estimated_calls > 0 && <span className="ml-2 text-[10px] text-amber-600 font-sans font-bold" title="Some calls logged as flat estimates (no token counts available)">~est</span>}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-600">{m.calls.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-600">{fmtTok(m.input_tokens)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-600">{fmtTok(m.output_tokens)}</td>
+                  <td className="px-6 py-3 text-right tabular-nums font-black text-gray-900">{fmtUsd(m.cost)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      )}
+      </div>
+
+      {/* ── Per-user spend ── */}
+      <div className="bg-white rounded-2xl shadow overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-2">
+          <h3 className="text-base font-bold text-gray-900">Who&apos;s spending the most <span className="text-xs font-semibold text-gray-400">(30d)</span></h3>
+          <div className="flex gap-1.5">
+            <button onClick={() => setUserSort('cost')}
+              className={`text-xs font-bold px-3 py-1.5 rounded-full border-2 transition-colors ${userSort === 'cost' ? 'bg-brand-navy border-brand-navy text-white' : 'bg-white border-gray-200 text-gray-500'}`}>
+              Highest cost
+            </button>
+            <button onClick={() => setUserSort('alpha')}
+              className={`text-xs font-bold px-3 py-1.5 rounded-full border-2 transition-colors ${userSort === 'alpha' ? 'bg-brand-navy border-brand-navy text-white' : 'bg-white border-gray-200 text-gray-500'}`}>
+              A–Z
+            </button>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-left text-xs font-bold text-gray-500 uppercase tracking-wide">
+              <tr><th className="px-6 py-3">User</th><th className="px-4 py-3 text-right">Calls</th><th className="px-4 py-3 text-right">Tokens</th><th className="px-6 py-3 text-right">Cost</th><th className="px-4 py-3 text-right">% of spend</th></tr>
+            </thead>
+            <tbody>
+              {users.length === 0 && (
+                <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-400 text-sm">No user-attributed AI calls in the last 30 days</td></tr>
+              )}
+              {users.map(u => (
+                <tr key={u.key} className="border-t border-gray-50 hover:bg-gray-50/60">
+                  <td className="px-6 py-3 font-semibold text-gray-800">{u.email}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-600">{u.calls.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-600">{fmtTok(u.input_tokens + u.output_tokens)}</td>
+                  <td className="px-6 py-3 text-right tabular-nums font-black text-gray-900">{fmtUsd(u.cost)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-500">{t.last_30d > 0 ? `${((u.cost / t.last_30d) * 100).toFixed(1)}%` : '—'}</td>
+                </tr>
+              ))}
+              {t.system_cost_30d > 0 && (
+                <tr className="border-t border-gray-100 bg-gray-50/40">
+                  <td className="px-6 py-3 text-gray-500 italic">System — crons &amp; background jobs</td>
+                  <td className="px-4 py-3" /><td className="px-4 py-3" />
+                  <td className="px-6 py-3 text-right tabular-nums font-black text-gray-700">{fmtUsd(t.system_cost_30d)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-gray-500">{t.last_30d > 0 ? `${((t.system_cost_30d / t.last_30d) * 100).toFixed(1)}%` : '—'}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <p className="text-xs text-gray-400 font-semibold">
+        Metering live since v1.20 — token counts come straight from each provider&apos;s API response. Rows marked ~est use flat per-call estimates (Perplexity search fees, Grok tool calls). History before v1.20 wasn&apos;t tracked.
+      </p>
     </div>
   )
 }
@@ -1665,13 +2116,13 @@ const ErrorLogsTab = ({ apiCall, showToast }) => {
             Show Resolved
           </label>
         </div>
-        <select
+        <SearchableSelect
+          className="w-48"
+          buttonClassName="py-1.5 text-sm"
           value={componentFilter}
-          onChange={(e) => setComponentFilter(e.target.value)}
-          className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-400"
-        >
-          {components.map(c => <option key={c} value={c}>{c === 'all' ? 'All Components' : c}</option>)}
-        </select>
+          onChange={setComponentFilter}
+          options={components.map(c => ({ value: c, label: c === 'all' ? 'All Components' : c }))}
+          placeholder="All Components" />
         <input
           type="text"
           value={search}
@@ -1894,6 +2345,63 @@ Please:
 }
 
 // TAB 6: Announcements
+// ── Rich announcement editor (v1.20) ─────────────────────────────────────────
+// Formatting toolbar: bold / italic / underline + emoji palette. Deliberately
+// NO text-size control (product decision). Output is HTML restricted to
+// b/i/u/em/strong/br — sanitized here, on the server, and again at render.
+const ANNOUNCE_EMOJIS = ['🎉','🚀','✅','🆕','📣','🔔','💡','🔥','👏','⭐','🗳️','🦡','📊','🎯','⚠️','❗','🛠️','📅','🤝','💪']
+
+const RichMessageEditor = ({ onChange, editorRef }) => {
+  const [showEmoji, setShowEmoji] = useState(false)
+
+  const exec = (cmd) => {
+    editorRef.current?.focus()
+    document.execCommand(cmd)
+    onChange(editorRef.current?.innerHTML || '')
+  }
+  const insertEmoji = (emoji) => {
+    editorRef.current?.focus()
+    document.execCommand('insertText', false, emoji)
+    onChange(editorRef.current?.innerHTML || '')
+    setShowEmoji(false)
+  }
+
+  const ToolBtn = ({ label, title, onClick, className = '' }) => (
+    <button type="button" onMouseDown={e => e.preventDefault()} onClick={onClick} title={title}
+      className={`w-8 h-8 rounded-lg border border-gray-200 bg-white hover:bg-gray-100 text-gray-700 text-sm flex items-center justify-center transition-colors ${className}`}>
+      {label}
+    </button>
+  )
+
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 mb-2 relative">
+        <ToolBtn label={<b>B</b>} title="Bold"      onClick={() => exec('bold')} />
+        <ToolBtn label={<i>I</i>} title="Italic"    onClick={() => exec('italic')} />
+        <ToolBtn label={<u>U</u>} title="Underline" onClick={() => exec('underline')} />
+        <div className="w-px h-5 bg-gray-200 mx-1" />
+        <ToolBtn label="😊" title="Insert emoji" onClick={() => setShowEmoji(s => !s)} />
+        {showEmoji && (
+          <div className="absolute top-9 left-0 z-20 bg-white border border-gray-200 rounded-xl shadow-xl p-2 grid grid-cols-10 gap-1 w-[320px]">
+            {ANNOUNCE_EMOJIS.map(e => (
+              <button key={e} type="button" onMouseDown={ev => ev.preventDefault()} onClick={() => insertEmoji(e)}
+                className="w-7 h-7 rounded-lg hover:bg-gray-100 text-base flex items-center justify-center">{e}</button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div
+        ref={editorRef}
+        contentEditable
+        suppressContentEditableWarning
+        onInput={() => onChange(editorRef.current?.innerHTML || '')}
+        data-placeholder="Write your announcement… select text to bold, italicize, or underline it."
+        className="w-full min-h-[110px] px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-700 text-sm text-gray-800 leading-relaxed [&:empty]:before:content-[attr(data-placeholder)] [&:empty]:before:text-gray-400"
+      />
+    </div>
+  )
+}
+
 const AnnouncementsTab = ({ apiCall, showToast }) => {
   const [announcements, setAnnouncements] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1903,6 +2411,8 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
     type: 'info',
     message: '',
   })
+  const editorRef = useRef(null)
+  const plainText = (html) => { const d = document.createElement('div'); d.innerHTML = html; return d.textContent || '' }
 
   useEffect(() => {
     const fetch = async () => {
@@ -1924,8 +2434,10 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
 
   const handleCreateAnnouncement = async () => {
     if (posting) return
-    if (!formData.message.trim()) {
-      alert('Message is required')
+    // Sanitize to formatting-only HTML; require actual text content
+    const clean = sanitizeAnnouncementHtml(formData.message)
+    if (!plainText(clean).trim()) {
+      showToast('Message is required', 'error')
       return
     }
 
@@ -1933,12 +2445,13 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
     try {
       await apiCall('create_announcement', {
         type: formData.type,
-        message: formData.message,
+        message: clean,
       })
       const data = await apiCall('announcements')
       setAnnouncements(Array.isArray(data) ? data : (data?.announcements || []))
       setShowCreateForm(false)
       setFormData({ type: 'info', message: '' })
+      if (editorRef.current) editorRef.current.innerHTML = ''
       showToast('Announcement created')
     } catch (err) {
       console.error(err)
@@ -1949,9 +2462,10 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
 
   const handleToggleActive = async (announcementId, isActive) => {
     try {
-      await apiCall('toggle_announcement', {
-        announcement_id: announcementId,
-        active: !isActive,
+      // Audit fix (#19): backend action is update_announcement with {id, is_active}
+      await apiCall('update_announcement', {
+        id: announcementId,
+        is_active: !isActive,
       })
       const data = await apiCall('announcements')
       setAnnouncements(Array.isArray(data) ? data : (data?.announcements || []))
@@ -1966,7 +2480,7 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
     if (!window.confirm('Delete this announcement?')) return
 
     try {
-      await apiCall('delete_announcement', { announcement_id: announcementId })
+      await apiCall('delete_announcement', { id: announcementId })
       const data = await apiCall('announcements')
       setAnnouncements(Array.isArray(data) ? data : (data?.announcements || []))
       showToast('Announcement deleted')
@@ -2026,13 +2540,13 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
 
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-2">Message</label>
-            <textarea
-              value={formData.message}
-              onChange={(e) => setFormData({ ...formData, message: e.target.value })}
-              placeholder="Enter announcement message..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-700"
-              rows={4}
+            <RichMessageEditor
+              editorRef={editorRef}
+              onChange={(html) => setFormData(f => ({ ...f, message: html }))}
             />
+            {formData.type === 'success' && (
+              <p className="text-xs text-green-700 mt-2">Success announcements also pop up for users for 10 seconds — other types go quietly to the bell.</p>
+            )}
           </div>
 
           {/* Preview */}
@@ -2044,7 +2558,8 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
                   {formData.type.charAt(0).toUpperCase() + formData.type.slice(1)}
                 </span>
               </div>
-              <p className="text-gray-800 mt-2 text-sm">{formData.message}</p>
+              <div className="text-gray-800 mt-2 text-sm leading-relaxed"
+                dangerouslySetInnerHTML={{ __html: sanitizeAnnouncementHtml(formData.message) }} />
             </div>
           )}
 
@@ -2080,19 +2595,20 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
               </span>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => handleToggleActive(announcement.id, announcement.active)}
+                  onClick={() => handleToggleActive(announcement.id, announcement.is_active)}
                   className={`px-3 py-1 text-xs rounded font-medium transition ${
-                    announcement.active
+                    announcement.is_active
                       ? 'bg-green-100 text-green-800 hover:bg-green-200'
                       : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
                   }`}
                 >
-                  {announcement.active ? 'Active' : 'Inactive'}
+                  {announcement.is_active ? 'Active' : 'Inactive'}
                 </button>
               </div>
             </div>
 
-            <p className="text-gray-800 mb-4">{announcement.message}</p>
+            <div className="text-gray-800 mb-4 text-sm leading-relaxed"
+              dangerouslySetInnerHTML={{ __html: sanitizeAnnouncementHtml(announcement.message) }} />
 
             <div className="flex gap-2">
               <button

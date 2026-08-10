@@ -3,6 +3,7 @@
 // acts, regulations, and legal events for auto-populating the Incumbent Record.
 
 import { enforceRateLimit } from './_rate-limit.js'
+import { logAiUsage } from './_ai-usage.js'
 
 export const handler = async (event) => {
   const headers = {
@@ -124,6 +125,7 @@ Return ONLY the JSON array:`
   }
 
   const claudeData = await claudeRes.json()
+  logAiUsage({ userId: uid, endpoint: 'district-intel', provider: 'anthropic', model: 'claude-opus-4-8', inputTokens: claudeData?.usage?.input_tokens || 0, outputTokens: claudeData?.usage?.output_tokens || 0 })
   const rawText = claudeData.content?.[0]?.text?.trim() || '[]'
 
   let records = []

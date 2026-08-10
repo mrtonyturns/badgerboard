@@ -119,14 +119,37 @@ export const getElections = async () => withOffline(
   () => supabase.from('elections').select('*').order('election_date')
 )
 
+// Audit fix (#13): election tables are read-only to browser clients (RLS) —
+// the old direct writes either errored or matched 0 rows while the UI showed
+// success. All election writes route through the admin-verified service-role
+// function, which also verifies the write actually landed.
+export const adminElections = async (action, params = {}) => {
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    const res = await fetch('/.netlify/functions/admin-elections', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify({ action, params }),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok) return { data: null, error: { message: json.error || `Request failed (${res.status})` } }
+    return { data: json.data ?? null, error: null }
+  } catch (e) {
+    return { data: null, error: { message: e.message || 'Network error' } }
+  }
+}
+
 export const createElection = async (data) =>
-  supabase.from('elections').insert(data).select().single()
+  adminElections('save_election', { data })
 
 export const updateElection = async (id, data) =>
-  supabase.from('elections').update(data).eq('id', id).select().single()
+  adminElections('save_election', { id, data })
 
 export const deleteElection = async (id) =>
-  supabase.from('elections').delete().eq('id', id)
+  adminElections('delete_election', { id })
 
 // ── Candidates (USER-SCOPED) ───────────────────────────────────
 // RLS enforces user isolation at the DB level.  App-layer filter on

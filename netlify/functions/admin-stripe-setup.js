@@ -20,16 +20,21 @@ import { ADMIN_EMAILS } from './_config.js'
 
 // ── Pricing tables ────────────────────────────────────────────────────────────
 
+// v1.18 pricing update (approved 2026-07-21). Running this again creates NEW
+// Stripe prices at these amounts (getOrCreatePrice matches on amount, so the
+// old founder-era prices remain untouched in Stripe — existing subscriptions
+// stay grandfathered on them). Apply the printed env vars to Netlify so
+// checkout starts selling at the new rates.
 const CANDIDATE_PLANS = [
-  { key: 'c_monitor',  name: 'Badger Board Monitor (Candidate)', monthlyPrice: 59  },
-  { key: 'c_active',   name: 'Badger Board Active (Candidate)',  monthlyPrice: 89  },
-  { key: 'c_campaign', name: 'Badger Board Campaign (Candidate)',monthlyPrice: 139 },
+  { key: 'c_monitor',  name: 'Badger Board Monitor (Candidate)', monthlyPrice: 79  },
+  { key: 'c_active',   name: 'Badger Board Active (Candidate)',  monthlyPrice: 119 },
+  { key: 'c_campaign', name: 'Badger Board Campaign (Candidate)',monthlyPrice: 189 },
 ]
 
 const ACTION_MONTHLY_PRICES = {
-  a_monitor:  { b1: 69,  b2_5: 99,  b6: 129, b11: 169, b26: 219, b51: 299 },
-  a_active:   { b1: 119, b2_5: 149, b6: 199, b11: 269, b26: 389, b51: 549 },
-  a_campaign: { b1: 159, b2_5: 249, b6: 349, b11: 479, b26: 699, b51: 999 },
+  a_monitor:  { b1: 89,  b2_5: 129, b6: 169, b11: 229, b26: 299, b51: 399  },
+  a_active:   { b1: 149, b2_5: 199, b6: 269, b11: 359, b26: 529, b51: 749  },
+  a_campaign: { b1: 219, b2_5: 339, b6: 469, b11: 649, b26: 949, b51: 1349 },
 }
 
 const ACTION_PLAN_NAMES = {

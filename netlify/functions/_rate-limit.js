@@ -37,6 +37,13 @@ const RATE_LIMITS = {
   'broadside-brain':             { perMinute: 40, perDay: 800 },
   'broadside-voice':             { perMinute: 40, perDay: 800 },
   'broadside-debrief':           { perMinute: 3,  perDay: 60  },
+  // Sends real email from the platform domain — keep tight (audit #16)
+  'invite-volunteer':            { perMinute: 5,  perDay: 50  },
+  // Most expensive endpoint in the app (multi-Perplexity + multi-Opus per run) —
+  // cache covers normal use; the budget only matters for abuse (audit #18)
+  'research-district-events':    { perMinute: 2,  perDay: 20  },
+  // Beta polling snapshots — heavy pipeline (Perplexity + Grok + Opus per run)
+  'polling-snapshot':            { perMinute: 2,  perDay: 15  },
 }
 
 const DEFAULT_LIMITS = { perMinute: 10, perDay: 100 }

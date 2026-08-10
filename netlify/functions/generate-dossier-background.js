@@ -4,6 +4,7 @@
 // ANTHROPIC_API_KEY + SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY must be set.
 
 const { enforceRateLimit } = require('./_rate-limit')
+const { logAiUsage } = require('./_ai-usage')
 const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY // must be set in Netlify env vars
 const XAI_API_KEY        = process.env.XAI_API_KEY        // xAI Grok — x.ai console
@@ -29,6 +30,41 @@ function sanitize(val, maxLen = 200) {
     .trim()
 }
 
+// ─── Internal trigger support (audit fix #11) ────────────────────────────────
+// The weekly auto-regenerate cron cannot present a user JWT (GoTrue rejects a
+// raw service-role key), so it authenticates with the shared trigger secret.
+const nodeCrypto = require('crypto')
+function safeEqual(a, b) {
+  const A = nodeCrypto.createHash('sha256').update(String(a ?? '')).digest()
+  const B = nodeCrypto.createHash('sha256').update(String(b ?? '')).digest()
+  return nodeCrypto.timingSafeEqual(A, B)
+}
+
+// Resolve the OWNING user of a candidate (candidates.created_by → auth user)
+// so internally-triggered regenerations gate Sections 6/13 by the owner's real
+// plan instead of falling back to the Scout teaser.
+async function getCandidateOwner(candidateId) {
+  try {
+    if (!candidateId) return null
+    const cRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/candidates?id=eq.${encodeURIComponent(candidateId)}&select=created_by`,
+      { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
+    )
+    if (!cRes.ok) return null
+    const rows = await cRes.json()
+    const ownerId = rows?.[0]?.created_by
+    if (!ownerId) return null
+    const uRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${ownerId}`, {
+      headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
+    })
+    if (!uRes.ok) return null
+    return await uRes.json()
+  } catch (e) {
+    console.warn('[dossier-bg] getCandidateOwner failed:', e.message)
+    return null
+  }
+}
+
 // ─── Verify Supabase JWT and return user ──────────────────────────────────────
 async function verifyUser(authHeader) {
   if (!authHeader?.startsWith('Bearer ')) return null
@@ -45,43 +81,72 @@ async function verifyUser(authHeader) {
 }
 
 // ─── Determine user plan from metadata ───────────────────────────────────────
-function getUserPlan(user) {
-  if (!user) return 'scout'
-  if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'agency'
-  const p = user?.app_metadata?.plan
-  // Normalize new-format plan keys introduced in v1.14 pricing overhaul
+// v1.18: resolves through the shared entitlement layer first (admin > beta >
+// trial > paid), then normalizes to this function's legacy internal buckets.
+const { resolveEntitlement } = require('./_entitlements')
+
+// Resolves the user's canonical entitlement (plan + bracket). Admins short-
+// circuit to the top action plan; everyone else goes through the shared
+// resolver (admin > beta > trial > paid > free).
+async function getUserEntitlement(user) {
+  if (!user) return { plan: 'scout', bracket: 'b1' }
+  if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return { plan: 'a_campaign', bracket: 'ent' }
+  return resolveEntitlement(user)
+}
+
+// Legacy internal buckets — still used for Section 6 gating (SECTION6_TIERS).
+function toLegacyBucket(plan) {
   const PLAN_MAP = {
     c_monitor: 'monitor',  a_monitor: 'monitor',
     c_active:  'campaign', a_active:  'campaign',
     c_campaign:'campaign', a_campaign:'agency',
   }
-  return PLAN_MAP[p] || (['scout', 'monitor', 'campaign', 'agency'].includes(p) ? p : 'scout')
+  return PLAN_MAP[plan] || (['scout', 'monitor', 'campaign', 'agency'].includes(plan) ? plan : 'scout')
 }
 
-// Base monthly profile allotment per plan (excludes purchased credits).
-// Dossier credit packs are a Candidate-plan feature; Action/Agency/admin are effectively unlimited.
-const MONTHLY_BASE = { scout: 1, monitor: 1, campaign: 2, agency: Infinity }
+// ─── v1.18 monthly profile allotments (server-side source of truth) ──────────
+// getMonthlyProfileBase (from _entitlements) mirrors tiers.js getProfileLimit:
+// Candidate plans fixed (c_campaign = 6); Action plans profiles-per-candidate ×
+// bracket (a_monitor 1×, a_active 2×, a_campaign 4×). Purchased credits bank on
+// top. Enforced HERE, before any LLM spend — the client-side check in
+// Profiler.jsx is advisory only and trivially bypassed with a direct POST.
+const { getMonthlyProfileBase } = require('./_entitlements')
+const getMonthlyBase = getMonthlyProfileBase
+
+async function countMonthToDateDossiers(userId) {
+  const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/dossiers?generated_by=eq.${userId}&generated_at=gte.${monthStart.toISOString()}&select=id`,
+    { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
+  )
+  if (!res.ok) throw new Error(`dossier count failed (${res.status})`)
+  const rows = await res.json()
+  return Array.isArray(rows) ? rows.length : 0
+}
 
 // After a successful generation, consume one banked profile credit if this
-// generation went beyond the user's free monthly allotment. Safe/idempotent:
-// counts month-to-date dossiers and never drops the bank below zero.
-async function consumeProfileCreditIfOverage(user, userId, userPlan) {
+// generation went beyond the user's free monthly allotment. Audit fix (#1):
+// re-reads the user's metadata fresh before decrementing — the request-start
+// snapshot could be minutes old (research takes 3-6 min), and decrementing a
+// stale bank both double-spent and un-spent credits under concurrency.
+async function consumeProfileCreditIfOverage(userId, plan, bracket) {
   try {
     if (!userId) return
-    const bank = Number(user?.app_metadata?.profile_credits) || 0
-    if (bank <= 0) return
-    const base = MONTHLY_BASE[userPlan]
+    const base = getMonthlyBase(plan, bracket)
     if (!Number.isFinite(base)) return  // unlimited plans never consume credits
-    const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
-    const cntRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/dossiers?generated_by=eq.${userId}&generated_at=gte.${monthStart.toISOString()}&select=id`,
-      { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
-    )
-    if (!cntRes.ok) return
-    const monthCount = (await cntRes.json()).length  // includes the one just saved
+    const monthCount = await countMonthToDateDossiers(userId)  // includes the one just saved
     if (monthCount <= base) return  // still within the free monthly allotment
+
+    // Fresh read of the bank at decrement time (not the request-start snapshot)
+    const freshRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
+      headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
+    })
+    if (!freshRes.ok) return
+    const fresh = await freshRes.json()
+    const bank = Number(fresh?.app_metadata?.profile_credits) || 0
+    if (bank <= 0) return
     const newBank = Math.max(0, bank - 1)
-    const meta = { ...(user.app_metadata || {}), profile_credits: newBank }
+    const meta = { ...(fresh.app_metadata || {}), profile_credits: newBank }
     await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
@@ -132,7 +197,9 @@ async function queryPerplexity(systemMsg, userMsg, maxTokens = 1500, model = 'so
   if (!PERPLEXITY_API_KEY) return null
   try {
     const ctrl = new AbortController()
-    setTimeout(() => ctrl.abort(), 22000)
+    // v1.20.1: 45s (was 22s) — deep sonar-pro searches were being aborted and
+    // silently returned null, which is why news/social sections came up thin.
+    setTimeout(() => ctrl.abort(), 45000)
     const res = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST', signal: ctrl.signal,
       headers: { 'Authorization': `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
@@ -177,25 +244,54 @@ async function fetchPerplexityNews(name, office, district, ctx, mode, localSourc
     incumbent: `Find all recent news articles, coverage of official actions, and re-election campaign activity for ${name} who holds ${office}${locNote}.${ctxNote} Include: coverage of their official votes and decisions, legislation they sponsored or opposed, constituent controversies, endorsements for re-election, fundraising stories, any challenger coverage that references them, ethics or legal coverage, and any press about their record in office. Return 15+ items.`,
   }
 
-  try {
+  const NEWS_SYSTEM = 'You are a Wisconsin political news researcher. For each news item, use this exact format:\n### [Exact Article Title](https://full-url.com)\n**Publication Name** · Month D, YYYY\nOne sentence summary.\n\nIf URL unknown: ### Exact Article Title\nReturn at least 12-20 items. Focus on Wisconsin local outlets. Do not fabricate articles.'
+
+  const runNewsSearch = async (model, maxTokens, timeoutMs) => {
     const ctrl = new AbortController()
-    setTimeout(() => ctrl.abort(), 20000)
+    setTimeout(() => ctrl.abort(), timeoutMs)
     const res = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST', signal: ctrl.signal,
       headers: { 'Authorization': `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'sonar-pro',
+        model,
         messages: [
-          { role: 'system', content: 'You are a Wisconsin political news researcher. For each news item, use this exact format:\n### [Exact Article Title](https://full-url.com)\n**Publication Name** · Month D, YYYY\nOne sentence summary.\n\nIf URL unknown: ### Exact Article Title\nReturn at least 10-15 items. Focus on Wisconsin local outlets. Do not fabricate articles.' },
-          { role: 'user', content: (queries[mode] || queries.challenger) + localSources },
+          { role: 'system', content: NEWS_SYSTEM },
+          { role: 'user', content: (queries[mode] || queries.challenger) + ' ALSO search for podcast episodes, radio interviews, and YouTube/TV appearances featuring them (list each as an item with the show name as the publication).' + localSources },
         ],
-        max_tokens: 2000,
+        max_tokens: maxTokens,
       }),
     })
-    if (!res.ok) { console.error(`[perplexity/news] ${res.status}`); return null }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
     return data.choices?.[0]?.message?.content || null
-  } catch (e) { console.error(`[perplexity/news] ${e.message}`); return null }
+  }
+
+  // v1.20.1: 45s budget + a fast sonar retry when the deep search fails —
+  // previously a 20s abort silently produced a dossier with NO news at all.
+  try {
+    return await runNewsSearch('sonar-pro', 3000, 45000)
+  } catch (e) {
+    console.error(`[perplexity/news] deep search failed (${e.message}) — retrying with sonar`)
+    try {
+      return await runNewsSearch('sonar', 2000, 20000)
+    } catch (e2) { console.error(`[perplexity/news] fallback failed: ${e2.message}`); return null }
+  }
+}
+
+// v1.20.1: dedicated hyper-local pass — the general news search covers state
+// and major outlets; this one exclusively works the county-local source list
+// (weeklies, city pages, chambers, local broadcast), which the single-pass
+// search consistently under-covered.
+async function fetchPerplexityLocalNews(name, office, district, ctx, mode, localSources = '') {
+  if (!PERPLEXITY_API_KEY || !localSources) return null
+  const ctxNote = ctx ? ` Context: ${ctx}.` : ''
+  const locNote = district ? ` in ${district}` : ' in Wisconsin'
+  return queryPerplexity(
+    'You are a hyper-local Wisconsin news researcher. Search ONLY small local outlets: county weeklies, city newspapers, local TV/radio stations, chamber-of-commerce pages, city/village hall announcements, school district pages, and community Facebook pages surfaced by news search. For each item:\n### [Exact Title](https://full-url.com)\n**Outlet Name** · Month D, YYYY\nOne sentence summary.\nSmall items count — meeting minutes mentions, letters to the editor, event coverage, local award notices. Return every item you find. Do not fabricate.',
+    `Search these specific local outlets and any other hyper-local sources for ANY mention of ${name}${locNote} — as a candidate, official, business owner, or community member.${ctxNote}${localSources}\nInclude older items (up to 3 years back) if relevant to their public record.`,
+    2500,
+    'sonar-pro'
+  )
 }
 
 // ─── Political / civic record — mode-aware ────────────────────────────────────
@@ -250,10 +346,13 @@ async function fetchPerplexitySocialMedia(name, office, district, ctx, mode) {
     incumbent: `Find social media activity for ${name} who holds ${office}${locNote}.${ctxNote} Search: official government social media accounts, campaign social media, constituent interactions, posts about their votes/decisions by community members, Reddit discussions, local Facebook groups discussing their record. Include both their posts and community commentary on their performance.`,
   }
 
+  // v1.20.1: upgraded from sonar → sonar-pro with a platform-by-platform sweep —
+  // the cheap single-pass search was the main reason Section 10 came up thin.
   return queryPerplexity(
-    'You are a Wisconsin social media researcher. Return a structured list of posts and mentions. For each item use this format:\n### [Post description or excerpt](URL-if-known)\n**Platform / Author** · Date\nSentiment: +/-/~. One-sentence context.\n\nReturn 10-15+ items including both posts BY the subject and posts ABOUT them.',
+    'You are a Wisconsin social media researcher. Work platform by platform — for EACH of Facebook, X/Twitter, Instagram, LinkedIn, TikTok, YouTube, Reddit, and Nextdoor, search for the subject and report what you find (or skip silently if nothing). Return a structured list of posts and mentions. For each item use this format:\n### [Post description or excerpt](URL-if-known)\n**Platform / Author** · Date\nSentiment: +/-/~. One-sentence context.\n\nReturn 12-20+ items including both posts BY the subject and posts ABOUT them (community reactions, local group discussions). Do not fabricate posts.',
     queries[mode] || queries.challenger,
-    2000
+    3000,
+    'sonar-pro'
   )
 }
 
@@ -304,7 +403,11 @@ async function fetchPerplexityIncumbent(candidateName, office) {
 // ─── Grok: real-time X + web intelligence — mode-aware ───────────────────────
 async function fetchGrokXIntelligence(name, office, district, twitterHandle, ctx, mode) {
   if (!XAI_API_KEY) return null
-  const handleLine = twitterHandle ? ` Their X handle is @${twitterHandle}.` : ''
+  // v1.20.1: no stored handle is no longer a dead end — Grok is told to FIND
+  // the account first, then search it.
+  const handleLine = twitterHandle
+    ? ` Their X handle is @${twitterHandle}.`
+    : ` Their X handle is not known — first search X to identify their account (match name + Wisconsin + role), state which handle you found, then proceed.`
   const ctxLine = ctx ? ` Additional context: ${ctx}.` : ''
   const locNote = district ? ` in ${district}` : ' in Wisconsin'
 
@@ -328,7 +431,7 @@ ${modeInstructions[mode] || modeInstructions.challenger}
 
 Search X (Twitter) and the web RIGHT NOW and report:
 
-1. X POST ACTIVITY (past 30 days): Format each as: [@handle · Date] "excerpt" — context note.
+1. X POST ACTIVITY (past 90 days — local candidates post infrequently, go back further): Format each as: [@handle · Date] "excerpt" — context note.
 2. REAL-TIME SENTIMENT: Overall X/web sentiment (positive/negative/mixed) and what's driving it.
 3. BREAKING COVERAGE: Any news in the last 2 weeks — emerging stories, recent statements, new endorsements or withdrawals.
 4. GRASSROOTS SIGNALS: What are local activists, organizers, and community members saying?
@@ -337,7 +440,7 @@ Return structured findings with source attribution. Mark recency: [Today] [This 
 
   try {
     const ctrl = new AbortController()
-    setTimeout(() => ctrl.abort(), 40000)  // Responses API with tool use takes longer
+    setTimeout(() => ctrl.abort(), 60000)  // Responses API with tool use takes longer (v1.20.1: 60s)
     const res = await fetch('https://api.x.ai/v1/responses', {
       method: 'POST',
       signal: ctrl.signal,
@@ -404,6 +507,41 @@ function countSections(content) {
   return (content.match(/^## SECTION \d+/gim) || []).length
 }
 
+// ─── Audit fix (#10): Scout lite-profile gate (storage-time) ──────────────────
+// Mirrors LITE_PROFILE_FREE_SECTIONS in src/lib/tiers.js: Section 2 (Biography)
+// and 4 (Political Record) stay full; Section 8 (Affiliations) keeps its first
+// 2 items; every other section's body is replaced with an upgrade template
+// BEFORE saving, so the paid content never exists in a Scout user's row.
+const LITE_FREE_FULL_SECTIONS = new Set([2, 4])
+const LITE_PARTIAL_SECTIONS   = { 8: 2 }  // section → number of leading items kept
+
+function applyScoutLiteGate(content) {
+  return content.replace(/^## SECTION (\d+)[^\n]*\n[\s\S]*?(?=^## SECTION \d+|$(?![\s\S]))/gim, (block, numStr) => {
+    const num = parseInt(numStr, 10)
+    if (LITE_FREE_FULL_SECTIONS.has(num)) return block
+    const headerMatch = block.match(/^## SECTION \d+[^\n]*\n/)
+    const header = headerMatch ? headerMatch[0] : `## SECTION ${num}\n`
+
+    if (num in LITE_PARTIAL_SECTIONS) {
+      const maxItems = LITE_PARTIAL_SECTIONS[num]
+      const bodyLines = block.slice(header.length).split('\n')
+      const kept = []
+      let items = 0
+      for (const line of bodyLines) {
+        if (/^###\s/.test(line)) {
+          items++
+          if (items > maxItems) break
+        }
+        kept.push(line)
+        if (kept.length >= 30) break  // hard cap if the section isn't ###-delimited
+      }
+      return `${header}${kept.join('\n').trim()}\n\n*The rest of this section is available on paid Badger Board plans.*\n\n`
+    }
+
+    return `${header}**[LOCKED — PAID PLANS]**\n\n*This section is available on paid Badger Board plans. Upgrade to unlock the full 14-section profile with controversies, financial background, social media analysis, attack & defense strategy, and more.*\n\n`
+  })
+}
+
 // ─── #1: Secondary Haiku pass — verify high-risk sections and flag issues ─────
 async function runVerificationPass(content, candidateName) {
   if (!ANTHROPIC_API_KEY || !content) return null
@@ -426,6 +564,8 @@ async function runVerificationPass(content, candidateName) {
     })
     if (!res.ok) return null
     const d = await res.json()
+    logAiUsage({ endpoint: 'profiler', provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
+      inputTokens: d?.usage?.input_tokens || 0, outputTokens: d?.usage?.output_tokens || 0 })
     const flags = d.content?.[0]?.text?.trim()
     return (flags && flags !== 'NO FLAGS') ? flags : null
   } catch (e) { console.error('[dossier-bg] Verification pass failed:', e.message); return null }
@@ -561,6 +701,74 @@ async function applyCandidateUpdates(candidateId, currentCandidate, updates) {
   }
 }
 
+
+// ─── Weekly digest (active monitoring v2) ────────────────────────────────────
+// Compares the new profile against the previous one with a cheap Haiku pass
+// and stores a structured week-in-review on the dossier row:
+//   weekly_digest = { summary, items: [{ category, title, note }] }
+// Categories: news | social | podcast | controversy | polling | endorsement | other
+async function buildWeeklyDigest(dossierId, candidateId, newContent, candidateName, userId) {
+  try {
+    if (!ANTHROPIC_API_KEY) return
+    const prevRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/dossiers?candidate_id=eq.${candidateId}&order=generated_at.desc&limit=2&select=id,content`,
+      { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
+    )
+    const rows = await prevRes.json()
+    const prev = Array.isArray(rows) ? rows.find(r => r.id !== dossierId) : null
+    if (!prev?.content) { console.log('[dossier-bg] digest skipped — no previous dossier'); return }
+
+    const clip = (s, n) => String(s || '').slice(0, n)
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1500,
+        messages: [{
+          role: 'user',
+          content: `Compare the PREVIOUS and NEW intelligence profiles for ${candidateName} and produce a week-in-review of genuinely NEW developments (items in NEW that are absent from PREVIOUS). Cover: news articles, podcast/radio/TV appearances, social media activity, controversies, polling, endorsements.
+
+Return STRICT JSON only, no prose, no markdown fences:
+{"summary": "2-3 plain-English sentences a busy campaign manager can skim — what actually happened this week; if nothing meaningful changed say so plainly", "items": [{"category": "news|social|podcast|controversy|polling|endorsement|other", "title": "short headline", "note": "one sentence"}]}
+
+Max 8 items, most important first. Empty items array if nothing new.
+
+PREVIOUS PROFILE:
+${clip(prev.content, 14000)}
+
+NEW PROFILE:
+${clip(newContent, 14000)}`
+        }],
+      }),
+    })
+    if (!res.ok) { console.error('[dossier-bg] digest LLM failed:', res.status); return }
+    const d = await res.json()
+    logAiUsage({ userId, endpoint: 'monitoring', provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
+      inputTokens: d?.usage?.input_tokens || 0, outputTokens: d?.usage?.output_tokens || 0 })
+    const raw = (d.content?.[0]?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
+    let digest
+    try { digest = JSON.parse(raw) } catch { console.error('[dossier-bg] digest JSON unparseable'); return }
+    if (!digest || typeof digest.summary !== 'string') return
+    digest.items = (Array.isArray(digest.items) ? digest.items : []).slice(0, 8).map(i => ({
+      category: String(i.category || 'other').slice(0, 20),
+      title: String(i.title || '').slice(0, 160),
+      note: String(i.note || '').slice(0, 300),
+    }))
+    digest.summary = digest.summary.slice(0, 600)
+    digest.generated_at = new Date().toISOString()
+
+    const patch = await fetch(`${SUPABASE_URL}/rest/v1/dossiers?id=eq.${dossierId}`, {
+      method: 'PATCH',
+      headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ weekly_digest: digest }),
+    })
+    console.log(`[dossier-bg] weekly digest stored (${digest.items.length} items): ${patch.ok}`)
+  } catch (e) {
+    console.error('[dossier-bg] buildWeeklyDigest error:', e.message)
+  }
+}
+
 exports.handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -634,18 +842,80 @@ exports.handler = async (event) => {
   // body.auth_header (forwarded by generate-dossier.js — Netlify background
   // invocations don't carry the client's headers). Either way it MUST verify;
   // unauthenticated callers are rejected before any LLM spend.
-  const authHeader = event.headers?.authorization || event.headers?.Authorization
-    || (typeof body.auth_header === 'string' ? body.auth_header : null)
-  const user = await verifyUser(authHeader)
-  if (!user) {
-    return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authenticated' }) }
+  // ── Internal trigger path (audit fix #11) ──────────────────────────────────
+  // The weekly auto-regenerate cron used to authenticate with the raw
+  // service-role key, which verifyUser() rejects — every run 401'd (invisibly,
+  // because Netlify answers background invocations with 202 before the handler
+  // runs) and the paid weekly refresh was silently dead since July 5. Internal
+  // calls now carry the shared trigger secret; section gating resolves from
+  // the candidate's OWNER, and quota/rate-limit/credits are skipped (the cron
+  // caps its own batch and saves with generated_by = null).
+  const internalSecret = process.env.ADMIN_TRIGGER_SECRET
+  const providedInternal = event.headers?.['x-internal-trigger'] || event.headers?.['X-Internal-Trigger']
+    || (typeof body.internal_trigger === 'string' ? body.internal_trigger : null)
+  const isInternalTrigger = Boolean(internalSecret && providedInternal && safeEqual(providedInternal, internalSecret))
+
+  let user = null
+  if (isInternalTrigger) {
+    user = await getCandidateOwner(body.candidate_id)
+    if (!user) console.warn('[dossier-bg] Internal trigger: no owner resolved — gating by top plan (monitored candidate)')
+  } else {
+    const authHeader = event.headers?.authorization || event.headers?.Authorization
+      || (typeof body.auth_header === 'string' ? body.auth_header : null)
+    user = await verifyUser(authHeader)
+    if (!user) {
+      return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authenticated' }) }
+    }
   }
-  const userPlan = getUserPlan(user)
+
+  // Monitoring/weekly refresh is a paid feature — if the owner can't be
+  // resolved on an internal run, keep the previously-generated depth rather
+  // than overwriting a paying user's dossier with the Scout upsell teaser.
+  const entitlement = isInternalTrigger && !user
+    ? { plan: 'a_campaign', bracket: 'ent' }
+    : await getUserEntitlement(user)
+  const userPlan = toLegacyBucket(entitlement.plan)
   const canViewSection6 = SECTION6_TIERS.includes(userPlan)
+  const isAdminCaller = !isInternalTrigger && ADMIN_EMAILS.includes(user?.email?.toLowerCase())
 
   // ── Durable per-user rate limit (defense in depth if invoked directly) ─────
-  const limited = await enforceRateLimit(user.id, 'generate-dossier-background', headers)
-  if (limited) return limited
+  if (!isInternalTrigger) {
+    const limited = await enforceRateLimit(user.id, 'generate-dossier-background', headers)
+    if (limited) return limited
+  }
+
+  // ── Audit fix (#1): server-side monthly profile-limit enforcement ──────────
+  // Previously only the client checked the limit — a direct POST to this
+  // endpoint generated unlimited profiles (each a multi-dollar LLM spend) on
+  // any plan, including free Scout. Enforce base allotment + banked credits
+  // here, before any research queries fire. Internal (cron) runs are exempt:
+  // they save with generated_by = null and never count toward the quota.
+  if (!isAdminCaller && !isInternalTrigger) {
+    try {
+      const base = getMonthlyBase(entitlement.plan, entitlement.bracket)
+      if (Number.isFinite(base)) {
+        const bank = Math.max(0, Number(user?.app_metadata?.profile_credits) || 0)
+        const monthCount = await countMonthToDateDossiers(user.id)
+        if (monthCount >= base + bank) {
+          console.log(`[dossier-bg] Limit reached for ${user.id}: ${monthCount}/${base}+${bank} (${entitlement.plan}/${entitlement.bracket})`)
+          return {
+            statusCode: 403,
+            headers,
+            body: JSON.stringify({
+              error: `You've used all ${base + bank} of your profile generations for this month. Upgrade your plan or purchase profile credits to generate more.`,
+              limit: base + bank,
+              used: monthCount,
+            }),
+          }
+        }
+      }
+    } catch (e) {
+      // Fail closed on count errors — an attacker shouldn't get free generations
+      // by breaking the counter. Legit users can retry.
+      console.error('[dossier-bg] Limit check failed:', e.message)
+      return { statusCode: 503, headers, body: JSON.stringify({ error: 'Could not verify your profile allotment — please try again in a moment.' }) }
+    }
+  }
 
   const { candidate } = body
   if (!candidate || typeof candidate !== 'object') {
@@ -704,6 +974,8 @@ exports.handler = async (event) => {
 
   // ─── Fire all Perplexity + Grok queries in parallel (#2, #3) ─────────────
   const perplexityPromise   = fetchPerplexityNews(safe.name, officeLine, safe.districtName, ctx, mode, localSourcesNote)
+  // v1.20.1: second, hyper-local-only news pass over the county source list
+  const localNewsPromise    = fetchPerplexityLocalNews(safe.name, officeLine, safe.districtName, ctx, mode, localSourcesNote)
   // fetchPerplexityIncumbent retired — fetchPerplexityPoliticalRecord (incumbent mode) covers the same ground
   const incumbentPromise    = Promise.resolve(null)
   const identityPromise     = fetchPerplexityIdentity(safe.name, officeLine, safe.districtName, ctx, mode)
@@ -892,12 +1164,30 @@ Label all items [RESEARCH REQUIRED] unless you have a credible public record sou
   const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
 
   // ─── Wait for all Perplexity + Grok results in parallel ─────────────────
-  let perplexityNews = null, perplexityIncumbent = null
+  let perplexityNews = null, perplexityIncumbent = null, localNews = null
   let identityData = null, financeData = null, politicalData = null, affiliationsData = null, socialMediaData = null
   let grokData = null, officialData = null
   try {
-    ;[perplexityNews, perplexityIncumbent, identityData, financeData, politicalData, affiliationsData, socialMediaData, grokData, officialData] =
-      await Promise.all([perplexityPromise, incumbentPromise, identityPromise, financePromise, politicalPromise, affiliationsPromise, socialMediaPromise, grokPromise, officialPromise])
+    ;[perplexityNews, perplexityIncumbent, identityData, financeData, politicalData, affiliationsData, socialMediaData, grokData, officialData, localNews] =
+      await Promise.all([perplexityPromise, incumbentPromise, identityPromise, financePromise, politicalPromise, affiliationsPromise, socialMediaPromise, grokPromise, officialPromise, localNewsPromise])
+    // Merge the hyper-local pass into the news research block
+    if (localNews) {
+      perplexityNews = perplexityNews
+        ? `${perplexityNews}\n\n— ADDITIONAL HYPER-LOCAL COVERAGE (county weeklies, city pages, local broadcast) —\n\n${localNews}`
+        : localNews
+    }
+
+    // v1.20: cost metering — one row per successful research call. Perplexity's
+    // per-request search fee dominates its token cost, so these are flat-fee
+    // estimates (marked estimated=true); Grok includes server-side search tools.
+    {
+      const uid = user?.id || null
+      const pplxSuccesses = [perplexityNews, localNews, identityData, financeData, politicalData, affiliationsData, socialMediaData].filter(Boolean).length
+      for (let i = 0; i < pplxSuccesses; i++) {
+        logAiUsage({ userId: uid, endpoint: 'profiler', provider: 'perplexity', model: 'sonar-pro', flatUsd: 0.004, estimated: true })
+      }
+      if (grokData) logAiUsage({ userId: uid, endpoint: 'profiler', provider: 'xai', model: GROK_MODEL, flatUsd: 0.03, estimated: true })
+    }
     const stats = [
       perplexityNews && `news:${perplexityNews.length}`,
       perplexityIncumbent && `incumbent:${perplexityIncumbent.length}`,
@@ -924,7 +1214,7 @@ Label all items [RESEARCH REQUIRED] unless you have a credible public record sou
     : ''
 
   const newsContext = perplexityNews
-    ? `\n\nREAL-TIME NEWS RESEARCH (from web search — use as the primary basis for Section 1):\n${perplexityNews}\n\nUse these real news results for Section 1. Keep ### heading format. Add confidence badges. Prioritize these verified results over training knowledge.`
+    ? `\n\nREAL-TIME NEWS RESEARCH (from web search — use as the primary basis for Section 1):\n${perplexityNews}\n\nUse these real news results for Section 1. Keep ### heading format. Add confidence badges. Prioritize these verified results over training knowledge. MANDATORY: include EVERY distinct item from this research in Section 1 — do NOT summarize the list down or drop smaller items; Section 1 must contain at least 12 items whenever the research provides them.`
     : ''
 
   const incumbentContext = perplexityIncumbent
@@ -1038,7 +1328,10 @@ PARTY VERIFICATION REMINDER: Check campaign website donation links (ActBlue = De
 ${identityContext}${officialContext}${newsContext}${incumbentContext}${politicalContext}${financeContext}${affiliationsContext}${socialMediaContext}${grokContext}
 ---
 
-BEGIN DOSSIER. Output EXACTLY these 14 sections:
+BEGIN DOSSIER. Start with the PROFILE SNAPSHOT, then output EXACTLY the 14 sections.
+
+## PROFILE SNAPSHOT
+Two to three sentences (max 60 words) describing who this person is — written the way a sharp, neutral observer would describe them to a friend: intriguing, plain-spoken, easy to understand, and strictly unbiased. Lead with what makes them distinctive (their background, their path into politics, what they're known for locally). No confidence badges, no headers, no bullet points, no partisan framing — just a compelling, factual portrait.
 
 ## SECTION 1: NEWS & MEDIA COVERAGE
 **[HIGH/MEDIUM/LOW]**
@@ -1181,7 +1474,7 @@ If URL unknown, omit link: ### Post description or excerpt
 **Platform / Author** · Month D, YYYY
 
 **By candidate:** (posts made by the candidate on their own accounts)
-List 5-10+ items using ### heading format above.
+List 8-15+ items using ### heading format above. MANDATORY: include EVERY distinct post from the social media research and the real-time X intelligence — do not drop items.
 
 **About candidate:** (posts by others mentioning or discussing the candidate)
 List 5-10+ items using ### heading format above.
@@ -1319,7 +1612,10 @@ Rules:
 - status_notes: required if verified_status is not null. One sentence citing the specific evidence (source + date).`
 
   const { candidate_id } = body
-  const user_id = user?.id || null  // Use verified user ID, not body (frontend doesn't send it)
+  // Verified user ID, never from the body. Internal (cron) runs save with
+  // null so auto-regenerated dossiers stay excluded from the monthly quota
+  // count and never consume purchased credits.
+  const user_id = isInternalTrigger ? null : (user?.id || null)
 
   try {
     const perplexityCount = [perplexityNews, identityData, financeData, politicalData, affiliationsData, perplexityIncumbent, socialMediaData].filter(Boolean).length
@@ -1339,7 +1635,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     const webSearchTools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }]
     const claudePayload = {
       model: CLAUDE_MODEL,
-      max_tokens: 12000,
+      max_tokens: 16000,
       system: systemPrompt + webSearchDirective,
       tools: webSearchTools,
       messages: [{ role: 'user', content: userPrompt }],
@@ -1354,6 +1650,9 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     }
 
     const data = await response.json()
+    // v1.20: real cost metering — main writer call with actual token counts
+    logAiUsage({ userId: user_id, endpoint: 'profiler', provider: 'anthropic', model: CLAUDE_MODEL,
+      inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
     const extractClaudeText = (d) => (d?.content || []).filter(b => b.type === 'text' && b.text).map(b => b.text).join('')
     let content = extractClaudeText(data)
     // Strip any AI reasoning/thinking tags that should never be stored or shown to users
@@ -1382,9 +1681,11 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     if (sectionCount < 10) {
       console.log('[dossier-bg] Too few sections — retrying with continuation prompt')
       const retryPrompt = `The dossier you just generated for ${safe.name} was cut short — only ${sectionCount} of 14 sections were included. Continue from where it was cut off and complete ALL missing sections. Start with the next missing ## SECTION header and continue through ## SECTION 14. Do not repeat sections already written.\n\nPrevious output (partial):\n${content.slice(-3000)}`
-      const retryResp = await callClaudeWithRetry({ model: CLAUDE_MODEL, max_tokens: 12000, system: systemPrompt + webSearchDirective, tools: webSearchTools, messages: [{ role: 'user', content: retryPrompt }] })
+      const retryResp = await callClaudeWithRetry({ model: CLAUDE_MODEL, max_tokens: 16000, system: systemPrompt + webSearchDirective, tools: webSearchTools, messages: [{ role: 'user', content: retryPrompt }] })
       if (retryResp.ok) {
         const retryData = await retryResp.json()
+        logAiUsage({ userId: user_id, endpoint: 'profiler', provider: 'anthropic', model: CLAUDE_MODEL,
+          inputTokens: retryData?.usage?.input_tokens || 0, outputTokens: retryData?.usage?.output_tokens || 0 })
         const continuation = extractClaudeText(retryData)
         if (continuation) {
           content = content + '\n\n' + continuation
@@ -1404,6 +1705,18 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     const changeSummary = await detectChanges(candidate_id, content)
     if (changeSummary) console.log(`[dossier-bg] Changes detected: ${changeSummary}`)
 
+    // ─── Audit fix (#10): enforce Scout's lite profile at STORAGE time ──────
+    // Previously the full 14-section paid dossier was stored and shipped to
+    // Scout browsers where locked sections were merely CSS-blurred — Copy,
+    // Export PDF, devtools, or a direct table select handed over the entire
+    // paid report. Locked sections are now replaced server-side before the
+    // row is ever written, so paid content never reaches a free client.
+    if (userPlan === 'scout') {
+      content = applyScoutLiteGate(content)
+      console.log(`[dossier-bg] Scout lite gate applied (${countSections(content)} sections retained/templated)`)
+    }
+
+    let savedDossierId = null
     // ─── Save to Supabase ──────────────────────────────────────────────────
     const saveRes = await fetch(`${SUPABASE_URL}/rest/v1/dossiers`, {
       method: 'POST',
@@ -1443,19 +1756,27 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
         throw new Error(`Failed to save dossier: ${baseRes.status}`)
       }
       const baseSaved = await baseRes.json()
+      savedDossierId = baseSaved?.[0]?.id || null
       console.log(`[dossier-bg] Saved (base) id=${baseSaved?.[0]?.id}, total=${Date.now() - startTime}ms`)
     } else {
       const saved = await saveRes.json()
+      savedDossierId = saved?.[0]?.id || null
       console.log(`[dossier-bg] Saved id=${saved?.[0]?.id}, sections=${countSections(content)}, changes=${!!changeSummary}, flags=${!!verificationFlags}, total=${Date.now() - startTime}ms`)
     }
 
+    // ─── Weekly digest: what changed vs the previous profile ────────────────
+    // Powers the Monday monitoring email and the in-app "What's new" card.
+    if (savedDossierId && candidate_id) {
+      await buildWeeklyDigest(savedDossierId, candidate_id, content, safe.name, user_id)
+    }
+
     // ─── Consume a purchased credit if this exceeded the free monthly allotment ─
-    await consumeProfileCreditIfOverage(user, user_id, userPlan)
+    await consumeProfileCreditIfOverage(user_id, entitlement.plan, entitlement.bracket)
 
     // ─── Dossier-ready notification email ─────────────────────────────────────
     try {
       const prefs = await getNotificationPrefs(user_id)
-      if (prefs.dossier_ready && user?.email) {
+      if (user_id && prefs.dossier_ready && user?.email) {
         const officeNote = officeLine && officeLine !== 'Unknown Office' ? ` (${officeLine})` : ''
         await sendEmail({
           to: user.email,

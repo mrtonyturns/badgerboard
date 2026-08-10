@@ -7,6 +7,16 @@
  */
 
 import crypto from 'crypto'
+import { enforceRateLimit } from './_rate-limit.js'
+
+// Escape user-supplied text before interpolating into email HTML — the name
+// field was previously injected raw, letting any account send phishing-capable
+// HTML from the platform's authenticated sending domain (audit #16).
+function escapeHtml(str = '') {
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+}
 
 const SUPABASE_URL  = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
@@ -68,7 +78,10 @@ async function listBelongsToUser(listId, userId) {
 async function sendInviteEmail({ name, email, token }) {
   if (!RESEND_API_KEY || !email) return { skipped: true }
 
-  const inviteUrl = `https://www.badgerboardwi.com/v?token=${token}`
+  // Audit fix (#14): the link MUST carry both token and email — the portal's
+  // auto-login requires both query params, so the old email-less link dumped
+  // every invited volunteer on the login screen with an unusable token.
+  const inviteUrl = `https://www.badgerboardwi.com/v?token=${token}&email=${encodeURIComponent(email)}`
   const html = `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -94,7 +107,7 @@ async function sendInviteEmail({ name, email, token }) {
               You've been invited to join a canvassing team
             </h1>
             <div style="color:#4b5563;font-size:15px;line-height:1.65">
-              <p>Hi ${name ? name : 'there'},</p>
+              <p>Hi ${name ? escapeHtml(name).slice(0, 100) : 'there'},</p>
               <p>You've been invited to join a canvassing team on <strong>BadgerBoard</strong> — Wisconsin's campaign door-knocking platform.</p>
               <p>Click the button below to access your volunteer portal and get started:</p>
             </div>
@@ -166,6 +179,11 @@ export const handler = async (event) => {
     return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
 
+  // Audit fix (#16, partial): durable per-user rate limit — this endpoint sends
+  // real email from the platform domain and previously had no limit at all.
+  const limited = await enforceRateLimit(user.id, 'invite-volunteer', CORS_HEADERS)
+  if (limited) return limited
+
   const { name, email, phone, role, listId } = body
   if (!name?.trim()) {
     return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: 'name is required' }) }
@@ -182,7 +200,10 @@ export const handler = async (event) => {
   }
 
   // ── Create volunteer record ───────────────────────────────────────────────
-  const inviteToken = crypto.randomUUID()
+  // Audit fix (#14): verify_token requires a 64-char hex token — the old
+  // crypto.randomUUID() (36 chars, dashed) could NEVER pass validation, so
+  // every invite link was permanently dead.
+  const inviteToken = crypto.randomBytes(32).toString('hex')
   // volunteers table uses: created_by (not coordinator_id), magic_token (not invite_token)
   const record = {
     created_by: user.id,
@@ -210,7 +231,9 @@ export const handler = async (event) => {
     )
   }
 
-  const portalLink = `https://www.badgerboardwi.com/v?token=${inviteToken}`
+  const portalLink = email?.trim()
+    ? `https://www.badgerboardwi.com/v?token=${inviteToken}&email=${encodeURIComponent(email.trim())}`
+    : `https://www.badgerboardwi.com/v?token=${inviteToken}`
 
   return {
     statusCode: 200,

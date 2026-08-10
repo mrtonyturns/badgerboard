@@ -8,7 +8,9 @@
 // v2.0: Bumped to clear v1 stale caches that caused white-screen on deploy
 
 const CACHE_NAME    = 'badgerboard-v3'
-const GEODATA_CACHE = 'badgerboard-geodata-v2'
+// v3: demographics rebuilt from ACS 2024 5-year (2024 legislative maps) —
+// bump forces cached-forever geodata to refresh for existing users
+const GEODATA_CACHE = 'badgerboard-geodata-v3'
 
 // Assets to pre-cache on install (app shell)
 const PRECACHE_URLS = [
