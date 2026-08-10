@@ -702,6 +702,60 @@ async function applyCandidateUpdates(candidateId, currentCandidate, updates) {
 }
 
 
+// ─── Refresh diff (candidate profile redesign) ───────────────────────────────
+// Deterministic section-level diff of the new dossier vs the previous one,
+// computed ONCE here and persisted on the dossier row (never per render).
+const DIFF_SECTION_LABELS = {
+  1: 'News Feed', 2: 'Biography', 3: 'Timeline', 4: 'Political Record',
+  5: 'Financial', 6: 'Opposition', 7: 'Platform', 8: 'Affiliations',
+  9: 'Allies', 10: 'Social Media', 11: 'District', 12: 'SWOT',
+  13: 'Attack & Defense', 14: 'Sources',
+}
+function diffSplitSections(content) {
+  const map = {}
+  for (const m of String(content || '').matchAll(/##\s*SECTION\s*(\d+)[^\n]*\n([\s\S]*?)(?=##\s*SECTION\s*\d+|$)/gi)) {
+    map[+m[1]] = m[2]
+  }
+  return map
+}
+function diffNormLines(t) {
+  return new Set(String(t || '').split('\n').map(l => l.trim().toLowerCase().replace(/\s+/g, ' ')).filter(l => l.length > 20))
+}
+async function buildRefreshDiff(dossierId, candidateId, newContent) {
+  try {
+    const prevRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/dossiers?candidate_id=eq.${candidateId}&order=generated_at.desc&limit=2&select=id,content`,
+      { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
+    )
+    const rows = await prevRes.json()
+    const prev = Array.isArray(rows) ? rows.find(r => r.id !== dossierId) : null
+    if (!prev?.content) { console.log('[dossier-bg] refresh_diff skipped — no previous dossier'); return }
+    const A = diffSplitSections(prev.content), B = diffSplitSections(newContent)
+    const nums = [...new Set([...Object.keys(A), ...Object.keys(B)].map(Number))].sort((a, b) => a - b)
+    const sections = []
+    for (const n of nums) {
+      const label = DIFF_SECTION_LABELS[n] || `Section ${n}`
+      const pa = diffNormLines(A[n]), pb = diffNormLines(B[n])
+      const added = [...pb].filter(l => !pa.has(l)).length
+      const removed = [...pa].filter(l => !pb.has(l)).length
+      let status = 'unchanged', note = 'No change'
+      if (!(n in A) && (n in B))      { status = 'new';     note = 'Section added in this refresh' }
+      else if ((n in A) && !(n in B)) { status = 'updated'; note = 'Section no longer present' }
+      else if (added >= 3)            { status = 'new';     note = `${added} new lines of intelligence` }
+      else if (added > 0)             { status = 'updated'; note = `${added} new line${added === 1 ? '' : 's'}` }
+      else if (removed > 0)           { status = 'updated'; note = 'Content revised' }
+      sections.push({ section: `SECTION ${n}`, label, status, new_items: status === 'unchanged' ? 0 : added, note })
+    }
+    const diff = { computed_at: new Date().toISOString(), prev_dossier_id: prev.id, sections }
+    await fetch(`${SUPABASE_URL}/rest/v1/dossiers?id=eq.${dossierId}`, {
+      method: 'PATCH',
+      headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ refresh_diff: diff }),
+    })
+    console.log(`[dossier-bg] refresh_diff stored (${sections.length} sections)`)
+  } catch (e) { console.error('[dossier-bg] buildRefreshDiff error:', e.message) }
+}
+
 // ─── Weekly digest (active monitoring v2) ────────────────────────────────────
 // Compares the new profile against the previous one with a cheap Haiku pass
 // and stores a structured week-in-review on the dossier row:
@@ -1295,13 +1349,22 @@ Voting record is the foundation — this is where the most research value lies.\
 
   const researchModeNote = researchModeDirectives[mode] || researchModeDirectives.challenger
 
+  // Team notes & documents — enters the prompt ONLY through the single
+  // AI-access gate (_candidate-context.js). Locked candidate => empty block.
+  let aiNotesBlock = ''
+  try {
+    const { getCandidateAiContext, formatAiContextBlock } = require('./_candidate-context')
+    const teamCtx = await getCandidateAiContext(body.candidate_id)
+    aiNotesBlock = formatAiContextBlock(teamCtx, safe.name)
+  } catch (e) { console.warn('[dossier-bg] team-notes context skipped:', e.message) }
+
   const userPrompt = `Generate a complete 14-section political intelligence dossier for the following Wisconsin candidate. Adhere strictly to all legal compliance standards. Use table format wherever specified. Structure output EXACTLY with ## SECTION headers.
 
 IMPORTANT: If research returned NO USABLE DATA for a section (all entries are NOT FOUND or UNCONFIRMED), OMIT that entire section entirely from your output rather than writing a section that says information could not be found. Only include sections where you have at least some verified information to present.
 
 TODAY'S DATE: ${today}
 Include news, events, & developments up to today. Focus on the past 12 months.
-${safe.research_context ? `\n⭐ IDENTITY CONTEXT (user-provided — prioritize this to find the correct person before anything else):\n${safe.research_context}\nThis context must frame ALL searches and record attribution. Use it to distinguish this person from anyone sharing their name.\n` : ''}${researchModeNote}
+${safe.research_context ? `\n⭐ IDENTITY CONTEXT (user-provided — prioritize this to find the correct person before anything else):\n${safe.research_context}\nThis context must frame ALL searches and record attribution. Use it to distinguish this person from anyone sharing their name.\n` : ''}${aiNotesBlock}${researchModeNote}
 ---
 ⚠️ LEGAL DISCLAIMER:
 This dossier is AI-generated from publicly available sources for lawful political research purposes only. All information requires independent verification before use. Do NOT use for FCRA-regulated purposes. Do NOT publish without independent corroboration. The Bluejack Group assumes no liability for accuracy of AI-generated content.
@@ -1768,6 +1831,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     // Powers the Monday monitoring email and the in-app "What's new" card.
     if (savedDossierId && candidate_id) {
       await buildWeeklyDigest(savedDossierId, candidate_id, content, safe.name, user_id)
+      await buildRefreshDiff(savedDossierId, candidate_id, content)
     }
 
     // ─── Consume a purchased credit if this exceeded the free monthly allotment ─

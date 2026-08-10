@@ -40,10 +40,20 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.19.2'
+const APP_VERSION = 'v1.20.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.20.0',
+    date: 'July 21, 2026',
+    changes: [
+      'Candidate profiles redesigned: four navigation groups replace eight tabs, and a new Overview answers "what did this week\u2019s refresh produce" — digest, section-by-section change list, snapshot, and next actions',
+      'Notes & Documents gained an AI access lock: lock instantly, unlock free for 5 minutes, password required after — and locked material is stripped from every AI request server-side, not just hidden',
+      'Weekly refreshes now store a section-level diff so "what changed" is computed once, not guessed',
+      'Unread tracking: profiles show how many new items arrived since you last opened them',
+    ],
+  },
   {
     version: 'v1.19.2',
     date: 'July 21, 2026',
