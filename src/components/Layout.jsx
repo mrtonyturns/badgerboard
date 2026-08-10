@@ -40,10 +40,18 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.24.0'
+const APP_VERSION = 'v1.24.1'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.24.1',
+    date: 'August 10, 2026',
+    changes: [
+      'Settings now matches its design spec exactly \u2014 tighter type scale and control heights throughout',
+      'Your account gained a profile photo: upload from Settings and it appears in the account hero',
+    ],
+  },
   {
     version: 'v1.24.0',
     date: 'July 21, 2026',
