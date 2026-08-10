@@ -40,10 +40,20 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.23.0'
+const APP_VERSION = 'v1.24.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.24.0',
+    date: 'July 21, 2026',
+    changes: [
+      'Sharing rebuilt as four clear steps: choose link or PDF, an explicit responsibility acknowledgment recorded with every link, a live-link view with countdown, views, email and instant deactivation',
+      'PDF export gained real options — and team notes can never leave Badger Board when a candidate\u2019s AI lock is on',
+      'Settings redesigned: a grouped rail with six focused, linkable panes (Account, Security, Plan & billing, Notifications, Calendars, Data & privacy), a real unsaved-changes bar, and usage meters that always match the Profiler\u2019s',
+      'New org-wide AI-access default in Data & privacy — each candidate\u2019s own lock always overrides it, enforced server-side',
+    ],
+  },
   {
     version: 'v1.23.0',
     date: 'July 21, 2026',

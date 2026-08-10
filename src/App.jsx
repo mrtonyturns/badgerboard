@@ -200,7 +200,10 @@ const AppRoutes = () => {
         <Route path="compare" element={<Compare />} />
         <Route path="events" element={<Events />} />
         <Route path="campaign-connect" element={<CampaignConnect />} />
+        {/* Settings panes are deep-linkable: /settings/plan, /settings/security, …
+            /settings alone renders the default pane (Your account). */}
         <Route path="settings" element={<Settings />} />
+        <Route path="settings/:pane" element={<Settings />} />
         <Route path="plans" element={<Pricing />} />
         <Route path="broadside" element={<FeatureRoute feature="broadside"><Broadside /></FeatureRoute>} />
         <Route path="polling" element={<BetaRoute><Polling /></BetaRoute>} />

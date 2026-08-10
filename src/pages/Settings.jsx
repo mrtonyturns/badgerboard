@@ -1,512 +1,344 @@
-import React, { useState, useEffect, useRef } from 'react'
+// src/pages/Settings.jsx — Settings shell: hero, grouped rail, one pane at a
+// time, and the unsaved-changes bar.
+//
+// Routing: /settings is the default pane (Your account) and /settings/:pane
+// deep-links the rest (/settings/plan, /settings/security, …). Legacy hash
+// links that still exist across the app and in Stripe emails
+// (/settings#billing, #security, #calendars) are normalised to their pane.
+//
+// This file owns the data every pane shares — real usage counts, notification
+// preferences, the org-level AI default — and the billing/cancel/delete flows.
+// The panes themselves are in src/pages/settings/.
+
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useLocation, useParams } from 'react-router-dom'
 import {
-  Settings as SettingsIcon, Key, CheckCircle, AlertCircle,
-  User, Users, Shield, CreditCard, ExternalLink, Lock,
-  Loader2, ChevronRight, Sparkles, ArrowRight, Edit2, Eye, EyeOff, Save,
-  Trash2, AlertTriangle, X, Bell,
-  CalendarDays, Copy, Check } from 'lucide-react'
+  User, Shield, CreditCard, Bell, CalendarDays, Lock,
+  Loader2, AlertTriangle, X, Trash2, CheckCircle, AlertCircle, ArrowRight, ChevronRight,
+} from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase } from '../lib/supabase'
+import { supabase, logActivity } from '../lib/supabase'
 import {
-  getUserPlan, getUserBracket, getPlanConfig, getBracketConfig,
-  PLAN_CONFIG, MONTHLY_PRICES, getProfileLimit, getEffectiveProfileLimit,
-  getEntitlementSource, getActiveTrial,
+  getUserPlan, getUserPlanType, getUserBracket, getBracketConfig,
+  getEffectiveProfileLimit, getActiveCandidateLimit, ADMIN_EMAILS,
 } from '../lib/tiers'
-import { isNativeApp } from '../lib/native'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { SettingsShell, Btn, Pill, T } from './settings/shared'
+import AccountPane from './settings/AccountPane'
+import SecurityPane from './settings/SecurityPane'
+import PlanPane from './settings/PlanPane'
+import NotificationsPane from './settings/NotificationsPane'
+import CalendarsPane from './settings/CalendarsPane'
+import PrivacyPane from './settings/PrivacyPane'
 
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-function getStartOfMonth() {
+// ── Month boundary ────────────────────────────────────────────────────────────
+// Copied verbatim from src/pages/Dossiers.jsx (the Profiler library) so the two
+// monthly counters can never drift apart. See the usage query below.
+const startOfThisMonth = () => {
   const d = new Date()
-  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString()
+  d.setDate(1); d.setHours(0, 0, 0, 0)
+  return d
 }
 
-// ── Dossier usage bar ─────────────────────────────────────────────────────────
+// ── Rail ──────────────────────────────────────────────────────────────────────
 
-function DossierBar({ used, limit }) {
-  if (limit === Infinity) {
-    return (
-      <div className="flex items-center gap-2 p-2.5 bg-green-50 border border-green-200 rounded-lg mb-5">
-        <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
-        <span className="text-xs font-semibold text-green-700">Unlimited profiles — Agency plan</span>
-      </div>
-    )
-  }
-  const remaining = Math.max(0, limit - used)
-  const pct       = Math.min(100, Math.round((used / limit) * 100))
-  const color     = pct >= 80
-    ? { bar: '#ef4444', bg: 'bg-red-50',    border: 'border-red-200',    text: 'text-red-700'    }
-    : pct >= 60
-    ? { bar: '#f97316', bg: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-700' }
-    : { bar: '#22c55e', bg: 'bg-green-50',  border: 'border-green-200',  text: 'text-green-700'  }
-
-  return (
-    <div className={`p-2.5 rounded-lg border ${color.bg} ${color.border} mb-5`}>
-      <div className="flex items-center justify-between mb-1.5">
-        <span className={`text-xs font-semibold ${color.text}`}>
-          {remaining === 0
-            ? 'Monthly limit reached'
-            : remaining === 1
-            ? '1 profile remaining this month'
-            : `${remaining} of ${limit} profiles remaining`}
-        </span>
-        <span className="text-xs text-gray-400">{used}/{limit}</span>
-      </div>
-      <div className="h-1.5 bg-white/70 rounded-full overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all duration-500"
-          style={{ width: `${pct}%`, backgroundColor: color.bar }}
-        />
-      </div>
-      <p className="text-xs text-gray-400 mt-1">{used} of {limit} profiles used this month · resets the 1st</p>
-    </div>
-  )
-}
-
-// ── Main Settings page ────────────────────────────────────────────────────────
-
-
-// ── Calendars (Outreach events) ───────────────────────────────────────────────
-const CAL_PROVIDERS = [
-  { key: 'google',  name: 'Google Calendar',  color: '#1A73E8', letter: 'G',
-    steps: ['Open Google Calendar on the web', 'In the left sidebar: Other calendars → + → From URL', 'Paste your feed URL below and click "Add calendar"'] },
-  { key: 'apple',   name: 'Apple Calendar',   color: '#0F172A', letter: '\uF8FF',
-    steps: ['Click the webcal button below (or Calendar → File → New Calendar Subscription)', 'Confirm the subscription', 'Set auto-refresh to "Every hour" for fastest updates'] },
-  { key: 'outlook', name: 'Outlook Calendar', color: '#0F6CBD', letter: 'O',
-    steps: ['Open Outlook calendar on the web', 'Add calendar → Subscribe from web', 'Paste your feed URL below and name it "Badger Board Events"'] },
+const NAV_GROUPS = [
+  { label: 'ACCOUNT', items: [
+    { id: 'account',       label: 'Your account',  Icon: User },
+    { id: 'security',      label: 'Security',      Icon: Shield, badge: '2FA OFF' },
+  ] },
+  { label: 'PLAN', items: [
+    { id: 'plan',          label: 'Plan & billing', Icon: CreditCard },
+  ] },
+  { label: 'PREFERENCES', items: [
+    { id: 'notifications', label: 'Notifications',  Icon: Bell },
+    { id: 'calendars',     label: 'Calendars',      Icon: CalendarDays },
+  ] },
+  { label: 'DATA', items: [
+    { id: 'privacy',       label: 'Data & privacy', Icon: Lock },
+  ] },
 ]
-const REMINDER_OPTIONS = [[15,'15 min'],[30,'30 min'],[60,'1 hour'],[120,'2 hours'],[1440,'1 day']]
+const NAV_ITEMS = NAV_GROUPS.flatMap(g => g.items)
+const PANE_IDS  = NAV_ITEMS.map(i => i.id)
+const DEFAULT_PANE = 'account'
 
-// User-agent fingerprints of each provider's feed fetcher — used to VERIFY that
-// the calendar service actually pulled the user's feed before marking connected.
-const PROVIDER_UA = {
-  google:  /google/i,
-  apple:   /calendaragent|dataaccessd|ical|apple|cfnetwork|swiftbird/i,
-  outlook: /microsoft|outlook|office|exchange/i,
+// Legacy in-app and email deep links (/settings#billing etc.) → panes.
+const HASH_TO_PANE = {
+  billing: 'plan', plan: 'plan', security: 'security', calendars: 'calendars',
+  notifications: 'notifications', privacy: 'privacy', account: 'account',
 }
 
-function CalendarsSection({ user }) {
-  const meta = user?.user_metadata || {}
-  const [feedToken, setFeedToken]   = useState(null)
-  const [connecting, setConnecting] = useState(null)   // provider key with open instructions
-  const [verifying, setVerifying]   = useState(null)   // provider key being verified
-  const [verifyMsg, setVerifyMsg]   = useState(null)   // { key, ok, text }
-  const [copied, setCopied]         = useState(false)
-  const [saving, setSaving]         = useState(false)
-  const [local, setLocal]           = useState({
-    reminder: meta.cal_reminder ?? 60,
-    ask: meta.cal_ask !== false,
-    connected: { google: !!meta.cal_google, apple: !!meta.cal_apple, outlook: !!meta.cal_outlook },
-    defaults: meta.cal_defaults || [],
-  })
-
-  useEffect(() => {
-    if (!user?.id) return
-    supabase.from('calendar_feeds').select('token').eq('user_id', user.id).maybeSingle().then(async ({ data }) => {
-      if (data?.token) { setFeedToken(data.token); return }
-      const { data: ins } = await supabase.from('calendar_feeds').insert({ user_id: user.id }).select('token').single()
-      if (ins?.token) setFeedToken(ins.token)
-    })
-  }, [user?.id])
-
-  const feedUrl   = feedToken ? `https://badgerboardwi.com/.netlify/functions/calendar-feed?token=${feedToken}` : ''
-  const webcalUrl = feedUrl.replace(/^https:/, 'webcal:')
-
-  const localRef = useRef(local)
-  useEffect(() => { localRef.current = local }, [local])
-  const persist = async (patch) => {
-    setSaving(true)
-    // Merge against the LATEST local state (ref), not the render-time closure —
-    // prevents a rapid second click (e.g. connect → reminder) from reverting the first.
-    const next = { ...localRef.current, ...patch }
-    localRef.current = next
-    setLocal(next)
-    const { data } = await supabase.auth.updateUser({ data: {
-      cal_google: next.connected.google, cal_apple: next.connected.apple, cal_outlook: next.connected.outlook,
-      cal_defaults: next.defaults, cal_reminder: next.reminder, cal_ask: next.ask,
-    } })
-    setSaving(false)
-    return data
-  }
-
-  const toggleConnected = async (key, value) => {
-    const connected = { ...localRef.current.connected, [key]: value }
-    const defaults = value ? [...new Set([...localRef.current.defaults, key])] : localRef.current.defaults.filter(d => d !== key)
-    await persist({ connected, defaults })
-    if (!value) setConnecting(null)
-  }
-
-  const copy = () => { navigator.clipboard?.writeText(feedUrl); setCopied(true); setTimeout(() => setCopied(false), 2000) }
-
-  const verifyConnection = async (key) => {
-    setVerifying(key); setVerifyMsg(null)
-    const startedAt = Date.now() - 10 * 60 * 1000   // accept fetches from the last 10 min (subscribe happens before clicking verify)
-    const matcher = PROVIDER_UA[key]
-    for (let i = 0; i < 20; i++) {
-      const { data } = await supabase.from('calendar_feeds').select('fetch_log').eq('user_id', user.id).maybeSingle()
-      const log = Array.isArray(data?.fetch_log) ? data.fetch_log : []
-      const hit = log.find(f => matcher.test(f.ua || '') && new Date(f.at).getTime() >= startedAt)
-      if (hit) {
-        await toggleConnected(key, true)
-        setVerifying(null)
-        setVerifyMsg({ key, ok: true, text: `Verified — ${CAL_PROVIDERS.find(p => p.key === key).name} fetched your feed ${new Date(hit.at).toLocaleTimeString()}` })
-        return
-      }
-      // any fetch at all (unknown client) after start also counts on later passes
-      if (i > 10) {
-        const anyHit = log.find(f => new Date(f.at).getTime() >= Date.now() - 5 * 60 * 1000)
-        if (anyHit) {
-          await toggleConnected(key, true)
-          setVerifying(null)
-          setVerifyMsg({ key, ok: true, text: 'Verified — your feed was fetched by a calendar client' })
-          return
-        }
-      }
-      await new Promise(r => setTimeout(r, 3000))
-    }
-    setVerifying(null)
-    setVerifyMsg({ key, ok: false, text: "We haven't seen this calendar fetch your feed yet. Double-check you pasted the URL and finished the subscribe step — then verify again. (Some providers take a minute to make their first fetch.)" })
-  }
-
-  return (
-    <section id="calendars" className="card scroll-mt-8">
-      <h2 className="text-base font-bold text-gray-900 mb-1 flex items-center gap-2">
-        <CalendarDays className="w-4 h-4 text-brand-red" /> Calendars
-      </h2>
-      <p className="text-sm text-gray-500 mb-5">
-        Connect your calendars once — events you add from the Events page appear in them automatically with your default reminder.
-      </p>
-
-      {CAL_PROVIDERS.map(p => {
-        const isConn = local.connected[p.key]
-        const isDflt = local.defaults.includes(p.key)
-        return (
-          <div key={p.key} className="border-b border-gray-100 last:border-0">
-            <div className="flex items-center gap-3 py-3">
-              <span className="w-10 h-10 rounded-xl flex items-center justify-center text-white text-sm font-black flex-shrink-0" style={{ background: p.color }}>{p.letter}</span>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                  {p.name}
-                  {isDflt && <span className="text-[9px] font-black bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full tracking-wide">DEFAULT</span>}
-                </div>
-                <div className="text-xs text-gray-400 font-medium">{isConn ? 'Connected · synced via your personal feed' : 'Not connected'}</div>
-              </div>
-              {isConn && (
-                <button onClick={() => persist({ defaults: isDflt ? local.defaults.filter(d => d !== p.key) : [...local.defaults, p.key] })}
-                  className="text-xs font-bold text-gray-400 hover:text-amber-600">{isDflt ? 'Unset default' : 'Set default'}</button>
-              )}
-              {isConn ? (
-                <button onClick={() => toggleConnected(p.key, false)} className="text-xs font-bold bg-green-100 text-green-700 border border-green-200 px-3.5 py-2 rounded-lg">✓ Connected</button>
-              ) : (
-                <button onClick={() => setConnecting(connecting === p.key ? null : p.key)} className="btn-secondary text-xs px-3.5 py-2">Connect →</button>
-              )}
-            </div>
-            {connecting === p.key && !isConn && (
-              <div className="mb-4 ml-13 bg-gray-50 rounded-xl p-4" style={{ marginLeft: 52 }}>
-                <ol className="text-xs text-gray-600 font-medium space-y-1.5 list-decimal list-inside">
-                  {p.steps.map((st, i) => <li key={i}>{st}</li>)}
-                </ol>
-                <div className="flex items-center gap-2 mt-3">
-                  <input readOnly value={feedUrl} className="input text-xs flex-1 font-mono" onFocus={e => e.target.select()} />
-                  <button onClick={copy} className="btn-secondary text-xs px-3 py-2 flex items-center gap-1">
-                    {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />} {copied ? 'Copied' : 'Copy'}
-                  </button>
-                </div>
-                <div className="flex items-center gap-2 mt-3 flex-wrap">
-                  {p.key === 'apple' && (
-                    <a href={webcalUrl} className="text-xs font-bold bg-brand-navy text-white px-3.5 py-2 rounded-lg">Open in Apple Calendar (webcal)</a>
-                  )}
-                  <button onClick={() => verifyConnection(p.key)} disabled={verifying === p.key}
-                    className="text-xs font-bold bg-brand-red text-white px-3.5 py-2 rounded-lg disabled:opacity-60 flex items-center gap-1.5">
-                    {verifying === p.key ? (<><Loader2 className="w-3.5 h-3.5 animate-spin" /> Watching for {p.name.split(' ')[0]}'s first fetch…</>) : "I've subscribed — verify connection"}
-                  </button>
-                  {verifyMsg?.key === p.key && !verifyMsg.ok && (
-                    <button onClick={() => toggleConnected(p.key, true)} className="text-xs font-bold text-gray-400 hover:text-gray-600 underline">
-                      Mark connected anyway
-                    </button>
-                  )}
-                </div>
-                {verifyMsg?.key === p.key && (
-                  <p className={`text-xs font-bold mt-2 ${verifyMsg.ok ? 'text-green-700' : 'text-amber-600'}`}>{verifyMsg.ok ? '✓ ' : '⚠ '}{verifyMsg.text}</p>
-                )}
-              </div>
-            )}
-          </div>
-        )
-      })}
-
-      <div className="flex items-center gap-2 flex-wrap pt-4 mt-1 border-t border-gray-100">
-        <span className="text-sm font-semibold text-gray-700 mr-1">Default event reminder</span>
-        {REMINDER_OPTIONS.map(([mins, label]) => (
-          <button key={mins} onClick={() => persist({ reminder: mins })}
-            className={`text-xs font-bold px-3.5 py-1.5 rounded-full border-2 transition-colors ${local.reminder === mins ? 'bg-brand-red border-brand-red text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}>
-            {label}
-          </button>
-        ))}
-      </div>
-      <div className="flex items-center gap-2 flex-wrap pt-4 mt-3 border-t border-gray-100">
-        <span className="text-sm font-semibold text-gray-700 mr-1">When adding events</span>
-        <button onClick={() => persist({ ask: true })}
-          className={`text-xs font-bold px-3.5 py-1.5 rounded-full border-2 ${local.ask ? 'bg-brand-red border-brand-red text-white' : 'bg-white border-gray-200 text-gray-500'}`}>Always ask which calendar</button>
-        <button onClick={() => persist({ ask: false })}
-          className={`text-xs font-bold px-3.5 py-1.5 rounded-full border-2 ${!local.ask ? 'bg-brand-red border-brand-red text-white' : 'bg-white border-gray-200 text-gray-500'}`}>Use default calendar</button>
-      </div>
-      <p className="text-xs text-gray-400 font-medium mt-4 leading-relaxed">
-        Your feed URL is private — anyone with it can see events you add, so treat it like a password.
-        Google refreshes subscribed feeds every few hours; Apple and Outlook are faster.
-        {saving ? ' Saving…' : ''}
-      </p>
-    </section>
-  )
-}
+const NOTIF_KEYS = ['payment_failed', 'payment_receipt', 'plan_changed', 'account_locked', 'dossier_ready']
+const readPrefs = (row) => NOTIF_KEYS.reduce((acc, k) => ({ ...acc, [k]: row?.[k] ?? true }), {})
 
 export default function Settings() {
   const { user, session, signOut, refreshSession, isDowngradeLocked, downgradedAt } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
+  const { pane: paneParam } = useParams()
 
-  // Scroll to hash anchor (e.g. /settings#billing) after page renders
+  // ── Which pane ──────────────────────────────────────────────────────────────
+  const hashPane = HASH_TO_PANE[location.hash.replace('#', '')] || null
+  const pane = PANE_IDS.includes(paneParam) ? paneParam : (hashPane || DEFAULT_PANE)
+
   useEffect(() => {
-    if (location.hash) {
-      const id = location.hash.slice(1)
-      // Small delay to ensure the DOM has rendered
-      const timer = setTimeout(() => {
-        const el = document.getElementById(id)
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      }, 150)
-      return () => clearTimeout(timer)
-    }
-  }, [location.hash])
-  const [dossiersUsed, setDossiersUsed] = useState(0)
-  const [testResult, setTestResult]     = useState(null)
-  const [testing, setTesting]           = useState(false)
-  const [portalLoading, setPortalLoading]     = useState(false)
-  const [billingMsg, setBillingMsg]           = useState(null)
-  // Profile editing
-  const [editingName, setEditingName]       = useState(false)
-  const [displayName, setDisplayName]       = useState(user?.user_metadata?.display_name || '')
-  const [savingName, setSavingName]         = useState(false)
-  const [nameMsg, setNameMsg]               = useState(null)
+    // Normalise legacy hash links and unknown panes onto a real URL.
+    if (hashPane) { navigate(`/settings/${hashPane}`, { replace: true }); return }
+    if (paneParam && !PANE_IDS.includes(paneParam)) navigate('/settings', { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hashPane, paneParam])
 
-  // Password change
-  const [currentPw, setCurrentPw]           = useState('')
-  const [newPw, setNewPw]                   = useState('')
-  const [confirmPw, setConfirmPw]           = useState('')
-  const [showCurrentPw, setShowCurrentPw]   = useState(false)
-  const [showNewPw, setShowNewPw]           = useState(false)
-  const [savingPw, setSavingPw]             = useState(false)
-  const [pwMsg, setPwMsg]                   = useState(null)
+  const goPane = (id) => {
+    navigate(id === DEFAULT_PANE ? '/settings' : `/settings/${id}`)
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
 
-  const userPlan     = getUserPlan(user)
-  const userBracket  = getUserBracket(user)
-  const planConfig   = getPlanConfig(userPlan) || getPlanConfig('scout')
-  const bracketCfg   = getBracketConfig(userBracket)
-  const dossierLimit = getEffectiveProfileLimit(user)
-  const entSource    = getEntitlementSource(user)   // admin | beta | trial | paid | free
-  const activeTrial  = getActiveTrial(user)
+  // ── Plan facts ──────────────────────────────────────────────────────────────
+  const plan         = getUserPlan(user)
+  const planType     = getUserPlanType(user)
+  const bracketCfg   = getBracketConfig(getUserBracket(user))
+  const profileLimit = getEffectiveProfileLimit(user)
+  const isAdmin      = !!user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase())
+  // Monitoring slot accounting mirrors Candidates.jsx exactly.
+  const maxSlots = isAdmin
+    ? Infinity
+    : planType === 'candidate'
+      ? getActiveCandidateLimit(plan)
+      : (bracketCfg?.max ?? Infinity)
 
-  // Live monthly price for current plan+bracket
-  const currentPrice = (() => {
-    if (userPlan === 'scout') return null
-    const cfg = PLAN_CONFIG[userPlan]
-    if (cfg?.monthlyPrice != null) return cfg.monthlyPrice
-    return MONTHLY_PRICES[userPlan]?.[userBracket] ?? null
-  })()
+  // ── Real usage counts ───────────────────────────────────────────────────────
+  const [usage, setUsage] = useState({ loading: true, profilesUsed: 0, monitored: 0, candidates: 0 })
 
-  // Load dossier usage count for this month
   useEffect(() => {
     if (!supabase || !user?.id) return
-    supabase
-      .from('dossiers')
-      .select('id, generated_at')
-      .eq('generated_by', user.id)       // scope to current user only
-      .gte('generated_at', getStartOfMonth())
-      .not('generated_by', 'is', null)  // exclude auto-regenerated dossiers from quota
-      .then(({ data, error }) => {
-        if (error) { console.error('Failed to fetch dossier usage:', error); return }
-        if (data) setDossiersUsed(data.length)
+    let alive = true
+    ;(async () => {
+      const [monthly, candidates, monitored] = await Promise.all([
+        // SAME QUERY SHAPE as the Profiler library's monthly counter in
+        // src/pages/Dossiers.jsx → fetchData():
+        //   supabase.from('dossiers').select('id')
+        //     .gte('generated_at', startOfThisMonth().toISOString())
+        //     .eq('generated_by', user.id).not('generated_by', 'is', null)
+        // Only the user's own manual generations draw down the monthly
+        // allowance; auto-refreshes have generated_by = null and are free.
+        // If you change one of these, change the other — otherwise Settings and
+        // the Profiler will disagree about how many profiles are left.
+        supabase.from('dossiers').select('id')
+          .gte('generated_at', startOfThisMonth().toISOString())
+          .eq('generated_by', user.id).not('generated_by', 'is', null),
+        supabase.from('candidates').select('id', { count: 'exact', head: true })
+          .eq('created_by', user.id),
+        supabase.from('candidates').select('id', { count: 'exact', head: true })
+          .eq('created_by', user.id).contains('section_timestamps', { monitoring: true }),
+      ])
+      if (!alive) return
+      setUsage({
+        loading: false,
+        profilesUsed: (monthly.data || []).length,
+        candidates: candidates.count ?? 0,
+        monitored: monitored.count ?? 0,
       })
-      .catch(err => console.error('Dossier usage fetch error:', err))
-  }, [])
+    })().catch(() => { if (alive) setUsage(u => ({ ...u, loading: false })) })
+    return () => { alive = false }
+  }, [user?.id])
 
-  // Handle Stripe redirect params
+  // ── Live share links (Data & privacy) ───────────────────────────────────────
+  const [shares, setShares] = useState({ loading: true, count: 0 })
+  useEffect(() => {
+    if (!supabase || !user?.id) return
+    let alive = true
+    supabase.from('dossier_shares').select('id', { count: 'exact', head: true })
+      .eq('created_by', user.id).eq('is_active', true).gt('expires_at', new Date().toISOString())
+      .then(({ count }) => { if (alive) setShares({ loading: false, count: count ?? 0 }) })
+      .catch(() => { if (alive) setShares({ loading: false, count: 0 }) })
+    return () => { alive = false }
+  }, [user?.id])
+
+  // ── Profile fields + unsaved-changes bar ────────────────────────────────────
+  const metaName = user?.user_metadata?.display_name || ''
+  const metaOrg  = user?.user_metadata?.business || ''
+  const [savedName, setSavedName] = useState(metaName)
+  const [savedOrg, setSavedOrg]   = useState(metaOrg)
+  const [nameField, setNameField] = useState(metaName)
+  const [orgField, setOrgField]   = useState(metaOrg)
+  const [savingProfile, setSavingProfile] = useState(false)
+  const [formMsg, setFormMsg]     = useState(null)
+
+  const nameDirty  = nameField.trim() !== savedName.trim()
+  const orgDirty   = orgField.trim() !== savedOrg.trim()
+  const dirtyCount = (nameDirty ? 1 : 0) + (orgDirty ? 1 : 0)
+  const dirtyRef   = useRef(dirtyCount)
+  useEffect(() => { dirtyRef.current = dirtyCount })
+
+  useEffect(() => {
+    setSavedName(metaName); setSavedOrg(metaOrg)
+    if (!dirtyRef.current) { setNameField(metaName); setOrgField(metaOrg) }
+  }, [metaName, metaOrg])
+
+  const discardChanges = () => {
+    setNameField(savedName); setOrgField(savedOrg); setFormMsg(null)
+  }
+
+  const saveChanges = async () => {
+    const name = nameField.trim()
+    const org  = orgField.trim()
+    if (!name) { setFormMsg({ type: 'error', text: 'Your display name cannot be empty.' }); return }
+    setSavingProfile(true); setFormMsg(null)
+    const { error } = await supabase.auth.updateUser({ data: { display_name: name, business: org } })
+    if (error) {
+      setFormMsg({ type: 'error', text: error.message })
+    } else {
+      setSavedName(name); setSavedOrg(org)
+      setNameField(name); setOrgField(org)
+      setFormMsg({ type: 'success', text: dirtyCount === 1 ? 'Change saved.' : 'Changes saved.' })
+      logActivity('profile_updated', 'account', user?.id, {}).catch(() => {})
+    }
+    setSavingProfile(false)
+  }
+
+  // ── Notification preferences (+ AI default, + digest) ───────────────────────
+  const [notifPrefs, setNotifPrefs] = useState(readPrefs(null))
+  const [aiDefault, setAiDefault]   = useState(true)
+  const [aiSaving, setAiSaving]     = useState(false)
+  const [aiMsg, setAiMsg]           = useState(null)
+  const [digest, setDigest]         = useState('monday')
+  const [digestMsg, setDigestMsg]   = useState(null)
+
+  const notifDebounceRef = useRef(null)
+  const notifPendingRef  = useRef(null)
+
+  useEffect(() => {
+    if (!supabase || !user?.id) return
+    let alive = true
+    supabase.from('notification_preferences').select('*').eq('user_id', user.id).maybeSingle()
+      .then(({ data }) => {
+        if (!alive || !data) return
+        const loaded = readPrefs(data)
+        // payment_failed and account_locked are ALWAYS ON. If a stored row says
+        // otherwise (set before this rule existed), repair it — the badge has to
+        // be true, not decorative.
+        if (loaded.payment_failed === false || loaded.account_locked === false) {
+          const repaired = { ...loaded, payment_failed: true, account_locked: true }
+          setNotifPrefs(repaired)
+          writePrefRow(repaired).then(() => {}, () => {})
+        } else {
+          setNotifPrefs(loaded)
+        }
+        // ai_access_default: the org-level AI default (column added by
+        // supabase/migrations/20260721000005_share_ack_org_ai_default.sql).
+        setAiDefault(data.ai_access_default !== false)
+        setDigest(data.weekly_digest === false ? 'never' : 'monday')
+      })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [user?.id])
+
+  /** One write path for this row — the email toggles, the AI default and the
+   *  digest cadence all land in notification_preferences. */
+  const writePrefRow = (patch) => supabase
+    .from('notification_preferences')
+    .upsert({ user_id: user.id, ...patch, updated_at: new Date().toISOString() })
+
+  const handleNotifToggle = (key) => {
+    setNotifPrefs(prev => {
+      const next = { ...prev, [key]: !prev[key] }
+      notifPendingRef.current = next
+      // Debounce: cancel any pending write and schedule a new one, so rapid
+      // toggling coalesces into a single upsert with the final state.
+      if (notifDebounceRef.current) clearTimeout(notifDebounceRef.current)
+      notifDebounceRef.current = setTimeout(async () => {
+        const toWrite = notifPendingRef.current
+        if (!toWrite || !user?.id) return
+        try {
+          const { error } = await writePrefRow(toWrite)
+          if (error) throw error
+        } catch (e) {
+          // Revert to last saved state on error — reload from the DB.
+          supabase.from('notification_preferences').select('*').eq('user_id', user.id).maybeSingle()
+            .then(({ data }) => { if (data) setNotifPrefs(readPrefs(data)) })
+            .catch(() => {})
+          console.error('Failed to save notification pref:', e.message)
+        }
+      }, 400)
+      return next
+    })
+  }
+
+  const handleAiDefault = async (value) => {
+    const previous = aiDefault
+    setAiDefault(value); setAiSaving(true); setAiMsg(null)
+    const { error } = await writePrefRow({ ai_access_default: value })
+    if (error) {
+      setAiDefault(previous)
+      setAiMsg({ type: 'error', text: 'That could not be saved. Your AI default is unchanged.' })
+    } else {
+      setAiMsg({
+        type: 'success',
+        text: value
+          ? 'New candidates will let AI tools read their notes and documents unless you lock them.'
+          : 'New candidates now start closed — AI tools will not read their notes or documents.',
+      })
+      logActivity('ai_access_default_changed', 'account', user?.id, { ai_access_default: value }).catch(() => {})
+    }
+    setAiSaving(false)
+  }
+
+  const handleDigest = async (value) => {
+    const previous = digest
+    if (value === previous) return
+    setDigest(value); setDigestMsg(null)
+    const { error } = await writePrefRow({ weekly_digest: value !== 'never' })
+    if (error) {
+      setDigest(previous)
+      setDigestMsg({ type: 'error', text: 'That could not be saved. Your digest setting is unchanged.' })
+    }
+  }
+
+  // ── Billing ─────────────────────────────────────────────────────────────────
+  const [billingMsg, setBillingMsg]     = useState(null)
+  const [portalLoading, setPortalLoading] = useState(false)
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (params.get('billing') === 'success') {
-      const planName    = PLAN_CONFIG[params.get('plan')]?.name ?? 'your new plan'
-      const bracketName = params.get('bracket') ?? ''
+      const planName = params.get('plan') || ''
       setBillingMsg({
         type: 'success',
-        text: `You're now on ${planName}! Your access has been updated.`,
+        text: planName
+          ? 'Your plan is updated and active — the new limits apply right away.'
+          : 'Your plan is updated and active.',
       })
-      window.history.replaceState({}, '', '/settings')
-      // Refresh the session so the new plan is active immediately — no sign-out needed
+      window.history.replaceState({}, '', window.location.pathname)
+      // Refresh the session so the new plan is active immediately — no sign-out.
       refreshSession?.().catch(() => {})
     } else if (params.get('billing') === 'cancelled') {
-      setBillingMsg({ type: 'info', text: 'Checkout was cancelled — no changes were made.' })
-      window.history.replaceState({}, '', '/settings')
+      setBillingMsg({ type: 'info', text: 'Checkout was cancelled — nothing changed.' })
+      window.history.replaceState({}, '', window.location.pathname)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ── Stripe Customer Portal ──────────────────────────────────────────────────
   const handleManageBilling = async () => {
     setPortalLoading(true)
     const token = session?.access_token
     try {
-      const res  = await fetch('/.netlify/functions/create-portal-session', {
+      const res = await fetch('/.netlify/functions/create-portal-session', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({}),
       })
       const json = await res.json()
-      if (json.url) {
-        window.location.href = json.url
-      } else {
-        setBillingMsg({ type: 'error', text: json.error || 'Could not open billing portal.' })
-      }
+      if (json.url) window.location.href = json.url
+      else setBillingMsg({ type: 'error', text: json.error || 'Could not open the billing portal.' })
     } catch {
       setBillingMsg({ type: 'error', text: 'Could not reach the server.' })
     }
     setPortalLoading(false)
   }
 
-  // ── Save display name ────────────────────────────────────────────────────────
-  const handleSaveName = async () => {
-    if (!displayName.trim()) return
-    setSavingName(true)
-    setNameMsg(null)
-    const { error } = await supabase.auth.updateUser({ data: { display_name: displayName.trim() } })
-    if (error) {
-      setNameMsg({ type: 'error', text: error.message })
-    } else {
-      setNameMsg({ type: 'success', text: 'Display name updated.' })
-      setEditingName(false)
-    }
-    setSavingName(false)
-  }
-
-  // ── Change password ──────────────────────────────────────────────────────────
-  const handleChangePassword = async () => {
-    setPwMsg(null)
-    if (!newPw || newPw.length < 8) {
-      setPwMsg({ type: 'error', text: 'New password must be at least 8 characters.' })
-      return
-    }
-    if (newPw !== confirmPw) {
-      setPwMsg({ type: 'error', text: 'Passwords do not match.' })
-      return
-    }
-    setSavingPw(true)
-    // Re-authenticate first to verify current password
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: user.email,
-      password: currentPw,
-    })
-    if (signInError) {
-      setPwMsg({ type: 'error', text: 'Current password is incorrect.' })
-      setSavingPw(false)
-      return
-    }
-    const { error } = await supabase.auth.updateUser({ password: newPw })
-    if (error) {
-      setPwMsg({ type: 'error', text: error.message })
-    } else {
-      setPwMsg({ type: 'success', text: 'Password changed successfully.' })
-      setCurrentPw('')
-      setNewPw('')
-      setConfirmPw('')
-    }
-    setSavingPw(false)
-  }
-
-  // ── API test ────────────────────────────────────────────────────────────────
-  const testApiConnection = async () => {
-    setTesting(true)
-    setTestResult(null)
-    try {
-      const res  = await fetch('/.netlify/functions/generate-dossier', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ candidate: null, test: true }),
-      })
-      const json = await res.json()
-      setTestResult(json.ok
-        ? { success: true,  message: 'Claude API is connected and responding correctly.' }
-        : { success: false, message: json.error || 'API connection failed.' }
-      )
-    } catch {
-      setTestResult({ success: false, message: 'Could not reach the API endpoint.' })
-    }
-    setTesting(false)
-  }
-
-  // ── Notification preferences ────────────────────────────────────────────────
-  const NOTIF_PREFS = [
-    { key: 'payment_failed',  label: 'Payment failed warning',    desc: 'Get notified when a payment attempt fails so you can update your card before access is interrupted.' },
-    { key: 'payment_receipt', label: 'Payment receipts',          desc: 'Receive a receipt email each time a subscription payment is successfully processed.' },
-    { key: 'plan_changed',    label: 'Plan changes',              desc: 'Get notified when your plan is upgraded, downgraded, or your subscription is cancelled.' },
-    { key: 'account_locked',  label: 'Account security alerts',   desc: 'Receive alerts if your account is locked due to failed payments or security events.' },
-    { key: 'dossier_ready',   label: 'Profile ready',             desc: 'Get an email when a political intelligence profile you requested has been generated.' },
-  ]
-  const [notifPrefs, setNotifPrefs] = useState({ payment_failed: true, payment_receipt: true, plan_changed: true, account_locked: true, dossier_ready: true })
-  // Debounce: hold a timer ref + a stable snapshot of what to write, so rapid
-  // toggling coalesces into a single Supabase upsert with the final state.
-  const notifDebounceRef = useRef(null)
-  const notifPendingRef  = useRef(null)
-
-  useEffect(() => {
-    if (!supabase || !user?.id) return
-    supabase
-      .from('notification_preferences')
-      .select('*')
-      .eq('user_id', user.id)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data) setNotifPrefs({
-          payment_failed:  data.payment_failed  ?? true,
-          payment_receipt: data.payment_receipt ?? true,
-          plan_changed:    data.plan_changed    ?? true,
-          account_locked:  data.account_locked  ?? true,
-          dossier_ready:   data.dossier_ready   ?? true,
-        })
-      })
-      .catch(() => {})
-  }, [user?.id])
-
-  const handleNotifToggle = (key) => {
-    setNotifPrefs(prev => {
-      const newPrefs = { ...prev, [key]: !prev[key] }
-      notifPendingRef.current = newPrefs
-      // Debounce: cancel any pending write and schedule a new one
-      if (notifDebounceRef.current) clearTimeout(notifDebounceRef.current)
-      notifDebounceRef.current = setTimeout(async () => {
-        const toWrite = notifPendingRef.current
-        if (!toWrite || !user?.id) return
-        try {
-          const { error } = await supabase
-            .from('notification_preferences')
-            .upsert({ user_id: user.id, ...toWrite, updated_at: new Date().toISOString() })
-          if (error) throw error
-        } catch (e) {
-          // Revert to last saved state on error — reload from DB
-          supabase.from('notification_preferences').select('*').eq('user_id', user.id).maybeSingle()
-            .then(({ data }) => { if (data) setNotifPrefs({ payment_failed: data.payment_failed ?? true, payment_receipt: data.payment_receipt ?? true, plan_changed: data.plan_changed ?? true, account_locked: data.account_locked ?? true, dossier_ready: data.dossier_ready ?? true }) })
-            .catch(() => {})
-          console.error('Failed to save notification pref:', e.message)
-        }
-      }, 400)
-      return newPrefs
-    })
-  }
-
-  // ── Cancel at period end (pause/soft cancel) ───────────────────────────────
-  const [cancelPeriodModal, setCancelPeriodModal]   = useState(false)
+  // ── Cancel at period end (soft cancel) ──────────────────────────────────────
+  const [cancelPeriodModal, setCancelPeriodModal]     = useState(false)
   const [cancelPeriodLoading, setCancelPeriodLoading] = useState(false)
-  const [cancelPeriodEnd, setCancelPeriodEnd]       = useState(null) // unix timestamp
+  const [cancelPeriodEnd, setCancelPeriodEnd]         = useState(null) // unix timestamp
 
   const handleCancelAtPeriodEnd = async () => {
     setCancelPeriodLoading(true)
@@ -514,10 +346,7 @@ export default function Settings() {
       const token = session?.access_token
       const res = await fetch('/.netlify/functions/cancel-at-period-end', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ userId: user?.id, email: user?.email }),
       })
       const data = await res.json()
@@ -526,11 +355,11 @@ export default function Settings() {
       setCancelPeriodModal(false)
       setBillingMsg({
         type: 'info',
-        text: data.message || `Your plan will remain active until the end of your billing period, then access will be removed.`,
+        text: data.message || 'Your plan stays active until the end of this billing period, then access is removed.',
       })
     } catch (err) {
       console.error('Cancel at period end error:', err)
-      setBillingMsg({ type: 'error', text: err.message || 'Could not cancel subscription. Please try again.' })
+      setBillingMsg({ type: 'error', text: err.message || 'Could not cancel the subscription. Please try again.' })
       setCancelPeriodModal(false)
     } finally {
       setCancelPeriodLoading(false)
@@ -539,41 +368,36 @@ export default function Settings() {
 
   // ── Account cancellation flow ───────────────────────────────────────────────
   // null → 'warn' (step 1: downgrade offer) → 'confirm' (step 2: delete confirm)
-  const [cancelStep, setCancelStep]         = useState(null)
-  const [deleteLoading, setDeleteLoading]   = useState(false)
-  const [deleteMsg, setDeleteMsg]           = useState(null)
+  const [cancelStep, setCancelStep]       = useState(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
+  const [deleteMsg, setDeleteMsg]         = useState(null)
 
   const handleDowngradeToFree = async () => {
     setDeleteLoading(true)
     const token = session?.access_token
     try {
-      const res  = await fetch('/.netlify/functions/downgrade-to-free', {
+      const res = await fetch('/.netlify/functions/downgrade-to-free', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ userId: user?.id, email: user?.email }),
       })
-      // Audit fix (#2): never show "cancelled" unless the server actually
-      // confirmed it — a 401/500 here previously produced a success banner
-      // while Stripe kept billing.
+      // Never show "cancelled" unless the server actually confirmed it — a
+      // 401/500 here previously produced a success banner while Stripe kept billing.
       if (!res.ok) {
         let errText = 'We couldn\'t cancel your subscription. Please try again, or use "Manage billing" to cancel through the billing portal.'
         try { const j = await res.json(); if (j?.error) errText = `${j.error} — please try again or use "Manage billing" to cancel through the billing portal.` } catch { /* keep default */ }
         setBillingMsg({ type: 'error', text: errText })
-        setCancelStep(null)
-        setDeleteLoading(false)
+        setCancelStep(null); setDeleteLoading(false)
         return
       }
       const json = await res.json()
-      // Refresh JWT so the app immediately reflects Scout plan (no stale tier in UI)
       await refreshSession?.()
       setCancelStep(null)
       setBillingMsg({
         type: 'success',
-        text: json.message || 'Your subscription has been cancelled. You\'ve been moved to the free Scout plan — all your data is safe.',
+        text: json.message || 'Your subscription is cancelled. You\'re on the free Scout plan and all your data is safe.',
       })
+      navigate('/settings/plan')
     } catch {
       setBillingMsg({ type: 'error', text: 'Could not reach the server to cancel. Please try again, or use "Manage billing" to cancel through the billing portal.' })
       setCancelStep(null)
@@ -582,33 +406,22 @@ export default function Settings() {
   }
 
   const handleConfirmDelete = async () => {
-    setDeleteLoading(true)
-    setDeleteMsg(null)
+    setDeleteLoading(true); setDeleteMsg(null)
     const token = session?.access_token
     try {
-      const res  = await fetch('/.netlify/functions/delete-account', {
+      const res = await fetch('/.netlify/functions/delete-account', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ userId: user?.id, email: user?.email }),
       })
-      // Audit fix (#2): a non-2xx here previously signed the user out as if
-      // the account were deleted while it (and its Stripe subscription) lived on.
+      // A non-2xx here previously signed the user out as if the account were
+      // deleted while it (and its Stripe subscription) lived on.
       let json = {}
       try { json = await res.json() } catch { /* non-JSON error body */ }
       if (!res.ok || json.error) {
         setDeleteMsg({ type: 'error', text: json.error || `Account deletion failed (HTTP ${res.status}). Please try again or contact support — your account has NOT been deleted.` })
       } else {
-        // Sign out and redirect — account is gone
-        try {
-          await signOut()
-        } catch {
-          // signOut failed but account is already deleted — force navigate to login
-        } finally {
-          navigate('/login')
-        }
+        try { await signOut() } catch { /* account is already gone */ } finally { navigate('/login') }
       }
     } catch {
       setDeleteMsg({ type: 'error', text: 'Could not reach the server. Please try again or contact support.' })
@@ -616,472 +429,248 @@ export default function Settings() {
     setDeleteLoading(false)
   }
 
-  return (
-    <div className="space-y-8 max-w-2xl">
-      {/* Header lives in the top bar (v1.24.1) */}
+  // ── Hero ────────────────────────────────────────────────────────────────────
+  const displayName = savedName || user?.email?.split('@')[0] || 'Your account'
+  const heroStats = useMemo(() => ([
+    {
+      label: 'PROFILES LEFT',
+      value: usage.loading ? '—'
+        : profileLimit === Infinity ? 'Unlimited'
+        : String(Math.max(0, profileLimit - usage.profilesUsed)),
+    },
+    {
+      label: 'MONITORING',
+      value: usage.loading ? '—'
+        : maxSlots === Infinity ? String(usage.monitored)
+        : `${usage.monitored} / ${maxSlots}`,
+    },
+    { label: 'CANDIDATES', value: usage.loading ? '—' : String(usage.candidates) },
+  ]), [usage, profileLimit, maxSlots])
 
-      {/* ── Billing message banner ─────────────────────────────────────────── */}
-      {billingMsg && (
-        <div className={`flex items-start gap-3 p-4 rounded-xl border text-sm ${
-          billingMsg.type === 'success' ? 'bg-green-50 border-green-200 text-green-800' :
-          billingMsg.type === 'error'   ? 'bg-red-50   border-red-200   text-red-800'   :
-                                          'bg-blue-50  border-blue-200  text-blue-800'
-        }`}>
-          {billingMsg.type === 'success'
-            ? <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            : <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />}
-          <span>{billingMsg.text}</span>
-          <button onClick={() => setBillingMsg(null)} className="ml-auto opacity-50 hover:opacity-100">✕</button>
+  const railItem = (item, chip) => {
+    const on = item.id === pane
+    const { Icon } = item
+    if (chip) {
+      return (
+        <button
+          key={item.id}
+          type="button"
+          onClick={() => goPane(item.id)}
+          className="st-btn"
+          aria-current={on ? 'page' : undefined}
+          style={{
+            flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 7,
+            border: `1px solid ${on ? T.ink : T.field}`, background: on ? T.ink : '#fff',
+            color: on ? '#fff' : T.ink4, borderRadius: 99, padding: '7px 14px', minHeight: 44,
+            fontSize: 12.5, fontWeight: on ? 600 : 500, fontFamily: 'inherit',
+            cursor: 'pointer', whiteSpace: 'nowrap',
+          }}
+        >
+          <Icon style={{ width: 14, height: 14, flex: 'none' }} />
+          {item.label}
+        </button>
+      )
+    }
+    return (
+      <button
+        key={item.id}
+        type="button"
+        onClick={() => goPane(item.id)}
+        className="st-nav"
+        data-on={on ? 'true' : 'false'}
+        aria-current={on ? 'page' : undefined}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+          padding: '8px 11px', minHeight: 44, borderRadius: 10, border: 0,
+          background: on ? T.navy : 'transparent',
+          boxShadow: on ? '0 4px 12px rgba(13,21,38,.2)' : 'none',
+          cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
+        }}
+      >
+        <span aria-hidden="true" style={{
+          flex: 'none', width: 22, height: 22, borderRadius: 7,
+          background: on ? T.red : '#EFEEEA',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          transition: 'background .16s ease',
+        }}>
+          <Icon style={{ width: 13, height: 13, color: on ? '#fff' : T.faint }} />
+        </span>
+        <span style={{ fontSize: 13, fontWeight: on ? 600 : 500, color: on ? '#fff' : T.ink4, minWidth: 0 }}>
+          {item.label}
+        </span>
+        {item.badge && (
+          <Pill
+            c={on ? '#FCA5A5' : T.redHot}
+            bg={on ? 'rgba(165,28,36,.28)' : T.redBg}
+            style={{ marginLeft: 'auto' }}
+          >{item.badge}</Pill>
+        )}
+      </button>
+    )
+  }
+
+  return (
+    <SettingsShell>
+      {/* ── Hero ─────────────────────────────────────────────────────────── */}
+      <div style={{
+        position: 'relative', overflow: 'hidden', borderRadius: 18, padding: '22px 26px',
+        marginBottom: 20, boxShadow: '0 12px 30px rgba(13,21,38,.18)',
+        background: 'linear-gradient(135deg, #0D1526 0%, #16203A 58%, #263255 100%)',
+      }}>
+        <div aria-hidden="true" style={{
+          position: 'absolute', top: -120, right: '18%', width: 320, height: 320, borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(165,28,36,.38) 0%, rgba(165,28,36,0) 70%)',
+        }} />
+        <div className="st-hero" style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ flex: 1, minWidth: 180 }}>
+            <div style={{
+              fontSize: 21, fontWeight: 700, color: '#fff', letterSpacing: '-.3px',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>{displayName}</div>
+            <div style={{
+              fontSize: 12, color: '#A9B2C4', marginTop: 2,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>{user?.email}</div>
+          </div>
+          <div className="st-herostats" style={{ marginLeft: 'auto', flex: 'none', display: 'flex', gap: 9 }}>
+            {heroStats.map(h => (
+              <div key={h.label} style={{
+                minWidth: 96, background: 'rgba(255,255,255,.07)',
+                border: '1px solid rgba(255,255,255,.12)', borderRadius: 12,
+                padding: '9px 13px', textAlign: 'center',
+              }}>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.8px', color: '#9AA4B8' }}>{h.label}</div>
+                <div style={{ fontSize: 17, fontWeight: 800, color: '#fff', lineHeight: 1.15, marginTop: 3 }}>{h.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Chip row (below 900px) ───────────────────────────────────────── */}
+      <div className="st-chips" style={{ display: 'none', gap: 6, overflowX: 'auto', paddingBottom: 14 }}>
+        {NAV_ITEMS.map(item => railItem(item, true))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 26, alignItems: 'flex-start', paddingBottom: 120 }}>
+        {/* ── Rail ───────────────────────────────────────────────────────── */}
+        <nav className="st-rail" aria-label="Settings sections" style={{
+          flex: 'none', width: 212, position: 'sticky', top: 0,
+          display: 'flex', flexDirection: 'column', gap: 16,
+        }}>
+          {NAV_GROUPS.map(group => (
+            <div key={group.label}>
+              <div style={{
+                fontSize: 11, fontWeight: 700, letterSpacing: '1.2px',
+                color: T.faint, padding: '0 10px 7px',
+              }}>{group.label}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {group.items.map(item => railItem(item, false))}
+              </div>
+            </div>
+          ))}
+        </nav>
+
+        {/* ── Pane ───────────────────────────────────────────────────────── */}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {formMsg && (
+            <div style={{
+              background: formMsg.type === 'error' ? T.redBg : T.greenBg,
+              border: `1px solid ${formMsg.type === 'error' ? T.redBr : '#CDE9D8'}`,
+              color: formMsg.type === 'error' ? T.redHot : T.green,
+              borderRadius: 12, padding: '11px 14px', fontSize: 12.5, fontWeight: 500,
+            }}>{formMsg.text}</div>
+          )}
+
+          {pane === 'account' && (
+            <AccountPane
+              user={user}
+              savedName={savedName}
+              nameField={nameField}
+              orgField={orgField}
+              onName={setNameField}
+              onOrg={setOrgField}
+            />
+          )}
+
+          {pane === 'security' && <SecurityPane user={user} />}
+
+          {pane === 'plan' && (
+            <PlanPane
+              user={user}
+              usage={usage}
+              profileLimit={profileLimit}
+              maxSlots={maxSlots}
+              onManageBilling={handleManageBilling}
+              portalLoading={portalLoading}
+              billingMsg={billingMsg}
+              onDismissBilling={() => setBillingMsg(null)}
+              onCancelPlan={() => setCancelPeriodModal(true)}
+              cancelPeriodEnd={cancelPeriodEnd}
+              isDowngradeLocked={isDowngradeLocked}
+              downgradedAt={downgradedAt}
+              navigate={navigate}
+            />
+          )}
+
+          {pane === 'notifications' && (
+            <NotificationsPane
+              prefs={notifPrefs}
+              onToggle={handleNotifToggle}
+              digest={digest}
+              onDigest={handleDigest}
+              digestMsg={digestMsg}
+              monitoredCount={usage.monitored}
+              monitoringLoading={usage.loading}
+            />
+          )}
+
+          {pane === 'calendars' && <CalendarsPane user={user} />}
+
+          {pane === 'privacy' && (
+            <PrivacyPane
+              aiDefault={aiDefault}
+              onAiDefault={handleAiDefault}
+              aiMsg={aiMsg}
+              aiLoading={aiSaving}
+              shareCount={shares.count}
+              shareLoading={shares.loading}
+              onReviewShares={() => navigate('/profiler')}
+              onDeleteAccount={() => { setCancelStep('warn'); setDeleteMsg(null) }}
+            />
+          )}
+        </div>
+      </div>
+
+      {/* ── Unsaved-changes bar ──────────────────────────────────────────── */}
+      {dirtyCount > 0 && (
+        <div role="status" style={{
+          position: 'fixed', bottom: 22, left: '50%', transform: 'translateX(-50%)', zIndex: 40,
+          display: 'flex', alignItems: 'center', gap: 14,
+          background: T.navy, color: '#fff', borderRadius: 99,
+          padding: '8px 12px 8px 20px', boxShadow: '0 14px 34px rgba(13,21,38,.34)',
+          animation: 'stRise .22s ease', maxWidth: 'calc(100vw - 32px)',
+        }}>
+          <span style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: 'nowrap' }}>
+            {dirtyCount === 1 ? '1 unsaved change' : `${dirtyCount} unsaved changes`}
+          </span>
+          <button
+            type="button"
+            onClick={discardChanges}
+            disabled={savingProfile}
+            style={{
+              background: 'none', border: 0, color: '#B7BECD', fontSize: 12, fontWeight: 600,
+              fontFamily: 'inherit', cursor: savingProfile ? 'not-allowed' : 'pointer',
+              minHeight: 44, padding: '0 4px', whiteSpace: 'nowrap',
+            }}
+          >Discard</button>
+          <Btn kind="primary" onClick={saveChanges} disabled={savingProfile}>
+            {savingProfile ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</> : 'Save changes'}
+          </Btn>
         </div>
       )}
 
-      {/* ── Account ───────────────────────────────────────────────────────── */}
-      <section className="card scroll-mt-8">
-        <h2 className="text-base font-bold text-gray-900 mb-5 flex items-center gap-2">
-          <User className="w-4 h-4 text-brand-red" /> My Profile
-        </h2>
-
-        {/* Avatar + email row */}
-        <div className="flex items-center gap-4 mb-5">
-          <div className="w-14 h-14 bg-brand-red rounded-full flex items-center justify-center text-white text-2xl font-bold flex-shrink-0">
-            {(user?.user_metadata?.display_name || user?.email || 'U')[0].toUpperCase()}
-          </div>
-          <div>
-            <p className="text-base font-bold text-gray-900">
-              {user?.user_metadata?.display_name || user?.email?.split('@')[0] || 'User'}
-            </p>
-            <p className="text-sm text-gray-400">{user?.email}</p>
-            <div className="flex items-center gap-1.5 mt-1 text-xs text-green-700 bg-green-100 px-2 py-0.5 rounded-full font-medium w-fit">
-              <CheckCircle className="w-3 h-3" /> Active
-            </div>
-          </div>
-        </div>
-
-        {/* Display name edit */}
-        <div className="space-y-3">
-          <div className="p-4 bg-gray-50 rounded-xl">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Display Name</p>
-              {!editingName && (
-                <button
-                  onClick={() => { setEditingName(true); setNameMsg(null) }}
-                  className="text-xs text-brand-navy flex items-center gap-1 hover:underline"
-                >
-                  <Edit2 className="w-3 h-3" /> Edit
-                </button>
-              )}
-            </div>
-            {editingName ? (
-              <div className="flex gap-2">
-                <input
-                  className="input text-sm flex-1"
-                  value={displayName}
-                  onChange={e => setDisplayName(e.target.value)}
-                  placeholder="Your name"
-                  maxLength={60}
-                  onKeyDown={e => e.key === 'Enter' && handleSaveName()}
-                />
-                <button
-                  onClick={handleSaveName}
-                  disabled={savingName || !displayName.trim()}
-                  className="btn-primary text-xs px-3 flex items-center gap-1 disabled:opacity-50"
-                >
-                  {savingName ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-                  Save
-                </button>
-                <button
-                  onClick={() => { setEditingName(false); setDisplayName(user?.user_metadata?.display_name || '') }}
-                  className="btn-secondary text-xs px-3"
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <p className="text-sm text-gray-900 font-medium">
-                {user?.user_metadata?.display_name || <span className="text-gray-400 italic">Not set</span>}
-              </p>
-            )}
-            {nameMsg && (
-              <div className={`mt-2 text-xs flex items-center gap-1.5 ${nameMsg.type === 'success' ? 'text-green-700' : 'text-red-600'}`}>
-                {nameMsg.type === 'success' ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
-                {nameMsg.text}
-              </div>
-            )}
-          </div>
-
-          <div className="p-4 bg-gray-50 rounded-xl">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Email</p>
-            <p className="text-sm text-gray-700 font-medium">{user?.email}</p>
-            <p className="text-xs text-gray-400 mt-0.5">To change your email, contact support.</p>
-          </div>
-
-          <div className="text-xs text-gray-400 space-y-1 px-1">
-            <p>User ID: <span className="font-mono text-gray-500">{user?.id}</span></p>
-            <p>Member since: {user?.created_at ? new Date(user.created_at).toLocaleDateString() : 'Unknown'}</p>
-            <p>Last sign in: {user?.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleString() : 'Unknown'}</p>
-          </div>
-        </div>
-      </section>
-
-      {/* ── Billing & Plan ─────────────────────────────────────────────────── */}
-      <section id="billing" className="card scroll-mt-8">
-        <h2 className="text-base font-bold text-gray-900 mb-5 flex items-center gap-2">
-          <CreditCard className="w-4 h-4 text-brand-red" /> Billing &amp; Plan
-        </h2>
-
-        {/* ── Downgrade lockout warning ───────────────────────────────────── */}
-        {isDowngradeLocked && (() => {
-          const deletionMs  = downgradedAt + 30 * 24 * 60 * 60 * 1000
-          const daysLeft    = Math.max(0, Math.ceil((deletionMs - Date.now()) / (1000 * 60 * 60 * 24)))
-          const deleteDate  = new Date(deletionMs).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
-          return (
-            <div className="flex items-start gap-3 bg-red-50 border border-red-300 rounded-xl p-4 mb-5">
-              <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-semibold text-red-800 mb-1">Your subscription has ended</p>
-                <p className="text-xs text-red-700 leading-relaxed">
-                  Your account is locked. All candidates, profiles, and data will be <strong>permanently deleted on {deleteDate}</strong> ({daysLeft} {daysLeft === 1 ? 'day' : 'days'} from now) unless you resubscribe.
-                </p>
-                {isNativeApp ? (
-                  <p className="mt-3 text-xs text-red-700">
-                    To resubscribe, sign in to your account on the BadgerBoard website.
-                  </p>
-                ) : (
-                  <button
-                    onClick={() => navigate('/plans')}
-                    className="mt-3 inline-flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors"
-                  >
-                    Resubscribe Now →
-                  </button>
-                )}
-              </div>
-            </div>
-          )
-        })()}
-
-        {/* ── Current plan card ──────────────────────────────────────────── */}
-        <div className="p-5 bg-brand-red/5 border border-brand-red/20 rounded-xl mb-4">
-          <p className="text-xs text-brand-red font-semibold uppercase tracking-wider mb-3">Your Current Plan</p>
-
-          <div className="flex items-center justify-between gap-4 mb-4">
-            <div>
-              <p className="text-2xl font-black text-gray-900 flex items-center gap-2">
-                {planConfig.name}
-                {entSource === 'beta' && (
-                  <span className="text-[10px] font-bold uppercase tracking-wide bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full">Beta access</span>
-                )}
-                {entSource === 'trial' && activeTrial && (
-                  <span className="text-[10px] font-bold uppercase tracking-wide bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
-                    Free trial · {activeTrial.daysLeft}d left
-                  </span>
-                )}
-              </p>
-              {userPlan !== 'scout' && ['a_monitor','a_active','a_campaign','monitor','campaign','agency'].includes(userPlan) && (
-                <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
-                  <Users className="w-3.5 h-3.5" />
-                  {bracketCfg.label} active candidates
-                </p>
-              )}
-              {entSource === 'trial' && activeTrial && (
-                <p className="text-xs text-purple-700 mt-1">
-                  Trial ends {new Date(activeTrial.endsAt).toLocaleDateString()} — you'll move to the free Scout plan automatically.
-                </p>
-              )}
-              {entSource === 'beta' && (
-                <p className="text-xs text-indigo-700 mt-1">
-                  Full access while the beta program is on — no charge.
-                </p>
-              )}
-            </div>
-            <div className="text-right flex-shrink-0">
-              {entSource === 'beta' || entSource === 'trial' ? (
-                <p className="text-xl font-black text-gray-400">Free</p>
-              ) : currentPrice ? (
-                <>
-                  <p className="text-3xl font-black text-brand-red leading-none">
-                    ${currentPrice}
-                  </p>
-                  <p className="text-xs text-gray-400 mt-1">per month</p>
-                </>
-              ) : (
-                <p className="text-xl font-black text-gray-400">Free</p>
-              )}
-            </div>
-          </div>
-
-          {/* Dossier usage */}
-          <div className="pt-4 border-t border-brand-red/10">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-gray-700">AI Profiles this month</p>
-              {dossierLimit === Infinity ? (
-                <span className="text-xs font-semibold text-green-700 bg-green-100 px-2 py-0.5 rounded-full flex items-center gap-1">
-                  <CheckCircle className="w-3 h-3" /> Unlimited
-                </span>
-              ) : (
-                <span className="text-xs text-gray-500 font-medium">
-                  {dossiersUsed} / {dossierLimit} used
-                </span>
-              )}
-            </div>
-            {dossierLimit !== Infinity && dossierLimit > 0 && (
-              <>
-                <div className="h-2 bg-white rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-500"
-                    style={{
-                      width: `${Math.min(100, Math.round((dossiersUsed / dossierLimit) * 100))}%`,
-                      backgroundColor:
-                        dossiersUsed / dossierLimit >= 0.8 ? '#ef4444' :
-                        dossiersUsed / dossierLimit >= 0.6 ? '#f97316' : '#22c55e',
-                    }}
-                  />
-                </div>
-                <p className="text-xs text-gray-400 mt-1.5">
-                  {Math.max(0, dossierLimit - dossiersUsed)} remaining · resets the 1st of each month
-                </p>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* ── Cancellation scheduled banner ─────────────────────────────── */}
-        {cancelPeriodEnd && (
-          <div className="flex items-start gap-3 p-4 bg-yellow-50 border border-yellow-300 rounded-xl mb-4 text-sm text-yellow-800">
-            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-yellow-600" />
-            <span>
-              Your plan is scheduled to cancel on{' '}
-              <strong>{new Date(cancelPeriodEnd * 1000).toLocaleDateString()}</strong>.
-              You will lose access after this date.
-            </span>
-          </div>
-        )}
-
-        {/* ── Need more dossiers ─────────────────────────────────────────── */}
-        {/* Upsell hidden in native app builds (store rules) */}
-        {!isNativeApp && dossierLimit !== Infinity && (
-          <div className="p-4 bg-brand-navy/5 border border-brand-navy/15 rounded-xl flex items-center justify-between gap-4 mb-4">
-            <div>
-              <p className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-brand-navy" />
-                Need more profiles?
-              </p>
-              <p className="text-xs text-gray-500 mt-0.5">
-                Upgrade your plan for a higher monthly limit — up to unlimited on Agency.
-              </p>
-            </div>
-            <button
-              onClick={() => navigate('/plans')}
-              className="flex-shrink-0 inline-flex items-center gap-1.5 text-xs font-bold bg-brand-navy text-white px-4 py-2 rounded-lg hover:bg-brand-navy/90 transition-colors whitespace-nowrap"
-            >
-              Upgrade plan <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-
-        {/* ── Manage billing link ────────────────────────────────────────── */}
-        {isNativeApp ? (
-          <div className="pt-3 border-t border-gray-100">
-            <p className="text-xs text-gray-400">
-              Billing, invoices, and plan changes are managed from your account on the BadgerBoard website.
-            </p>
-          </div>
-        ) : (
-          <div className="flex items-center justify-between pt-3 border-t border-gray-100">
-            <p className="text-xs text-gray-400">Invoices, payment method, and subscription details.</p>
-            <div className="flex items-center gap-3">
-              {userPlan !== 'scout' && !cancelPeriodEnd && (
-                <button
-                  onClick={() => setCancelPeriodModal(true)}
-                  className="inline-flex items-center gap-1.5 text-xs text-red-500 font-semibold hover:underline underline-offset-2"
-                >
-                  Cancel plan
-                </button>
-              )}
-              <button
-                onClick={handleManageBilling}
-                disabled={portalLoading}
-                className="inline-flex items-center gap-1.5 text-xs text-brand-navy font-semibold hover:underline underline-offset-2 disabled:opacity-50"
-              >
-                {portalLoading
-                  ? <><Loader2 className="w-3 h-3 animate-spin" /> Opening…</>
-                  : <><ExternalLink className="w-3 h-3" /> Manage billing</>}
-              </button>
-            </div>
-          </div>
-        )}
-      </section>
-
-      {/* AI API Configuration — hidden from users; managed via Netlify env vars */}
-
-      {/* ── Security ─────────────────────────────────────────────────────────── */}
-      <section id="security" className="card scroll-mt-8">
-        <h2 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2">
-          <Shield className="w-4 h-4 text-brand-red" /> Security
-        </h2>
-
-        {/* Security status */}
-        <div className="p-4 bg-gray-50 rounded-xl space-y-2 text-xs mb-5">
-          {[
-            ['Data Isolation', 'Row-Level Security Active'],
-            ['Connection', 'HTTPS / TLS Encrypted'],
-            ['Auth Provider', 'Supabase Auth'],
-            ['Content Security', 'CSP + XSS headers active'],
-          ].map(([label, val]) => (
-            <div key={label} className="flex justify-between items-center">
-              <span className="text-gray-500">{label}</span>
-              <span className="flex items-center gap-1 text-green-700 font-semibold">
-                <CheckCircle className="w-3 h-3" /> {val}
-              </span>
-            </div>
-          ))}
-        </div>
-
-        {/* Change password */}
-        <div className="border border-gray-200 rounded-xl p-4">
-          <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
-            <Lock className="w-4 h-4 text-gray-500" /> Change Password
-          </h3>
-          <div className="space-y-3">
-            {/* Current password */}
-            <div>
-              <label className="label text-xs">Current Password</label>
-              <div className="relative">
-                <input
-                  type={showCurrentPw ? 'text' : 'password'}
-                  className="input pr-10 text-sm"
-                  value={currentPw}
-                  onChange={e => setCurrentPw(e.target.value)}
-                  placeholder="Enter current password"
-                  autoComplete="current-password"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowCurrentPw(v => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                >
-                  {showCurrentPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-            {/* New password */}
-            <div>
-              <label className="label text-xs">New Password</label>
-              <div className="relative">
-                <input
-                  type={showNewPw ? 'text' : 'password'}
-                  className="input pr-10 text-sm"
-                  value={newPw}
-                  onChange={e => setNewPw(e.target.value)}
-                  placeholder="At least 8 characters"
-                  autoComplete="new-password"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowNewPw(v => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                >
-                  {showNewPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-            {/* Confirm password */}
-            <div>
-              <label className="label text-xs">Confirm New Password</label>
-              <input
-                type="password"
-                className="input text-sm"
-                value={confirmPw}
-                onChange={e => setConfirmPw(e.target.value)}
-                placeholder="Repeat new password"
-                autoComplete="new-password"
-              />
-            </div>
-
-            {pwMsg && (
-              <div className={`flex items-start gap-2 p-3 rounded-lg text-xs ${
-                pwMsg.type === 'success'
-                  ? 'bg-green-50 border border-green-200 text-green-800'
-                  : 'bg-red-50 border border-red-200 text-red-700'
-              }`}>
-                {pwMsg.type === 'success'
-                  ? <CheckCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                  : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />}
-                {pwMsg.text}
-              </div>
-            )}
-
-            <button
-              onClick={handleChangePassword}
-              disabled={savingPw || !currentPw || !newPw || !confirmPw}
-              className="btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
-            >
-              {savingPw
-                ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
-                : <><Lock className="w-4 h-4" /> Update Password</>}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <CalendarsSection user={user} />
-
-      {/* ── Notifications ────────────────────────────────────────────────────── */}
-      <section id="notifications" className="card scroll-mt-8">
-        <h2 className="text-base font-bold text-gray-900 mb-1 flex items-center gap-2">
-          <Bell className="w-4 h-4 text-brand-red" /> Notifications
-        </h2>
-        <p className="text-xs text-gray-400 mb-5">Choose which email notifications you receive from Badger Board.</p>
-
-        <div className="divide-y divide-gray-100">
-          {NOTIF_PREFS.map(pref => (
-            <div key={pref.key} className="flex items-center justify-between gap-4 py-3.5 first:pt-0 last:pb-0">
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-gray-900">{pref.label}</p>
-                <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">{pref.desc}</p>
-              </div>
-              <button
-                onClick={() => handleNotifToggle(pref.key)}
-                className={`relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-red ${
-                  notifPrefs[pref.key] ? 'bg-brand-red' : 'bg-gray-200'
-                }`}
-                role="switch"
-                aria-checked={notifPrefs[pref.key]}
-              >
-                <span
-                  className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200 ${
-                    notifPrefs[pref.key] ? 'translate-x-6' : 'translate-x-1'
-                  }`}
-                />
-              </button>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ── Danger Zone ──────────────────────────────────────────────────────── */}
-      <section className="card border-red-200 bg-red-50/30">
-        <h2 className="text-base font-bold text-red-700 mb-1 flex items-center gap-2">
-          <Trash2 className="w-4 h-4" /> Danger Zone
-        </h2>
-        <p className="text-xs text-red-500 mb-4">These actions are permanent and cannot be undone.</p>
-
-        <div className="flex items-start justify-between gap-4 p-4 bg-white border border-red-200 rounded-xl">
-          <div>
-            <p className="text-sm font-semibold text-gray-900">Cancel my account</p>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Remove your paid subscription. You can keep your data on the free Scout plan.
-            </p>
-          </div>
-          <button
-            onClick={() => { setCancelStep('warn'); setDeleteMsg(null) }}
-            className="flex-shrink-0 text-xs font-semibold text-red-600 border border-red-200 hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors"
-          >
-            Cancel account
-          </button>
-        </div>
-      </section>
-
-      {/* ── Cancel at period end modal ─────────────────────────────────────── */}
+      {/* ── Cancel at period end modal ───────────────────────────────────── */}
       {cancelPeriodModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
@@ -1092,37 +681,30 @@ export default function Settings() {
                 </div>
                 <div>
                   <h3 className="text-white font-black text-base">Cancel your plan?</h3>
-                  <p className="text-yellow-100 text-xs mt-0.5">You'll keep access until your billing period ends</p>
+                  <p className="text-yellow-100 text-xs mt-0.5">You keep access until this billing period ends</p>
                 </div>
               </div>
-              <button onClick={() => setCancelPeriodModal(false)} className="text-white/60 hover:text-white mt-0.5">
+              <button onClick={() => setCancelPeriodModal(false)} className="text-white/60 hover:text-white mt-0.5" aria-label="Close">
                 <X className="w-4 h-4" />
               </button>
             </div>
-
             <div className="px-6 py-5 space-y-4">
               <p className="text-sm text-gray-700">
-                Your plan will remain active until the end of your current billing period.
-                After that, your access will be fully removed and you'll be moved to the free Scout tier.
-                This cannot be undone.
+                Your plan stays active until the end of the period you have already paid for. After that
+                your access is removed and you move to the free Scout tier. Your data stays.
               </p>
-
               <div className="flex flex-col gap-2 pt-1">
                 <button
                   onClick={() => setCancelPeriodModal(false)}
                   disabled={cancelPeriodLoading}
                   className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-800 text-sm font-bold rounded-xl transition-colors disabled:opacity-60"
-                >
-                  Keep My Plan
-                </button>
+                >Keep my plan</button>
                 <button
                   onClick={handleCancelAtPeriodEnd}
                   disabled={cancelPeriodLoading}
                   className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white text-sm font-bold rounded-xl transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
                 >
-                  {cancelPeriodLoading
-                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Cancelling…</>
-                    : 'Yes, Cancel Plan'}
+                  {cancelPeriodLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Cancelling…</> : 'Yes, cancel my plan'}
                 </button>
               </div>
             </div>
@@ -1130,14 +712,11 @@ export default function Settings() {
         </div>
       )}
 
-      {/* ── Cancellation modal overlay ──────────────────────────────────────── */}
+      {/* ── Cancellation / deletion modal ────────────────────────────────── */}
       {cancelStep && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-
-          {/* ── Step 1: Downgrade offer ───────────────────────────────────────── */}
           {cancelStep === 'warn' && (
             <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
-              {/* Header */}
               <div className="bg-gradient-to-r from-red-600 to-red-700 px-6 py-5 flex items-start justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center flex-shrink-0">
@@ -1148,78 +727,73 @@ export default function Settings() {
                     <p className="text-red-200 text-xs mt-0.5">Before you go, there's a better option</p>
                   </div>
                 </div>
-                <button onClick={() => setCancelStep(null)} className="text-white/60 hover:text-white mt-0.5">
+                <button onClick={() => setCancelStep(null)} className="text-white/60 hover:text-white mt-0.5" aria-label="Close">
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
               <div className="px-6 py-5 space-y-4">
-                {/* What they'd lose */}
                 <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
                   <p className="text-xs font-bold text-red-700 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
-                    <Trash2 className="w-3.5 h-3.5" /> If you delete your account, you permanently lose:
+                    <Trash2 className="w-3.5 h-3.5" /> Deleting your account permanently destroys:
                   </p>
                   <ul className="space-y-1.5">
                     {[
-                      'Every candidate profile and their tracking history',
-                      'All AI-generated profiles (including any credits you purchased)',
+                      'Every candidate record and its tracking history',
+                      'Every generated profile, including credits you paid for',
                       'Your election monitoring data and alerts',
                       'All prospecting lists and saved filters',
-                      'Your entire account history — gone forever',
+                      'Your entire account history',
                     ].map(item => (
                       <li key={item} className="flex items-start gap-2 text-xs text-red-700">
-                        <span className="mt-0.5 flex-shrink-0 font-bold">✕</span>
+                        <span className="mt-0.5 flex-shrink-0 font-bold">–</span>
                         {item}
                       </li>
                     ))}
                   </ul>
                 </div>
 
-                <p className="text-xs text-gray-500 text-center">
-                  <strong className="text-gray-800">There's a smarter option:</strong> downgrade to the free Scout plan.
-                  Your data stays safe, your account stays active — just without the paid features.
+                <p className="text-xs text-gray-600 text-center">
+                  <strong className="text-gray-800">There is a smaller step:</strong> move to the free Scout plan.
+                  Billing stops, your account stays, and every profile you have made stays with it.
                 </p>
 
-                {/* Option A — Downgrade (recommended) */}
                 <button
                   onClick={handleDowngradeToFree}
                   disabled={deleteLoading}
                   className="w-full flex items-center justify-between p-4 bg-green-50 border-2 border-green-400 rounded-xl hover:bg-green-100 transition-colors text-left disabled:opacity-60"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-green-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <div className="w-8 h-8 bg-green-600 rounded-lg flex items-center justify-center flex-shrink-0">
                       <CheckCircle className="w-4 h-4 text-white" />
                     </div>
                     <div>
-                      <p className="text-sm font-bold text-green-800">Keep my data — move to free Scout plan</p>
-                      <p className="text-xs text-green-600 mt-0.5">Cancel billing · Keep all candidates & profiles · Free forever</p>
+                      <p className="text-sm font-bold text-green-800">Keep my data — move to the free Scout plan</p>
+                      <p className="text-xs text-green-700 mt-0.5">Billing stops · candidates and profiles stay · free</p>
                     </div>
                   </div>
                   {deleteLoading
-                    ? <Loader2 className="w-4 h-4 text-green-600 animate-spin flex-shrink-0" />
-                    : <ArrowRight className="w-4 h-4 text-green-600 flex-shrink-0" />}
+                    ? <Loader2 className="w-4 h-4 text-green-700 animate-spin flex-shrink-0" />
+                    : <ArrowRight className="w-4 h-4 text-green-700 flex-shrink-0" />}
                 </button>
 
-                {/* Option B — Delete (destructive) */}
                 <button
                   onClick={() => setCancelStep('confirm')}
                   disabled={deleteLoading}
                   className="w-full flex items-center justify-between p-3 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors text-left disabled:opacity-60"
                 >
                   <div>
-                    <p className="text-sm font-semibold text-gray-600">Permanently delete everything</p>
-                    <p className="text-xs text-gray-400 mt-0.5">All data destroyed · cannot be reversed</p>
+                    <p className="text-sm font-semibold text-gray-700">Permanently delete everything</p>
+                    <p className="text-xs text-gray-500 mt-0.5">All data destroyed · cannot be reversed</p>
                   </div>
-                  <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                  <ChevronRight className="w-4 h-4 text-gray-500 flex-shrink-0" />
                 </button>
               </div>
             </div>
           )}
 
-          {/* ── Step 2: Final delete confirmation ────────────────────────────── */}
           {cancelStep === 'confirm' && (
             <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
-              {/* Skull header */}
               <div className="bg-gray-900 px-6 py-5 flex items-start justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-red-600 rounded-xl flex items-center justify-center flex-shrink-0">
@@ -1227,42 +801,38 @@ export default function Settings() {
                   </div>
                   <div>
                     <h3 className="text-white font-black text-base">This cannot be undone</h3>
-                    <p className="text-gray-400 text-xs mt-0.5">You are about to permanently destroy your account</p>
+                    <p className="text-gray-300 text-xs mt-0.5">You are about to permanently destroy this account</p>
                   </div>
                 </div>
-                <button onClick={() => setCancelStep(null)} className="text-gray-500 hover:text-white mt-0.5">
+                <button onClick={() => setCancelStep(null)} className="text-gray-400 hover:text-white mt-0.5" aria-label="Close">
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
               <div className="px-6 py-5 space-y-4">
-                <div className="p-4 bg-gray-900 rounded-xl text-center">
-                  <p className="text-white font-black text-lg">⚠ PERMANENT DATA DESTRUCTION ⚠</p>
-                  <p className="text-gray-400 text-xs mt-1">The following will be <span className="text-red-400 font-bold">immediately and permanently wiped</span>:</p>
-                </div>
-
                 <div className="space-y-1.5">
                   {[
-                    ['Candidates', 'Every profile, note, and tracking history'],
-                    ['Profiles', 'Every AI report — including credits you paid for'],
-                    ['Elections', 'All race monitoring, alerts, and result tracking'],
-                    ['Prospecting', 'All saved lists, filters, and contact intelligence'],
-                    ['Your account', 'Login credentials and all account history'],
+                    ['Candidates', 'every record, note, document and game plan'],
+                    ['Profiles', 'every generated report, including purchased credits'],
+                    ['Elections', 'all race monitoring, alerts and result tracking'],
+                    ['Prospecting', 'all saved lists, filters and contact intelligence'],
+                    ['Your account', 'credentials, billing history and audit trail'],
                   ].map(([label, desc]) => (
                     <div key={label} className="flex items-center gap-3 p-2.5 bg-red-50 border border-red-100 rounded-lg">
-                      <Trash2 className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />
+                      <Trash2 className="w-3.5 h-3.5 text-red-600 flex-shrink-0" />
                       <div>
                         <span className="text-xs font-bold text-red-700">{label}</span>
-                        <span className="text-xs text-red-500 ml-1.5">{desc}</span>
+                        <span className="text-xs text-red-700 ml-1.5">{desc}</span>
                       </div>
                     </div>
                   ))}
                 </div>
 
                 <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5">
-                  <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                  <AlertTriangle className="w-4 h-4 text-amber-700 flex-shrink-0 mt-0.5" />
                   <p className="text-xs text-amber-800">
-                    <strong>Still time to change your mind.</strong> Downgrading to the free Scout plan keeps everything intact. You can re-upgrade anytime.
+                    <strong>There is still time to change your mind.</strong> The free Scout plan keeps
+                    everything intact, and you can re-upgrade whenever you want.
                   </p>
                 </div>
 
@@ -1274,15 +844,13 @@ export default function Settings() {
                 )}
 
                 <div className="flex flex-col gap-2 pt-1">
-                  {/* Last escape hatch */}
                   <button
                     onClick={handleDowngradeToFree}
                     disabled={deleteLoading}
-                    className="w-full py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-bold rounded-xl transition-colors disabled:opacity-60"
+                    className="w-full py-2.5 bg-green-700 hover:bg-green-800 text-white text-sm font-bold rounded-xl transition-colors disabled:opacity-60"
                   >
                     {deleteLoading ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Actually — keep my data on Scout (free)'}
                   </button>
-                  {/* Nuclear button */}
                   <button
                     onClick={handleConfirmDelete}
                     disabled={deleteLoading}
@@ -1295,16 +863,14 @@ export default function Settings() {
                   <button
                     onClick={() => setCancelStep(null)}
                     disabled={deleteLoading}
-                    className="text-xs text-gray-400 hover:text-gray-600 text-center py-1 transition-colors"
-                  >
-                    Cancel — I changed my mind
-                  </button>
+                    className="text-xs text-gray-500 hover:text-gray-700 text-center py-1 transition-colors"
+                  >Cancel — I changed my mind</button>
                 </div>
               </div>
             </div>
           )}
         </div>
       )}
-    </div>
+    </SettingsShell>
   )
 }

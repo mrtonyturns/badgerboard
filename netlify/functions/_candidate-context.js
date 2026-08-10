@@ -30,13 +30,27 @@ async function getCandidateAiContext(candidateId) {
   try {
     const { data, error } = await serviceClient()
       .from('candidates')
-      .select('notes, ai_access_notes')
+      .select('notes, ai_access_notes, created_by')
       .eq('id', candidateId)
       .single()
     if (error || !data) return empty
 
-    // Candidate-level lock: hard stop, nothing leaves.
+    // Candidate-level lock: hard stop, nothing leaves. This ALWAYS overrides
+    // the org-level default below.
     if (data.ai_access_notes === false) return empty
+
+    // Tri-state: null inherits the owner's org-level default
+    // (Settings -> Data & privacy). Explicit true bypasses the default.
+    if (data.ai_access_notes == null && data.created_by) {
+      try {
+        const { data: pref } = await serviceClient()
+          .from('notification_preferences')
+          .select('ai_access_default')
+          .eq('user_id', data.created_by)
+          .maybeSingle()
+        if (pref && pref.ai_access_default === false) return empty
+      } catch { /* missing table/column -> permissive default, matching prior behavior */ }
+    }
 
     // candidates.notes holds the v2 JSON {v:2, notes:[], files:[]} store
     let parsed = null

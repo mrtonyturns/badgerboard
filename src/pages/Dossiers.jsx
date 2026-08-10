@@ -41,7 +41,7 @@ import ShareModal from './profiler/ShareModal'
 import ClaimReviewer from './profiler/ClaimReviewer'
 import {
   parseSections, buildReport, buildPrintHtml, sourcingStats, flagSummary,
-  parseFlaggedClaims,
+  parseFlaggedClaims, verdictOf,
 } from './profiler/reportModel'
 import { rowToCandidatePatch } from './profiler/bulkCsv'
 import { filterSections } from '../lib/profileContent'
@@ -53,6 +53,11 @@ const BULK_STAGGER_MS = 3000
 const ANNOTATION_PREFIX = 'dossier_annotation_'
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+
+/** Escape user-written text before it is injected into the print document. */
+const escapeForPrint = (s = '') => String(s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
 
 const startOfThisMonth = () => {
   const d = new Date()
@@ -547,13 +552,62 @@ export default function Dossiers() {
     await fetchData()
   }
 
-  const handleExportPdf = () => {
+  // Options come from the share dialog's PDF step (SPEC-share-dialog §4). A bare
+  // call — ReportReader's own Export button passes a click event — keeps the
+  // defaults: checklist on, disclaimer on, team notes OFF.
+  const handleExportPdf = (opts) => {
     if (!selected) return
+    const o = {
+      checklist:  opts?.checklist  !== false,
+      disclaimer: opts?.disclaimer !== false,
+      notes:      opts?.notes === true,
+    }
     const { sections } = filterSections(parseSections(selected.content || ''), showEmpty)
     // The printed copy carries the team's verdicts too — a claim the team has
     // settled must not print as unverified.
     const report = buildReport(selected.content || '', sections, verdicts)
-    const html = buildPrintHtml(selected, report)
+    // Section 14 IS the verification checklist; turning the option off drops
+    // that section and nothing else.
+    const printReport = o.checklist
+      ? report
+      : { ...report, sections: (report.sections || []).filter(s => s.id !== 'section-14') }
+    let html = buildPrintHtml(selected, printReport)
+
+    if (!o.disclaimer) {
+      // The only thing this removes is the standing footer line; the AI-research
+      // markers inside the document stay exactly where they are.
+      html = html.replace(/\s*<div class="footer">[\s\S]*?<\/div>\s*(?=<\/body>)/, '\n')
+    }
+
+    // Team notes are internal and never travel by default. The candidate-level
+    // AI-access lock is authoritative: locked notes cannot be exported at all.
+    if (o.notes && !notesLocked) {
+      const labelFor = (id) =>
+        (printReport.sections || []).find(s => s.id === id)?.label
+        || (id === 'overview' ? 'Overview' : id.replace(/^section-/, 'Section '))
+      const entries = Object.entries(annotations)
+        .filter(([, n]) => n?.text?.trim())
+        .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
+      if (entries.length) {
+        const rows = entries.map(([id, n]) => `
+          <div class="note">
+            <div class="note-h">${escapeForPrint(labelFor(id))}</div>
+            <div class="note-t">${escapeForPrint(n.text)}</div>
+          </div>`).join('')
+        html = html.replace('</body>', `
+  <section class="sec">
+    <div class="sec-h"><span class="title">Internal team notes</span>
+      <span class="grp">NOT PART OF THE PROFILE</span></div>
+    <div class="p">Written by your team inside Badger Board. Not AI-generated, not
+    published with any shared link, and not for distribution outside your organization.</div>
+    <style>.note{margin:0 0 10px}.note-h{font-family:Arial,sans-serif;font-size:9pt;font-weight:700}
+    .note-t{font-size:10.5pt;color:#27272A;white-space:pre-wrap}</style>
+    ${rows}
+  </section>
+</body>`)
+      }
+    }
+
     const win = window.open('', '_blank')
     if (!win) { setError('Allow pop-ups to export a PDF.'); return }
     win.document.write(html)
@@ -567,6 +621,24 @@ export default function Dossiers() {
     for (const c of candidates) m.set(c.id, c)
     return m
   }, [candidates])
+
+  // ── What the share dialog needs about the open profile ────────────────────
+  // The AI-access lock lives on the candidate row; the PDF step disables the
+  // team-notes option outright when it is engaged.
+  const openProfileCandidate = selected
+    ? (candidateById.get(selected.candidate_id) || selected.candidate || null)
+    : null
+  const notesLocked = openProfileCandidate?.ai_access_notes === false
+
+  // Claims still waiting on a source — the same rule flagSummary uses, so the
+  // PDF step's checklist line can't disagree with the reader.
+  const openClaimCount = useMemo(() => {
+    if (!selected) return 0
+    return parseFlaggedClaims(selected.content || '').filter(c => {
+      const v = verdictOf(verdicts, c.key)
+      return !v || v.verdict === 'unsure'
+    }).length
+  }, [selected, verdicts])
 
   const rows = useMemo(() => dossiers.map(d => {
     const cand = candidateById.get(d.candidate_id) || d.candidate || {}
@@ -763,7 +835,14 @@ export default function Dossiers() {
         />
 
         {showShare && (
-          <ShareModal dossier={selected} onClose={() => setShowShare(false)} onExportPdf={handleExportPdf} />
+          <ShareModal
+            dossier={selected}
+            candidate={openProfileCandidate}
+            openClaimCount={openClaimCount}
+            noteCount={Object.keys(annotations).length}
+            onClose={() => setShowShare(false)}
+            onExportPdf={handleExportPdf}
+          />
         )}
         {showReviewer && <ClaimReviewer dossier={selected} onClose={() => setShowReviewer(false)} />}
         {confirmDelete && (

@@ -2,8 +2,15 @@
 // Creates a temporary shareable link for a dossier.
 // Agency tier only. Returns a token-based public URL with chosen expiry.
 //
-// POST body: { dossier_id, expires_in: '24h' | '7d' | '30d' }
-// Returns:   { token, share_url, expires_at, id }
+// POST body: { dossier_id, expires_hours: 1..168, acknowledged: true }
+//            (legacy: expires_in: '24h' | '7d' | '30d')
+// Returns:   { token, share_url, expires_at, expires_hours, created_at, view_count, id }
+//
+// The responsibility acknowledgment is REQUIRED. The share dialog gates its
+// "Create link" button on an explicit checkbox (SPEC-share-dialog §2); this
+// function refuses to mint a link without `acknowledged: true` so the record on
+// dossier_shares (ack_at / ack_by / ack_duration_hours) is always complete.
+// ack_by is taken from the verified user — never from the request body.
 
 const SUPABASE_URL     = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SVC_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -112,6 +119,17 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'expires_hours must be a number between 1 (1 hour) and 168 (7 days)' }) }
   }
 
+  // Acknowledgment gate — a link is not created without it. The checkbox in the
+  // dialog is the consent record, so a missing/false flag is a hard 400 rather
+  // than a silently unacknowledged row.
+  if (body.acknowledged !== true) {
+    return {
+      statusCode: 400,
+      headers: CORS,
+      body: JSON.stringify({ error: 'The responsibility acknowledgment is required before a share link can be created.' }),
+    }
+  }
+
   // Verify the dossier belongs to this user
   const check = await supa('dossiers', 'GET', null, `?id=eq.${encodeURIComponent(dossier_id)}&generated_by=eq.${user.id}&select=id,title`)
   if (!check.ok || !Array.isArray(check.data) || check.data.length === 0) {
@@ -128,11 +146,16 @@ exports.handler = async (event) => {
   const token     = generateToken()
   const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString()
 
+  // The acknowledgment rides with the row: who accepted it, when, and the
+  // duration they accepted it for. ack_by comes from the verified session.
   const insert = await supa('dossier_shares', 'POST', {
     token,
     dossier_id,
     created_by: user.id,
     expires_at: expiresAt,
+    ack_at: new Date().toISOString(),
+    ack_by: user.id,
+    ack_duration_hours: expiryHours,
   })
 
   if (!insert.ok || !Array.isArray(insert.data) || insert.data.length === 0) {
@@ -152,6 +175,11 @@ exports.handler = async (event) => {
       share_url:     shareUrl,
       expires_at:    share.expires_at,
       expires_hours: expiryHours,
+      // The live step shows "created …" and a view count; both come from the
+      // row rather than being assumed by the client.
+      created_at:    share.created_at || null,
+      view_count:    share.view_count ?? 0,
+      ack_at:        share.ack_at || null,
     }),
   }
 }
