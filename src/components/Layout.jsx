@@ -40,10 +40,18 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.21.0'
+const APP_VERSION = 'v1.21.1'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.21.1',
+    date: 'July 21, 2026',
+    changes: [
+      'Profiler reports: every claim backed by an article or post now carries a View source link',
+      'Verify now asks for your verdict — Valid, False, or Unsure — and remembers it: verified claims stop being flagged, false ones are marked and muted, and your team\u2019s calls show on shared views',
+    ],
+  },
   {
     version: 'v1.21.0',
     date: 'July 21, 2026',

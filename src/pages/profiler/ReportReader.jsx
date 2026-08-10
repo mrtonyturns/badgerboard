@@ -10,22 +10,30 @@
 //     the report itself tagged unverified or low-confidence
 //   · undifferentiated prose → typed blocks from reportModel.js
 //   · a flat pill rail → 14 sections grouped into four, with working scroll-spy
+//
+// Two owner-requested additions live here too:
+//   · "View source →" on any block whose own markdown carries a URL
+//   · the Verify link opens the lookup AND asks the team for a verdict; a claim
+//     ruled valid stops asking to be verified, one ruled false stays on the page
+//     marked. Verdicts persist on dossiers.claim_verdicts via `onVerdict`; with
+//     no `onVerdict` (the public share view) they render read-only.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { filterSections } from '../../lib/profileContent'
 import {
   parseSections, buildReport, filterToUnverified, sourcingStats, riskStats,
-  sourceStats, inlineHtml, plainText, GROUP_ORDER, SEV_COLOR,
+  sourceStats, inlineHtml, plainText, claimState, verdictDate, urlHost,
+  GROUP_ORDER, SEV_COLOR,
 } from './reportModel'
 import { T, cardStyle, Rich, StatStrip, StatCell, RatioBar, plural } from './shared'
 
 // ─── Model hook ──────────────────────────────────────────────────────────────
 
-export function useReport(content, showEmpty = false) {
+export function useReport(content, showEmpty = false, verdicts = null) {
   return useMemo(() => {
     const parsed = parseSections(content || '')
     const { sections, hiddenCount } = filterSections(parsed, showEmpty)
-    const report = buildReport(content || '', sections)
+    const report = buildReport(content || '', sections, verdicts)
     return {
       report,
       hiddenCount,
@@ -33,7 +41,7 @@ export function useReport(content, showEmpty = false) {
       risk:     riskStats(content || ''),
       sources:  sourceStats(content || ''),
     }
-  }, [content, showEmpty])
+  }, [content, showEmpty, verdicts])
 }
 
 // ─── Scroll-spy (ported from the old Dossiers.jsx, generalized) ─────────────
@@ -101,28 +109,90 @@ function useScrollSpy(ids, docRef, enabled) {
 
 const MEASURE = 78   // ch — the paragraph measure cap from the spec
 
-function VerifyLink({ text, subject }) {
+const quietLink = { fontSize: 11, color: T.faint, textDecoration: 'underline', textUnderlineOffset: 2 }
+const quietBtn  = {
+  ...quietLink, background: 'none', border: 0, padding: 0, cursor: 'pointer',
+  fontFamily: 'inherit', lineHeight: 1.45,
+}
+
+/** Opens the lookup in a new tab AND, in-app, asks for the team's verdict. */
+function VerifyLink({ text, subject, onAsk }) {
   const q = `${subject ? subject + ' ' : ''}${plainText(text).slice(0, 90)}`.trim()
   return (
     <a
       href={`https://www.google.com/search?q=${encodeURIComponent(q)}`}
       target="_blank" rel="noopener noreferrer"
-      style={{ fontSize: 11, color: T.faint, textDecoration: 'underline' }}
+      onClick={onAsk || undefined}
+      style={quietLink}
     >Verify</a>
   )
 }
 
-function Marker({ marker, text, subject }) {
-  if (!marker) return null
+/**
+ * "View source →" for the URLs a block's own markdown carries. Never invented:
+ * `urls` comes from the document text, so a block without one shows nothing.
+ */
+function SourceLinks({ urls }) {
+  const [open, setOpen] = useState(false)
+  if (!urls || !urls.length) return null
+  const rest = urls.slice(1)
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 6 }}>
-      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.9px', color: T.amber }}>{marker}</span>
-      <VerifyLink text={text} subject={subject} />
+    <>
+      <a href={urls[0]} target="_blank" rel="noopener noreferrer" title={urls[0]} style={quietLink}>
+        View source →
+      </a>
+      {rest.length > 0 && !open && (
+        <button type="button" onClick={() => setOpen(true)} style={quietBtn}>
+          +{rest.length} more
+        </button>
+      )}
+      {open && rest.map((u, i) => (
+        <a key={i} href={u} target="_blank" rel="noopener noreferrer" title={u} style={quietLink}>
+          {urlHost(u) || 'View source'} →
+        </a>
+      ))}
+    </>
+  )
+}
+
+/**
+ * The one row under a block: the report's own confidence label, what the team
+ * decided about it, and the sources the block cites. A block with none of those
+ * renders nothing at all.
+ */
+function Foot({ el, text, subject, onAsk }) {
+  const st = claimState(el)
+  const urls = el?.urls || []
+  if (!st && !urls.length) return null
+  const ask = onAsk && el?.key ? () => onAsk(el, text) : null
+  const on = st?.at ? verdictDate(st.at) : ''
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 6, flexWrap: 'wrap' }}>
+      {st?.kind === 'valid' && (
+        <span style={{ fontSize: 11, fontWeight: 600, color: T.green }}>
+          Verified by {onAsk ? 'your team' : 'the profile owner'}{on ? ` · ${on}` : ''}
+        </span>
+      )}
+      {st && st.kind !== 'valid' && (
+        <span style={{
+          fontSize: 11, fontWeight: 700, letterSpacing: '.9px',
+          color: st.kind === 'false' ? T.redHot : T.amber,
+        }}>{st.label}</span>
+      )}
+      {st?.verify && <VerifyLink text={text} subject={subject} onAsk={ask} />}
+      {st && !st.verify && ask && (
+        <button type="button" onClick={ask} style={quietBtn}>Change</button>
+      )}
+      <SourceLinks urls={urls} />
     </div>
   )
 }
 
-function Block({ b, subject }) {
+/** Body colour for a claim: muted once the team has marked it false. */
+const bodyColor = (el, base = T.ink3) => (claimState(el)?.muted ? T.faint : base)
+
+function Block({ b, subject, onAsk }) {
   switch (b.kind) {
     case 'head':
       return (
@@ -136,8 +206,8 @@ function Block({ b, subject }) {
       return (
         <div style={{ marginBottom: 14, maxWidth: `${MEASURE}ch` }}>
           <Rich as="div" html={inlineHtml(b.text)}
-            style={{ fontSize: 14.5, lineHeight: 1.68, color: T.ink3 }} />
-          <Marker marker={b.marker} text={b.text} subject={subject} />
+            style={{ fontSize: 14.5, lineHeight: 1.68, color: bodyColor(b) }} />
+          <Foot el={b} text={b.text} subject={subject} onAsk={onAsk} />
         </div>
       )
 
@@ -149,8 +219,8 @@ function Block({ b, subject }) {
               <span style={{ flex: 'none', width: 4, height: 4, borderRadius: '50%', background: '#C9C9C2', marginTop: 8 }} />
               <div style={{ minWidth: 0 }}>
                 <Rich as="div" html={inlineHtml(it.text)}
-                  style={{ fontSize: 14, lineHeight: 1.62, color: T.ink3 }} />
-                <Marker marker={it.marker} text={it.text} subject={subject} />
+                  style={{ fontSize: 14, lineHeight: 1.62, color: bodyColor(it) }} />
+                <Foot el={it} text={it.text} subject={subject} onAsk={onAsk} />
               </div>
             </div>
           ))}
@@ -173,7 +243,7 @@ function Block({ b, subject }) {
                       {plainText(it.v)}
                     </a>
                   : <Rich as="div" html={inlineHtml(it.v || it.raw || '')}
-                      style={{ fontSize: 14, lineHeight: 1.6, color: T.ink3 }} />}
+                      style={{ fontSize: 14, lineHeight: 1.6, color: bodyColor(it) }} />}
                 {it.sub && (
                   <div style={{ fontSize: 11.5, color: T.muted, lineHeight: 1.5, marginTop: 2 }}>{it.sub}</div>
                 )}
@@ -185,7 +255,7 @@ function Block({ b, subject }) {
                     ))}
                   </div>
                 )}
-                <Marker marker={it.marker} text={it.v || it.raw || ''} subject={subject} />
+                <Foot el={it} text={it.v || it.raw || ''} subject={subject} onAsk={onAsk} />
               </div>
             </div>
           ))}
@@ -203,8 +273,9 @@ function Block({ b, subject }) {
             <div key={i} style={{ background: '#fff', padding: '10px 14px', minWidth: 0 }}>
               <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.3px', color: T.muted }}>{r.k}</div>
               <Rich as="div" html={inlineHtml(r.v)}
-                style={{ fontSize: 13, fontWeight: 600, marginTop: 2, color: T.ink, lineHeight: 1.5 }} />
+                style={{ fontSize: 13, fontWeight: 600, marginTop: 2, color: bodyColor(r, T.ink), lineHeight: 1.5 }} />
               {r.src && <div style={{ fontSize: 11, color: T.muted, marginTop: 3 }}>{r.src}</div>}
+              <Foot el={r} text={r.v} subject={subject} onAsk={onAsk} />
             </div>
           ))}
         </div>
@@ -225,10 +296,10 @@ function Block({ b, subject }) {
           </div>
           {b.text && (
             <Rich as="div" html={inlineHtml(b.text)}
-              style={{ fontSize: 14.5, lineHeight: 1.68, color: T.ink3 }} />
+              style={{ fontSize: 14.5, lineHeight: 1.68, color: bodyColor(b) }} />
           )}
           {b.source && <div style={{ fontSize: 11, color: T.muted, marginTop: 7 }}>{b.source}</div>}
-          <Marker marker={b.marker} text={b.text || b.title} subject={subject} />
+          <Foot el={b} text={b.text || b.title} subject={subject} onAsk={onAsk} />
         </div>
       )
 
@@ -243,7 +314,7 @@ function Block({ b, subject }) {
                   letterSpacing: '.9px', color: T.redHot,
                 }}>ATTACK</span>
                 <Rich as="span" html={inlineHtml(p.attack)}
-                  style={{ fontSize: 14.5, lineHeight: 1.6, color: T.ink4 }} />
+                  style={{ fontSize: 14.5, lineHeight: 1.6, color: bodyColor(p, T.ink4) }} />
               </div>
               {p.defense && (
                 <div style={{ display: 'flex', gap: 11 }}>
@@ -255,6 +326,9 @@ function Block({ b, subject }) {
                     style={{ fontSize: 14.5, lineHeight: 1.6, color: T.ink3 }} />
                 </div>
               )}
+              <div style={{ paddingLeft: 77 }}>
+                <Foot el={p} text={p.attack} subject={subject} onAsk={onAsk} />
+              </div>
             </div>
           ))}
         </div>
@@ -386,6 +460,96 @@ function ViewControls({ mode, setMode, vOnly, setVOnly, hint }) {
   )
 }
 
+// ─── Verdict lightbox ────────────────────────────────────────────────────────
+// Opens the moment the Verify link is clicked — the lookup is already loading in
+// the other tab, so the question is waiting when the reader comes back. Escape
+// or the backdrop closes it WITHOUT recording anything: no answer is not an
+// answer, and a claim nobody ruled on stays flagged.
+
+const VERDICT_BUTTONS = [
+  { id: 'valid',  label: 'Valid',  bg: T.green,  fg: '#fff',  hint: 'The source confirms it' },
+  { id: 'false',  label: 'False',  bg: T.redHot, fg: '#fff',  hint: 'The source contradicts it' },
+  { id: 'unsure', label: 'Unsure', bg: T.chip,   fg: T.ink3,  hint: 'Still not settled' },
+]
+
+function VerdictLightbox({ claim, current, onPick, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const full = plainText(claim || '')
+  const quote = full.length > 200
+    ? `${full.slice(0, 200).replace(/\s+\S*$/, '')}…`
+    : full
+
+  return (
+    <div
+      role="dialog" aria-modal="true" aria-label="Record a verdict on this claim"
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(13,21,38,.45)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        fontFamily: 'inherit', color: T.ink,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: '#fff', borderRadius: 18, boxShadow: '0 24px 60px rgba(13,21,38,.28)',
+          width: '100%', maxWidth: 420, padding: '20px 22px 18px',
+        }}
+      >
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', color: T.faint }}>
+          VERIFY THIS CLAIM
+        </div>
+        <div style={{ fontSize: 16, fontWeight: 700, margin: '6px 0 12px', lineHeight: 1.35 }}>
+          Did the source confirm this claim?
+        </div>
+        <div style={{
+          borderLeft: `2px solid ${T.line}`, paddingLeft: 13, marginBottom: 16,
+          fontSize: 13, lineHeight: 1.6, color: T.ink3,
+        }}>{quote || 'This claim has no readable text.'}</div>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          {VERDICT_BUTTONS.map(v => {
+            const on = current === v.id
+            return (
+              <button
+                key={v.id}
+                type="button"
+                title={v.hint}
+                onClick={() => onPick(v.id)}
+                style={{
+                  flex: 1, minHeight: 44, borderRadius: 10, cursor: 'pointer',
+                  fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
+                  background: v.bg, color: v.fg,
+                  border: v.id === 'unsure' ? `1px solid ${T.field}` : '1px solid transparent',
+                  boxShadow: on ? `0 0 0 2px #fff, 0 0 0 4px ${v.id === 'unsure' ? T.field : v.bg}` : 'none',
+                }}
+              >{v.label}</button>
+            )
+          })}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.55, flex: 1, minWidth: 190 }}>
+            Saved to this profile for everyone on your team. A valid claim stops asking to be
+            verified; a false one stays on the page, marked.
+          </div>
+          {current && (
+            <button type="button" onClick={() => onPick(null)} style={{ ...quietBtn, flex: 'none' }}>
+              Remove verdict
+            </button>
+          )}
+          <button type="button" onClick={onClose} style={{ ...quietBtn, flex: 'none' }}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Reader ──────────────────────────────────────────────────────────────────
 
 export default function ReportReader({
@@ -406,14 +570,28 @@ export default function ReportReader({
   onSaveAnnotation = null,
   showAnnotations = false,
   headerExtra = null,
+  verdicts = null,
+  onVerdict = null,
 }) {
   const [mode, setMode]   = useState('full')
   const [vOnly, setVOnly] = useState(false)
+  const [ask, setAsk]     = useState(null)   // { key, text, current } — the lightbox
   const docRef = useRef(null)
 
-  const { report, hiddenCount, sourcing, risk, sources } = useReport(content, showEmpty)
+  // The share view passes no verdicts prop but its dossier row carries the
+  // column: verdicts render there read-only, with no lightbox and no writes.
+  const verdictMap = verdicts
+    || (dossier?.claim_verdicts && typeof dossier.claim_verdicts === 'object' ? dossier.claim_verdicts : null)
+
+  const { report, hiddenCount, sourcing, risk, sources } = useReport(content, showEmpty, verdictMap)
   const candidate = dossier?.candidate || {}
   const subject   = candidate.name || ''
+
+  const onAsk = useCallback((el, text) => {
+    if (!el?.key) return
+    setAsk({ key: el.key, text: text || el.text || '', current: el.verdict?.verdict || null })
+  }, [])
+  const askVerdict = onVerdict ? onAsk : null
 
   const visible = useMemo(() => {
     if (!vOnly) return report.sections
@@ -443,6 +621,17 @@ export default function ReportReader({
     : vOnly
       ? 'Showing only claims the report has not sourced to a primary record'
       : `${plural(report.sections.length, 'section')}, grouped`
+
+  // Needs verification, after the team's verdicts. The SOURCING ratio below is
+  // deliberately untouched: a team verdict is not a primary record, so it never
+  // moves the honest ratio — it only stops the report asking again.
+  const team = report.verdictTotals || { valid: 0, false: 0, unsure: 0, resolvedWeak: 0, total: 0 }
+  const pendingWeak = Math.max(0, sourcing.weak - team.resolvedWeak)
+  const teamNote = [
+    team.valid  ? `${team.valid} verified by ${onVerdict ? 'your team' : 'the profile owner'}` : '',
+    team.false  ? `${team.false} marked false` : '',
+    team.unsure ? `${team.unsure} reviewed, still open` : '',
+  ].filter(Boolean).join(' · ')
 
   return (
     <>
@@ -492,10 +681,10 @@ export default function ReportReader({
         />
         <StatCell
           label="Needs verification"
-          value={sourcing.weak}
-          sub={sourcing.weak
+          value={pendingWeak}
+          sub={teamNote || (sourcing.weak
             ? `${sourcing.material} material · ${sourcing.minor} minor`
-            : 'Nothing tagged for follow-up'}
+            : 'Nothing tagged for follow-up')}
         />
         <StatCell
           label="Risk items"
@@ -542,11 +731,17 @@ export default function ReportReader({
             {visible.length === 0 && (
               <div style={{ padding: '40px 0' }}>
                 <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 5 }}>
-                  {vOnly ? 'Nothing in this profile is tagged for verification' : 'This profile has no readable sections'}
+                  {vOnly
+                    ? team.resolvedWeak > 0
+                      ? 'Nothing is left to verify in this profile'
+                      : 'Nothing in this profile is tagged for verification'
+                    : 'This profile has no readable sections'}
                 </div>
                 <div style={{ fontSize: 12.5, color: T.muted, lineHeight: 1.6, maxWidth: '62ch' }}>
                   {vOnly
-                    ? 'Every claim the report tagged is sourced to a primary record, or the profile predates confidence tagging. Switch back to the full report to read it.'
+                    ? team.resolvedWeak > 0
+                      ? `${onVerdict ? 'Your team' : 'The profile owner'} has ruled on every claim the report flagged. Switch back to the full report to read it.`
+                      : 'Every claim the report tagged is sourced to a primary record, or the profile predates confidence tagging. Switch back to the full report to read it.'
                     : 'The stored report could not be split into sections. Regenerating it will rebuild the document.'}
                 </div>
               </div>
@@ -596,7 +791,7 @@ export default function ReportReader({
                     </div>
                   )}
 
-                  {blocks.map((b, i) => <Block key={i} b={b} subject={subject} />)}
+                  {blocks.map((b, i) => <Block key={i} b={b} subject={subject} onAsk={askVerdict} />)}
 
                   {mode !== 'brief' && blocks.length === 0 && (
                     <div style={{ fontSize: 12.5, color: T.muted }}>
@@ -662,6 +857,15 @@ export default function ReportReader({
           </div>
         </div>
       </div>
+
+      {ask && onVerdict && (
+        <VerdictLightbox
+          claim={ask.text}
+          current={ask.current}
+          onClose={() => setAsk(null)}
+          onPick={(verdict) => { setAsk(null); onVerdict(ask.key, verdict) }}
+        />
+      )}
     </>
   )
 }

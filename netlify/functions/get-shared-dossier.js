@@ -83,7 +83,9 @@ exports.handler = async (event) => {
     // Fetch the dossier (title + content + candidate info)
     const dossierRes = await supa(
       'dossiers', 'GET', null,
-      `?id=eq.${share.dossier_id}&select=id,title,content,generated_at,candidates(name,party,is_incumbent,offices(name,district_name))`
+      // claim_verdicts rides along so the shared reader shows the team's rulings
+      // (read-only — the public view has no way to write one back).
+      `?id=eq.${share.dossier_id}&select=id,title,content,generated_at,claim_verdicts,candidates(name,party,is_incumbent,offices(name,district_name))`
     )
     if (!dossierRes.ok || !Array.isArray(dossierRes.data) || dossierRes.data.length === 0) {
       return { statusCode: 404, headers: CORS, body: JSON.stringify({ error: 'Profile not found.' }) }
@@ -107,6 +109,7 @@ exports.handler = async (event) => {
           title:        dossier.title,
           content:      dossier.content,
           generated_at: dossier.generated_at,
+          claim_verdicts: dossier.claim_verdicts || {},
           candidate:    dossier.candidates,
         },
         share: {

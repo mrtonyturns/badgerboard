@@ -168,6 +168,39 @@ export default function Dossiers() {
   const aliveRef = useRef(true)
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false } }, [])
 
+  // ── Team verdicts on flagged claims (dossiers.claim_verdicts) ─────────────
+  // Optimistic: the reader updates the moment a verdict is picked, and the row
+  // is put back exactly as it was if the write fails.
+  const [verdicts, setVerdicts] = useState({})
+  useEffect(() => {
+    const stored = selected?.claim_verdicts
+    setVerdicts(stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {})
+  }, [selected?.id, selected?.claim_verdicts])
+
+  const saveVerdict = useCallback(async (claimKey, verdict) => {
+    if (!selected?.id || !claimKey) return
+    const previous = verdicts
+    const next = { ...previous }
+    if (verdict) next[claimKey] = { verdict, at: new Date().toISOString(), by: user?.id || null }
+    else delete next[claimKey]
+
+    setVerdicts(next)
+    setError('')
+    const { error: upErr } = await supabase
+      .from('dossiers').update({ claim_verdicts: next }).eq('id', selected.id)
+    if (!aliveRef.current) return
+    if (upErr) {
+      setVerdicts(previous)
+      setError('That verdict could not be saved. The claim has been left as it was.')
+      return
+    }
+    // Keep the open profile and the library row in step without a refetch —
+    // the FLAGS "to verify" count reads the same column.
+    setSelected(prev => (prev && prev.id === selected.id ? { ...prev, claim_verdicts: next } : prev))
+    setDossiers(prev => prev.map(d => (d.id === selected.id ? { ...d, claim_verdicts: next } : d)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id, verdicts, user?.id])
+
   // ── Fetch ─────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
     const [{ data: c }, { data: d }, { data: monthly }] = await Promise.all([
@@ -487,7 +520,9 @@ export default function Dossiers() {
   const handleExportPdf = () => {
     if (!selected) return
     const { sections } = filterSections(parseSections(selected.content || ''), showEmpty)
-    const report = buildReport(selected.content || '', sections)
+    // The printed copy carries the team's verdicts too — a claim the team has
+    // settled must not print as unverified.
+    const report = buildReport(selected.content || '', sections, verdicts)
     const html = buildPrintHtml(selected, report)
     const win = window.open('', '_blank')
     if (!win) { setError('Allow pop-ups to export a PDF.'); return }
@@ -507,7 +542,8 @@ export default function Dossiers() {
     const cand = candidateById.get(d.candidate_id) || d.candidate || {}
     const content = d.content || ''
     const src = sourcingStats(content)
-    const flags = flagSummary(content)
+    // Claims the team has ruled valid or false stop counting as "to verify".
+    const flags = flagSummary(content, d.claim_verdicts)
     const ageDays = d.generated_at
       ? Math.floor((Date.now() - new Date(d.generated_at).getTime()) / 86400000) : null
     return {
@@ -583,6 +619,8 @@ export default function Dossiers() {
           annotations={annotations}
           onSaveAnnotation={saveAnnotation}
           showAnnotations={showNotes}
+          verdicts={verdicts}
+          onVerdict={saveVerdict}
           back={(
             <button
               type="button"

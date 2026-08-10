@@ -95,6 +95,10 @@ export function markerFor(text) {
 
 export function hasWeakClaim(text) { return badgesIn(text).some(b => WEAK.has(b)) }
 
+/** How many weak badges a claim carries — the unit the "needs verification"
+ *  count is expressed in, so a resolved claim subtracts exactly what it added. */
+export function weakCount(text) { return badgesIn(text).filter(b => WEAK.has(b)).length }
+
 function severityIn(text) {
   const found = badgesIn(text).find(b => SEVERITY.has(b))
   return found || null
@@ -201,8 +205,11 @@ export function parseFlaggedClaims(content = '') {
     // A line that is nothing but a tag is the section-level confidence header.
     if (/^\s*\*\*\[[A-Za-z][A-Za-z _/]*\]\*\*\s*$/.test(line)) return
     if (/\*\*\[(VERIFY|RESEARCH REQUIRED|LIKELY)\]\*\*/i.test(line)) {
-      const clean = line
-        .replace(/^[#*\-•\d.]+\s*/, '')
+      // The list marker is dropped BEFORE the key is taken, and the confidence
+      // badge is left intact for normalizeClaim to strip, so this key matches
+      // the one parseBlocks puts on the same claim inside the reader.
+      const bare  = line.replace(/^[#*\-•\d.]+\s*/, '')
+      const clean = bare
         .replace(/\*\*\[([A-Z ]+)\]\*\*/g, '[$1]')
         .replace(/\*\*/g, '')
         .trim()
@@ -211,6 +218,7 @@ export function parseFlaggedClaims(content = '') {
           id:        `${currentSection}::${clean.slice(0, 60)}`,
           sectionId: currentSection,
           text:      clean.slice(0, 300),
+          key:       claimKey(bare),
           badge:     /RESEARCH REQUIRED/i.test(line) ? 'RESEARCH REQUIRED' : /VERIFY/i.test(line) ? 'Verify' : 'Likely',
         })
       }
@@ -252,21 +260,111 @@ export function sourcingStats(content = '') {
 const SOCIAL_HOSTS = ['facebook.', 'twitter.', 'x.com', 'instagram.', 'youtube.', 'youtu.be',
   'linkedin.', 'tiktok.', 'threads.', 'reddit.', 'nextdoor.', 'bsky.']
 
+// One URL matcher for the whole model. The "sources linked" stat and the
+// per-block "View source" links read exactly the same thing, so the strip can
+// never claim a source the document does not carry. The class stops at ")" so
+// a markdown link's own closing paren is not swallowed.
+const URL_G = /https?:\/\/[^\s)<>\]"'`]+/g
+
+/**
+ * Distinct, document-order URLs inside a piece of markdown — bare or the target
+ * of a [label](url) link. Anything that does not parse as a URL is dropped:
+ * the reader never links to something it had to guess at.
+ */
+export function extractUrls(text) {
+  const out  = []
+  const seen = new Set()
+  for (const m of String(text || '').matchAll(URL_G)) {
+    const url = m[0].replace(/[.,;:!?'"]+$/, '')
+    if (!url || seen.has(url)) continue
+    try { new URL(url) } catch { continue }
+    seen.add(url)
+    out.push(url)
+  }
+  return out
+}
+
+/** Host of a URL, for labelling the second and later source links. */
+export function urlHost(url) {
+  try { return new URL(url).hostname.replace(/^www\./, '') } catch { return '' }
+}
+
 /** Distinct URLs actually present in the document, split by host type. */
 export function sourceStats(content = '') {
-  const seen = new Set()
+  const urls = extractUrls(content)
   let press = 0, filings = 0, social = 0
-  for (const m of String(content || '').matchAll(/https?:\/\/[^\s)<>\]"']+/g)) {
-    const raw = m[0].replace(/[.,;:]+$/, '')
-    let host
-    try { host = new URL(raw).hostname.replace(/^www\./, '').toLowerCase() } catch { continue }
-    if (seen.has(raw)) continue
-    seen.add(raw)
+  for (const raw of urls) {
+    const host = urlHost(raw).toLowerCase()
+    if (!host) continue
     if (SOCIAL_HOSTS.some(h => host.includes(h))) social++
     else if (/\.gov$/.test(host) || host.includes('.gov.')) filings++
     else press++
   }
-  return { total: seen.size, press, filings, social }
+  return { total: urls.length, press, filings, social }
+}
+
+// ─── Team verdicts on flagged claims ─────────────────────────────────────────
+// A verdict is stored against a hash of the claim's own text, so it survives a
+// reload, another user's session and a re-parse of the same report. It is NOT
+// stored against a block index — blocks move when the parser improves.
+
+export const VERDICTS = ['valid', 'false', 'unsure']
+
+/** Claim text reduced to the letters and digits that carry its meaning. */
+export function normalizeClaim(text = '') {
+  return plainText(String(text).replace(/\s+/g, ' '))
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+/**
+ * Stable claim key: djb2 and FNV-1a over the normalized claim, concatenated in
+ * base 36. Both are plain integer hashes with no randomness or platform
+ * dependency, so the same claim text always produces the same key — which is
+ * the whole reason a stored verdict can find its claim again next session.
+ */
+export function claimKey(text = '') {
+  const s = normalizeClaim(text)
+  if (!s) return ''
+  let d = 5381
+  let f = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    d = (((d << 5) + d) + c) >>> 0
+    f = Math.imul(f ^ c, 0x01000193) >>> 0
+  }
+  return `${d.toString(36)}${f.toString(36)}`
+}
+
+/** The stored verdict for a key, or null. Unknown verdict values are ignored. */
+export function verdictOf(verdicts, key) {
+  const v = key && verdicts ? verdicts[key] : null
+  return v && VERDICTS.includes(v.verdict) ? v : null
+}
+
+/**
+ * How a flagged claim should present once the team's verdict is applied.
+ * Shared by the reader and the print document so they cannot disagree.
+ *   valid  → no label, no Verify link, a quiet "verified" note
+ *   false  → MARKED FALSE, body muted, still on the page as a record
+ *   unsure → the report's own label plus "· reviewed", still flagged
+ */
+export function claimState(el) {
+  const v = el?.verdict?.verdict
+  if (v === 'valid')  return { kind: 'valid',  label: '',             at: el.verdict.at, verify: false, muted: false }
+  if (v === 'false')  return { kind: 'false',  label: 'MARKED FALSE', at: el.verdict.at, verify: false, muted: true  }
+  if (v === 'unsure') return { kind: 'unsure', label: `${el.marker || 'UNVERIFIED'} · reviewed`, at: el.verdict.at, verify: true, muted: false }
+  if (el?.marker)     return { kind: 'open',   label: el.marker,      at: null,          verify: true,  muted: false }
+  return null
+}
+
+/** "Aug 10, 2026" — the date a verdict was recorded, or '' if it is unusable. */
+export function verdictDate(at) {
+  const d = at ? new Date(at) : null
+  return d && !Number.isNaN(+d)
+    ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : ''
 }
 
 /** Risk severities tagged inside sections 6 and 13 (the opposition sections). */
@@ -298,14 +396,24 @@ export function riskStats(content = '') {
   return { ...counts, total, top, topCount: top ? counts[top] : 0 }
 }
 
-/** One-line FLAGS cell for the library table. */
-export function flagSummary(content = '') {
+/**
+ * One-line FLAGS cell for the library table. A claim the team has ruled valid
+ * or false is settled — it stops asking to be verified here too. "Unsure" is
+ * reviewed but unresolved, so it stays in the count.
+ */
+export function flagSummary(content = '', verdicts = null) {
   const risk   = riskStats(content)
-  const verify = parseFlaggedClaims(content).length
+  const claims = parseFlaggedClaims(content)
+  const verify = claims.filter(c => {
+    const v = verdictOf(verdicts, c.key)
+    return !v || v.verdict === 'unsure'
+  }).length
+  const settled = claims.length - verify
   return {
     riskLabel:   risk.top ? `${risk.topCount} ${risk.top === 'MEDIUM' ? 'MED' : risk.top}` : '',
     riskColor:   risk.top ? SEV_COLOR[risk.top] : '#71717A',
     verifyLabel: verify ? `${verify} to verify` : '',
+    settled,
     clean:       !risk.top && !verify,
   }
 }
@@ -376,8 +484,12 @@ function firstSentence(text, max = 240) {
 /**
  * Markdown for one section → typed content blocks.
  * Block kinds: head | paragraph | bullets | list | kv | risk | pair
+ *
+ * Every block (and every item inside one) also carries what it can prove about
+ * itself: `urls` — the source links its own markdown contains — and, when the
+ * report flagged it, `key` / `weak` / `verdict` for the team-verdict flow.
  */
-export function parseBlocks(md = '', sectionNum = null) {
+export function parseBlocks(md = '', sectionNum = null, verdicts = null) {
   const src = withoutSectionTags(stripThinking(md))
     .replace(/^##\s*SECTION[^\n]*\n?/i, '')
     .replace(/^#{1,2}\s+[^\n]*\n?/, (m) => (/^#{1,2}\s*(profile snapshot|section)/i.test(m) ? '' : m))
@@ -387,10 +499,14 @@ export function parseBlocks(md = '', sectionNum = null) {
   const isPairSection = sectionNum === 13
   const isFeedSection = sectionNum === 1 || sectionNum === 10
 
-  const pushPair = (attack, defense) => {
+  // `claim` is the pair's own source line(s): an attack the report tagged
+  // **[VERIFY]** is counted as needing verification, so it has to be something
+  // the reader can actually rule on.
+  const pushPair = (attack, defense, claim = '') => {
+    const pair = { attack, defense, claim: claim || `${attack} ${defense}` }
     const last = blocks[blocks.length - 1]
-    if (last && last.kind === 'pair') last.pairs.push({ attack, defense })
-    else blocks.push({ kind: 'pair', pairs: [{ attack, defense }] })
+    if (last && last.kind === 'pair') last.pairs.push(pair)
+    else blocks.push({ kind: 'pair', pairs: [pair] })
   }
   const pushFeedItem = (item) => {
     const last = blocks[blocks.length - 1]
@@ -431,7 +547,7 @@ export function parseBlocks(md = '', sectionNum = null) {
       if (/attack|charge|criticism/.test(headText) && /respon|defen|rebut|counter|answer/.test(headText) && header.length >= 2) {
         const ai = header.findIndex(h => /attack|charge|criticism/i.test(h))
         const ri = header.findIndex(h => /respon|defen|rebut|counter|answer/i.test(h))
-        body.forEach(r => { if (r[ai] || r[ri]) pushPair(r[ai] || '', r[ri] || '') })
+        body.forEach(r => { if (r[ai] || r[ri]) pushPair(r[ai] || '', r[ri] || '', r.join(' ')) })
         continue
       }
 
@@ -455,6 +571,7 @@ export function parseBlocks(md = '', sectionNum = null) {
             text: text || '',
             source: src,
             marker: markerFor(cells.join(' ')),
+            claim: cells.join(' '),
           })
         })
         continue
@@ -483,7 +600,7 @@ export function parseBlocks(md = '', sectionNum = null) {
         const v = parts.length === 1
           ? parts[0].text
           : parts.map(p => (p.label && !GENERIC_TH.test(p.label) ? `${p.label}: ${p.text}` : p.text)).join(' · ')
-        return { k: plainText(r[0]), v, sub, marker: markerFor(r.join(' ')) }
+        return { k: plainText(r[0]), v, sub, marker: markerFor(r.join(' ')), claim: r.join(' ') }
       }).filter(r => r.k || r.v)
       if (items.length) blocks.push({ kind: 'list', items })
       continue
@@ -492,19 +609,19 @@ export function parseBlocks(md = '', sectionNum = null) {
     // ── Attack / respond pairs (section 13 and anywhere the labels appear) ────
     const atk = line.match(ATTACK_RE)
     if (atk && (isPairSection || RESPOND_RE.test((lines[i + 1] || '').trim()) || RESPOND_RE.test((lines[i + 2] || '').trim()))) {
-      let j = i + 1, defense = ''
+      let j = i + 1, defense = '', defenseLine = ''
       let guard = 0
       while (j < lines.length && guard < 6) {
         const nxt = lines[j].trim()
         if (nxt) {
           guard++
           const r = nxt.match(RESPOND_RE)
-          if (r) { defense = r[1].trim(); j++; break }
+          if (r) { defense = r[1].trim(); defenseLine = nxt; j++; break }
           if (ATTACK_RE.test(nxt) || /^#{1,6}\s/.test(nxt)) break
         }
         j++
       }
-      pushPair(atk[1].trim(), defense)
+      pushPair(atk[1].trim(), defense, weakLine([line, defenseLine]))
       i = defense ? j : i + 1
       continue
     }
@@ -535,6 +652,7 @@ export function parseBlocks(md = '', sectionNum = null) {
             href: link ? link[2] : '',
             sub: [date ? source : '', plainText(summary)].filter(Boolean).join(' — '),
             marker: markerFor(`${title} ${body.join(' ')}`),
+            claim: weakLine([title, ...body]),
           })
           i = j
           continue
@@ -558,7 +676,9 @@ export function parseBlocks(md = '', sectionNum = null) {
           title: plainText(title),
           text,
           source: srcLine ? plainText(srcLine.replace(/^\**\s*/, '')) : '',
+          sourceRaw: srcLine || '',
           marker: markerFor(`${title} ${bodyText}`),
+          claim: weakLine([title, ...body]),
         })
         i = j
         continue
@@ -567,7 +687,7 @@ export function parseBlocks(md = '', sectionNum = null) {
       if (isPairSection && body.length) {
         const rl = body.find(l => RESPOND_RE.test(l))
         if (rl) {
-          pushPair(plainText(title), rl.match(RESPOND_RE)[1].trim())
+          pushPair(plainText(title), rl.match(RESPOND_RE)[1].trim(), weakLine([title, rl]))
           const rest = body.filter(l => l !== rl && !RESPOND_RE.test(l))
           rest.forEach(l => blocks.push({ kind: 'paragraph', text: l, marker: markerFor(l) }))
           i = j
@@ -602,7 +722,11 @@ export function parseBlocks(md = '', sectionNum = null) {
           const parent = items[items.length - 1]
           parent.children = parent.children || []
           parent.children.push(text)
-          parent.marker = parent.marker || markerFor(text)
+          // The flag belongs to the child line, so the claim key does too.
+          if (!parent.marker) {
+            const m = markerFor(text)
+            if (m) { parent.marker = m; parent.claim = text }
+          }
           i++
           continue
         }
@@ -615,6 +739,7 @@ export function parseBlocks(md = '', sectionNum = null) {
             text: boldLead && boldLead[2] ? boldLead[2] : text,
             source: '',
             marker: markerFor(text),
+            claim: text,
           })
           i++
           continue
@@ -625,14 +750,16 @@ export function parseBlocks(md = '', sectionNum = null) {
         // "**Strengths** (advantages this candidate has right now):" — the gloss
         // is prompt scaffolding, not content, when the bullet has children.
         if (kvp.k) kvp.v = kvp.v.replace(/^\((?:[^()]|\([^()]*\))*\)\s*:?\s*$/, '').trim()
-        items.push({ ...kvp, raw: text, marker: markerFor(text) })
+        // The claim is the bullet's own line, minus its marker — the same text
+        // parseFlaggedClaims keys on.
+        items.push({ ...kvp, raw: text, marker: markerFor(text), claim: cb ? l.replace(/^[-*]\s*/, '') : text })
         i++
       }
       if (items.length) {
         const keyed = items.filter(it => it.k).length
         const nested = items.some(it => it.children?.length)
         if ((keyed && keyed >= Math.ceil(items.length / 2)) || nested) blocks.push({ kind: 'list', items })
-        else blocks.push({ kind: 'bullets', items: items.map(it => ({ text: it.raw, marker: it.marker })) })
+        else blocks.push({ kind: 'bullets', items: items.map(it => ({ text: it.raw, marker: it.marker, claim: it.claim })) })
       }
       continue
     }
@@ -648,7 +775,9 @@ export function parseBlocks(md = '', sectionNum = null) {
         title: plainText(boldLead ? boldLead[1] : firstSentence(plainText(line), 70)),
         text: boldLead && boldLead[2] ? boldLead[2] : line,
         source: hasSrc ? plainText(srcNext.replace(/^\**\s*/, '')) : '',
+        sourceRaw: hasSrc ? srcNext : '',
         marker: markerFor(line),
+        claim: line,
       })
       i += hasSrc ? 2 : 1
       continue
@@ -667,6 +796,70 @@ export function parseBlocks(md = '', sectionNum = null) {
     i++
   }
 
+  return decorateBlocks(blocks, verdicts)
+}
+
+// ─── Source links + claim keys ───────────────────────────────────────────────
+
+/** The one source line inside a multi-line block that carries the weak badge —
+ *  the same unit parseFlaggedClaims counts, which is what keeps the reader, the
+ *  library table and the print document resolving a verdict to the same claim. */
+function weakLine(lines) {
+  const list = lines.filter(Boolean)
+  return list.find(l => hasWeakClaim(l)) || list.join(' ')
+}
+
+/**
+ * Give one block or item its own source URLs and, if it is a flagged claim, the
+ * key its verdict is stored under. `el.claim` (set at parse time where the
+ * claim's source line differs from the rendered text) wins over `text`.
+ */
+function attach(el, text, verdicts, skipUrl) {
+  const urls = extractUrls(text).filter(u => u !== skipUrl)
+  if (urls.length) el.urls = urls
+  if (el.marker) {
+    const claim = el.claim || text
+    el.key  = claimKey(claim)
+    el.weak = weakCount(claim)
+    const v = verdictOf(verdicts, el.key)
+    if (v) el.verdict = v
+  }
+  return el
+}
+
+function decorateBlocks(blocks, verdicts) {
+  for (const b of blocks) {
+    switch (b.kind) {
+      case 'paragraph':
+        attach(b, b.text, verdicts); break
+      case 'bullets':
+        b.items.forEach(it => attach(it, it.text, verdicts)); break
+      case 'list':
+        b.items.forEach(it => attach(
+          it,
+          // `claim` and `raw` are the untouched markdown: plainText has already
+          // reduced [label](url) to its label in `sub`, so the URL only survives
+          // in the raw copies.
+          [it.claim, it.v, it.raw, it.sub, (it.children || []).join(' ')].filter(Boolean).join(' '),
+          verdicts,
+          // A feed row's own link is already the value; it is not a second source.
+          it.href,
+        )); break
+      case 'kv':
+        b.rows.forEach(r => attach(r, `${r.v || ''} ${r.src || ''}`, verdicts)); break
+      case 'risk':
+        attach(b, [b.claim, b.title, b.text, b.source, b.sourceRaw].filter(Boolean).join(' '), verdicts); break
+      case 'pair':
+        b.pairs.forEach(p => {
+          // A pair is built from its own lines, so its confidence label comes
+          // from them — otherwise a **[VERIFY]** attack would be counted as
+          // needing verification with nothing on the page to verify.
+          if (!p.marker) p.marker = markerFor(p.claim || `${p.attack || ''} ${p.defense || ''}`)
+          attach(p, [p.claim, p.attack, p.defense].filter(Boolean).join(' '), verdicts)
+        }); break
+      default: break
+    }
+  }
   return blocks
 }
 
@@ -696,16 +889,39 @@ function countItems(blocks) {
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + 's'}`
 
+/** Walk every claim-carrying element in a block list and count team verdicts. */
+function verdictTally(blocks) {
+  const t = { valid: 0, false: 0, unsure: 0, resolvedWeak: 0, total: 0 }
+  const each = (el) => {
+    const v = el?.verdict?.verdict
+    if (!v || !VERDICTS.includes(v)) return
+    t[v] += 1
+    t.total += 1
+    // Only valid/false settle a claim. The subtraction is in weak-badge units,
+    // the same unit sourcingStats counts, so the two can't drift.
+    if (v !== 'unsure') t.resolvedWeak += el.weak || 1
+  }
+  for (const b of blocks || []) {
+    if (b.kind === 'list' || b.kind === 'bullets') b.items.forEach(each)
+    else if (b.kind === 'kv') b.rows.forEach(each)
+    else if (b.kind === 'pair') b.pairs.forEach(each)
+    else each(b)
+  }
+  return t
+}
+
 /**
  * Build the whole document model.
  *   sections: the filtered sections (from lib/profileContent.filterSections)
- * Returns { summary, sections[], flaggedTotal }
+ *   verdicts: dossiers.claim_verdicts — { [claimKey]: { verdict, at, by } }
+ * Returns { summary, sections[], verdictTotals }
  */
-export function buildReport(content = '', sections = []) {
+export function buildReport(content = '', sections = [], verdicts = null) {
   const { snapshot } = extractSnapshot(content)
   let summary = snapshot
 
   const out = []
+  const totals = { valid: 0, false: 0, unsure: 0, resolvedWeak: 0, total: 0 }
   for (const s of sections) {
     const md  = s.displayContent || s.content || ''
     const num = /^section-(\d+)$/.test(s.id) ? Number(s.id.split('-')[1]) : null
@@ -720,7 +936,7 @@ export function buildReport(content = '', sections = []) {
       continue
     }
 
-    let blocks = parseBlocks(md, num)
+    let blocks = parseBlocks(md, num, verdicts)
     const takeaway = deriveTakeaway(md)
     // Drop a leading block that is nothing more than the takeaway itself.
     if (takeaway && (blocks[0]?.kind === 'paragraph' || blocks[0]?.kind === 'head')) {
@@ -730,9 +946,20 @@ export function buildReport(content = '', sections = []) {
 
     const stats  = sourcingStats(md)
     const items  = countItems(blocks)
+    const tally  = verdictTally(blocks)
+    // What is still open: the report's own weak claims, less the ones the team
+    // has ruled valid or false. A verdict never adds to the sourced side of the
+    // ratio — it only stops the section asking to be verified.
+    const pending = Math.max(0, stats.weak - tally.resolvedWeak)
     const meta   = stats.total
-      ? `${plural(stats.total, 'claim')}${stats.weak ? ` · ${stats.weak} to verify` : ''}`
+      ? `${plural(stats.total, 'claim')}${pending ? ` · ${pending} to verify` : ''}`
       : items ? plural(items, 'item') : ''
+
+    totals.valid += tally.valid
+    totals.false += tally.false
+    totals.unsure += tally.unsure
+    totals.total += tally.total
+    totals.resolvedWeak += tally.resolvedWeak
 
     out.push({
       id:       s.id,
@@ -744,7 +971,8 @@ export function buildReport(content = '', sections = []) {
       meta,
       takeaway,
       blocks,
-      unverified: stats.weak > 0,
+      unverified: pending > 0,
+      verdicts: tally,
       content:  s.content,
       displayContent: s.displayContent,
       isEmptySection: !!s.isEmptySection,
@@ -752,7 +980,13 @@ export function buildReport(content = '', sections = []) {
   }
 
   out.sort((a, b) => a.rank - b.rank)
-  return { summary, sections: out }
+  return { summary, sections: out, verdictTotals: totals }
+}
+
+/** A claim the team has ruled valid or false is settled — it leaves the filter. */
+const stillOpen = (el) => {
+  const v = el?.verdict?.verdict
+  return v !== 'valid' && v !== 'false'
 }
 
 /** Reduce a built section list to only the blocks carrying unverified claims. */
@@ -763,12 +997,17 @@ export function filterToUnverified(sections) {
     const blocks = []
     for (const b of s.blocks) {
       if (b.kind === 'list' || b.kind === 'bullets') {
-        const items = b.items.filter(it => it.marker || hasWeakClaim(it.raw || it.text || `${it.k} ${it.v}`))
+        const items = b.items.filter(it =>
+          (it.marker || hasWeakClaim(it.raw || it.text || `${it.k} ${it.v}`)) && stillOpen(it))
         if (items.length) blocks.push({ ...b, items })
       } else if (b.kind === 'kv') {
-        const rows = b.rows.filter(r => hasWeakClaim(`${r.k} ${r.v} ${r.src || ''}`))
+        const rows = b.rows.filter(r => hasWeakClaim(`${r.k} ${r.v} ${r.src || ''}`) && stillOpen(r))
         if (rows.length) blocks.push({ ...b, rows })
-      } else if (b.marker || hasWeakClaim(blockText(b))) {
+      } else if (b.kind === 'pair') {
+        const pairs = b.pairs.filter(p =>
+          (p.marker || hasWeakClaim(`${p.claim || ''} ${p.attack} ${p.defense}`)) && stillOpen(p))
+        if (pairs.length) blocks.push({ ...b, pairs })
+      } else if ((b.marker || hasWeakClaim(blockText(b))) && stillOpen(b)) {
         blocks.push(b)
       }
     }
@@ -790,8 +1029,20 @@ export function buildPrintHtml(dossier, report) {
     ? generated.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
     : ''
 
-  const P = (b) => `<p class="p">${inlineHtml(b.text)}${b.marker
-    ? `<span class="mark">${escapeHtml(b.marker)}</span>` : ''}</p>`
+  // The printed document reads a claim's status through the same claimState the
+  // reader uses, so a claim the team has settled is not printed as unverified.
+  const mark = (el) => {
+    const st = claimState(el)
+    if (!st) return ''
+    if (st.kind === 'valid') {
+      const on = verdictDate(st.at)
+      return `<span class="ok">Verified by your team${on ? ` · ${escapeHtml(on)}` : ''}</span>`
+    }
+    return `<span class="mark${st.kind === 'false' ? ' wrong' : ''}">${escapeHtml(st.label)}</span>`
+  }
+  const dim = (el) => (claimState(el)?.muted ? ' muted' : '')
+
+  const P = (b) => `<p class="p${dim(b)}">${inlineHtml(b.text)}${mark(b)}</p>`
 
   const blockHtml = (b) => {
     switch (b.kind) {
@@ -799,7 +1050,7 @@ export function buildPrintHtml(dossier, report) {
       case 'paragraph': return P(b)
       case 'bullets':
         return `<ul class="ul">${b.items.map(it =>
-          `<li>${inlineHtml(it.text)}${it.marker ? `<span class="mark">${escapeHtml(it.marker)}</span>` : ''}</li>`).join('')}</ul>`
+          `<li class="${dim(it).trim()}">${inlineHtml(it.text)}${mark(it)}</li>`).join('')}</ul>`
       case 'list':
         return `<table class="lv">${b.items.map(it => {
           const value = it.href
@@ -808,8 +1059,7 @@ export function buildPrintHtml(dossier, report) {
           const sub = it.sub ? `<div class="src">${inlineHtml(it.sub)}</div>` : ''
           const kids = it.children?.length
             ? `<ul class="ul">${it.children.map(c => `<li>${inlineHtml(c)}</li>`).join('')}</ul>` : ''
-          return `<tr><th>${escapeHtml(it.k)}</th><td>${value}${it.marker
-            ? `<span class="mark">${escapeHtml(it.marker)}</span>` : ''}${sub}${kids}</td></tr>`
+          return `<tr><th>${escapeHtml(it.k)}</th><td class="${dim(it).trim()}">${value}${mark(it)}${sub}${kids}</td></tr>`
         }).join('')}</table>`
       case 'kv':
         return `<table class="kv">${b.rows.map(r =>
@@ -817,13 +1067,13 @@ export function buildPrintHtml(dossier, report) {
             ? `<div class="src">${escapeHtml(r.src)}</div>` : ''}</td></tr>`).join('')}</table>`
       case 'risk':
         return `<div class="risk sev-${escapeHtml(String(b.sev || '').toLowerCase())}">
-            <div class="risk-h"><span class="sev">${escapeHtml(b.sev || '')}</span> ${escapeHtml(b.title)}</div>
-            <div class="p">${inlineHtml(b.text)}</div>
+            <div class="risk-h"><span class="sev">${escapeHtml(b.sev || '')}</span> ${escapeHtml(b.title)}${mark(b)}</div>
+            <div class="p${dim(b)}">${inlineHtml(b.text)}</div>
             ${b.source ? `<div class="src">${escapeHtml(b.source)}</div>` : ''}
           </div>`
       case 'pair':
         return b.pairs.map(p => `<div class="pair">
-            <div><span class="lbl atk">ATTACK</span>${inlineHtml(p.attack)}</div>
+            <div class="${dim(p).trim()}"><span class="lbl atk">ATTACK</span>${inlineHtml(p.attack)}${mark(p)}</div>
             ${p.defense ? `<div><span class="lbl def">RESPOND</span>${inlineHtml(p.defense)}</div>` : ''}
           </div>`).join('')
       default: return ''
@@ -876,6 +1126,9 @@ export function buildPrintHtml(dossier, report) {
     .lv td, .kv td { vertical-align: top; padding: 4px 0; }
     .kv tr { border-bottom: 1px solid #F0EFEC; }
     .mark { font-family: Arial, sans-serif; font-size: 7pt; font-weight: 700; letter-spacing: .08em; color: #B45309; margin-left: 7px; white-space: nowrap; }
+    .mark.wrong { color: #B91C1C; }
+    .ok { font-family: Arial, sans-serif; font-size: 7pt; font-weight: 600; color: #15803D; margin-left: 7px; white-space: nowrap; }
+    .muted { color: #71717A; }
     .risk { border-left: 2px solid #71717A; padding-left: 12px; margin: 0 0 12px; }
     .risk.sev-high { border-left-color: #B91C1C; }
     .risk.sev-medium { border-left-color: #C2410C; }
