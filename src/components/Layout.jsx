@@ -902,7 +902,9 @@ export default function Layout() {
   const PAGE_HEADERS = [
     { match: /^\/offices/,          title: 'Offices & Districts',    sub: 'All political offices tracked across Wisconsin' },
     { match: /^\/elections/,        title: 'Elections',              sub: 'Wisconsin election calendar & live results' },
-    { match: /^\/game-plan/,        title: 'Game Plan',              sub: 'Campaign tasks & election calendar' },
+    { match: /^\/game-plan\?.*tab=calendar/, title: 'Calendar',       sub: 'Election calendar & key dates', useSearch: true },
+    { match: /^\/game-plan\?.*tab=results/,  title: 'Results',        sub: 'Election night results', useSearch: true },
+    { match: /^\/game-plan/,        title: 'Todo',                   sub: 'Campaign tasks & priorities' },
     { match: /^\/candidates\/.+/,  title: 'Candidates',             sub: 'Candidate profile' },
     { match: /^\/candidates/,       title: 'Candidates',             sub: 'All tracked candidates across Wisconsin' },
     { match: /^\/prospecting/,      title: 'Prospecting Lists',      sub: 'AI-powered candidate prospecting for political marketing outreach' },
@@ -918,7 +920,7 @@ export default function Layout() {
     { match: /^\/admin/,            title: 'Admin Panel',            sub: 'Platform health, accounts, billing & controls' },
     { match: /^\/$/,                title: 'Intelligence Dashboard', sub: 'Wisconsin statewide political tracking' },
   ]
-  const pageHeader = PAGE_HEADERS.find(h => h.match.test(pathname)) || null
+  const pageHeader = PAGE_HEADERS.find(h => h.match.test(pathname + search)) || null
   const navigate           = useNavigate()
   const [sidebarOpen, setSidebarOpen]   = useState(false)
   const [profileOpen, setProfileOpen]   = useState(false)
