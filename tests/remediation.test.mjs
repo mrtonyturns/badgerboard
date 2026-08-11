@@ -904,6 +904,231 @@ console.log('Phases 2-3 — election-results-poller window decision')
 }
 
 
+// ─── Per-race result notifications (_result-notify) ──────────────────────────
+{
+  const {
+    buildUpdateEmail, buildWinnerEmail, buildRecountEmail,
+    decideNotification, snapshotOf, snapshotChanged, marginOf, THROTTLE_MS,
+  } = require('../netlify/functions/_result-notify.js')
+
+  const ELECTION_ID = '11111111-2222-3333-4444-555555555555'
+  const contestBase = {
+    id: '99999999-8888-7777-6666-555555555555',
+    election_id: ELECTION_ID,
+    office: 'State Senate District 31',
+    district: 'District 31',
+    county: 'Trempealeau',
+    seats: 1,
+    status: 'reporting',
+    status_detail: { reason: '78% of precincts reporting (39 of 50); too early to decide anything.' },
+    precincts_rptg: 39,
+    precincts_total: 50,
+  }
+  const resultsMid = [
+    { candidate_name: 'Marla Vandenberg', party: 'Democrat',   votes: 24318, vote_pct: 51.3, winner: false, declared: false },
+    { candidate_name: 'Dale Kupferschmidt', party: 'Republican', votes: 23107, vote_pct: 48.7, winner: false, declared: false },
+  ]
+  const opts = { electionId: ELECTION_ID, electionName: 'Fall General Election', now: new Date('2026-11-03T03:42:00Z') }
+
+  // ── update email ──────────────────────────────────────────────────────────
+  console.log('Result notifications — update email')
+  const upd = buildUpdateEmail(contestBase, resultsMid, opts)
+  t('the update subject names the office',
+    upd.subject === '📊 State Senate District 31: new numbers in')
+  t('the update body carries thousands separators, never raw integers',
+    upd.body.includes('24,318') && upd.body.includes('23,107') && !upd.body.includes('>24318<'))
+  t('the update body leads with the margin between the top two',
+    upd.body.includes('Marla Vandenberg leads by 1,211 votes (2.6%)'))
+  t('the leader row is bolded and flagged with a ▲',
+    /▲ Marla Vandenberg/.test(upd.body) && /font-weight:700">▲ Marla Vandenberg/.test(upd.body))
+  t('the runner-up is not flagged as a leader',
+    !/▲ Dale Kupferschmidt/.test(upd.body))
+  t('the update body states precincts reporting in plain English',
+    upd.body.includes('39 of 50 precincts reporting (78%)'))
+  t('the status line is plain English, not a status enum',
+    upd.body.includes('Reporting — 78% of precincts in') && !upd.body.includes('recount_possible'))
+  t('a projected race says victory likely, not final',
+    buildUpdateEmail({ ...contestBase, status: 'projected' }, resultsMid, opts).body.includes('Victory likely — not final'))
+  t('a too-close race says so',
+    buildUpdateEmail({ ...contestBase, status: 'too_close' }, resultsMid, opts).body.includes('Too close to call'))
+  t('the update body timestamps the numbers in Central time',
+    /Numbers as of \d{1,2}:\d{2}\s?(AM|PM) CT/.test(upd.body))
+  t('the update CTA points at this election on the results board',
+    upd.ctaText === 'View live results' &&
+    upd.ctaUrl === `https://badgerboardwi.com/game-plan?tab=results&election=${ELECTION_ID}`)
+  t('the update footer explains why they got it and how to stop it',
+    /every time this race's numbers change/.test(upd.footerNote) &&
+    /Manage or turn off notifications from the race card/.test(upd.footerNote))
+  t('the update email returns the full house-template payload',
+    ['subject', 'title', 'preheader', 'body', 'ctaText', 'ctaUrl', 'footerNote'].every(k => typeof upd[k] === 'string' && upd[k].length))
+
+  // ── winner email ──────────────────────────────────────────────────────────
+  console.log('Result notifications — winner email')
+  const calledContest = {
+    ...contestBase,
+    status: 'called',
+    precincts_rptg: 50,
+    status_detail: { reason: 'All 50 precincts reporting; the leader is ahead by 1,211 votes (2.55%), beyond any recount threshold.', margin: 1211, margin_pct: 2.5535 },
+  }
+  const resultsFinal = [
+    { candidate_name: 'Marla Vandenberg', party: 'Democrat',   votes: 24318, vote_pct: 51.3, winner: true,  declared: true },
+    { candidate_name: 'Dale Kupferschmidt', party: 'Republican', votes: 23107, vote_pct: 48.7, winner: false, declared: false },
+  ]
+  const win = buildWinnerEmail(calledContest, resultsFinal, opts)
+  t('the winner subject names the winner and the office',
+    win.subject === '🏆 Winner: Marla Vandenberg — State Senate District 31')
+  t('the winner headline is an announcement, not a celebration',
+    win.title === 'Marla Vandenberg has won the State Senate District 31.' &&
+    !/congratulations/i.test(win.body))
+  t('the winner email states the final margin with separators',
+    win.body.includes('Final margin: 1,211 votes (2.6%) over Dale Kupferschmidt, out of 47,425 cast.'))
+  t('the winner row is highlighted, the loser row is not',
+    win.body.includes('🏆 Marla Vandenberg') && win.body.includes('#E6F5EC') &&
+    !win.body.includes('🏆 Dale Kupferschmidt'))
+  t('the winner email says how it was decided, quoting status_detail.reason',
+    win.body.includes('How it was decided:') && win.body.includes('All 50 precincts reporting'))
+  t('an admin hand-call is quoted verbatim as the reason',
+    buildWinnerEmail({ ...calledContest, status_detail: { reason: 'Called by hand for Marla Vandenberg.' } }, resultsFinal, opts)
+      .body.includes('Called by hand for Marla Vandenberg.'))
+  t('an unopposed winner gets a sentence that makes sense',
+    buildWinnerEmail(calledContest, [resultsFinal[0]], opts).body.includes('finishes with 24,318 votes and no opponent to displace'))
+  t('the winner CTA and footer match the house pattern',
+    win.ctaUrl === upd.ctaUrl && /Manage or turn off notifications from the race card/.test(win.footerNote))
+
+  // ── recount email ─────────────────────────────────────────────────────────
+  console.log('Result notifications — recount email')
+  const recountResults = [
+    { candidate_name: 'Marla Vandenberg', party: 'Democrat',   votes: 23760, vote_pct: 50.1, winner: false, declared: false },
+    { candidate_name: 'Dale Kupferschmidt', party: 'Republican', votes: 23665, vote_pct: 49.9, winner: false, declared: false },
+  ]
+  const recountContest = {
+    ...contestBase, status: 'recount_possible', precincts_rptg: 50,
+    status_detail: { fee_free: true, margin: 95, margin_pct: 0.2, reason: 'All 50 precincts reporting with a final unofficial margin of 0.2%.' },
+  }
+  const rec = buildRecountEmail(recountContest, recountResults, opts)
+  t('the recount subject flags final numbers and the recount window',
+    rec.subject === '⚖️ Final numbers — recount possible: State Senate District 31')
+  t('the recount email states the margin between the top two',
+    rec.body.includes('Marla Vandenberg finished ahead of Dale Kupferschmidt by 95 votes — 0.2% of the 47,425 votes cast.'))
+  t('the recount email explains both Wisconsin thresholds',
+    rec.body.includes('may petition for a recount when the margin is 1% of the votes cast or less') &&
+    rec.body.includes('0.25% or less, the recount is fee-free'))
+  t('a fee-free margin says the recount costs the petitioner nothing',
+    rec.body.includes('inside the fee-free band'))
+  t('a petition-window-but-not-fee-free margin says the petitioner pays',
+    buildRecountEmail({ ...recountContest, status_detail: { fee_free: false } }, recountResults, opts)
+      .body.includes('outside the fee-free band, so a petitioner would have to cover the cost'))
+  t('the recount email still carries the table and the CTA',
+    rec.body.includes('23,760') && rec.body.includes('23,665') && rec.ctaUrl === upd.ctaUrl)
+
+  t('the builders escape hostile candidate names instead of rendering them',
+    buildUpdateEmail(contestBase, [{ candidate_name: '<script>alert(1)</script>', votes: 5 }], opts)
+      .body.includes('&lt;script&gt;') === true)
+  t('the builders never throw on junk input', (() => {
+    const junk = [undefined, null, 'x', 42, {}, { office: null }]
+    try {
+      junk.forEach(c => { buildUpdateEmail(c, null, {}); buildWinnerEmail(c, 'nope', {}); buildRecountEmail(c, [null, 7], {}) })
+      return true
+    } catch { return false }
+  })())
+
+  // ── margin maths ──────────────────────────────────────────────────────────
+  console.log('Result notifications — margin + change detection')
+  t('marginOf reads first-minus-second and its share of the vote', (() => {
+    const m = marginOf(resultsMid)
+    return m.margin === 1211 && m.totalVotes === 47425 && Math.abs(m.marginPct - 2.5535) < 0.001
+  })())
+  t('marginOf on a multi-seat race compares the last seat to the first loser',
+    marginOf([{ candidate_name: 'A', votes: 100 }, { candidate_name: 'B', votes: 90 }, { candidate_name: 'C', votes: 40 }], 2).margin === 50)
+  t('a snapshot tracks votes, precincts and status — nothing else', (() => {
+    const s = snapshotOf(contestBase, resultsMid)
+    return s.votes['Marla Vandenberg'] === 24318 && s.precincts_rptg === 39 && s.status === 'reporting' &&
+      Object.keys(s).length === 3
+  })())
+  t('a moved vote total is a change; a moved vote_pct alone is not', (() => {
+    const base = snapshotOf(contestBase, resultsMid)
+    const samePctDifferent = snapshotOf(contestBase, resultsMid.map(r => ({ ...r, vote_pct: r.vote_pct + 1 })))
+    const votesMoved = snapshotOf(contestBase, [{ ...resultsMid[0], votes: 24319 }, resultsMid[1]])
+    return snapshotChanged(base, samePctDifferent) === false && snapshotChanged(base, votesMoved) === true
+  })())
+  t('a first-ever snapshot always counts as a change', snapshotChanged(null, snapshotOf(contestBase, resultsMid)) === true)
+  t('more precincts reporting is a change even when the votes are identical',
+    snapshotChanged(snapshotOf(contestBase, resultsMid), snapshotOf({ ...contestBase, precincts_rptg: 40 }, resultsMid)) === true)
+
+  // ── the decision matrix ───────────────────────────────────────────────────
+  console.log('Result notifications — decideNotification matrix')
+  const T0 = new Date('2026-11-03T03:00:00Z')
+  const at = (mins) => new Date(T0.getTime() + mins * 60000)
+  const everyChange = { id: 's1', mode: 'every_change', last_notified_at: null, last_snapshot: null, winner_notified_at: null }
+  const finalOnly   = { ...everyChange, id: 's2', mode: 'final_only' }
+
+  // first change → send
+  const d1 = decideNotification(everyChange, contestBase, resultsMid, T0)
+  t('every_change: the first change sends an update', d1.kind === 'update')
+  t('an update writes back both the throttle stamp and the snapshot',
+    d1.patch.last_notified_at === T0.toISOString() && d1.patch.last_snapshot.votes['Marla Vandenberg'] === 24318 &&
+    d1.patch.winner_notified_at === undefined)
+
+  // second change 10 minutes later → suppressed
+  const subAfter1 = { ...everyChange, last_notified_at: d1.patch.last_notified_at, last_snapshot: d1.patch.last_snapshot }
+  const movedResults = [{ ...resultsMid[0], votes: 25900 }, resultsMid[1]]
+  const d2 = decideNotification(subAfter1, { ...contestBase, precincts_rptg: 44 }, movedResults, at(10))
+  t('every_change: a second change 10 minutes later is throttled',
+    d2.kind === 'none' && /throttled/.test(d2.reason) && d2.patch === null)
+  t('the throttle window is exactly 30 minutes', THROTTLE_MS === 30 * 60 * 1000)
+  t('every_change: the same change 31 minutes later does send',
+    decideNotification(subAfter1, { ...contestBase, precincts_rptg: 44 }, movedResults, at(31)).kind === 'update')
+  t('every_change: no change at all sends nothing, however long it has been', (() => {
+    const d = decideNotification(subAfter1, contestBase, resultsMid, at(600))
+    return d.kind === 'none' && /no change/.test(d.reason)
+  })())
+
+  // winner bypasses the throttle, exactly once
+  const d3 = decideNotification(subAfter1, calledContest, resultsFinal, at(2))
+  t('a called race sends the winner email 2 minutes after an update — throttle ignored',
+    d3.kind === 'winner')
+  t('the winner send stamps winner_notified_at', d3.patch.winner_notified_at === at(2).toISOString())
+  const subAfterWinner = { ...subAfter1, winner_notified_at: d3.patch.winner_notified_at, last_notified_at: d3.patch.last_notified_at, last_snapshot: d3.patch.last_snapshot }
+  t('the winner email is sent exactly once, ever',
+    decideNotification(subAfterWinner, calledContest, resultsFinal, at(400)).kind === 'none')
+  t('a certified contest also counts as decided',
+    decideNotification(everyChange, { ...contestBase, status: 'certified' }, resultsFinal, T0).kind === 'winner')
+  t('a declared result row counts as decided even when the status lags',
+    decideNotification(everyChange, contestBase, resultsFinal, T0).kind === 'winner')
+
+  // final_only
+  t('final_only: a numbers change sends nothing', (() => {
+    const d = decideNotification(finalOnly, contestBase, resultsMid, T0)
+    return d.kind === 'none' && /final_only/.test(d.reason)
+  })())
+  t('final_only: the winner email still arrives',
+    decideNotification(finalOnly, calledContest, resultsFinal, T0).kind === 'winner')
+  t('final_only: the winner email also arrives exactly once',
+    decideNotification({ ...finalOnly, winner_notified_at: T0.toISOString() }, calledContest, resultsFinal, at(60)).kind === 'none')
+
+  // recount transition
+  const d4 = decideNotification(subAfter1, recountContest, recountResults, at(5))
+  t('entering recount_possible emails both modes, throttle ignored',
+    d4.kind === 'recount' &&
+    decideNotification({ ...finalOnly, last_snapshot: subAfter1.last_snapshot }, recountContest, recountResults, at(5)).kind === 'recount')
+  t('the recount email does NOT consume the winner announcement',
+    d4.patch.winner_notified_at === undefined)
+  const subAfterRecount = { ...subAfter1, last_notified_at: d4.patch.last_notified_at, last_snapshot: d4.patch.last_snapshot }
+  t('a second identical recount_possible pass sends nothing',
+    decideNotification(subAfterRecount, recountContest, recountResults, at(90)).kind === 'none')
+  t('final_only stays silent while a recount race keeps re-reporting the same status',
+    decideNotification({ ...finalOnly, last_snapshot: d4.patch.last_snapshot }, recountContest, recountResults, at(90)).kind === 'none')
+  t('once the recount race is called, the winner email still goes out',
+    decideNotification(subAfterRecount, { ...recountContest, status: 'called' }, resultsFinal, at(120)).kind === 'winner')
+  t('decideNotification never throws on junk', (() => {
+    try {
+      decideNotification(undefined, undefined, undefined, undefined)
+      decideNotification({ mode: 'nonsense', last_snapshot: 'x' }, { status: 7 }, 'nope', 'not-a-date')
+      return true
+    } catch { return false }
+  })())
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
 

@@ -12,8 +12,10 @@ import { format, parseISO, isToday, isFuture, isPast } from 'date-fns'
 import {
   BarChart2, Filter, TrendingUp, Trophy,
   Clock, MapPin, Users, ExternalLink, ChevronDown, Download, Info, Search, Landmark,
+  Bell, BellRing,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../contexts/AuthContext'
 import SearchableSelect from '../components/SearchableSelect'
 
 // ── Party colours ─────────────────────────────────────────────────────────────
@@ -242,7 +244,90 @@ function CandidateRow({ cand, totalVotes, isWinner, declared, isNonpartisan, lea
   )
 }
 
-function RaceCard({ contest, results }) {
+// ── Per-race notifications ────────────────────────────────────────────────────
+// Bell in the card header → small popover with three mutually exclusive
+// choices. Writes go to election_subscriptions with the user's own client
+// (RLS: users CRUD only their own rows); the notifier bookkeeping columns are
+// service-role only and are never touched from here.
+const NOTIFY_OPTIONS = [
+  { value: 'every_change', label: 'Every update',      hint: 'Email me whenever the numbers change' },
+  { value: 'final_only',   label: 'Final result only', hint: 'Email me when the winner is in' },
+  { value: 'off',          label: 'Off',               hint: 'No emails about this race' },
+]
+
+function RaceNotifyButton({ contestId, mode, onChange, userEmail }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  // Close on outside click — same pattern as NotificationCenter.
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  // Signed-out visitors can read the board but have nowhere to send email.
+  if (!userEmail) return null
+
+  const on = mode === 'every_change' || mode === 'final_only'
+  const current = on ? mode : 'off'
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-label={on ? 'Race notifications on' : 'Get notified about this race'}
+        aria-expanded={open}
+        title={on ? 'Race notifications on' : 'Get notified about this race'}
+        className={`p-1.5 rounded-lg border transition-colors ${
+          on ? 'border-brand-red/30 bg-red-50 text-brand-red hover:bg-red-100'
+             : 'border-gray-200 bg-white text-gray-400 hover:text-gray-600 hover:border-gray-300'
+        }`}
+      >
+        {on
+          ? <BellRing className="w-3.5 h-3.5" fill="currentColor" />
+          : <Bell className="w-3.5 h-3.5" />}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-9 z-30 w-64 bg-white border border-gray-200 rounded-xl shadow-lg p-2">
+          <p className="text-xs font-bold text-gray-900 px-2 pt-1 pb-2">Race notifications</p>
+          <div className="space-y-0.5">
+            {NOTIFY_OPTIONS.map(opt => {
+              const selected = current === opt.value
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => { setOpen(false); if (!selected) onChange(contestId, opt.value) }}
+                  className={`w-full flex items-start gap-2 text-left px-2 py-1.5 rounded-lg transition-colors ${
+                    selected ? 'bg-red-50' : 'hover:bg-gray-50'
+                  }`}
+                >
+                  <span className={`mt-0.5 w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${
+                    selected ? 'border-brand-red' : 'border-gray-300'
+                  }`}>
+                    {selected && <span className="w-1.5 h-1.5 rounded-full bg-brand-red" />}
+                  </span>
+                  <span className="min-w-0">
+                    <span className={`block text-xs font-semibold ${selected ? 'text-brand-red' : 'text-gray-800'}`}>{opt.label}</span>
+                    <span className="block text-[11px] text-gray-400 leading-snug">{opt.hint}</span>
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          <p className="text-[11px] text-gray-400 px-2 pt-2 mt-1 border-t border-gray-100 truncate" title={userEmail}>
+            Sent to {userEmail}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RaceCard({ contest, results, notifyMode, onNotifyChange, userEmail }) {
   const [expanded, setExpanded] = useState(true)
   // Total votes across all candidates — bars scale to this so proportions are accurate
   const totalVotes = results.reduce((sum, r) => sum + (r.votes || 0), 0)
@@ -270,11 +355,14 @@ function RaceCard({ contest, results }) {
     : new Set()
 
   return (
-    <div className={`rounded-xl border-2 overflow-hidden transition-all duration-300 ${ui.ring}`}>
+    <div className={`rounded-xl border-2 transition-all duration-300 ${ui.ring}`}>
+      {/* The bell lives OUTSIDE the expand button — a button inside a button is
+          invalid HTML and swallows the click. */}
+      <div className={`flex items-start bg-white ${expanded ? 'rounded-t-[10px]' : 'rounded-[10px]'}`}>
       <button
         type="button"
         onClick={() => setExpanded(e => !e)}
-        className="w-full flex items-start gap-3 p-4 bg-white hover:bg-gray-50 transition-colors text-left"
+        className="flex-1 min-w-0 flex items-start gap-3 p-4 hover:bg-gray-50 transition-colors text-left rounded-tl-[10px]"
       >
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
@@ -319,10 +407,27 @@ function RaceCard({ contest, results }) {
             ))}
           </div>
         )}
-        <ChevronDown className={`w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5 transition-transform ${expanded ? 'rotate-180' : ''}`} />
       </button>
+        <div className="flex items-center gap-1.5 pt-4 pr-3 flex-shrink-0">
+          <RaceNotifyButton
+            contestId={contest.id}
+            mode={notifyMode}
+            onChange={onNotifyChange}
+            userEmail={userEmail}
+          />
+          <button
+            type="button"
+            onClick={() => setExpanded(e => !e)}
+            aria-label={expanded ? 'Collapse race' : 'Expand race'}
+            aria-expanded={expanded}
+            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors"
+          >
+            <ChevronDown className={`w-4 h-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+          </button>
+        </div>
+      </div>
       {expanded && (
-        <div className="bg-gray-50 px-4 pb-4 space-y-2">
+        <div className="bg-gray-50 px-4 pb-4 space-y-2 rounded-b-[10px]">
           {results.length === 0 ? (
             <p className="text-center text-xs text-gray-400 py-4">Awaiting first returns…</p>
           ) : sorted.map(cand => (
@@ -356,6 +461,7 @@ function LiveDot() {
 
 // ── Main board component ──────────────────────────────────────────────────────
 export default function ElectionResultsBoard({ elections, selectedId, onSelectElection }) {
+  const { user } = useAuth()
   // Guard against "null"/"undefined" strings leaking in from URL params
   const cleanId    = (selectedId && selectedId !== 'null' && selectedId !== 'undefined') ? selectedId : null
   const election   = elections.find(e => e.id === cleanId) || null
@@ -372,6 +478,9 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
   // this ballot size. Purely presentational — see the realtime note below.
   const [groupOpen,    setGroupOpen]    = useState({})
   const [pulse,        setPulse]        = useState(false)
+  // contest_id → 'every_change' | 'final_only'. Loaded once per election and
+  // kept in sync optimistically; a missing key means "not subscribed".
+  const [notifyModes,  setNotifyModes]  = useState({})
   const realtimeRef = useRef(null)
 
   // ── Load contests + results ─────────────────────────────────────────────────
@@ -420,6 +529,54 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
     setGroupOpen({})
     if (electionId) loadData(electionId)
   }, [electionId, loadData])
+
+  // ── Race notification subscriptions ─────────────────────────────────────────
+  // One read per signed-in user, cached in state for the life of the board.
+  // RLS already restricts the table to the caller's own rows; the explicit
+  // user_id filter keeps the query honest and the payload small.
+  useEffect(() => {
+    let cancelled = false
+    if (!user?.id) { setNotifyModes({}); return }
+    ;(async () => {
+      const { data, error } = await supabase
+        .from('election_subscriptions')
+        .select('contest_id, mode')
+        .eq('user_id', user.id)
+      if (cancelled || error) return
+      const map = {}
+      for (const s of data || []) map[s.contest_id] = s.mode
+      setNotifyModes(map)
+    })()
+    return () => { cancelled = true }
+  }, [user?.id, electionId])
+
+  // Optimistic write; reverts to the previous choice if the row never lands.
+  const setNotifyMode = useCallback(async (contestId, mode) => {
+    if (!user?.id || !contestId) return
+    const previous = notifyModes[contestId]
+    setNotifyModes(prev => {
+      const next = { ...prev }
+      if (mode === 'off') delete next[contestId]
+      else next[contestId] = mode
+      return next
+    })
+    try {
+      const { error } = mode === 'off'
+        ? await supabase.from('election_subscriptions').delete()
+            .eq('user_id', user.id).eq('contest_id', contestId)
+        : await supabase.from('election_subscriptions')
+            .upsert({ user_id: user.id, contest_id: contestId, mode }, { onConflict: 'user_id,contest_id' })
+      if (error) throw error
+    } catch (err) {
+      console.error('[ElectionResultsBoard] subscription write failed:', err)
+      setNotifyModes(prev => {
+        const next = { ...prev }
+        if (previous) next[contestId] = previous
+        else delete next[contestId]
+        return next
+      })
+    }
+  }, [user?.id, notifyModes])
 
   // ── Realtime ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -792,7 +949,14 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
                 {open && (
                   <div className="grid sm:grid-cols-1 lg:grid-cols-2 gap-3">
                     {typeContests.map(c => (
-                      <RaceCard key={c.id} contest={c} results={resultsMap[c.id] || []} />
+                      <RaceCard
+                        key={c.id}
+                        contest={c}
+                        results={resultsMap[c.id] || []}
+                        notifyMode={notifyModes[c.id]}
+                        onNotifyChange={setNotifyMode}
+                        userEmail={user?.email || null}
+                      />
                     ))}
                   </div>
                 )}

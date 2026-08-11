@@ -40,10 +40,17 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.26.0'
+const APP_VERSION = 'v1.27.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.27.0',
+    date: 'August 11, 2026',
+    changes: [
+      'Race notifications: hit the bell on any race card to get emailed when its numbers change or only when the winner is in \u2014 including a winner announcement and a recount-alert email when a race lands inside Wisconsin\u2019s recount threshold',
+    ],
+  },
   {
     version: 'v1.26.0',
     date: 'August 11, 2026',

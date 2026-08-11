@@ -39,6 +39,9 @@
 //   6. Write        upsert results → recompute vote_pct → precincts →
 //                   determineStatus(), status written ONLY where
 //                   status_source = 'auto'. `declared` is never touched.
+//   6b. Notify      subscribers to any contest this run touched get an email
+//                   via ./_result-notify.js (never on a dry run, never
+//                   throwing, 30-minute throttle on running updates).
 //   7. Log          one election_poller_log row per ACTIVE run.
 //   8. Resilience   every throw is caught, logged, and answered with 200 —
 //                   a scheduled function that 500s gets retried, and a retry
@@ -93,6 +96,7 @@
 
 const { cors, json, serviceClient, requireAdmin } = require('./_shared')
 const { determineStatus } = require('./_determination')
+const { notifyContestChanges } = require('./_result-notify')
 const COUNTY_SOURCES = require('./_county-sources.json')
 
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY
@@ -1089,6 +1093,21 @@ exports.handler = async (event = {}) => {
       }
     }
 
+    // ── 6b. Per-race subscriber notifications ──────────────────────────────
+    // Everything above has already landed in the database, so a notification
+    // problem can only cost an email — never a result. notifyContestChanges
+    // never throws and does nothing at all when no one is subscribed to any of
+    // the contests this run touched. Dry runs write nothing, so they notify
+    // nobody.
+    let notified = null
+    if (!dryRun && touched.contests.size) {
+      notified = await notifyContestChanges(sb, touched.contests, { trigger: `poller:${scheduled ? 'auto' : 'manual'}` })
+      runMeta.notes.push(...notified.notes)
+      if (!notified.sent && !notified.failed && notified.subscriptions) {
+        runMeta.notes.push(`Notifications: ${notified.subscriptions} subscription(s) checked, nothing worth emailing yet.`)
+      }
+    }
+
     // ── 7. Audit row for this ACTIVE run ───────────────────────────────────
     await writeLog(sb, { ...runMeta, startedAt })
     return json(200, {
@@ -1099,6 +1118,10 @@ exports.handler = async (event = {}) => {
       election: { id: election.id, name: election.name, election_date: runMeta.electionDate },
       contests_synced: touched.contests.size,
       results_upserted: touched.results.size,
+      emails_sent: notified ? notified.sent : 0,
+      notifications: notified
+        ? { sent: notified.sent, failed: notified.failed, skipped: notified.skipped, subscriptions: notified.subscriptions }
+        : null,
       notes: runMeta.notes,
       duration_ms: Date.now() - startedAt,
     }, headers)

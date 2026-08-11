@@ -33,9 +33,17 @@
 //
 // Every mutation, successful or not, appends an audit row to
 // election_poller_log with source 'admin:<action>'.
+//
+// ─── Subscriber notifications ───────────────────────────────────────────────
+// save_result / update_precincts / call_race / set_status / reset_status_auto
+// hand the contest to ./_result-notify.js afterwards, which emails whoever
+// subscribed to that race from the Results board. It never throws and it is
+// fired AFTER the write has landed, so an email problem can never fail an
+// admin's edit.
 
 const { cors, json, serviceClient, requireAdmin } = require('./_shared')
 const { determineStatus, ALLOWED_STATUSES } = require('./_determination')
+const { notifyContestChanges } = require('./_result-notify')
 
 // Column whitelists — never pass client objects straight to the DB
 const ELECTION_FIELDS = ['name', 'election_date', 'filing_deadline', 'type', 'year', 'notes']
@@ -153,6 +161,26 @@ async function applyWinnerFlags(sb, results, seats) {
   if (losers.length) await sb.from('election_results').update({ winner: false }).in('id', losers)
 }
 
+// ─── Subscriber notifications ────────────────────────────────────────────────
+// Fired after a mutation that changes what a subscriber to this race would
+// want to know: new numbers, new precinct counts, a called race, a status
+// override. Best effort in every sense — notifyContestChanges never throws,
+// and this wrapper swallows anything that somehow escapes it, because the
+// admin's write has already succeeded by the time we get here.
+async function notifyRace(sb, contestId, action) {
+  try {
+    if (!isUuid(contestId)) return null
+    const res = await notifyContestChanges(sb, [contestId], { trigger: `admin:${action}` })
+    if (res && (res.sent || res.failed)) {
+      console.log(`[admin-elections] ${action}: ${res.sent} notification email(s) sent, ${res.failed} failed`)
+    }
+    return res
+  } catch (e) {
+    console.warn('[admin-elections] notification pass skipped:', e.message)
+    return null
+  }
+}
+
 // Audit trail — every admin mutation lands in election_poller_log. Best effort:
 // a logging failure must never fail the admin's write.
 async function logAdminAction(sb, action, { contests = 0, results = 0, startedAt, error = null }) {
@@ -242,6 +270,7 @@ async function route(sb, action, params, headers, event) {
       if (res.statusCode === 200 && isUuid(contestId)) {
         await recalcVotePct(sb, contestId)
         await runDetermination(sb, contestId)
+        await notifyRace(sb, contestId, 'save_result')
       }
       return res
     }
@@ -305,6 +334,9 @@ async function route(sb, action, params, headers, event) {
         }
       } catch (e) { console.warn('[admin-elections] officeholder sync skipped:', e.message) }
 
+      // Everyone watching this race hears about it, whichever mode they picked.
+      await notifyRace(sb, cid, 'call_race')
+
       return json(200, { data: { called: true, officeholder_synced: officeholderSynced } })
     }
 
@@ -338,6 +370,7 @@ async function route(sb, action, params, headers, event) {
       if (error) return json(500, { error: error.message })
       if (!rows?.length) return json(404, { error: 'Contest not found — precincts NOT updated' })
       const determination = await runDetermination(sb, contest_id)
+      await notifyRace(sb, contest_id, 'update_precincts')
       return json(200, { data: { updated: true, determination } })
     }
 
@@ -364,6 +397,7 @@ async function route(sb, action, params, headers, event) {
         .update(patch).eq('id', contest_id).select('id, status, status_source')
       if (error) return json(500, { error: error.message })
       if (!rows?.length) return json(404, { error: 'Contest not found — status NOT updated' })
+      await notifyRace(sb, contest_id, 'set_status')
       return json(200, { data: rows[0] })
     }
 
@@ -377,6 +411,7 @@ async function route(sb, action, params, headers, event) {
       if (error) return json(500, { error: error.message })
       if (!rows?.length) return json(404, { error: 'Contest not found — status NOT reset' })
       const determination = await runDetermination(sb, contest_id, { force: true })
+      await notifyRace(sb, contest_id, 'reset_status_auto')
       return json(200, { data: { status_source: 'auto', determination } })
     }
 
