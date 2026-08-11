@@ -315,8 +315,9 @@ function buildWinnerEmail(rawContest = {}, results = [], rawOpts = {}) {
         ? 'The result has been certified by the canvassing authority.'
         : 'Decided from the reported returns on file.')
 
-  const body = `<p style="margin:0 0 6px;padding:18px 20px;background:#E6F5EC;border:1px solid #bbe5ca;border-radius:10px;font-size:20px;line-height:1.35;font-weight:700;color:#14532D">🏆 ${esc(headline)}</p>
-${marginSentence ? `<p style="margin:12px 0 0">${esc(marginSentence)}</p>` : ''}
+  // Owner's spec: no banner box — the centered trophy headline IS the
+  // announcement; the body opens with the final margin.
+  const body = `${marginSentence ? `<p style="margin:0">${esc(marginSentence)}</p>` : ''}
 ${candidateTable(results, { highlight })}
 <p style="margin:0 0 6px">${esc(precinctsLine(contest))}</p>
 <p style="margin:0 0 6px"><strong>How it was decided:</strong> ${esc(reason)}</p>
@@ -324,7 +325,8 @@ ${candidateTable(results, { highlight })}
 
   return {
     subject: `🏆 Winner: ${winnerNames.length ? winnerNames.join(', ') : 'race decided'} — ${office}`,
-    title: headline,
+    title: `🏆 ${headline}`,
+    titleCenter: true,
     preheader: marginSentence || `The ${office} has been decided.`,
     body,
     ctaText: 'View live results',

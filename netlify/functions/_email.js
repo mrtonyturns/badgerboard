@@ -4,7 +4,7 @@
 const RESEND_API_KEY = process.env.RESEND_API_KEY
 const FROM = 'Badger Board <noreply@noreply.badgerboardwi.com>'
 
-function emailTemplate({ title, preheader = '', body, ctaText, ctaUrl, footerNote = '', flagBar = true }) {
+function emailTemplate({ title, preheader = '', body, ctaText, ctaUrl, footerNote = '', flagBar = true, titleCenter = false }) {
   return `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head>
@@ -21,7 +21,7 @@ function emailTemplate({ title, preheader = '', body, ctaText, ctaUrl, footerNot
         </tr>` : ''}
         <!-- Logo header -->
         <tr>
-          <td colspan="3" style="background:#000000;padding:20px 40px;text-align:center;${'${'}flagBar ? '' : 'border-radius:12px 12px 0 0'}">
+          <td colspan="3" style="background:#000000;padding:20px 40px;text-align:center;${flagBar ? '' : 'border-radius:12px 12px 0 0'}">
             <img src="https://www.badgerboardwi.com/badger-board-logo.png"
                  alt="Badger Board"
                  width="200"
@@ -31,7 +31,7 @@ function emailTemplate({ title, preheader = '', body, ctaText, ctaUrl, footerNot
         <!-- Body card -->
         <tr>
           <td colspan="3" style="background:#ffffff;padding:40px 40px 36px;border-radius:0 0 12px 12px">
-            <h1 style="margin:0 0 20px;font-size:21px;font-weight:700;color:#111827;line-height:1.3">${title}</h1>
+            <h1 style="margin:0 0 20px;font-size:21px;font-weight:700;color:#111827;line-height:1.3${titleCenter ? ';text-align:center' : ''}">${title}</h1>
             <div style="color:#4b5563;font-size:15px;line-height:1.65">${body}</div>
             ${ctaText && ctaUrl ? `
             <div style="text-align:center;margin:32px 0 4px">
@@ -53,7 +53,7 @@ function emailTemplate({ title, preheader = '', body, ctaText, ctaUrl, footerNot
 </html>`
 }
 
-async function sendEmail({ to, subject, title, preheader, body, ctaText, ctaUrl, footerNote, flagBar }) {
+async function sendEmail({ to, subject, title, preheader, body, ctaText, ctaUrl, footerNote, flagBar, titleCenter }) {
   if (!RESEND_API_KEY) {
     console.warn('[email] RESEND_API_KEY not set — skipping email to', to)
     return { skipped: true }
@@ -62,7 +62,7 @@ async function sendEmail({ to, subject, title, preheader, body, ctaText, ctaUrl,
     console.warn('[email] No recipient — skipping')
     return { skipped: true }
   }
-  const html = emailTemplate({ title: title || subject, preheader, body, ctaText, ctaUrl, footerNote, flagBar: flagBar !== false })
+  const html = emailTemplate({ title: title || subject, preheader, body, ctaText, ctaUrl, footerNote, flagBar: flagBar !== false, titleCenter: titleCenter === true })
   try {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',

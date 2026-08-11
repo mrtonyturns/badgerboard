@@ -977,9 +977,10 @@ console.log('Phases 2-3 — election-results-poller window decision')
   const win = buildWinnerEmail(calledContest, resultsFinal, opts)
   t('the winner subject names the winner and the office',
     win.subject === '🏆 Winner: Marla Vandenberg — State Senate District 31')
-  t('the winner headline is a bare announcement (redesign: winner + "has won.", nothing more)',
-    win.title === 'Marla Vandenberg has won.' &&
-    win.body.includes('Marla Vandenberg has won.') &&
+  t('the winner headline is the centered trophy announcement, banner box removed',
+    win.title === '🏆 Marla Vandenberg has won.' &&
+    win.titleCenter === true &&
+    !win.body.includes('border:1px solid #bbe5ca') &&
     !/congratulations/i.test(win.body))
   t('the winner email states the final margin with separators',
     win.body.includes('Final margin: 1,211 votes (2.6%) over Dale Kupferschmidt, out of 47,425 cast.'))
