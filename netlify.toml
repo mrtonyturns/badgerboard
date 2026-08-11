@@ -63,8 +63,19 @@
 [functions."trial-expiry"]
   schedule = "0 14 * * *"
 
-# election-results-poller schedule removed — results are entered manually
-# via the Admin panel (Elections tab). The function file is kept for reference.
+# Live election results poller (Phases 2-3). The cron fires every 5 minutes,
+# every day; the function itself decides whether the invocation falls inside one
+# of the Central-time election-night windows and exits immediately (no DB call,
+# no AI call, no log row) when it does not. Netlify cron is UTC and CT shifts
+# with DST, so the window is computed inside the function from a real
+# America/Chicago conversion, never from a hardcoded offset.
+#   election day 20:00-21:59 CT  -> every run
+#   election day 22:00-23:59 CT  -> hourly (minute < 5)
+#   next day     00:00-03:59 CT  -> hourly (minute < 5)
+#   next day     10:00-10:04 CT  -> one final run
+[functions."election-results-poller"]
+  schedule = "*/5 * * * *"
+  timeout  = 30
 
 [[headers]]
   for = "/*"

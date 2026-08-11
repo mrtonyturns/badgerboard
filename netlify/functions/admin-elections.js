@@ -202,7 +202,7 @@ exports.handler = async (event) => {
 
   let res
   try {
-    res = await route(sb, action, params, headers)
+    res = await route(sb, action, params, headers, event)
   } catch (e) {
     console.error('[admin-elections] error:', e.message)
     res = json(500, { error: 'An internal error occurred' }, headers)
@@ -220,7 +220,7 @@ exports.handler = async (event) => {
   return res
 }
 
-async function route(sb, action, params, headers) {
+async function route(sb, action, params, headers, event) {
   switch (action) {
     case 'save_election':   return await saveRow(sb, 'elections', ELECTION_FIELDS, params)
     case 'delete_election': return await deleteRow(sb, 'elections', params.id)
@@ -378,6 +378,25 @@ async function route(sb, action, params, headers) {
       if (!rows?.length) return json(404, { error: 'Contest not found — status NOT reset' })
       const determination = await runDetermination(sb, contest_id, { force: true })
       return json(200, { data: { status_source: 'auto', determination } })
+    }
+
+    // ── Manually trigger the scheduled poller (scheduled functions are not
+    //    URL-invocable on Netlify, so the admin console reaches it here).
+    //    The poller re-validates the same admin JWT from the forwarded headers.
+    case 'run_poller': {
+      const poller = require('./election-results-poller')
+      const res = await poller.handler({
+        httpMethod: 'POST',
+        headers: (event && event.headers) || {},
+        body: JSON.stringify({
+          force: params.force !== false,          // default true — that's the point
+          dry_run: params.dry_run === true,
+          election_date: params.election_date || undefined,
+        }),
+      })
+      let parsed
+      try { parsed = JSON.parse(res.body) } catch { parsed = { raw: String(res.body).slice(0, 500) } }
+      return json(res.statusCode || 200, parsed, headers)
     }
 
     default:

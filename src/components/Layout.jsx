@@ -40,10 +40,17 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.25.0'
+const APP_VERSION = 'v1.25.1'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.25.1',
+    date: 'August 10, 2026',
+    changes: [
+      'Election results now update themselves: every 5 minutes from 8\u201310 PM on election night, hourly through 4 AM, and a final pass at 10 AM \u2014 published numbers only, validated before every write, with the admin always able to override',
+    ],
+  },
   {
     version: 'v1.25.0',
     date: 'August 10, 2026',

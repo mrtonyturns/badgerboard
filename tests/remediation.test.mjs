@@ -480,5 +480,214 @@ console.log('Phase 1 — admin-elections determination wiring (mocked Supabase)'
   shared.requireAdmin  = realRequireAdmin
 }
 
+
+// ─── Live results Phases 2–3: the poller's pure halves ───────────────────────
+// The poller itself is all network + Supabase, but the two pieces that decide
+// whether it runs at all and whether a number is allowed near the database are
+// pure — and those are the two that can quietly ruin an election night.
+console.log('Phases 2-3 — election-results-poller window decision')
+{
+  const { decideWindow, validateContestUpdate, MAX_TOTAL_VOTES } =
+    require('../netlify/functions/election-results-poller.js')
+
+  // 2026-08-11 is the Wisconsin partisan primary; Central time is CDT (UTC-5)
+  // that week, so these literals pin the exact instant regardless of the host's
+  // own timezone.
+  const CDT = (hhmm, day = '2026-08-11') => new Date(`${day}T${hhmm}:00-05:00`)
+  const DATES = ['2026-08-11']
+  const w = (hhmm, day) => decideWindow(CDT(hhmm, day), DATES)
+
+  // — election day —
+  t('19:59 election day → skip (polls have not closed)',      w('19:59').run === false)
+  t('20:00 election day → run, peak (5-minute cadence)',
+    w('20:00').run === true && w('20:00').phase === 'peak' && w('20:00').cadence === 'every 5 minutes')
+  t('21:57 → run, still the 5-minute phase',
+    w('21:57').run === true && w('21:57').phase === 'peak')
+  t('22:30 → skip (past 10pm it is hourly, top of the hour only)', w('22:30').run === false)
+  t('23:02 → run, overnight hourly phase',
+    w('23:02').run === true && w('23:02').phase === 'overnight' && w('23:02').cadence === 'hourly')
+  t('22:00 → run (the 10pm hourly run itself)', w('22:00').run === true)
+
+  // — the morning after (targets the PREVIOUS day's election) —
+  const nxt = (hhmm) => w(hhmm, '2026-08-12')
+  t('00:01 next day → run, and it is attributed to the 8/11 election',
+    nxt('00:01').run === true && nxt('00:01').electionDate === '2026-08-11')
+  t('01:03 next day → run (hourly)', nxt('01:03').run === true)
+  t('03:02 next day → run — 3am is the last overnight run', nxt('03:02').run === true)
+  t('03:58 next day → skip (not the top of the hour)', nxt('03:58').run === false)
+  // BOUNDARY: "10pm through the next 6 hours" = 22, 23, 00, 01, 02, 03 — six
+  // hourly runs, with 04:00 the exclusive end of the window. 4am does NOT run.
+  t('04:02 next day → skip (4am is the exclusive end of the overnight window)',
+    nxt('04:02').run === false)
+  t('09:02 next day → skip (nothing between 4am and 10am)', nxt('09:02').run === false)
+  t('10:02 next day → run, final sweep, once',
+    nxt('10:02').run === true && nxt('10:02').phase === 'final' && nxt('10:02').cadence === 'once')
+  t('10:07 next day → skip (the final sweep already went at the top of the hour)',
+    nxt('10:07').run === false)
+  t('11:02 next day → skip (the final sweep is the last run)', nxt('11:02').run === false)
+
+  // — no election, no run —
+  t('20:00 the day BEFORE the election → skip',
+    decideWindow(CDT('20:00', '2026-08-10'), DATES).run === false)
+  t('20:00 two days after the election → skip',
+    decideWindow(CDT('20:00', '2026-08-13'), DATES).run === false)
+  t('no election dates on file at all → skip', decideWindow(CDT('20:30'), []).run === false)
+  t('a skip still explains itself', typeof w('19:59').reason === 'string' && w('19:59').reason.length > 10)
+
+  // — DST: the window must come from a real America/Chicago conversion —
+  // 2027-02-16 is the spring primary, in CST (UTC-6). A hardcoded UTC-5 would
+  // read 20:00 CST as 21:00 and 19:00 CST as 20:00 — both wrong.
+  const WINTER = ['2027-02-16']
+  t('winter election: 20:00 CST → run (offset is -6, not -5)',
+    decideWindow(new Date('2027-02-16T20:00:00-06:00'), WINTER).run === true)
+  t('winter election: 19:00 CST → skip (a hardcoded -5 offset would have run it)',
+    decideWindow(new Date('2027-02-16T20:00:00-05:00'), WINTER).run === false)
+  t('winter election: 22:02 CST → run hourly',
+    decideWindow(new Date('2027-02-16T22:02:00-06:00'), WINTER).phase === 'overnight')
+  t('winter morning after: 10:01 CST → final run',
+    decideWindow(new Date('2027-02-17T10:01:00-06:00'), WINTER).phase === 'final')
+
+  // — the decision never throws on junk —
+  t('window decision survives junk input', (() => {
+    try {
+      decideWindow(new Date('nonsense'), null)
+      decideWindow(CDT('20:00'), [null, undefined, {}, new Date('2026-08-11T12:00:00-05:00')])
+      return true
+    } catch { return false }
+  })())
+
+  // ─── validation: nothing bad reaches the database ─────────────────────────
+  console.log('Phases 2-3 — election-results-poller validation / quarantine')
+
+  const roster = () => ([
+    { id: 'r1', candidate_name: 'Sarah Godlewski', votes: 1000 },
+    { id: 'r2', candidate_name: 'Tom Nelson',      votes: 900 },
+  ])
+  const existing = (over = {}) => ({
+    office: 'Governor — Democratic Primary',
+    results: roster(),
+    precincts_total: 3600,
+    precincts_rptg: 1200,
+    ...over,
+  })
+  const payload = (over = {}) => ({
+    office: 'Governor — Democratic Primary',
+    candidates: [{ name: 'Sarah Godlewski', votes: 1500 }, { name: 'Tom Nelson', votes: 1400 }],
+    precincts_reporting: 1800,
+    precincts_total: 3600,
+    source: 'AP via WISN (https://example.com)',
+    ...over,
+  })
+
+  // — happy path —
+  const good = validateContestUpdate(payload(), existing())
+  t('clean payload: both candidates accepted, no notes',
+    good.ok === true && good.updates.length === 2 && good.inserts.length === 0 && good.notes.length === 0)
+  t('clean payload: precincts pass through', good.precincts.precincts_rptg === 1800 && good.precincts.precincts_total === 3600)
+  t('clean payload: updates carry the DB row id, not the reported name',
+    good.updates[0].id === 'r1' && good.updates[0].candidate_name === 'Sarah Godlewski')
+
+  // — name matching —
+  const cased = validateContestUpdate(payload({
+    candidates: [{ name: 'sarah  GODLEWSKI', votes: 1500 }],
+  }), existing())
+  t('candidate names match case- and whitespace-insensitively',
+    cased.updates.length === 1 && cased.updates[0].id === 'r1' && cased.updates[0].matched_by === 'exact')
+  const lastName = validateContestUpdate(payload({
+    candidates: [{ name: 'S. Godlewski', votes: 1500 }, { name: 'Thomas Nelson', votes: 1400 }],
+  }), existing())
+  t('last-name fallback matches "S. Godlewski" and "Thomas Nelson"',
+    lastName.updates.length === 2 && lastName.updates.every(u => u.matched_by === 'last-name'))
+  const ambiguous = validateContestUpdate(payload({
+    candidates: [{ name: 'J. Nelson', votes: 50 }],
+  }), existing({ results: [
+    { id: 'r1', candidate_name: 'Tom Nelson', votes: 10 },
+    { id: 'r2', candidate_name: 'Jane Nelson', votes: 10 },
+  ] }))
+  t('an ambiguous last name matches nobody and is quarantined',
+    ambiguous.updates.length === 0 && ambiguous.notes.some(n => /more than one candidate/.test(n)))
+
+  // — vote decreases —
+  const dropped = validateContestUpdate(payload({
+    candidates: [{ name: 'Sarah Godlewski', votes: 1500 }, { name: 'Tom Nelson', votes: 800 }],
+  }), existing())
+  t('a vote DECREASE is skipped, never written',
+    dropped.updates.length === 1 && dropped.updates[0].id === 'r1')
+  t('the decrease is explained in the notes (→ log row error field)',
+    dropped.notes.some(n => n.includes('Tom Nelson') && /below the stored 900/.test(n)))
+  const same = validateContestUpdate(payload({
+    candidates: [{ name: 'Sarah Godlewski', votes: 1000 }],
+  }), existing())
+  t('an unchanged total is fine (>= current, not > current)', same.updates.length === 1)
+  const fractional = validateContestUpdate(payload({
+    candidates: [{ name: 'Sarah Godlewski', votes: 1500.5 }, { name: 'Tom Nelson', votes: 'about 1,400' }],
+  }), existing())
+  t('non-integer / prose vote counts are dropped',
+    fractional.updates.length === 0 && fractional.notes.length === 2)
+  t('comma-formatted integers are still accepted',
+    validateContestUpdate(payload({ candidates: [{ name: 'Tom Nelson', votes: '1,400' }] }), existing())
+      .updates[0].votes === 1400)
+
+  // — unmatched candidates —
+  const stranger = validateContestUpdate(payload({
+    candidates: [{ name: 'Sarah Godlewski', votes: 1500 }, { name: 'Nobody Atall', votes: 99999 }],
+  }), existing())
+  t('an unmatched candidate in an ESTABLISHED contest is quarantined, not inserted',
+    stranger.updates.length === 1 && stranger.inserts.length === 0 &&
+    stranger.notes.some(n => /not on this contest's roster/.test(n)))
+  const bootstrapped = validateContestUpdate(payload({
+    candidates: [{ name: 'Sarah Godlewski', votes: 1500 }, { name: 'Late Entry', votes: 12 }],
+  }), existing(), { allowInserts: true })
+  t('the same name IS inserted in a contest the poller just bootstrapped',
+    bootstrapped.inserts.length === 1 && bootstrapped.inserts[0].candidate_name === 'Late Entry')
+
+  // — precincts —
+  const clamped = validateContestUpdate(payload({ precincts_reporting: 5000, precincts_total: 3600 }), existing())
+  t('precincts reporting above the total is clamped to the total',
+    clamped.precincts.precincts_rptg === 3600 &&
+    clamped.notes.some(n => /clamped to 3600/.test(n)))
+  t('precincts reporting going backwards is refused',
+    validateContestUpdate(payload({ precincts_reporting: 100 }), existing()).precincts === null ||
+    validateContestUpdate(payload({ precincts_reporting: 100 }), existing()).precincts.precincts_rptg === 1200)
+  t('omitted precinct numbers leave the stored counts alone',
+    validateContestUpdate({ office: 'x', candidates: [{ name: 'Tom Nelson', votes: 950 }], source: 'clerk' },
+      existing()).precincts === null)
+
+  // — whole-contest quarantines —
+  const noSource = validateContestUpdate(payload({ source: '   ' }), existing())
+  t('a contest with no cited source is quarantined whole',
+    noSource.ok === false && noSource.updates.length === 0 && noSource.precincts === null &&
+    noSource.notes.some(n => /no source cited/.test(n)))
+  const absurd = validateContestUpdate(payload({
+    candidates: [{ name: 'Sarah Godlewski', votes: MAX_TOTAL_VOTES }, { name: 'Tom Nelson', votes: 1400 }],
+  }), existing())
+  t('a contest breaching the 4,000,000-vote sanity cap is quarantined whole',
+    absurd.ok === false && absurd.updates.length === 0 &&
+    absurd.notes.some(n => /sanity cap/.test(n)))
+  t('an empty candidate list writes nothing',
+    validateContestUpdate(payload({ candidates: [] }), existing()).ok === false)
+
+  // — hostile input —
+  t('validation never throws on hostile input', (() => {
+    const hostile = [
+      null, undefined, 'nope', [], 42,
+      { candidates: null, source: 's' },
+      { candidates: [{}, { name: 5, votes: {} }, { name: 'x', votes: -3 }], source: 's' },
+      { candidates: [{ name: 'Tom Nelson', votes: Infinity }], source: 's', precincts_total: 'many' },
+    ]
+    try { hostile.forEach(h => validateContestUpdate(h, existing())); return true } catch { return false }
+  })())
+  t('hostile input still writes nothing',
+    validateContestUpdate({ candidates: [{ name: 'Tom Nelson', votes: Infinity }], source: 's' }, existing()).ok === false)
+
+  // — the manual-invocation guard runs BEFORE anything else, so this holds at
+  //   any time of day (including inside a live window) —
+  const { handler: poller } = require('../netlify/functions/election-results-poller.js')
+  const noAuth = await poller({ httpMethod: 'POST', headers: {}, body: JSON.stringify({ force: true, dry_run: true }) })
+  t('manual invocation without an admin JWT → 401 before any DB or AI call', noAuth.statusCode === 401)
+  const preflight = await poller({ httpMethod: 'OPTIONS', headers: {}, body: '' })
+  t('OPTIONS preflight → 204', preflight.statusCode === 204)
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
