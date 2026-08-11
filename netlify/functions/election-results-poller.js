@@ -337,8 +337,20 @@ function validateContestUpdate(payload, existing = {}, opts = {}) {
   const rptg = toInt(payload.precincts_reporting)
   if (total === null) total = storedTotal
 
+  // Before any actual votes exist (pre-election / polls just closed), sources
+  // have nothing real to say about precinct counts — anything offered is noise
+  // (e.g. "50" showed up pre-election on 2026-08-10). Ignore precinct changes
+  // until the contest carries at least one nonzero vote, incoming or stored.
+  const anyVotes =
+    updates.some(u => (u.votes || 0) > 0) ||
+    (existing.results || []).some(r => (toInt(r.votes) || 0) > 0)
+  if (!anyVotes && (rptg !== null || total !== storedTotal)) {
+    if (total !== storedTotal) notes.push(`${office}: precinct figures offered before any votes exist — ignored`)
+    total = storedTotal
+  }
+
   let precincts = null
-  if (rptg !== null || total !== storedTotal) {
+  if (anyVotes && (rptg !== null || total !== storedTotal)) {
     let nextRptg = rptg === null ? storedRptg : rptg
     if (total > 0 && nextRptg > total) {
       notes.push(`${office}: precincts reporting ${nextRptg} exceeded the ${total} total — clamped to ${total}`)

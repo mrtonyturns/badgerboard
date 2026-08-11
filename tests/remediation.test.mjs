@@ -689,5 +689,25 @@ console.log('Phases 2-3 — election-results-poller window decision')
   t('OPTIONS preflight → 204', preflight.statusCode === 204)
 }
 
+
+// ── poller: precinct figures ignored before any votes exist ─────────────────
+{
+  const { validateContestUpdate } = require('../netlify/functions/election-results-poller.js')
+  const existing = { office: 'Governor — Democratic Primary', precincts_total: 0, precincts_rptg: 0,
+    results: [{ id: 'r1', candidate_name: 'Sara Rodriguez', votes: 0 }] }
+  const v1 = validateContestUpdate(
+    { office: 'Governor — Democratic Primary', candidates: [{ name: 'Sara Rodriguez', votes: 0 }],
+      precincts_reporting: 0, precincts_total: 50, source: 'somewhere' },
+    existing)
+  t('pre-vote precinct figure is ignored', !v1.precincts)
+  t('pre-vote precinct ignore is noted', (v1.notes || []).some(n => /ignored/.test(n)))
+  const v2 = validateContestUpdate(
+    { office: 'Governor — Democratic Primary', candidates: [{ name: 'Sara Rodriguez', votes: 1200 }],
+      precincts_reporting: 10, precincts_total: 3600, source: 'Dane County Clerk' },
+    existing)
+  t('precincts accepted once votes exist', v2.precincts && v2.precincts.precincts_total === 3600 && v2.precincts.precincts_rptg === 10)
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
+
