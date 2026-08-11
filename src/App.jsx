@@ -1,6 +1,42 @@
 import React, { Suspense, lazy } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom'
 
+// ─── Stale-deploy chunk recovery ─────────────────────────────────────────────
+// A phone that kept the app open across a deploy holds an old bundle whose
+// lazy-route chunk hashes no longer exist on the CDN. The import then fails
+// ("Failed to fetch dynamically imported module" / Safari: "Importing a module
+// script failed") and the user sees the error screen. Recovery: reload ONCE —
+// the fresh shell carries the new hashes. A sessionStorage guard prevents a
+// reload loop when the failure is something else (e.g. genuinely offline).
+const CHUNK_ERR = /failed to fetch dynamically imported module|importing a module script failed|error loading dynamically imported module|chunkloaderror|failed to load module script/i
+const RELOAD_GUARD = 'bb-chunk-reload'
+
+function reloadOnceForStaleChunk(err) {
+  try {
+    if (!CHUNK_ERR.test(String(err?.message || err || ''))) return false
+    if (sessionStorage.getItem(RELOAD_GUARD)) return false
+    sessionStorage.setItem(RELOAD_GUARD, String(Date.now()))
+    window.location.reload()
+    return true
+  } catch { return false }
+}
+
+// Vite fires this for failed <link rel="modulepreload"> / dynamic imports.
+if (typeof window !== 'undefined') {
+  window.addEventListener('vite:preloadError', (event) => {
+    if (reloadOnceForStaleChunk(event?.payload || { message: 'failed to fetch dynamically imported module' })) {
+      event.preventDefault()
+    }
+  })
+}
+
+const lazyRetry = (factory) => lazy(() =>
+  factory().catch((err) => {
+    if (reloadOnceForStaleChunk(err)) return new Promise(() => {}) // page is reloading
+    throw err
+  })
+)
+
 // ─── Global error boundary ────────────────────────────────────────────────────
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -12,6 +48,10 @@ class ErrorBoundary extends React.Component {
   }
   componentDidCatch(error, info) {
     console.error('[ErrorBoundary] Unhandled error:', error, info)
+    reloadOnceForStaleChunk(error)
+  }
+  componentDidMount() {
+    try { sessionStorage.removeItem(RELOAD_GUARD) } catch { /* noop */ }
   }
   render() {
     if (this.state.hasError) {
@@ -51,34 +91,34 @@ import Layout from './components/Layout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Offices from './pages/Offices'
-const Elections = lazy(() => import('./pages/Elections'))  // code-split: trims the initial bundle (M1)
-const GamePlan = lazy(() => import('./pages/GamePlan'))  // code-split: trims the initial bundle (M1)
+const Elections = lazyRetry(() => import('./pages/Elections'))  // code-split: trims the initial bundle (M1)
+const GamePlan = lazyRetry(() => import('./pages/GamePlan'))  // code-split: trims the initial bundle (M1)
 // ElectionResults (legacy standalone page) replaced by Elections.jsx two-tab UI.
 // Redirect helper preserves bookmarked /elections/results/:id URLs.
 function ElectionResultsRedirect() {
   const { id } = useParams()
   return <Navigate to={`/elections?tab=results${id ? `&election=${id}` : ''}`} replace />
 }
-const Candidates = lazy(() => import('./pages/Candidates'))  // code-split: trims the initial bundle (M1)
-const CandidateDetail = lazy(() => import('./pages/CandidateDetail'))  // code-split: trims the initial bundle (M1)
-const Prospecting = lazy(() => import('./pages/Prospecting'))  // code-split: trims the initial bundle (M1)
-const VoterLists = lazy(() => import('./pages/VoterLists'))  // code-split: trims the initial bundle (M1)
+const Candidates = lazyRetry(() => import('./pages/Candidates'))  // code-split: trims the initial bundle (M1)
+const CandidateDetail = lazyRetry(() => import('./pages/CandidateDetail'))  // code-split: trims the initial bundle (M1)
+const Prospecting = lazyRetry(() => import('./pages/Prospecting'))  // code-split: trims the initial bundle (M1)
+const VoterLists = lazyRetry(() => import('./pages/VoterLists'))  // code-split: trims the initial bundle (M1)
 // Door Knocking parked — restore import + route to re-enable
 // import DoorKnocking from './pages/DoorKnocking'
-const CampaignConnect = lazy(() => import('./pages/CampaignConnect'))  // code-split: trims the initial bundle (M1)
-const Dossiers = lazy(() => import('./pages/Dossiers'))  // code-split: trims the initial bundle (M1)
+const CampaignConnect = lazyRetry(() => import('./pages/CampaignConnect'))  // code-split: trims the initial bundle (M1)
+const Dossiers = lazyRetry(() => import('./pages/Dossiers'))  // code-split: trims the initial bundle (M1)
 import Settings from './pages/Settings'
 import Terms from './pages/Terms'
-const Pricing = lazy(() => import('./pages/Pricing'))  // code-split: trims the initial bundle (M1)
-const AdminDashboard = lazy(() => import('./pages/AdminDashboard'))  // code-split: trims the initial bundle (M1)
+const Pricing = lazyRetry(() => import('./pages/Pricing'))  // code-split: trims the initial bundle (M1)
+const AdminDashboard = lazyRetry(() => import('./pages/AdminDashboard'))  // code-split: trims the initial bundle (M1)
 import DossierDisclaimer from './pages/DossierDisclaimer'
-const Compare = lazy(() => import('./pages/Compare'))  // code-split: trims the initial bundle (M1)
+const Compare = lazyRetry(() => import('./pages/Compare'))  // code-split: trims the initial bundle (M1)
 import VolunteerPortal from './pages/VolunteerPortal'
 import SharedDossier from './pages/SharedDossier'
-const Events = lazy(() => import('./pages/Events'))  // code-split: trims the initial bundle (M1)
-const Broadside = lazy(() => import('./pages/Broadside'))  // code-split: admin-only beta
-const CityDemographics = lazy(() => import('./pages/CityDemographics'))  // code-split: trims the initial bundle (M1)
-const Polling = lazy(() => import('./pages/Polling'))  // code-split: beta-only (v1.22)
+const Events = lazyRetry(() => import('./pages/Events'))  // code-split: trims the initial bundle (M1)
+const Broadside = lazyRetry(() => import('./pages/Broadside'))  // code-split: admin-only beta
+const CityDemographics = lazyRetry(() => import('./pages/CityDemographics'))  // code-split: trims the initial bundle (M1)
+const Polling = lazyRetry(() => import('./pages/Polling'))  // code-split: beta-only (v1.22)
 import ResetPassword from './pages/ResetPassword'
 
 const ProtectedRoute = ({ children }) => {

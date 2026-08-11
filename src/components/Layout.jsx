@@ -40,10 +40,17 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.27.1'
+const APP_VERSION = 'v1.27.2'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.27.2',
+    date: 'August 11, 2026',
+    changes: [
+      'Mobile fix: a phone that kept the app open across an update no longer hits an error screen \u2014 the app now recovers by refreshing itself once, automatically',
+    ],
+  },
   {
     version: 'v1.27.1',
     date: 'August 11, 2026',
