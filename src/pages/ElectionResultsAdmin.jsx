@@ -2,25 +2,64 @@
 // Manual election results entry for the admin panel.
 // Replaces the fake WEC poller — an admin enters results by hand on election night.
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
 import {
   BarChart2, Plus, Edit2, Trash2, Trophy, ChevronDown, ChevronUp,
   CheckCircle2, X, MapPin, Users, Radio, ExternalLink, AlertTriangle,
+  Search, Filter,
 } from 'lucide-react'
 import { supabase, adminElections } from '../lib/supabase'
 import SearchableSelect from '../components/SearchableSelect'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
+// Order and labels match the public board (ElectionResultsBoard.jsx). The three
+// legislative types were missing, so editing one of the 244 us_house /
+// state_senate / state_assembly races showed a blank type and touching the
+// dropdown silently refiled the race into the wrong group on the board.
 const OFFICE_TYPES = [
-  { value: 'statewide',   label: 'Statewide' },
-  { value: 'judicial',    label: 'Judicial' },
-  { value: 'legislative', label: 'Legislative' },
-  { value: 'county',      label: 'County' },
-  { value: 'municipal',   label: 'Municipal' },
-  { value: 'referendum',  label: 'Referendum' },
+  { value: 'statewide',      label: 'Statewide' },
+  { value: 'us_house',       label: 'U.S. House' },
+  { value: 'state_senate',   label: 'State Senate' },
+  { value: 'state_assembly', label: 'State Assembly' },
+  { value: 'county',         label: 'County' },
+  { value: 'judicial',       label: 'Judicial' },
+  { value: 'legislative',    label: 'Legislative' },
+  { value: 'municipal',      label: 'Municipal' },
+  { value: 'referendum',     label: 'Referendum' },
 ]
+const OFFICE_TYPE_LABEL = Object.fromEntries(OFFICE_TYPES.map(t => [t.value, t.label]))
+const OFFICE_TYPE_ORDER = Object.fromEntries(OFFICE_TYPES.map((t, i) => [t.value, i]))
+
+// Seed/QA rows that should never be the thing an admin lands on at 8 PM.
+// (?![a-z]) so a real "Testing …" election is never swallowed by the filter.
+const isTestElection = (e) => /^(zz)?test(?![a-z])/i.test(String(e?.name || '').trim())
+
+// Today's date in America/Chicago — Wisconsin votes on Central time, and the
+// console must open on tonight's election for an admin anywhere.
+const ctToday = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date())
+
+/**
+ * Default election for the console: today's, else the nearest PAST one.
+ * Never a future election — the seeds run through 2028 and date-descending
+ * order used to open on "2028 November General" with "No contests yet".
+ */
+function pickDefaultElection(list) {
+  const pool = (list || []).filter(e => !isTestElection(e) && e.election_date)
+  if (!pool.length) return null
+  const today = ctToday()
+  const onToday = pool.find(e => String(e.election_date).slice(0, 10) === today)
+  if (onToday) return onToday
+  const past = pool
+    .filter(e => String(e.election_date).slice(0, 10) < today)
+    .sort((a, b) => b.election_date.localeCompare(a.election_date))
+  if (past[0]) return past[0]
+  // Nothing has happened yet — the soonest upcoming beats the furthest one.
+  return [...pool].sort((a, b) => a.election_date.localeCompare(b.election_date))[0] || null
+}
 
 const PARTIES = [
   'Democrat', 'Republican', 'Independent', 'Nonpartisan',
@@ -77,7 +116,11 @@ export default function ElectionResultsAdmin({ showToast }) {
   const [contests,         setContests]         = useState([])
   const [resultsMap,       setResultsMap]       = useState({})
   const [loading,          setLoading]          = useState(false)
+  // Contests start COLLAPSED — 250 open cards is 17,826 DOM nodes and 500 vote
+  // inputs. `expanded[id] === true` opens one.
   const [expanded,         setExpanded]         = useState({})
+  const [search,           setSearch]           = useState('')
+  const [typeFilter,       setTypeFilter]       = useState('all')
 
   // Modal state
   const [contestModal, setContestModal] = useState(null) // null | 'add' | contest-obj (edit)
@@ -96,15 +139,24 @@ export default function ElectionResultsAdmin({ showToast }) {
       .select('*')
       .order('election_date', { ascending: false })
       .then(({ data }) => {
-        setElections(data || [])
-        if (data?.length) setSelectedElection(data[0])
+        const list = data || []
+        setElections(list)
+        setSelectedElection(pickDefaultElection(list))
       })
   }, [])
+
+  // Test/seed rows never belong in the picker an admin uses on election night.
+  const pickerElections = useMemo(
+    () => elections.filter(e => !isTestElection(e) || e.id === selectedElection?.id),
+    [elections, selectedElection?.id])
 
   // Load contests + results whenever selected election changes
   useEffect(() => {
     if (selectedElection) loadContests(selectedElection.id)
   }, [selectedElection])
+
+  // Switching elections should not carry the previous ballot's filters over.
+  useEffect(() => { setSearch(''); setTypeFilter('all'); setExpanded({}) }, [selectedElection?.id])
 
   const loadContests = useCallback(async (electionId) => {
     setLoading(true)
@@ -119,14 +171,17 @@ export default function ElectionResultsAdmin({ showToast }) {
     setContests(cData || [])
 
     if (cData?.length) {
+      // FK-join filter rather than a 250-id `.in()` — that URL is ~10KB today
+      // and crosses the gateway limit at November's ~400 contests.
       const { data: rData } = await supabase
         .from('election_results')
-        .select('*')
-        .in('contest_id', cData.map(c => c.id))
+        .select('*, election_contests!inner(election_id)')
+        .eq('election_contests.election_id', electionId)
         .order('votes', { ascending: false })
 
       const map = {}
-      for (const r of rData || []) {
+      for (const raw of rData || []) {
+        const { election_contests: _join, ...r } = raw
         if (!map[r.contest_id]) map[r.contest_id] = []
         map[r.contest_id].push(r)
       }
@@ -136,6 +191,27 @@ export default function ElectionResultsAdmin({ showToast }) {
     }
     setLoading(false)
   }, [showToast])
+
+  /**
+   * Refresh ONE contest after a per-row save. The old code refetched the whole
+   * election after every keystroke-sized edit, which on a 250-contest ballot
+   * re-rendered the page and threw away scroll position and expansion state.
+   */
+  const refreshContest = useCallback(async (contestId) => {
+    if (!contestId) return
+    const [{ data: cRow }, { data: rRows }] = await Promise.all([
+      supabase.from('election_contests').select('*').eq('id', contestId).maybeSingle(),
+      supabase.from('election_results').select('*').eq('contest_id', contestId).order('votes', { ascending: false }),
+    ])
+    if (cRow) {
+      setContests(prev => prev.map(c => (c.id === contestId ? { ...c, ...cRow } : c)))
+      setResultsMap(prev => ({ ...prev, [contestId]: rRows || [] }))
+    } else {
+      // Row is gone (deleted elsewhere) — drop it rather than showing a ghost.
+      setContests(prev => prev.filter(c => c.id !== contestId))
+      setResultsMap(prev => { const next = { ...prev }; delete next[contestId]; return next })
+    }
+  }, [])
 
   // ── Contest CRUD ──────────────────────────────────────────────────────────
   const openAddContest = () => {
@@ -181,9 +257,13 @@ export default function ElectionResultsAdmin({ showToast }) {
 
     setSaving(false)
     if (error) { showToast('Save failed: ' + error.message, 'error'); return }
+    const editedId = contestModal === 'add' ? null : contestModal.id
     showToast(contestModal === 'add' ? 'Contest added' : 'Contest updated')
     setContestModal(null)
-    loadContests(selectedElection.id)
+    // A brand-new contest has to come from the list query; an edit only needs
+    // its own row.
+    if (editedId) refreshContest(editedId)
+    else loadContests(selectedElection.id)
   }
 
   const deleteContest = async (id) => {
@@ -193,7 +273,8 @@ export default function ElectionResultsAdmin({ showToast }) {
     setDeleting(null)
     if (error) { showToast('Delete failed: ' + error.message, 'error'); return }
     showToast('Contest deleted')
-    loadContests(selectedElection.id)
+    setContests(prev => prev.filter(c => c.id !== id))
+    setResultsMap(prev => { const next = { ...prev }; delete next[id]; return next })
   }
 
   // ── Result CRUD ───────────────────────────────────────────────────────────
@@ -239,17 +320,19 @@ export default function ElectionResultsAdmin({ showToast }) {
     setSaving(false)
     showToast(!resultModal.result ? 'Candidate added' : 'Result updated')
     setResultModal(null)
-    loadContests(selectedElection.id)
+    // Only this contest's slice — vote_pct for its siblings is recalculated
+    // server-side in the same action, so one contest refetch is enough.
+    refreshContest(contestId)
   }
 
-  const deleteResult = async (id) => {
+  const deleteResult = async (id, contestId) => {
     if (!window.confirm('Remove this candidate result?')) return
     setDeleting(id)
     const { error } = await adminElections('delete_result', { id })
     setDeleting(null)
     if (error) { showToast('Delete failed: ' + error.message, 'error'); return }
     showToast('Result removed')
-    loadContests(selectedElection.id)
+    refreshContest(contestId)
   }
 
   // ── Quick-call a race ─────────────────────────────────────────────────────
@@ -277,14 +360,14 @@ export default function ElectionResultsAdmin({ showToast }) {
     if (error) { showToast('Call failed: ' + error.message + ' — the board was NOT updated', 'error'); return }
     const newWinnerCount = results.filter(r => r.declared || r.id === candidateId).length
     showToast(newWinnerCount >= seats ? `All ${seats} seat${seats > 1 ? 's' : ''} called` : 'Candidate declared winner')
-    loadContests(selectedElection.id)
+    refreshContest(contestId)
   }
 
   const uncallRace = async (contestId) => {
     const { error } = await adminElections('uncall_race', { contest_id: contestId })
     if (error) { showToast('Un-call failed: ' + error.message, 'error'); return }
     showToast('Race un-called')
-    loadContests(selectedElection.id)
+    refreshContest(contestId)
   }
 
   // ── Status override / determination engine ────────────────────────────────
@@ -297,7 +380,7 @@ export default function ElectionResultsAdmin({ showToast }) {
     setStatusSaving(null)
     if (error) { showToast('Status override failed: ' + error.message, 'error'); return }
     showToast(`Status set to "${STATUS_LABEL[status] || status}" — the engine will leave this race alone`)
-    loadContests(selectedElection.id)
+    refreshContest(contestId)
   }
 
   const backToAuto = async (contestId) => {
@@ -309,7 +392,7 @@ export default function ElectionResultsAdmin({ showToast }) {
     showToast(engineSaid
       ? `Back on auto — engine says "${STATUS_LABEL[engineSaid] || engineSaid}"`
       : 'Back on auto')
-    loadContests(selectedElection.id)
+    refreshContest(contestId)
   }
 
   // ── Precinct quick-update ─────────────────────────────────────────────────
@@ -320,12 +403,32 @@ export default function ElectionResultsAdmin({ showToast }) {
     const { error } = await adminElections('update_precincts', { contest_id: contestId, rptg, total })
     if (error) { showToast('Update failed: ' + error.message, 'error'); return }
     showToast('Precincts updated')
-    loadContests(selectedElection.id)
+    // Drop the pending edit so the inputs fall back to the saved values.
+    setPrecEdit(prev => { const next = { ...prev }; delete next[contestId]; return next })
+    refreshContest(contestId)
   }
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const calledCount  = contests.filter(c => (resultsMap[c.id] || []).some(r => r.declared)).length
-  const totalVotes   = Object.values(resultsMap).flat().reduce((s, r) => s + (r.votes || 0), 0)
+  const totalVotes   = contests.reduce(
+    (s, c) => s + (resultsMap[c.id] || []).reduce((x, r) => x + (r.votes || 0), 0), 0)
+
+  // ── Search + office-type filter ───────────────────────────────────────────
+  // Finding one sheriff race in 250 contests used to mean scrolling past all of
+  // them. Case-insensitive substring across office / county / district.
+  const officeTypes = useMemo(
+    () => [...new Set(contests.map(c => c.office_type).filter(Boolean))]
+      .sort((a, b) => (OFFICE_TYPE_ORDER[a] ?? 99) - (OFFICE_TYPE_ORDER[b] ?? 99) || a.localeCompare(b)),
+    [contests])
+
+  const visibleContests = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return contests.filter(c => {
+      if (typeFilter !== 'all' && (c.office_type || '') !== typeFilter) return false
+      if (!q) return true
+      return [c.office, c.county, c.district].filter(Boolean).join(' ').toLowerCase().includes(q)
+    })
+  }, [contests, search, typeFilter])
 
   // ─────────────────────────────────────────────────────────────────────────
   // Render
@@ -358,7 +461,7 @@ export default function ElectionResultsAdmin({ showToast }) {
             buttonClassName="py-1.5 text-sm"
             value={selectedElection?.id || ''}
             onChange={v => setSelectedElection(elections.find(x => x.id === v) || null)}
-            options={elections.map(el => ({ value: el.id, label: `${el.name} — ${format(parseISO(el.election_date), 'MMM d, yyyy')}` }))}
+            options={pickerElections.map(el => ({ value: el.id, label: `${el.name} — ${format(parseISO(el.election_date), 'MMM d, yyyy')}` }))}
             placeholder="Select election…"
             searchPlaceholder="Search elections…" />
           {selectedElection && (
@@ -390,6 +493,53 @@ export default function ElectionResultsAdmin({ showToast }) {
         </div>
       )}
 
+      {/* ── Find a race ── */}
+      {selectedElection && !loading && contests.length > 0 && (
+        <div className="card py-3 space-y-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="relative flex-1 min-w-[220px] max-w-md">
+              <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="search"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search office, county or district…"
+                className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg border border-gray-200 bg-white text-gray-700 placeholder-gray-400 focus:outline-none focus:border-brand-red/40"
+              />
+            </div>
+            <span className="text-xs text-gray-400 tabular-nums">
+              {visibleContests.length} of {contests.length} contest{contests.length !== 1 ? 's' : ''}
+            </span>
+            {(search || typeFilter !== 'all') && (
+              <button
+                onClick={() => { setSearch(''); setTypeFilter('all') }}
+                className="text-xs text-gray-500 hover:text-brand-red font-medium"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          {officeTypes.length > 1 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <Filter className="w-4 h-4 text-gray-400 flex-shrink-0" />
+              <div className="flex gap-1.5 flex-wrap">
+                {['all', ...officeTypes].map(type => (
+                  <button
+                    key={type}
+                    onClick={() => setTypeFilter(type)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                      typeFilter === type ? 'bg-brand-navy text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-gray-300'
+                    }`}
+                  >
+                    {type === 'all' ? 'All Races' : OFFICE_TYPE_LABEL[type] || type}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Contest list */}
       {loading ? (
         <div className="flex justify-center py-16">
@@ -406,9 +556,14 @@ export default function ElectionResultsAdmin({ showToast }) {
         </div>
       ) : (
         <div className="space-y-3">
-          {contests.map(contest => {
-            const results       = (resultsMap[contest.id] || []).sort((a, b) => (b.votes || 0) - (a.votes || 0))
-            const isOpen        = expanded[contest.id] !== false // default open
+          {visibleContests.length === 0 && (
+            <p className="text-center text-sm text-gray-400 py-10">
+              No contests match {search ? `“${search}”` : 'this filter'}.
+            </p>
+          )}
+          {visibleContests.map(contest => {
+            const results       = [...(resultsMap[contest.id] || [])].sort((a, b) => (b.votes || 0) - (a.votes || 0))
+            const isOpen        = expanded[contest.id] === true // default collapsed
             const seats         = contest.seats || 1
             const declaredCount = results.filter(r => r.declared).length
             const isCalled      = declaredCount >= seats && declaredCount > 0
@@ -449,6 +604,13 @@ export default function ElectionResultsAdmin({ showToast }) {
                       {contest.county && (
                         <span className="text-xs text-gray-400 flex items-center gap-0.5">
                           <MapPin className="w-3 h-3" />{contest.county} Co.
+                        </span>
+                      )}
+                      {/* Collapsed by default — say whether anything is entered
+                          without making the admin open the card to find out. */}
+                      {!isOpen && (
+                        <span className="text-xs text-gray-400">
+                          {results.length === 0 ? 'no candidates' : `${results.length} candidate${results.length !== 1 ? 's' : ''}`}
                         </span>
                       )}
                     </div>
@@ -646,7 +808,7 @@ export default function ElectionResultsAdmin({ showToast }) {
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
                             <button
-                              onClick={() => deleteResult(r.id)}
+                              onClick={() => deleteResult(r.id, contest.id)}
                               disabled={deleting === r.id}
                               className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-brand-red"
                               title="Remove candidate"

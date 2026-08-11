@@ -14,6 +14,10 @@ const safeISO = (d) => {
   return Number.isNaN(+t) ? new Date(0) : t
 }
 
+// Seed/QA rows ("TEST …", "ZZTEST …") never belong in the Results picker.
+// (?![a-z]) so a real "Testing …" election is never swallowed by the filter.
+const isTestElection = (e) => /^(zz)?test(?![a-z])/i.test(String(e?.name || '').trim())
+
 import {
   Target, CalendarDays, Plus, Clock, CheckCircle, Edit2, Trash2, X,
   BarChart2, AlertCircle, ChevronDown, ChevronRight, Users,
@@ -796,28 +800,39 @@ export default function GamePlan() {
     fetchElections()
   }
 
-  // Which elections actually have contests? Cheap: one `.in` select of a single
-  // column, only once the Results tab is open. Drives the default selection so
-  // the tab doesn't land on a stale past election with nothing in it.
+  // Which elections actually have contests? Only the ones the default could
+  // plausibly land on — today plus the three most recent past — and each is a
+  // head-only exact count, stopping at the first hit. (This used to pull every
+  // contest row of every election just to answer a yes/no question; on a
+  // 250-contest night that is the whole table.)
   useEffect(() => {
     if (activeTab !== 'results') return
     if (!elections.length) return
     if (electionsWithContests !== null) return
     let cancelled = false
     ;(async () => {
-      try {
-        const { data, error } = await supabase
-          .from('election_contests')
-          .select('election_id')
-          .in('election_id', elections.map(e => e.id))
-        if (cancelled) return
-        if (error) throw error
-        setElectionsWithContests(new Set((data || []).map(r => r.election_id)))
-      } catch (err) {
-        if (cancelled) return
-        console.warn('[GamePlan] contest lookup failed, falling back to date order:', err?.message)
-        setElectionsWithContests(new Set())   // empty ⇒ resolution falls through
+      const pool  = elections.filter(e => !isTestElection(e) && e.election_date)
+      const today = pool.filter(e => isToday(safeISO(e.election_date)))
+      const past  = pool
+        .filter(e => isPast(safeISO(e.election_date)) && !isToday(safeISO(e.election_date)))
+        .sort((a, b) => b.election_date.localeCompare(a.election_date))
+        .slice(0, 3)
+      const found = new Set()
+      for (const e of [...today, ...past]) {
+        try {
+          const { count, error } = await supabase
+            .from('election_contests')
+            .select('id', { count: 'exact', head: true })
+            .eq('election_id', e.id)
+          if (cancelled) return
+          if (error) throw error
+          if ((count || 0) > 0) { found.add(e.id); break }
+        } catch (err) {
+          console.warn('[GamePlan] contest probe failed, falling back to date order:', err?.message)
+          break   // empty ⇒ resolution falls through to date order
+        }
       }
+      if (!cancelled) setElectionsWithContests(found)
     })()
     return () => { cancelled = true }
   }, [activeTab, elections, electionsWithContests])
@@ -993,11 +1008,14 @@ export default function GamePlan() {
   const resolvedResultsId = useMemo(() => {
     if (selectedResultsId) return selectedResultsId
     if (!elections.length) return null
+    // Never default to a TEST/ZZTEST row — they're hidden from the picker.
+    const pool = elections.filter(e => !isTestElection(e))
+    if (!pool.length) return null
 
-    const today = elections.find(e => isToday(parseISO(e.election_date)))
+    const today = pool.find(e => isToday(parseISO(e.election_date)))
     if (today) return today.id
 
-    const pastDesc = [...elections]
+    const pastDesc = [...pool]
       .filter(e => isPast(parseISO(e.election_date)))
       .sort((a, b) => parseISO(b.election_date) - parseISO(a.election_date))
 
@@ -1006,13 +1024,18 @@ export default function GamePlan() {
       if (withResults) return withResults.id
     }
 
-    const nextUp = [...elections]
+    const nextUp = [...pool]
       .filter(e => isFuture(parseISO(e.election_date)))
       .sort((a, b) => parseISO(a.election_date) - parseISO(b.election_date))[0]
     if (nextUp) return nextUp.id
 
     return pastDesc[0]?.id || null
   }, [selectedResultsId, elections, electionsWithContests])
+
+  // The board renders its own election tab strip from this list.
+  const publicElections = useMemo(
+    () => elections.filter(e => !isTestElection(e) || e.id === selectedResultsId),
+    [elections, selectedResultsId])
 
   // Push the resolved id into the URL so the Results tab is linkable and a
   // refresh lands on the same election (mirrors Elections.jsx). replace:true —
@@ -1201,7 +1224,7 @@ export default function GamePlan() {
           </div>
         ) : (
           <ElectionResultsBoard
-            elections={elections}
+            elections={publicElections}
             selectedId={resolvedResultsId}
             onSelectElection={goToResults}
           />

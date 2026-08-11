@@ -476,6 +476,21 @@ console.log('Phase 1 — admin-elections determination wiring (mocked Supabase)'
   await call('update_precincts', { contest_id: CID, rptg: 0, total: 10 })
   t('no votes anywhere → waiting', contest().status === 'waiting')
 
+  // — QA #9: a race the engine REFUSES to call must not paint anyone green —
+  reset()
+  result(R1).votes = 5010; result(R2).votes = 4990
+  result(R1).winner = true                     // left over from an earlier pass
+  await call('update_precincts', { contest_id: CID, rptg: 10, total: 10 })
+  t('a 0.2% final margin is recount_possible, not called', contest().status === 'recount_possible')
+  t('entering recount_possible clears stale winner flags (no green under a RECOUNT badge)',
+    db.election_results.every(r => r.winner === false))
+  t('the engine still refuses to touch `declared` on a recount race',
+    db.election_results.every(r => r.declared === false))
+  // A later pass that is STILL recount_possible must not thrash the rows.
+  result(R1).winner = true
+  await call('update_precincts', { contest_id: CID, rptg: 10, total: 10 })
+  t('a contest already sitting in recount_possible is left alone', result(R1).winner === true)
+
   shared.serviceClient = realServiceClient
   shared.requireAdmin  = realRequireAdmin
 }
@@ -714,7 +729,8 @@ console.log('Phases 2-3 — election-results-poller window decision')
 {
   console.log('Full ballot — tier-2 chunking + rotation')
   const {
-    chunkList, tierTwoQueue, selectRotationChunks, rotationTick, contestLine,
+    chunkList, tierTwoQueue, assignChunks, orderChunk, chunkIndexOf,
+    selectRotationChunks, rotationTick, contestLine,
     countyChunk, countyDiscoveryPrompt, shapeCountyContests,
     WI_COUNTIES, COUNTY_CHUNKS, TIER2_CHUNK_SIZE, TIER2_MAX_CALLS,
   } = require('../netlify/functions/election-results-poller.js')
@@ -741,11 +757,11 @@ console.log('Phases 2-3 — election-results-poller window decision')
       return c.length === 3 && c[0].length === 12 && c[1].length === 12 && c[2].length === 1 })())
   t('chunkList of an empty list is no chunks', chunkList([], 12).length === 0)
   t('chunkList survives junk input', chunkList(null, 0).length === 0 && chunkList([1, 2], NaN).length === 1)
-  t('default chunk size is 12 and at most 3 tier-2 calls per run',
-    TIER2_CHUNK_SIZE === 12 && TIER2_MAX_CALLS === 3)
+  t('default chunk size is 8 and at most 2 tier-2 calls per run (lighter run shape)',
+    TIER2_CHUNK_SIZE === 8 && TIER2_MAX_CALLS === 2)
 
   // — queue composition —
-  const q = tierTwoQueue(ballot, ct(20, 30))
+  const q = tierTwoQueue(ballot)
   t('statewide contests are NEVER in the tier-2 rotation',
     q.length === 124 && q.every(c => c.office_type !== 'statewide'))
   t('tier-2 queue is ordered by id, so the rotation is stable between runs',
@@ -757,39 +773,44 @@ console.log('Phases 2-3 — election-results-poller window decision')
     ...mk(5, 'state_assembly', 'reporting', 'live'),
     ...mk(2, 'statewide',      'reporting', 'sw'),
   ]
-  const qd = tierTwoQueue(decided, ct(21, 0))
-  t('called and certified contests drop out of the rotation entirely',
-    qd.length === 5 && qd.every(c => c.status === 'reporting'))
+  const qd = tierTwoQueue(decided)
+  t('decided contests KEEP their seat in the tier-2 list (chunk membership must not shift)',
+    qd.length === 12 && qd.filter(c => c.status === 'reporting').length === 5)
+  t('…but a chunk only ever costs a call for the contests still worth one',
+    orderChunk(qd, ct(21, 0)).length === 5 && orderChunk(qd, ct(21, 0)).every(c => c.status === 'reporting'))
 
-  // — waiting deprioritisation —
+  // — waiting deprioritisation, now INSIDE a chunk (membership never moves) —
   const mixed = [
     { id: 'a', office_type: 'state_assembly', status: 'waiting'   },
     { id: 'b', office_type: 'state_assembly', status: 'reporting' },
     { id: 'c', office_type: 'state_assembly', status: 'waiting'   },
     { id: 'd', office_type: 'state_assembly', status: 'too_close' },
   ]
-  t('before 11 PM CT the queue is plain id order (waiting races still matter)',
-    tierTwoQueue(mixed, ct(21, 45)).map(c => c.id).join('') === 'abcd')
-  t('after 11 PM CT the still-waiting contests sort LAST',
-    tierTwoQueue(mixed, ct(23, 0)).map(c => c.id).join('') === 'bdac')
+  t('before 11 PM CT a chunk is plain id order (waiting races still matter)',
+    orderChunk(mixed, ct(21, 45)).map(c => c.id).join('') === 'abcd')
+  t('after 11 PM CT the still-waiting contests are ordered LAST inside the chunk',
+    orderChunk(mixed, ct(23, 0)).map(c => c.id).join('') === 'bdac')
   t('the 1 AM hourly run also deprioritises waiting contests',
-    tierTwoQueue(mixed, ct(1, 0)).map(c => c.id).join('') === 'bdac')
+    orderChunk(mixed, ct(1, 0)).map(c => c.id).join('') === 'bdac')
   t('deprioritisation keeps id order inside each band',
-    tierTwoQueue(mixed, ct(23, 0)).slice(2).map(c => c.id).join('') === 'ac')
+    orderChunk(mixed, ct(23, 0)).slice(2).map(c => c.id).join('') === 'ac')
 
   // — time-derived rotation: deterministic, disjoint, and it comes back round —
   const peak = (h, m) => selectRotationChunks(q, ct(h, m), { cadence: 'every 5 minutes' })
   t('rotation is fully determined by the clock — same instant, same chunks',
     peak(20, 15).indices.join(',') === peak(20, 15).indices.join(','))
-  t('124 contests in rotation → 11 chunks of 12', peak(20, 0).nChunks === 11)
-  t('each run takes 3 chunks', peak(20, 0).indices.length === 3 && peak(20, 5).indices.length === 3)
-  t('the 20:00 run starts at chunk 0', peak(20, 0).indices.join(',') === '0,1,2')
+  t('124 contests in rotation → 16 chunks of 8', peak(20, 0).nChunks === 16)
+  t('each run takes 2 chunks', peak(20, 0).indices.length === 2 && peak(20, 5).indices.length === 2)
+  t('the 20:00 run starts at chunk 0', peak(20, 0).indices.join(',') === '0,1')
   t('consecutive 5-minute runs cover DISJOINT chunks',
-    peak(20, 5).indices.join(',') === '3,4,5' && peak(20, 10).indices.join(',') === '6,7,8')
+    peak(20, 5).indices.join(',') === '2,3' && peak(20, 10).indices.join(',') === '4,5')
   t('any minute inside a 5-minute bucket picks the same slice',
     peak(20, 5).indices.join(',') === peak(20, 9).indices.join(','))
-  t('the rotation wraps rather than running off the end',
-    peak(20, 15).indices.join(',') === '9,10,0')
+  t('the rotation wraps rather than running off the end', (() => {
+    const small = q.slice(0, 20)   // 20 contests → 3 chunks, 2 taken per run
+    const idx = (m) => selectRotationChunks(small, ct(20, m), { cadence: 'every 5 minutes' }).indices.join(',')
+    return idx(20) === '2,0' && idx(25) === '1,2'
+  })())
   t('every tier-2 contest is refreshed within one full cycle of 5-minute runs', (() => {
     const seen = new Set()
     for (let m = 0; m < 60; m += 5) for (const i of peak(20, m).indices) seen.add(i)
@@ -805,7 +826,7 @@ console.log('Phases 2-3 — election-results-poller window decision')
   t('the 5-minute tick is 12 per hour off the same origin',
     rotationTick(ct(20, 0)) === 0 && rotationTick(ct(20, 55)) === 11 && rotationTick(ct(21, 0)) === 12)
   t('rotation math survives a junk clock',
-    selectRotationChunks(q, {}, {}).indices.length === 3 && selectRotationChunks([], ct(20, 0), {}).nChunks === 0)
+    selectRotationChunks(q, {}, {}).indices.length === 2 && selectRotationChunks([], ct(20, 0), {}).nChunks === 0)
   t('a single short chunk is still selected exactly once',
     selectRotationChunks(mixed, ct(20, 20), {}).indices.join(',') === '0')
 
@@ -1061,7 +1082,14 @@ console.log('Phases 2-3 — election-results-poller window decision')
   console.log('Result notifications — decideNotification matrix')
   const T0 = new Date('2026-11-03T03:00:00Z')
   const at = (mins) => new Date(T0.getTime() + mins * 60000)
-  const everyChange = { id: 's1', mode: 'every_change', last_notified_at: null, last_snapshot: null, winner_notified_at: null }
+  // A subscription that has ALREADY been seen once: it carries a baseline
+  // snapshot, so the matrix below is about real changes, not first sight.
+  // (First sight is its own block further down — it never emails.)
+  const baseline = snapshotOf({ ...contestBase, precincts_rptg: 30 }, [
+    { candidate_name: 'Marla Vandenberg', votes: 20000 },
+    { candidate_name: 'Dale Kupferschmidt', votes: 19000 },
+  ])
+  const everyChange = { id: 's1', mode: 'every_change', last_notified_at: null, last_snapshot: baseline, winner_notified_at: null }
   const finalOnly   = { ...everyChange, id: 's2', mode: 'final_only' }
 
   // first change → send
@@ -1129,6 +1157,491 @@ console.log('Phases 2-3 — election-results-poller window decision')
       return true
     } catch { return false }
   })())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Aug 2026 election-night QA fixes (Tier 1 #6–#10, Tier 2, Tier 3)
+// Everything below must stay ABOVE the summary/process.exit lines.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── T1#7 / T2: truncated-reply salvage + district-aware contest matching ────
+{
+  console.log('QA fixes — truncated reply salvage + contest matching')
+  const {
+    salvageJsonObjects, parseContestsLoose, matchContest, districtCountyAgree,
+    winnerFlagAction, fatalNotesOnly, RUN_BUDGET_MS, TIER1_TIMEOUT_MS,
+  } = require('../netlify/functions/election-results-poller.js')
+
+  // A reply that ran out of tokens mid-way through the third contest.
+  const truncated = '{"contests":[' +
+    '{"office":"Governor — Democratic Primary","candidates":[{"name":"A A","votes":10}],"source":"clerk"},' +
+    '{"office":"Governor — Republican Primary","candidates":[{"name":"B B","votes":20}],"source":"AP"},' +
+    '{"office":"Attorney General — Demo'
+  const salv = parseContestsLoose(truncated)
+  t('a truncated reply still yields the contests that arrived whole',
+    salv.salvaged === true && salv.contests.length === 2 &&
+    salv.contests[0].office === 'Governor — Democratic Primary' &&
+    salv.contests[1].candidates[0].votes === 20)
+  t('the half-written contest at the cut is dropped, never guessed',
+    !salv.contests.some(c => /Attorney General/.test(c.office || '')))
+  t('salvage survives braces and brackets inside strings',
+    (salvageJsonObjects('{"contests":[{"office":"Sheriff {Marathon} [x]","source":"a \\" b","candidates":[]},{"office":"cut')
+      || [{}])[0].office === 'Sheriff {Marathon} [x]')
+  t('a WHOLE reply is still parsed strictly, not salvaged',
+    parseContestsLoose('{"contests":[{"office":"X","candidates":[],"source":"s"}]}').salvaged === false)
+  t('a bare array reply is still accepted',
+    parseContestsLoose('[{"office":"X","candidates":[],"source":"s"}]').contests.length === 1)
+  t('an unusable reply is still nothing at all, never a guess',
+    parseContestsLoose('sorry, I could not find results').contests === null &&
+    parseContestsLoose('').contests === null)
+
+  // — T2: district / county cross-check on a LOOSE match —
+  const seeded8 = [{ id: 'c8', office: 'State Assembly District 8', district: 'District 8' }]
+  t('"District 85" numbers are NOT written into the seeded District 8 race',
+    matchContest('State Assembly District 85', seeded8) === null)
+  t('the district word boundary is digit-aware, not \\b',
+    districtCountyAgree('State Assembly District 85', { district: 'District 8' }) === false &&
+    districtCountyAgree('State Assembly District 8 — Democratic Primary', { district: 'District 8' }) === true)
+  t('a loose match with the RIGHT district still lands',
+    matchContest('State Assembly District 8 — Democratic Primary', seeded8) !== null)
+  const twoCounties = [
+    { id: 'm', office: 'Sheriff — Republican Primary', county: 'Marathon' },
+  ]
+  t('one county\'s sheriff numbers cannot be written into another county\'s race',
+    matchContest('Sheriff — Republican Primary — Portage County', twoCounties) === null)
+  t('the SAME county still matches loosely',
+    (matchContest('Marathon County Sheriff — Republican Primary', twoCounties) || {}).id === 'm')
+  t('an EXACT office-name match is unaffected by the cross-check',
+    matchContest('State Assembly District 8', seeded8).id === 'c8')
+  t('a contest with no district or county behaves exactly as before',
+    matchContest('Governor — Democratic', [{ id: 'g', office: 'Governor — Democratic Primary' }]).id === 'g')
+
+  // — T1#9: winner flags —
+  t('winner flags are applied ONLY on a called race',
+    winnerFlagAction('called', 'reporting', { margin: 5 }) === 'apply' &&
+    winnerFlagAction('recount_possible', 'reporting', { margin: 5 }) !== 'apply')
+  t('entering recount_possible CLEARS any stale winner flags',
+    winnerFlagAction('recount_possible', 'too_close', { margin: 3 }) === 'clear')
+  t('a race already sitting in recount_possible is left alone',
+    winnerFlagAction('recount_possible', 'recount_possible', { margin: 3 }) === 'none')
+  t('a called race with a zero margin still flags nobody',
+    winnerFlagAction('called', 'reporting', { margin: 0 }) === 'none' &&
+    winnerFlagAction('called', 'reporting', null) === 'none')
+  t('the admin console applies the identical rule', (() => {
+    const admin = require('../netlify/functions/admin-elections.js')
+    return admin.winnerFlagAction('called', 'reporting', { margin: 5 }) === 'apply' &&
+      admin.winnerFlagAction('recount_possible', 'reporting', { margin: 5 }) === 'clear' &&
+      admin.winnerFlagAction('recount_possible', 'recount_possible', { margin: 5 }) === 'none'
+  })())
+
+  // — T2: poller-log hygiene —
+  t('a healthy run writes error = null (informational notes stay in the JSON)',
+    fatalNotesOnly([
+      'Tier 2 rotation: chunk(s) 0, 1 of 16 (124 contest(s) in the stable rotation).',
+      'Discovery created 9 contest(s) with 31 candidate row(s).',
+      'Notifications: 4 subscription(s) checked, nothing worth emailing yet.',
+    ]).length === 0)
+  t('fatals, quarantines, skips and deferrals DO reach the error column',
+    fatalNotesOnly([
+      'FATAL: elections lookup failed',
+      'Governor: no source cited for these numbers — quarantined, nothing written',
+      'Tier 2 chunk 3/15: only 900ms of the run budget left — deferred to the next cycle.',
+      'Reported contest "x" does not match any contest on file — skipped.',
+      'Tier 2 rotation: chunk(s) 0, 1 of 16.',
+    ]).length === 4)
+  t('note filtering never throws on junk', (() => {
+    try { fatalNotesOnly(null); fatalNotesOnly([null, 7, {}, undefined]); return true } catch { return false }
+  })())
+
+  // — T1#6: the lighter, deadline-aware run shape —
+  t('the run budget dropped to 18s and is env-overridable',
+    RUN_BUDGET_MS === 18000 && TIER1_TIMEOUT_MS === 10000)
+}
+
+// ── T1#6 + T3: deadline-aware writes, FK-join load, 429 gate ────────────────
+{
+  console.log('QA fixes — deadline-aware writes, FK-join load, Perplexity 429 gate')
+  const {
+    loadContests, updatePass, queryPerplexity, makeRunGate,
+  } = require('../netlify/functions/election-results-poller.js')
+
+  // — T3: the results load is an FK join, never a 250-id .in() —
+  const queries = []
+  const sbLoad = {
+    from(table) {
+      const st = { table, selects: [], filters: [] }
+      queries.push(st)
+      const chain = {
+        select(s) { st.selects.push(String(s)); return chain },
+        eq(c, v) { st.filters.push([c, v]); return chain },
+        in(c, v) { st.filters.push([c, v, 'in']); return chain },
+        then(ok, no) {
+          const data = table === 'election_contests'
+            ? [{ id: 'c1', office: 'Sheriff' }, { id: 'c2', office: 'Coroner' }]
+            : [{ id: 'r1', contest_id: 'c1', candidate_name: 'Ann Lee', votes: 5, party: 'Republican',
+                 election_contests: { election_id: 'E1' } }]
+          return Promise.resolve({ data, error: null }).then(ok, no)
+        },
+      }
+      return chain
+    },
+  }
+  const loaded = await loadContests(sbLoad, 'E1')
+  t('results are loaded through the FK join, with no id list in the URL',
+    queries[1].table === 'election_results' &&
+    queries[1].selects[0].includes('election_contests!inner(election_id)') &&
+    queries[1].filters.some(([c, v]) => c === 'election_contests.election_id' && v === 'E1') &&
+    !queries[1].filters.some(f => f[2] === 'in'))
+  t('the joined key is stripped, so downstream row shape is unchanged',
+    loaded[0]._results.length === 1 &&
+    !('election_contests' in loaded[0]._results[0]) &&
+    loaded[0]._results[0].candidate_name === 'Ann Lee' &&
+    loaded[1]._results.length === 0)
+
+  // — T3: one 429 stops the run from dispatching anything else —
+  const realFetch = global.fetch
+  const realKey = process.env.PERPLEXITY_API_KEY
+  process.env.PERPLEXITY_API_KEY = 'test-key'
+  let calls = 0
+  global.fetch = async () => { calls++; return { ok: false, status: 429, text: async () => 'rate limited' } }
+  const gate = makeRunGate()
+  const first  = await queryPerplexity({ system: 's', user: 'u', timeoutMs: 5000, gate })
+  const second = await queryPerplexity({ system: 's', user: 'u', timeoutMs: 5000, gate })
+  t('an HTTP 429 closes the gate for the rest of the run',
+    gate.rateLimited === true && /429/.test(first.error) && calls === 1)
+  t('later calls this run are skipped instead of dispatched',
+    calls === 1 && second.text === null && /skipped/.test(second.error))
+  t('a fresh run gets a fresh gate', makeRunGate().rateLimited === false)
+
+  // — T1#6: the write pass stops cleanly at the deadline —
+  const reply = JSON.stringify({ contests: [
+    { office: 'Sheriff — Republican Primary', candidates: [{ name: 'Ann Lee', votes: 120 }], source: 'Marathon County Clerk' },
+  ] })
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: reply } }] }) })
+
+  const contests = [{
+    id: 'c1', office: 'Sheriff — Republican Primary', county: 'Marathon', seats: 1,
+    status: 'reporting', status_source: 'auto', precincts_total: 10, precincts_rptg: 5,
+    _results: [{ id: 'r1', candidate_name: 'Ann Lee', votes: 10 }],
+  }]
+  const election = { id: 'E1', name: 'Partisan Primary', election_date: '2026-08-11' }
+
+  const writes = []
+  const sbWrite = {
+    from(table) {
+      writes.push(table)
+      const chain = {
+        select() { return chain }, eq() { return chain }, in() { return chain },
+        upsert() { return chain }, update() { return chain },
+        then(ok, no) { return Promise.resolve({ data: [], error: null }).then(ok, no) },
+      }
+      return chain
+    },
+  }
+
+  const touchedLate = { contests: new Set(), results: new Set() }
+  const late = await updatePass(sbWrite, election, contests, {
+    dryRun: false, bootstrappedIds: new Set(), touched: touchedLate,
+    timeoutMs: 5000, deadline: Date.now() - 1,
+  })
+  t('past the run deadline the write pass writes nothing at all',
+    late.contests === 0 && writes.length === 0 && touchedLate.contests.size === 0)
+  t('the deferred contests are named in the notes, so the log row records them',
+    late.deferred === 1 && late.notes.some(n => /deferred/.test(n) && /Sheriff/.test(n)))
+
+  const touchedOk = { contests: new Set(), results: new Set() }
+  const inTime = await updatePass(sbWrite, election, contests, {
+    dryRun: false, bootstrappedIds: new Set(), touched: touchedOk,
+    timeoutMs: 5000, deadline: Date.now() + 60000,
+  })
+  t('with budget left the same contest is written normally',
+    inTime.contests === 1 && inTime.deferred === 0 && touchedOk.contests.has('c1') &&
+    writes.includes('election_results'))
+
+  global.fetch = realFetch
+  if (realKey === undefined) delete process.env.PERPLEXITY_API_KEY
+  else process.env.PERPLEXITY_API_KEY = realKey
+}
+
+// ── T3: stable chunk assignment ─────────────────────────────────────────────
+{
+  console.log('QA fixes — stable tier-2 chunk assignment')
+  const { chunkIndexOf, selectRotationChunks, tierTwoQueue } =
+    require('../netlify/functions/election-results-poller.js')
+  const ct = (hour, minute = 0) => ({ hour, minute, minutes: hour * 60 + minute })
+
+  const field = Array.from({ length: 30 }, (_, i) => ({
+    id: `asm-${String(i).padStart(3, '0')}`, office_type: 'state_assembly', status: 'reporting',
+  }))
+  const before = new Map(field.map(c => [c.id, chunkIndexOf(c.id, field, 8)]))
+
+  // Six races get called during the night; nobody else may move chunk.
+  const after = field.map((c, i) => (i % 5 === 0 ? { ...c, status: 'called' } : c))
+  t('a contest being called does NOT move any other contest to a new chunk',
+    after.every(c => chunkIndexOf(c.id, after, 8) === before.get(c.id)))
+  t('the called contests keep their own chunk seat too',
+    after.filter(c => c.status === 'called').every(c => chunkIndexOf(c.id, after, 8) === before.get(c.id)))
+  t('the 11 PM waiting re-sort does not move anybody either', (() => {
+    const late = field.map((c, i) => (i % 3 === 0 ? { ...c, status: 'waiting' } : c))
+    return late.every(c => chunkIndexOf(c.id, late, 8) === before.get(c.id))
+  })())
+
+  const rot = selectRotationChunks(tierTwoQueue(after), ct(20, 0), { size: 8, maxCalls: 2, cadence: 'every 5 minutes' })
+  t('every contest still has a chunk, called or not',
+    rot.chunks.reduce((s, c) => s + c.length, 0) === 30 && rot.nChunks === 4)
+  t('a called contest costs nothing: it is skipped INSIDE its chunk',
+    rot.selected.flat().every(c => c.status !== 'called') &&
+    rot.selected.flat().length < rot.chunks[rot.indices[0]].length + rot.chunks[rot.indices[1]].length)
+  t('an all-decided chunk simply yields no work', (() => {
+    const allDone = field.map(c => ({ ...c, status: 'certified' }))
+    return selectRotationChunks(tierTwoQueue(allDone), ct(20, 0), { size: 8, maxCalls: 2 })
+      .selected.every(list => list.length === 0)
+  })())
+}
+
+// ── T1#8 / T2: the notifier's decisions ─────────────────────────────────────
+{
+  console.log('QA fixes — first-sight seeding, zero-vote suppression, delivery backoff')
+  const {
+    decideNotification, snapshotOf, snapshotChanged,
+    deliveryStateOf, shouldBackOff, markDeliveryFailure, clearDeliveryState, hasBaseline,
+    MAX_DELIVERY_FAILS, DELIVERY_BACKOFF_MS,
+  } = require('../netlify/functions/_result-notify.js')
+
+  const NOW = new Date('2026-08-12T02:00:00Z')
+  const contest = {
+    id: 'c1', election_id: 'e1', office: 'Sheriff — Republican Primary', county: 'Marathon',
+    seats: 1, status: 'reporting', precincts_rptg: 4, precincts_total: 10,
+  }
+  const rows = [
+    { candidate_name: 'Ann Lee', votes: 1200, vote_pct: 60 },
+    { candidate_name: 'Bo Ray', votes: 800, vote_pct: 40 },
+  ]
+  const fresh = { id: 's1', mode: 'every_change', last_notified_at: null, last_snapshot: null, winner_notified_at: null }
+
+  // — first sight: seed, never send —
+  const seed = decideNotification(fresh, contest, rows, NOW)
+  t('a brand-new subscription is SEEDED, not emailed (no table of zeros)',
+    seed.kind === 'none' && /first sight/.test(seed.reason))
+  t('the seeding patch writes the baseline snapshot and nothing else',
+    seed.patch.last_snapshot.votes['Ann Lee'] === 1200 &&
+    seed.patch.winner_notified_at === undefined &&
+    seed.patch.last_notified_at === undefined)
+  t('the very next real change DOES email',
+    decideNotification({ ...fresh, last_snapshot: seed.patch.last_snapshot },
+      { ...contest, precincts_rptg: 6 },
+      [{ candidate_name: 'Ann Lee', votes: 1500 }, rows[1]], NOW).kind === 'update')
+
+  // — first sight of a race that was already decided —
+  const alreadyCalled = { ...contest, status: 'called', precincts_rptg: 10 }
+  const seedCalled = decideNotification(fresh, alreadyCalled, rows, NOW)
+  t('subscribing to an ALREADY-called race fires no retroactive winner email',
+    seedCalled.kind === 'none' && /already-decided/.test(seedCalled.reason))
+  t('…and it seeds winner_notified_at so the next admin touch stays quiet',
+    seedCalled.patch.winner_notified_at === NOW.toISOString() &&
+    seedCalled.patch.last_snapshot.status === 'called')
+  t('a race decided only by a declared ROW is caught by the same rule',
+    decideNotification(fresh, contest, [{ candidate_name: 'Ann Lee', votes: 9, declared: true }], NOW)
+      .patch.winner_notified_at === NOW.toISOString())
+  t('a race that is decided AFTER the baseline still sends the winner email',
+    decideNotification({ ...fresh, last_snapshot: seed.patch.last_snapshot }, alreadyCalled, rows, NOW).kind === 'winner')
+
+  // — zero votes + waiting: never an email —
+  const waiting = { ...contest, status: 'waiting', precincts_rptg: 0 }
+  const zeroRows = [{ candidate_name: 'Ann Lee', votes: 0 }, { candidate_name: 'Bo Ray', votes: 0 }]
+  const seenWaiting = { ...fresh, last_snapshot: snapshotOf({ ...waiting, precincts_rptg: 0 }, [{ candidate_name: 'Ann Lee', votes: 0 }]) }
+  // Precincts moved (and a second zero-vote candidate row appeared), so the
+  // snapshot HAS changed — but there is still nothing to say.
+  const zero = decideNotification(seenWaiting, { ...waiting, precincts_rptg: 2 }, zeroRows, NOW)
+  t('a zero-vote race still on "waiting" is never emailed, however much churns',
+    zero.kind === 'none' && /no votes reported yet/.test(zero.reason) && zero.patch === null)
+  t('the same race DOES email once a single vote is reported',
+    decideNotification(seenWaiting, { ...waiting, status: 'reporting' },
+      [{ candidate_name: 'Ann Lee', votes: 1 }], NOW).kind === 'update')
+
+  // — delivery backoff, stored under last_snapshot._delivery (no migration) —
+  const base = snapshotOf(contest, rows)
+  t('a clean subscription has no delivery failures on file',
+    deliveryStateOf({ last_snapshot: base }).fails === 0 && shouldBackOff({ last_snapshot: base }, NOW) === false)
+  const failed1 = markDeliveryFailure({ last_snapshot: base }, NOW)
+  t('a failure is recorded inside last_snapshot, keeping the race picture',
+    failed1._delivery.fails === 1 && failed1.votes['Ann Lee'] === 1200 && failed1.status === 'reporting')
+  let acc = { last_snapshot: base }
+  for (let i = 0; i < MAX_DELIVERY_FAILS; i++) acc = { last_snapshot: markDeliveryFailure(acc, NOW) }
+  t(`${MAX_DELIVERY_FAILS} failures inside 6 hours stops the retries`,
+    deliveryStateOf(acc).fails === MAX_DELIVERY_FAILS && shouldBackOff(acc, NOW) === true)
+  t('four failures is still worth another try',
+    shouldBackOff({ last_snapshot: { ...base, _delivery: { fails: 4, last_fail_at: NOW.toISOString() } } }, NOW) === false)
+  t('the backoff expires after six hours',
+    shouldBackOff(acc, new Date(NOW.getTime() + DELIVERY_BACKOFF_MS + 1000)) === false)
+  t('a successful send clears the counter',
+    clearDeliveryState(failed1)._delivery === undefined && clearDeliveryState(failed1).votes['Ann Lee'] === 1200)
+  t('_delivery is NOT part of the change picture',
+    snapshotChanged({ ...base, _delivery: { fails: 3, last_fail_at: NOW.toISOString() } }, base) === false)
+  t('a row carrying ONLY _delivery is not a baseline, so first sight still seeds',
+    hasBaseline({ _delivery: { fails: 2 } }) === false &&
+    decideNotification({ ...fresh, last_snapshot: { _delivery: { fails: 2 } } }, contest, rows, NOW).kind === 'none')
+  t('the backoff helpers never throw on junk', (() => {
+    try {
+      deliveryStateOf(null); deliveryStateOf({ last_snapshot: 'x' })
+      shouldBackOff(undefined, 'nope'); markDeliveryFailure(null, 'nope'); clearDeliveryState(null)
+      return true
+    } catch { return false }
+  })())
+}
+
+// ── T1#10 / T2: the notifier runner (mocked Supabase + mailer) ──────────────
+{
+  console.log('QA fixes — notifier runner: skipped sends, backoff, deadline, concurrency')
+  const emailer = require('../netlify/functions/_email.js')
+  const realSend = emailer.sendEmail
+  const {
+    notifyContestChanges, snapshotOf, runPool, NOTIFY_CONCURRENCY,
+  } = require('../netlify/functions/_result-notify.js')
+
+  const CID = 'aaaaaaaa-1111-4111-8111-111111111111'
+  const EID = 'bbbbbbbb-2222-4222-8222-222222222222'
+  const contestRow = {
+    id: CID, election_id: EID, office: 'Sheriff — Republican Primary', district: null,
+    county: 'Marathon', seats: 1, status: 'reporting', status_detail: null,
+    precincts_rptg: 6, precincts_total: 10,
+  }
+  const resultRows = [
+    { contest_id: CID, candidate_name: 'Ann Lee', party: 'Republican', votes: 1500, vote_pct: 60, winner: false, declared: false },
+    { contest_id: CID, candidate_name: 'Bo Ray', party: 'Republican', votes: 1000, vote_pct: 40, winner: false, declared: false },
+  ]
+  const staleSnapshot = snapshotOf({ ...contestRow, precincts_rptg: 3 }, [
+    { candidate_name: 'Ann Lee', votes: 900 }, { candidate_name: 'Bo Ray', votes: 800 },
+  ])
+
+  const mkDb = (subs) => ({
+    election_subscriptions: subs.map(s => ({ ...s })),
+    election_contests: [{ ...contestRow }],
+    election_results: resultRows.map(r => ({ ...r })),
+    elections: [{ id: EID, name: 'Partisan Primary' }],
+  })
+  const mkClient = (db) => ({
+    from(table) {
+      const st = { filters: [], op: null, payload: null }
+      const rows = () => (db[table] || []).filter(r =>
+        st.filters.every(([c, v, op]) => (op === 'in' ? v.includes(r[c]) : r[c] === v)))
+      const chain = {
+        select() { return chain },
+        eq(c, v) { st.filters.push([c, v]); return chain },
+        in(c, v) { st.filters.push([c, v, 'in']); return chain },
+        update(p) { st.op = 'update'; st.payload = p; return chain },
+        then(ok, no) {
+          if (st.op === 'update') {
+            const hit = rows()
+            hit.forEach(r => Object.assign(r, st.payload))
+            return Promise.resolve({ data: hit, error: null }).then(ok, no)
+          }
+          return Promise.resolve({ data: rows(), error: null }).then(ok, no)
+        },
+      }
+      return chain
+    },
+    auth: { admin: { getUserById: async (id) => ({ data: { user: { email: `${id}@example.test` } }, error: null }) } },
+  })
+
+  const sub = (over = {}) => ({
+    id: `sub-${Math.random().toString(36).slice(2, 8)}`, user_id: 'user-1', contest_id: CID,
+    mode: 'every_change', last_notified_at: null, last_snapshot: staleSnapshot, winner_notified_at: null,
+    ...over,
+  })
+
+  // — T1#10: a "skipped" send is a FAILURE, and must not be booked as sent —
+  emailer.sendEmail = async () => ({ skipped: true })
+  let db = mkDb([sub()])
+  let out = await notifyContestChanges(mkClient(db), [CID], { trigger: 'test' })
+  t('a skipped send counts as failed, never as sent',
+    out.sent === 0 && out.failed === 1)
+  t('a skipped send writes NO delivery bookkeeping, so the email is retried',
+    db.election_subscriptions[0].last_notified_at === null &&
+    db.election_subscriptions[0].winner_notified_at === null)
+  t('a skipped send only bumps the failure counter',
+    db.election_subscriptions[0].last_snapshot._delivery.fails === 1 &&
+    db.election_subscriptions[0].last_snapshot.votes['Ann Lee'] === 900)
+
+  // — a real send books the bookkeeping and clears the counter —
+  const sentTo = []
+  emailer.sendEmail = async ({ to, subject }) => { sentTo.push(`${to}|${subject}`); return { id: 'msg_1' } }
+  db = mkDb([sub({ last_snapshot: { ...staleSnapshot, _delivery: { fails: 2, last_fail_at: new Date().toISOString() } } })])
+  out = await notifyContestChanges(mkClient(db), [CID], { trigger: 'test' })
+  t('a delivered update books last_notified_at and the new snapshot',
+    out.sent === 1 && out.failed === 0 &&
+    db.election_subscriptions[0].last_notified_at !== null &&
+    db.election_subscriptions[0].last_snapshot.votes['Ann Lee'] === 1500)
+  t('a delivered email clears the failed-attempt counter',
+    db.election_subscriptions[0].last_snapshot._delivery === undefined)
+
+  // — first sight through the runner: seeded, no email —
+  db = mkDb([sub({ last_snapshot: null })])
+  const before = sentTo.length
+  out = await notifyContestChanges(mkClient(db), [CID], { trigger: 'test' })
+  t('the runner seeds a first-sight subscription without sending anything',
+    out.sent === 0 && sentTo.length === before &&
+    db.election_subscriptions[0].last_snapshot.votes['Ann Lee'] === 1500 &&
+    db.election_subscriptions[0].last_notified_at === null)
+
+  // — backoff: a hard-bouncing address is left alone —
+  db = mkDb([sub({ last_snapshot: { ...staleSnapshot, _delivery: { fails: 5, last_fail_at: new Date().toISOString() } } })])
+  const beforeBounce = sentTo.length
+  out = await notifyContestChanges(mkClient(db), [CID], { trigger: 'test' })
+  t('a five-times-failed address is skipped for six hours, costing nothing',
+    out.sent === 0 && out.skipped === 1 && sentTo.length === beforeBounce &&
+    out.notes.some(n => /backing off/.test(n)))
+
+  // — deadline: nothing is started that cannot be finished —
+  db = mkDb([sub(), sub(), sub()])
+  const beforeDeadline = sentTo.length
+  out = await notifyContestChanges(mkClient(db), [CID], { trigger: 'test', deadline: Date.now() - 1 })
+  t('past the deadline the notifier starts no new work',
+    out.sent === 0 && out.deferred === 3 && sentTo.length === beforeDeadline)
+  t('deferred subscriptions keep their old bookkeeping, so the next run retries them',
+    db.election_subscriptions.every(s => s.last_notified_at === null && s.last_snapshot.votes['Ann Lee'] === 900))
+  t('the deferral is noted for the poller log', out.notes.some(n => /deferred/.test(n)))
+
+  // — the pool: 4 at a time, error-isolated —
+  db = mkDb(Array.from({ length: 9 }, (_, i) => sub({ user_id: `user-${i}` })))
+  let inFlight = 0, peak = 0
+  emailer.sendEmail = async () => {
+    inFlight++; peak = Math.max(peak, inFlight)
+    await new Promise(r => setTimeout(r, 2))
+    inFlight--
+    return { id: 'msg' }
+  }
+  out = await notifyContestChanges(mkClient(db), [CID], { trigger: 'test' })
+  t('all nine subscribers are emailed', out.sent === 9 && out.failed === 0)
+  t(`sends run ${NOTIFY_CONCURRENCY} at a time, not one after another`,
+    peak > 1 && peak <= NOTIFY_CONCURRENCY)
+
+  // — one exploding subscription cannot take the pass down —
+  let n = 0
+  emailer.sendEmail = async () => { n++; if (n === 2) throw new Error('resend exploded'); return { id: 'msg' } }
+  db = mkDb([sub(), sub(), sub()])
+  out = await notifyContestChanges(mkClient(db), [CID], { trigger: 'test' })
+  t('one thrown send is isolated; the rest still go out',
+    out.sent === 2 && out.failed === 1)
+
+  // — runPool itself —
+  {
+    let live = 0, high = 0
+    const done = []
+    await runPool(Array.from({ length: 10 }, (_, i) => i), 4, async (i) => {
+      live++; high = Math.max(high, live)
+      try {
+        await new Promise(r => setTimeout(r, 1))
+        if (i === 3) throw new Error('boom')
+        done.push(i)
+      } finally { live-- }
+    })
+    t('runPool caps concurrency and finishes every other item',
+      high <= 4 && high > 1 && done.length === 9 && !done.includes(3))
+    t('runPool on an empty list is a no-op', (await runPool([], 4, async () => { throw new Error('never') })) === undefined)
+  }
+
+  emailer.sendEmail = realSend
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

@@ -2,7 +2,7 @@
 // Two tabs: Calendar (upcoming/past) | Results (live board for selected election)
 // Clicking "View Results" on any card switches to Results tab with that election loaded.
 
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { format, differenceInDays, isPast, isFuture, parseISO, isToday } from 'date-fns'
 
@@ -14,9 +14,9 @@ const safeISO = (d) => {
 }
 import {
   CalendarDays, Plus, Clock, CheckCircle, Edit2, Trash2, X,
-  BarChart2, AlertCircle, Radio,
+  BarChart2, AlertCircle, AlertTriangle, Radio,
 } from 'lucide-react'
-import { getElections, createElection, updateElection, deleteElection } from '../lib/supabase'
+import { supabase, getElections, createElection, updateElection, deleteElection } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import ElectionResultsBoard from './ElectionResultsBoard'
 import LoadingBar from '../components/LoadingBar'
@@ -43,6 +43,11 @@ const defaultForm = {
   year: new Date().getFullYear(), notes: '',
 }
 
+// Seed/QA rows ("TEST Spring Primary 2026", "ZZTEST …") are not something a
+// visitor should be offered in the results tab strip.
+// (?![a-z]) so a real "Testing …" election is never swallowed by the filter.
+const isTestElection = (e) => /^(zz)?test(?![a-z])/i.test(String(e?.name || '').trim())
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
@@ -65,6 +70,13 @@ export default function Elections() {
   const [form,        setForm]        = useState(defaultForm)
   const [yearFilter,  setYearFilter]  = useState(String(new Date().getFullYear()))
   const [writeError,  setWriteError]  = useState(null)
+  // A failed elections fetch used to leave the Results tab spinning forever
+  // ("Loading elections…") with no way out. Record the failure and offer Retry.
+  const [fetchError,  setFetchError]  = useState(null)
+  // Election ids known to have at least one contest row (null = not probed
+  // yet). Drives the default Results election so the tab doesn't land on a
+  // recent-but-empty election and say "No results yet".
+  const [electionsWithContests, setElectionsWithContests] = useState(null)
   // Audit fix (#13): election writes are admin-only (RLS blocks everyone else
   // and the server function requires admin) — hide write controls accordingly.
   const { isAdmin } = useAuth()
@@ -74,9 +86,23 @@ export default function Elections() {
 
   const fetchElections = async () => {
     setLoading(true)
-    const { data } = await getElections()
-    setElections(data || [])
+    try {
+      const { data, error } = await getElections()
+      if (error) throw error
+      setElections(data || [])
+      setFetchError(null)
+    } catch (err) {
+      // Keep whatever list we already had — a transient failure should not
+      // blank a working page.
+      console.error('[Elections] fetch error:', err)
+      setFetchError(err?.message || 'Elections could not be loaded.')
+    }
     setLoading(false)
+  }
+
+  const retryElections = () => {
+    setElectionsWithContests(null)
+    fetchElections()
   }
 
   const hasTodayElection = useCallback((list) => list.some(e => isToday(safeISO(e.election_date))), [])
@@ -135,23 +161,89 @@ export default function Elections() {
   const upcoming    = filtered.filter(e => isFuture(safeISO(e.election_date)))
   const past        = filtered.filter(e => isPast(safeISO(e.election_date)))
 
-  // Auto-select Results election — prefer today's, else most recent past
-  const resolvedResultsId = selectedResultsId
-    || elections.find(e => isToday(safeISO(e.election_date)))?.id
-    || [...elections].filter(e => isPast(safeISO(e.election_date))).sort((a,b) => b.election_date.localeCompare(a.election_date))[0]?.id
-    || null
+  // Elections a visitor may be shown in the Results tab strip.
+  const publicElections = useMemo(
+    () => elections.filter(e => !isTestElection(e) || e.id === selectedResultsId),
+    [elections, selectedResultsId])
+
+  // ── Which recent elections actually have contests? ──────────────────────────
+  // Cheap probes only: head + exact count, at most four, newest first, stopping
+  // at the first hit. (The old fetch-every-row approach pulled the entire
+  // contests table just to answer "which one has data?".)
+  useEffect(() => {
+    if (activeTab !== 'results') return
+    if (!elections.length) return
+    if (electionsWithContests !== null) return
+    let cancelled = false
+    ;(async () => {
+      const pool = elections.filter(e => !isTestElection(e) && e.election_date)
+      const today = pool.filter(e => isToday(safeISO(e.election_date)))
+      const past  = pool
+        .filter(e => isPast(safeISO(e.election_date)) && !isToday(safeISO(e.election_date)))
+        .sort((a, b) => b.election_date.localeCompare(a.election_date))
+      const probes = [...today, ...past].slice(0, 4)
+      const found = new Set()
+      for (const e of probes) {
+        try {
+          const { count, error } = await supabase
+            .from('election_contests')
+            .select('id', { count: 'exact', head: true })
+            .eq('election_id', e.id)
+          if (cancelled) return
+          if (error) throw error
+          if ((count || 0) > 0) { found.add(e.id); break }
+        } catch (err) {
+          console.warn('[Elections] contest probe failed, falling back to date order:', err?.message)
+          break
+        }
+      }
+      if (!cancelled) setElectionsWithContests(found)
+    })()
+    return () => { cancelled = true }
+  }, [activeTab, elections, electionsWithContests])
+
+  // ── Default Results election ────────────────────────────────────────────────
+  //   1. one happening today   2. most recent PAST election that has contests
+  //   3. next upcoming         4. most recent past (last resort)
+  const resolvedResultsId = useMemo(() => {
+    if (selectedResultsId) return selectedResultsId
+    if (!elections.length) return null
+    const pool = elections.filter(e => !isTestElection(e))
+    if (!pool.length) return null
+
+    const today = pool.find(e => isToday(safeISO(e.election_date)))
+    if (today) return today.id
+
+    const pastDesc = [...pool]
+      .filter(e => isPast(safeISO(e.election_date)))
+      .sort((a, b) => b.election_date.localeCompare(a.election_date))
+
+    if (electionsWithContests?.size) {
+      const withResults = pastDesc.find(e => electionsWithContests.has(e.id))
+      if (withResults) return withResults.id
+    }
+
+    const nextUp = [...pool]
+      .filter(e => isFuture(safeISO(e.election_date)))
+      .sort((a, b) => a.election_date.localeCompare(b.election_date))[0]
+    if (nextUp) return nextUp.id
+
+    return pastDesc[0]?.id || null
+  }, [selectedResultsId, elections, electionsWithContests])
 
   // Once elections load, push the auto-selected ID into the URL so the
-  // Results tab doesn't stay blank when navigated to without ?election=
+  // Results tab doesn't stay blank when navigated to without ?election=.
+  // replace:true — auto-selection is not a navigation the back button should
+  // have to undo (it used to trap users on the Results tab).
   useEffect(() => {
-    if (activeTab === 'results' && !selectedResultsId && elections.length > 0) {
-      const autoId =
-        elections.find(e => isToday(safeISO(e.election_date)))?.id ||
-        [...elections].filter(e => isPast(safeISO(e.election_date)))
-          .sort((a, b) => b.election_date.localeCompare(a.election_date))[0]?.id
-      if (autoId) setSearchParams({ tab: 'results', election: autoId })
+    if (activeTab !== 'results') return
+    if (selectedResultsId) return
+    if (!elections.length) return
+    if (electionsWithContests === null) return   // wait for the contest probes
+    if (resolvedResultsId) {
+      setSearchParams({ tab: 'results', election: resolvedResultsId }, { replace: true })
     }
-  }, [activeTab, selectedResultsId, elections.length, setSearchParams])
+  }, [activeTab, selectedResultsId, elections.length, electionsWithContests, resolvedResultsId, setSearchParams])
 
   // ── Election card ───────────────────────────────────────────────────────────
   const ElectionRow = ({ election }) => {
@@ -406,11 +498,41 @@ export default function Elections() {
       {/* RESULTS TAB                                              */}
       {/* ══════════════════════════════════════════════════════════ */}
       {activeTab === 'results' && (
-        <ElectionResultsBoard
-          elections={elections}
-          selectedId={resolvedResultsId}
-          onSelectElection={goToResults}
-        />
+        fetchError && elections.length === 0 ? (
+          // Honest failure beats an eternal spinner.
+          <div className="text-center py-16 border-2 border-dashed border-red-200 bg-red-50/40 rounded-2xl">
+            <AlertTriangle className="w-10 h-10 text-red-400 mx-auto mb-3" />
+            <p className="text-gray-800 font-semibold text-sm">Couldn't load elections</p>
+            <p className="text-gray-500 text-sm mt-1 max-w-sm mx-auto">{fetchError}</p>
+            <button onClick={retryElections} disabled={loading} className="btn-secondary text-sm mt-4">
+              {loading ? 'Retrying…' : 'Retry'}
+            </button>
+          </div>
+        ) : loading && elections.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-3">
+            <div className="w-8 h-8 border-4 border-brand-red border-t-transparent rounded-full animate-spin" />
+            <p className="text-gray-400 text-sm">Loading elections…</p>
+          </div>
+        ) : (
+          <>
+            {/* Refresh failed but we still have a list — say so above the board
+                instead of replacing live numbers with an error page. */}
+            {fetchError && (
+              <div className="mb-4 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-sm text-amber-800">
+                <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <span className="flex-1">Couldn't refresh the election list — showing the last known one.</span>
+                <button onClick={retryElections} disabled={loading} className="text-xs font-semibold underline hover:no-underline">
+                  {loading ? 'Retrying…' : 'Retry'}
+                </button>
+              </div>
+            )}
+            <ElectionResultsBoard
+              elections={publicElections}
+              selectedId={resolvedResultsId}
+              onSelectElection={goToResults}
+            />
+          </>
+        )
       )}
 
       {/* ── Add/Edit modal ── */}

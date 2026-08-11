@@ -40,10 +40,17 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.27.0'
+const APP_VERSION = 'v1.27.1'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.27.1',
+    date: 'August 11, 2026',
+    changes: [
+      'Election-night hardening across the board, poller, notifications and admin console: filter pills always show their races, a failed refresh keeps the last good numbers on screen, the admin console opens on tonight\u2019s election with search and filters, and no more all-zero first emails',
+    ],
+  },
   {
     version: 'v1.27.0',
     date: 'August 11, 2026',

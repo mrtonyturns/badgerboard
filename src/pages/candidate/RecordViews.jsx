@@ -7,7 +7,7 @@
 // filter pills and the AI-research extract/add-all flow. Profile History lists
 // every generated profile newest-first with Auto/Manual and its item count.
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { format } from 'date-fns'
 import {
   supabase, logActivity,
@@ -52,10 +52,18 @@ function Field({ label, children }) {
 
 // ═══ Election Results ═════════════════════════════════════════════════════════
 
+// Last word of a name, lower-cased and stripped of punctuation ("Ott," → "ott").
+const lastNameOf = (name) => String(name || '')
+  .trim().split(/\s+/).pop()?.replace(/[^\p{L}\p{N}'-]/gu, '').toLowerCase() || ''
+
 export function ElectionResultsView({ candidate, nav }) {
   const [results, setResults] = useState([])
   const [loading, setLoading] = useState(true)
   const [isLive, setIsLive] = useState(false)
+  // Realtime needs to know which rows are on screen without re-subscribing
+  // every time they change.
+  const rowsRef = useRef([])
+  useEffect(() => { rowsRef.current = results }, [results])
 
   useEffect(() => {
     if (!candidate?.id) return
@@ -71,14 +79,21 @@ export function ElectionResultsView({ candidate, nav }) {
         let mapped = (rows || []).map(r => ({ result: r, contest: r.contest, election: r.contest?.election }))
         if (!mapped.length) {
           // Fallback: name match for results that were never linked by id.
-          const lastName = candidate.name?.split(' ').pop() || ''
+          // The `ilike` is only a coarse net — a substring match happily
+          // attributes "Scott" to a candidate named "Ott", so every row is
+          // re-checked client-side: the row's LAST word must equal this
+          // candidate's last name.
+          const lastName = lastNameOf(candidate.name)
           if (lastName.length > 2) {
             const { data: nameRows } = await supabase
               .from('election_results').select(sel)
               .ilike('candidate_name', `%${lastName}%`)
               .order('updated_at', { ascending: false })
-              .limit(20)
-            mapped = (nameRows || []).map(r => ({ result: r, contest: r.contest, election: r.contest?.election }))
+              .limit(50)
+            mapped = (nameRows || [])
+              .filter(r => lastNameOf(r.candidate_name) === lastName)
+              .slice(0, 20)
+              .map(r => ({ result: r, contest: r.contest, election: r.contest?.election }))
           }
         }
         if (!cancelled) setResults(mapped)
@@ -91,15 +106,21 @@ export function ElectionResultsView({ candidate, nav }) {
     return () => { cancelled = true }
   }, [candidate?.id, candidate?.name])
 
+  // Realtime. The old subscription filtered on candidate_id — but the rows this
+  // view shows are mostly matched by name and carry no candidate_id, so the
+  // filter could never fire. Subscribe unfiltered and match the payload against
+  // the rows actually on screen. The channel topic gets a random suffix so two
+  // mounts (or a remount before cleanup lands) never collide on one topic.
   useEffect(() => {
     if (!candidate?.id) return
+    const topic = `cand-results-${candidate.id}-${Math.random().toString(36).slice(2, 8)}`
     const channel = supabase
-      .channel(`cand-results-${candidate.id}`)
-      .on('postgres_changes', {
-        event: 'UPDATE', schema: 'public', table: 'election_results',
-        filter: `candidate_id=eq.${candidate.id}`,
-      }, (payload) => {
-        setResults(prev => prev.map(row => row.result.id === payload.new.id ? { ...row, result: payload.new } : row))
+      .channel(topic)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'election_results' }, (payload) => {
+        const row = payload.new
+        if (!row?.id) return
+        if (!rowsRef.current.some(r => r.result?.id === row.id)) return
+        setResults(prev => prev.map(r => (r.result.id === row.id ? { ...r, result: { ...r.result, ...row } } : r)))
         setIsLive(true)
       })
       .subscribe()

@@ -111,6 +111,10 @@ async function runDetermination(sb, contestId, { force = false } = {}) {
       .eq('id', contestId).single()
     if (cErr || !contest) return null
 
+    // Read the OLD status before anything writes over it — "did this contest
+    // just enter recount_possible?" is the whole winner-flag question below.
+    const previousStatus = contest.status
+
     // Manual overrides always beat the engine.
     if (!force && contest.status_source === 'admin') {
       return { status: contest.status, detail: null, applied: false, reason: 'admin override' }
@@ -134,12 +138,19 @@ async function runDetermination(sb, contestId, { force = false } = {}) {
     }).eq('id', contestId)
     if (uErr) { console.warn('[admin-elections] status write failed:', uErr.message); return null }
 
-    // A decided contest at 100% precincts also flags its top-N rows as winners.
+    // A CALLED contest also flags its top-N rows as winners.
     // NOTE: `declared` is deliberately NOT set here — declaring a winner stays
     // an admin action (call_race). This only mirrors the math onto the rows so
     // the board can highlight who is ahead.
-    if ((status === 'called' || status === 'recount_possible') && detail && detail.margin > 0) {
+    //
+    // 'recount_possible' does NOT get winner flags: the engine is refusing to
+    // call the race, and a green "Winner" under a RECOUNT POSSIBLE badge is a
+    // lie. Entering recount_possible strips any flag an earlier pass set.
+    const action = winnerFlagAction(status, previousStatus, detail)
+    if (action === 'apply') {
       await applyWinnerFlags(sb, results, contest.seats || 1)
+    } else if (action === 'clear') {
+      await clearWinnerFlags(sb, contestId)
     }
 
     return { status, detail, applied: true }
@@ -147,6 +158,21 @@ async function runDetermination(sb, contestId, { force = false } = {}) {
     console.warn('[admin-elections] determination skipped:', e.message)
     return null
   }
+}
+
+/**
+ * What should happen to a contest's winner flags, given the engine's new status
+ * and the status it carried before? PURE — mirrored in election-results-poller.js
+ * so the two writers can never disagree about who the board paints green.
+ *
+ *   'apply' — 'called' with a real margin: flag the top N
+ *   'clear' — the contest just ENTERED 'recount_possible': strip stale flags
+ *   'none'  — leave the rows alone
+ */
+function winnerFlagAction(status, previousStatus = null, detail = null) {
+  if (status === 'called' && detail && detail.margin > 0) return 'apply'
+  if (status === 'recount_possible' && previousStatus !== 'recount_possible') return 'clear'
+  return 'none'
 }
 
 // winner=true on the top-N rows by votes, winner=false on everyone else.
@@ -159,6 +185,13 @@ async function applyWinnerFlags(sb, results, seats) {
   const losers = ranked.map(r => r.id).filter(id => !winners.includes(id))
   await sb.from('election_results').update({ winner: true }).in('id', winners)
   if (losers.length) await sb.from('election_results').update({ winner: false }).in('id', losers)
+}
+
+// Take winner=true off every row in a contest — one statement, no id list.
+async function clearWinnerFlags(sb, contestId) {
+  const { error } = await sb.from('election_results')
+    .update({ winner: false }).eq('contest_id', contestId).eq('winner', true)
+  if (error) console.warn('[admin-elections] winner-flag clear failed:', error.message)
 }
 
 // ─── Subscriber notifications ────────────────────────────────────────────────
@@ -444,3 +477,6 @@ async function route(sb, action, params, headers, event) {
       return json(400, { error: `Unknown action: ${action}` }, headers)
   }
 }
+
+// pure, unit-tested in tests/remediation.test.mjs
+module.exports.winnerFlagAction = winnerFlagAction

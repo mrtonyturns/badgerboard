@@ -64,6 +64,19 @@ const GROUP_ICON = {
 // statewide races, so everything but Statewide starts collapsed.
 const BIG_BALLOT_CONTESTS = 30
 
+// One shared empty array so `resultsMap[id] || EMPTY` keeps prop identity
+// stable — otherwise every render hands React.memo(RaceCard) a brand-new []
+// and the memo never holds.
+const EMPTY = []
+
+// Wisconsin votes on Central time. "Is it election night?" has to be answered
+// in America/Chicago or an East-coast viewer loses the LIVE dot an hour early
+// (and a West-coast viewer gets it an hour late).
+const ctToday = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date())
+const isElectionNightCT = (dateStr) => !!dateStr && String(dateStr).slice(0, 10) === ctToday()
+
 /**
  * Instant, case-insensitive search across office name, district, county and
  * candidate names. Multiple words are ANDed, so "assembly 85" narrows the way
@@ -327,7 +340,10 @@ function RaceNotifyButton({ contestId, mode, onChange, userEmail }) {
   )
 }
 
-function RaceCard({ contest, results, notifyMode, onNotifyChange, userEmail }) {
+// Memoised: on a 250-contest ballot a single realtime event used to re-render
+// every card. With stable callback props (see setNotifyMode) and the shared
+// EMPTY array, only the card whose contest or results actually changed re-renders.
+const RaceCard = React.memo(function RaceCard({ contest, results, notifyMode, onNotifyChange, userEmail }) {
   const [expanded, setExpanded] = useState(true)
   // Total votes across all candidates — bars scale to this so proportions are accurate
   const totalVotes = results.reduce((sum, r) => sum + (r.votes || 0), 0)
@@ -399,7 +415,10 @@ function RaceCard({ contest, results, notifyMode, onNotifyChange, userEmail }) {
           <div className="flex-shrink-0 text-right">
             {sorted.slice(0, 2).map(r => (
               <p key={r.id} className="text-xs text-gray-700 tabular-nums">
-                <span className={`font-semibold ${r.winner ? 'text-green-700' : ''}`}>
+                {/* Same predicate as the expanded rows — a bare `winner` flag is
+                    also set on recount_possible races, which used to paint the
+                    leader green on a race the engine refuses to call. */}
+                <span className={`font-semibold ${showWinner(r) ? 'text-green-700' : ''}`}>
                   {r.candidate_name.split(' ').pop()}
                 </span>{' '}
                 {r.vote_pct != null ? `${Number(r.vote_pct).toFixed(1)}%` : ''}
@@ -445,7 +464,7 @@ function RaceCard({ contest, results, notifyMode, onNotifyChange, userEmail }) {
       )}
     </div>
   )
-}
+})
 
 function LiveDot() {
   return (
@@ -477,13 +496,21 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
   // Per-group open/closed overrides. Absent key = fall back to the default for
   // this ballot size. Purely presentational — see the realtime note below.
   const [groupOpen,    setGroupOpen]    = useState({})
-  const [pulse,        setPulse]        = useState(false)
+  // True while the last fetch failed. Drives the small "Reconnecting…" pill —
+  // the numbers on screen stay exactly as they were.
+  const [staleFetch,   setStaleFetch]   = useState(false)
   // contest_id → 'every_change' | 'final_only'. Loaded once per election and
   // kept in sync optimistically; a missing key means "not subscribed".
   const [notifyModes,  setNotifyModes]  = useState({})
   const realtimeRef = useRef(null)
+  // Epoch ms of the last realtime event — the 60s fallback poll stands down
+  // while replication is clearly alive.
+  const lastRealtimeRef = useRef(0)
 
   // ── Load contests + results ─────────────────────────────────────────────────
+  // Errors are captured, not swallowed: a transient failure during the 60s poll
+  // must never wipe a board full of live numbers, so nothing is written to
+  // state unless the query actually succeeded.
   const loadData = useCallback(async (id, quiet = false) => {
     if (!id) return
     if (!quiet) setLoading(true)
@@ -491,31 +518,48 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
       // select('*') deliberately — it already carries the Phase 1 status
       // columns (status, status_source, status_updated_at, status_detail,
       // verified_at) added by migration 20260810000002.
-      const { data: contestRows } = await supabase
+      const { data: contestRows, error: contestErr } = await supabase
         .from('election_contests')
         .select('*')
         .eq('election_id', id)
         .order('office_type')
         .order('office')
 
-      setContests(contestRows || [])
-      if (!contestRows?.length) { setLoading(false); return }
+      if (contestErr) throw contestErr
 
-      const { data: resultRows } = await supabase
+      const rows = contestRows || []
+      setContests(rows)
+      if (!rows.length) {
+        setResultsMap({})
+        setLastSync(new Date())
+        setStaleFetch(false)
+        if (!quiet) setLoading(false)
+        return
+      }
+
+      // FK-join filter instead of a 250-id `.in()` — the id list becomes a
+      // ~16KB URL on a November general and falls off the gateway's limit.
+      const { data: resultRows, error: resultErr } = await supabase
         .from('election_results')
-        .select('*')
-        .in('contest_id', contestRows.map(c => c.id))
+        .select('*, election_contests!inner(election_id)')
+        .eq('election_contests.election_id', id)
         .order('votes', { ascending: false })
 
+      if (resultErr) throw resultErr
+
       const map = {}
-      for (const r of resultRows || []) {
+      for (const raw of resultRows || []) {
+        // Strip the joined key so rows stay shaped exactly like realtime payloads.
+        const { election_contests: _join, ...r } = raw
         if (!map[r.contest_id]) map[r.contest_id] = []
         map[r.contest_id].push(r)
       }
       setResultsMap(map)
       setLastSync(new Date())
+      setStaleFetch(false)
     } catch (err) {
       console.error('[ElectionResultsBoard] load error:', err)
+      setStaleFetch(true)   // keep last-known-good data on screen
     }
     if (!quiet) setLoading(false)
   }, [])
@@ -527,6 +571,8 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
     setCountyFilter('all')
     setQuery('')
     setGroupOpen({})
+    setStaleFetch(false)
+    lastRealtimeRef.current = 0
     if (electionId) loadData(electionId)
   }, [electionId, loadData])
 
@@ -550,10 +596,18 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
     return () => { cancelled = true }
   }, [user?.id, electionId])
 
+  // Refs so the callback handed to every RaceCard is stable for the life of the
+  // board — a changing onNotifyChange would defeat React.memo on all 250 cards.
+  const userIdRef      = useRef(null)
+  const notifyModesRef = useRef({})
+  useEffect(() => { userIdRef.current = user?.id || null }, [user?.id])
+  useEffect(() => { notifyModesRef.current = notifyModes }, [notifyModes])
+
   // Optimistic write; reverts to the previous choice if the row never lands.
   const setNotifyMode = useCallback(async (contestId, mode) => {
-    if (!user?.id || !contestId) return
-    const previous = notifyModes[contestId]
+    const userId = userIdRef.current
+    if (!userId || !contestId) return
+    const previous = notifyModesRef.current[contestId]
     setNotifyModes(prev => {
       const next = { ...prev }
       if (mode === 'off') delete next[contestId]
@@ -563,9 +617,9 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
     try {
       const { error } = mode === 'off'
         ? await supabase.from('election_subscriptions').delete()
-            .eq('user_id', user.id).eq('contest_id', contestId)
+            .eq('user_id', userId).eq('contest_id', contestId)
         : await supabase.from('election_subscriptions')
-            .upsert({ user_id: user.id, contest_id: contestId, mode }, { onConflict: 'user_id,contest_id' })
+            .upsert({ user_id: userId, contest_id: contestId, mode }, { onConflict: 'user_id,contest_id' })
       if (error) throw error
     } catch (err) {
       console.error('[ElectionResultsBoard] subscription write failed:', err)
@@ -576,7 +630,7 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
         return next
       })
     }
-  }, [user?.id, notifyModes])
+  }, [])
 
   // ── Realtime ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -586,18 +640,45 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
     const channel = supabase
       .channel(`board-${electionId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'election_results' }, (payload) => {
-        const row = payload.new || payload.old
+        lastRealtimeRef.current = Date.now()
+        // DELETE payloads carry only the primary key (no contest_id unless the
+        // table is REPLICA IDENTITY FULL), so find the row by scanning state.
+        if (payload.eventType === 'DELETE') {
+          const deletedId = payload.old?.id
+          if (!deletedId) return
+          setResultsMap(prev => {
+            let hit = false
+            const next = {}
+            for (const [cid, arr] of Object.entries(prev)) {
+              const kept = arr.filter(r => r.id !== deletedId)
+              if (kept.length !== arr.length) hit = true
+              next[cid] = kept
+            }
+            return hit ? next : prev
+          })
+          setLastSync(new Date())
+          return
+        }
+        const row = payload.new
         if (!row?.contest_id) return
-        setPulse(true); setTimeout(() => setPulse(false), 2000)
         setLastSync(new Date())
         setResultsMap(prev => {
           const cid      = row.contest_id
-          const existing = prev[cid] || []
-          if (payload.eventType === 'DELETE') return { ...prev, [cid]: existing.filter(r => r.id !== row.id) }
+          const existing = prev[cid] || EMPTY
           const idx = existing.findIndex(r => r.id === row.id)
-          const upd = idx >= 0 ? existing.map((r, i) => i === idx ? payload.new : r) : [...existing, payload.new]
+          const upd = idx >= 0 ? existing.map((r, i) => i === idx ? row : r) : [...existing, row]
           return { ...prev, [cid]: upd.sort((a, b) => (b.votes || 0) - (a.votes || 0)) }
         })
+      })
+      // County discovery adds contests mid-night; without this they only showed
+      // up on the next poll. Scoped to this election — the subscription itself
+      // is table-wide.
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'election_contests' }, (payload) => {
+        const row = payload.new
+        if (!row?.id || row.election_id !== electionId) return
+        lastRealtimeRef.current = Date.now()
+        setContests(prev => prev.some(c => c.id === row.id) ? prev : [...prev, row])
+        setLastSync(new Date())
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'election_contests' }, (payload) => {
         if (!payload?.new?.id) return
@@ -606,6 +687,7 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
         // verified_at) so a determination-engine write lands on the board
         // instantly, and anything the replication payload happens to omit
         // keeps its loaded value instead of going undefined.
+        lastRealtimeRef.current = Date.now()
         setContests(prev => prev.map(c => c.id === payload.new.id ? { ...c, ...payload.new } : c))
         setLastSync(new Date())
       })
@@ -615,8 +697,12 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
 
     // Polling fallback: realtime requires the tables to be in the project's
     // realtime publication — if that's ever disabled, this keeps the board live.
+    // While replication is demonstrably alive (an event inside the last 90s)
+    // the poll stands down rather than re-reading the whole ballot every minute.
     const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') loadData(electionId, true)
+      if (document.visibilityState !== 'visible') return
+      if (Date.now() - lastRealtimeRef.current < 90000) return
+      loadData(electionId, true)
     }, 60000)
 
     return () => { supabase.removeChannel(channel); clearInterval(interval) }
@@ -625,18 +711,30 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
   // ── CSV export ──────────────────────────────────────────────────────────────
   const exportCSV = () => {
     if (!election) return
-    const rows = [['Race', 'District', 'Candidate', 'Party', 'Votes', 'Pct', 'Winner', 'Precincts Rptg', 'Precincts Total', 'Status', 'Status Source', 'Status Updated']]
+    const rows = [['Race', 'Office Type', 'District', 'County', 'Candidate', 'Party', 'Votes', 'Pct', 'Winner', 'Precincts Rptg', 'Precincts Total', 'Status', 'Status Source', 'Status Updated']]
     for (const c of contests) {
-      const st = contestStatus(c, resultsMap[c.id] || [])
-      for (const r of (resultsMap[c.id] || [])) {
-        rows.push([c.office, c.district || '', r.candidate_name, r.party || '', r.votes, r.vote_pct, r.winner ? 'Yes' : 'No', c.precincts_rptg, c.precincts_total, st, c.status_source || 'auto', c.status_updated_at || ''])
+      const results = resultsMap[c.id] || EMPTY
+      const st = contestStatus(c, results)
+      const head = [c.office, OFFICE_LABELS[c.office_type] || c.office_type || '', c.district || '', c.county || '']
+      const tail = [c.precincts_rptg, c.precincts_total, st, c.status_source || 'auto', c.status_updated_at || '']
+      // A contest with no rows yet is still part of the ballot — emit it with a
+      // blank candidate rather than dropping the race from the export.
+      if (!results.length) { rows.push([...head, '', '', '', '', 'No', ...tail]); continue }
+      for (const r of results) {
+        const won = !!r.winner && (r.declared || st === 'called' || st === 'certified')
+        rows.push([...head, r.candidate_name, r.party || '', r.votes, r.vote_pct, won ? 'Yes' : 'No', ...tail])
       }
     }
     const csv  = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
+    const url  = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
     a.download = `${(election.name || 'results').replace(/\s+/g, '_')}_results.csv`
     a.click()
+    // Blobs are held by the document until revoked — a few CSV pulls on a
+    // long-lived election-night tab otherwise leak megabytes.
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
   // ── Filters ─────────────────────────────────────────────────────────────────
@@ -680,17 +778,22 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
   // not a group is on screen, so a collapsed group is already up to date the
   // instant it is opened.
   const bigBallot = contests.length > BIG_BALLOT_CONTESTS
+  // An office-type filter is as deliberate as a search: clicking "State
+  // Assembly" used to leave the group collapsed, so the pill produced a lone
+  // header over blank space.
+  const filtering = officeFilter !== 'all' || countyFilter !== 'all'
   const isGroupOpen = (type) => {
     if (Object.prototype.hasOwnProperty.call(groupOpen, type)) return groupOpen[type]
-    if (searching) return true
+    if (searching || filtering) return true
     return !bigBallot || type === 'statewide'
   }
   const toggleGroup = (type) => setGroupOpen(prev => ({ ...prev, [type]: !isGroupOpen(type) }))
-  // Entering or leaving a search resets manual toggles so the auto-expand is
-  // never fighting a collapse the user made three keystrokes ago.
-  useEffect(() => { setGroupOpen({}) }, [searching])
+  // Entering or leaving a search / filter resets manual toggles so the
+  // auto-expand is never fighting a collapse the user made three keystrokes ago.
+  useEffect(() => { setGroupOpen({}) }, [searching, officeFilter, countyFilter])
 
-  const isLive    = election ? isToday(parseISO(election.election_date)) && contests.length > 0 : false
+  // Election night is a Central-time fact, not a viewer-local one.
+  const isLive    = election ? isElectionNightCT(election.election_date) && contests.length > 0 : false
   const isPrimary = election ? isPrimaryType(election.type) : false
 
   // Past elections with results (for the election picker tabs)
@@ -732,6 +835,16 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
             <span className="text-xs text-gray-400 flex items-center gap-1">
               <Clock className="w-3 h-3" />
               Updated {format(lastSync, 'h:mm:ss a')}
+            </span>
+          )}
+          {/* Last fetch failed — the numbers above are the last good ones. */}
+          {staleFetch && (
+            <span
+              title="The last refresh didn't come back. The numbers shown are the last confirmed results and will catch up automatically."
+              className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 flex items-center gap-1.5"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+              Reconnecting…
             </span>
           )}
           {contests.length > 0 && (
@@ -891,8 +1004,11 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
               <p className="text-xs text-gray-500 mt-0.5">Avg Reporting</p>
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
+              {/* Summed over THIS election's contests only — realtime is
+                  table-wide, so rows from other elections can land in
+                  resultsMap and used to inflate this tile. */}
               <p className="text-xl font-bold text-gray-900 tabular-nums">
-                {Object.values(resultsMap).reduce((s, arr) => s + arr.reduce((x, r) => x + (r.votes || 0), 0), 0).toLocaleString()}
+                {contests.reduce((s, c) => s + (resultsMap[c.id] || EMPTY).reduce((x, r) => x + (r.votes || 0), 0), 0).toLocaleString()}
               </p>
               <p className="text-xs text-gray-500 mt-0.5">Total Votes</p>
             </div>
@@ -952,7 +1068,7 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
                       <RaceCard
                         key={c.id}
                         contest={c}
-                        results={resultsMap[c.id] || []}
+                        results={resultsMap[c.id] || EMPTY}
                         notifyMode={notifyModes[c.id]}
                         onNotifyChange={setNotifyMode}
                         userEmail={user?.email || null}

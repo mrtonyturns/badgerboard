@@ -68,7 +68,7 @@
 // each run refreshes a slice:
 //
 //   Tier 1  office_type = 'statewide'   → one call, EVERY run.
-//   Tier 2  everything else             → chunks of 12, at most 3 chunks/run.
+//   Tier 2  everything else             → chunks of 8, at most 2 chunks/run.
 //
 // The rotation cursor is derived from the Central-time clock rather than stored
 // anywhere, so it needs no new table and no read-modify-write race between
@@ -77,10 +77,13 @@
 // (tick × chunksPerRun) mod nChunks — consecutive runs therefore cover disjoint
 // chunks and the whole tier-2 field comes round on a predictable cycle.
 //
-// Two things fall out of rotation to save budget:
-//   · contests already 'called' or 'certified' — there is nothing left to learn
-//   · after 11 PM CT, contests still 'waiting' sort LAST, so the races that are
-//     actually counting get the calls
+// Chunk MEMBERSHIP is stable for the night: every tier-2 contest (including the
+// called ones) is sorted by id and assigned chunkIndex = position mod nChunks.
+// Nothing is filtered out of that list, so a race being called never reshuffles
+// everybody else. Two things vary INSIDE a chunk instead:
+//   · contests already 'called' or 'certified' are skipped — they cost nothing
+//   · after 11 PM CT, contests still 'waiting' are ordered LAST, so the races
+//     that are actually counting get the calls
 //
 // ── County discovery (manual only) ──────────────────────────────────────────
 // {discover:'county', chunk:N} runs ONE Perplexity call over 12 of Wisconsin's
@@ -99,7 +102,9 @@ const { determineStatus } = require('./_determination')
 const { notifyContestChanges } = require('./_result-notify')
 const COUNTY_SOURCES = require('./_county-sources.json')
 
-const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY
+// Read lazily: the key is looked up per call so a test (or a redeploy that sets
+// the variable after cold start) never gets a stale null captured at require().
+const pplxKey = () => process.env.PERPLEXITY_API_KEY
 const PPLX_URL   = 'https://api.perplexity.ai/chat/completions'
 const PPLX_MODEL = 'sonar'
 
@@ -110,22 +115,36 @@ const MAX_TOTAL_VOTES = 4000000
 
 // Whole-run wall-clock budget. Netlify scheduled functions are short-lived, so
 // we stop making network calls before the platform kills us and the audit row
-// still gets written.
-const RUN_BUDGET_MS = Number(process.env.POLLER_BUDGET_MS) || 24000
+// still gets written. ONE deadline (startedAt + RUN_BUDGET_MS) is threaded
+// through the AI calls, the database writes AND the notifier — everything that
+// does not fit carries to the next run, and writeLog always gets its reserve.
+const RUN_BUDGET_MS = Number(process.env.POLLER_BUDGET_MS) || 18000
+
+// Never START another contest's write round-trips (or another subscriber's
+// email) with less than this left — the audit row is worth more than one more
+// contest, and the next run picks up whatever was deferred.
+const WRITE_MIN_BUDGET_MS  = 2500
+// What writeLog itself is allowed to need after everything else has stopped.
+const LOG_RESERVE_MS = 1500
 
 // Discovery only makes sense once polls have been closed a while.
 const BOOTSTRAP_AFTER_MINUTES = 20 * 60 + 30   // 20:30 CT
 
 // ── Tiered rotation knobs ───────────────────────────────────────────────────
-// 12 contests is about as much as one `sonar` reply can carry without the model
-// starting to drop or conflate races; 3 chunks + the statewide call is 4 calls,
-// ~20s worst case, inside RUN_BUDGET_MS.
-const TIER2_CHUNK_SIZE = Number(process.env.POLLER_CHUNK_SIZE) || 12
-const TIER2_MAX_CALLS  = Number(process.env.POLLER_TIER2_CALLS) || 3
+// 8 contests is what one `sonar` reply carries comfortably inside the token cap
+// (12 could truncate, and a truncated reply used to throw away the whole chunk);
+// 2 chunks + the statewide call is 3 calls, which fits the 18s run budget with
+// room left for the writes and the emails.
+const TIER2_CHUNK_SIZE = Number(process.env.POLLER_CHUNK_SIZE) || 8
+const TIER2_MAX_CALLS  = Number(process.env.POLLER_TIER2_CALLS) || 2
 
 // Never START another chunk with less than this left in the budget — a chunk
 // that gets killed mid-flight costs the whole run its audit row.
 const CHUNK_MIN_BUDGET_MS = 8000
+
+// Tier 1 runs on EVERY cycle, so one hung statewide call must never eat the
+// down-ballot budget.
+const TIER1_TIMEOUT_MS = 10000
 
 // Nothing left to learn about these, so they leave the rotation entirely.
 const DONE_STATUSES = new Set(['called', 'certified'])
@@ -290,22 +309,62 @@ function deprioritizeWaiting(ct) {
 }
 
 /**
- * The tier-2 field, in rotation order: everything that is not statewide and is
- * not already decided, ordered by id (stable across runs) with waiting contests
- * pushed to the back late in the night.
+ * The tier-2 field: everything that is not statewide, in ONE stable order —
+ * lexicographic by id, INCLUDING contests that are already called or certified.
+ *
+ * Membership is deliberately unfiltered. Chunk assignment is derived from a
+ * contest's position in this list, so dropping decided races (or re-sorting at
+ * 11 PM) used to shuffle every contest into a different chunk and some races
+ * were refreshed twice while others waited hours. Decided contests keep their
+ * seat and cost nothing: they are skipped INSIDE the chunk.
  */
-function tierTwoQueue(contests, ct = {}) {
+function tierTwoQueue(contests) {
+  return (Array.isArray(contests) ? contests : [])
+    .filter(c => c && !isTierOne(c))
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+}
+
+/**
+ * Deal the stable tier-2 list into nChunks = ceil(total / size) chunks by
+ * position mod nChunks. Position-derived, so a contest's chunk never moves
+ * unless the ballot itself changes.
+ */
+function assignChunks(list, size = TIER2_CHUNK_SIZE) {
+  const arr = Array.isArray(list) ? list : []
+  const n = Math.max(1, Math.floor(Number(size) || 0) || TIER2_CHUNK_SIZE)
+  const nChunks = Math.ceil(arr.length / n)
+  const chunks = Array.from({ length: nChunks }, () => [])
+  arr.forEach((item, i) => chunks[i % nChunks].push(item))
+  return { nChunks, chunks }
+}
+
+/**
+ * The work a chunk is actually worth this run: decided contests dropped (there
+ * is nothing left to learn) and, late in the night, the races nobody has
+ * published a single number for ordered last. Membership never changes — only
+ * the order inside the chunk does.
+ */
+function orderChunk(chunk, ct = {}) {
   const late = deprioritizeWaiting(ct)
-  const live = (Array.isArray(contests) ? contests : [])
-    .filter(c => c && !isTierOne(c) && !DONE_STATUSES.has(c.status))
-  return live.sort((a, b) => {
-    if (late) {
-      const aw = a.status === 'waiting' ? 1 : 0
-      const bw = b.status === 'waiting' ? 1 : 0
-      if (aw !== bw) return aw - bw
-    }
-    return String(a.id).localeCompare(String(b.id))
-  })
+  return (Array.isArray(chunk) ? chunk : [])
+    .filter(c => c && !DONE_STATUSES.has(c.status))
+    .sort((a, b) => {
+      if (late) {
+        const aw = a.status === 'waiting' ? 1 : 0
+        const bw = b.status === 'waiting' ? 1 : 0
+        if (aw !== bw) return aw - bw
+      }
+      return String(a.id).localeCompare(String(b.id))
+    })
+}
+
+/** Which chunk does one contest live in, given the whole tier-2 field? */
+function chunkIndexOf(contestId, contests, size = TIER2_CHUNK_SIZE) {
+  const queue = tierTwoQueue(contests)
+  const n = Math.max(1, Math.floor(Number(size) || 0) || TIER2_CHUNK_SIZE)
+  const nChunks = Math.ceil(queue.length / n)
+  const pos = queue.findIndex(c => String(c.id) === String(contestId))
+  return pos < 0 || !nChunks ? -1 : pos % nChunks
 }
 
 /**
@@ -332,21 +391,24 @@ function rotationTick(ct = {}, cadence = 'every 5 minutes') {
  * reading, and disjoint from the previous run's slice (the cursor advances by
  * the number of chunks a run can actually make).
  *
+ * `queue` is the UNFILTERED, stable tier-2 list (see tierTwoQueue): chunk
+ * membership is fixed for the night, and `selected` carries only the contests
+ * in those chunks that are still worth a call.
+ *
  * @returns {{nChunks:number, indices:number[], selected:Array<Array>, chunks:Array<Array>}}
  */
 function selectRotationChunks(queue, ct = {}, opts = {}) {
   const size     = opts.size || TIER2_CHUNK_SIZE
   const maxCalls = Math.max(1, Math.floor(Number(opts.maxCalls) || TIER2_MAX_CALLS))
   const cadence  = opts.cadence || 'every 5 minutes'
-  const chunks   = chunkList(queue, size)
-  const n = chunks.length
+  const { nChunks: n, chunks } = assignChunks(queue, size)
   if (!n) return { nChunks: 0, indices: [], selected: [], chunks }
 
   const take  = Math.min(maxCalls, n)
   const start = ((rotationTick(ct, cadence) * take) % n + n) % n
   const indices = []
   for (let i = 0; i < take; i++) indices.push((start + i) % n)
-  return { nChunks: n, indices, selected: indices.map(i => chunks[i]), chunks }
+  return { nChunks: n, indices, selected: indices.map(i => orderChunk(chunks[i], ct)), chunks }
 }
 
 /**
@@ -590,12 +652,86 @@ function parseJsonLoose(text) {
 }
 
 /**
+ * Last resort for a TRUNCATED reply: walk the contests array and keep every
+ * complete top-level {...} object, dropping the half-written one at the end.
+ * A cut-off reply used to fail parsing and cost the whole chunk; now the eight
+ * contests that did arrive are written and the ninth waits for the next run.
+ *
+ * PURE. Returns an array of objects, or null when nothing whole survived.
+ */
+function salvageJsonObjects(text) {
+  if (!text || typeof text !== 'string') return null
+  const s = text.replace(/^```(?:json)?\s*/i, '')
+
+  // Start inside the array so the (never-closed) envelope object is skipped.
+  const keyed = s.search(/"(?:contests|results)"\s*:\s*\[/)
+  let start = keyed >= 0 ? s.indexOf('[', keyed) : s.indexOf('[')
+  if (start < 0) start = 0
+
+  const out = []
+  let depth = 0, objStart = -1, inStr = false, esc = false
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i]
+    if (inStr) {
+      if (esc) esc = false
+      else if (ch === '\\') esc = true
+      else if (ch === '"') inStr = false
+      continue
+    }
+    if (ch === '"') { inStr = true; continue }
+    if (ch === '{') { if (depth === 0) objStart = i; depth++; continue }
+    if (ch === '}') {
+      depth--
+      if (depth <= 0) {
+        if (objStart >= 0) {
+          try {
+            const v = JSON.parse(s.slice(objStart, i + 1))
+            if (v && typeof v === 'object' && !Array.isArray(v)) out.push(v)
+          } catch { /* a whole object that still will not parse is not usable */ }
+        }
+        depth = 0
+        objStart = -1
+      }
+      continue
+    }
+    if (ch === ']' && depth === 0) break
+  }
+  return out.length ? out : null
+}
+
+/**
+ * The parser the RESULTS path uses: strict JSON first, then salvage. Returns
+ * { contests, salvaged } — `contests` is null only when nothing at all could be
+ * read out of the reply.
+ */
+function parseContestsLoose(text) {
+  const parsed = contestArrayFrom(parseJsonLoose(text))
+  if (parsed) return { contests: parsed, salvaged: false }
+  const salvaged = salvageJsonObjects(text)
+  if (salvaged) return { contests: salvaged, salvaged: true }
+  return { contests: null, salvaged: false }
+}
+
+/**
  * One Perplexity chat completion. Asks for a JSON schema when one is given and
  * silently retries without it if the API rejects the constraint, because the
  * prompts demand strict JSON on their own too. Never throws.
  */
-async function queryPerplexity({ system, user, maxTokens = 2000, schema = null, timeoutMs = 20000 }) {
-  if (!PERPLEXITY_API_KEY) return { text: null, error: 'PERPLEXITY_API_KEY is not set' }
+/**
+ * One run's Perplexity dispatch state. A 429 anywhere in a run means the next
+ * call would 429 too, so the gate closes and the rest of the run's calls are
+ * skipped instead of burning the clock on certain failures.
+ */
+function makeRunGate() {
+  return { rateLimited: false }
+}
+
+async function queryPerplexity({ system, user, maxTokens = 2000, schema = null, timeoutMs = 20000, gate = null }) {
+  const key = pplxKey()
+  if (!key) return { text: null, error: 'PERPLEXITY_API_KEY is not set' }
+  if (gate && gate.rateLimited) {
+    return { text: null, error: 'skipped: Perplexity returned 429 earlier this run, so no further calls were dispatched' }
+  }
   if (timeoutMs <= 1000) return { text: null, error: 'no time budget left for the Perplexity call' }
 
   const send = async (withSchema) => {
@@ -615,11 +751,13 @@ async function queryPerplexity({ system, user, maxTokens = 2000, schema = null, 
       const res = await fetch(PPLX_URL, {
         method: 'POST',
         signal: ctrl.signal,
-        headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
       if (!res.ok) {
         const detail = await res.text().catch(() => '')
+        // Rate limited: close the gate so nothing else this run is dispatched.
+        if (res.status === 429 && gate) gate.rateLimited = true
         return { status: res.status, text: null, error: `Perplexity ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ''}` }
       }
       const d = await res.json()
@@ -635,7 +773,7 @@ async function queryPerplexity({ system, user, maxTokens = 2000, schema = null, 
   // 400/422 usually means this model or plan will not take a json_schema — the
   // prompt still demands strict JSON, so try once more unconstrained.
   if (schema && (out.status === 400 || out.status === 422)) out = await send(false)
-  return { text: out.text, error: out.error }
+  return { text: out.text, error: out.error, status: out.status }
 }
 
 const DISCOVERY_SCHEMA = {
@@ -920,16 +1058,50 @@ function contestArrayFrom(parsed) {
 // Contest matching + write helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Match a reported office string to a stored contest; unique matches only. */
+/**
+ * Does a reported office string agree with a stored contest's district and
+ * county? A district is compared as a STANDALONE number — "District 8" must not
+ * be satisfied by "District 85", which is a different race entirely and the one
+ * way a loose match can quietly write one contest's numbers into another.
+ * PURE.
+ */
+function districtCountyAgree(reportedOffice, contest = {}) {
+  const office = String(reportedOffice == null ? '' : reportedOffice)
+  const norm = normName(office)
+
+  const district = contest.district ? String(contest.district).trim() : ''
+  if (district) {
+    const num = (district.match(/\d+/) || [])[0]
+    if (num) {
+      // \d-boundary, not \b: \b8\b happily matches the "8" inside "85".
+      if (!new RegExp(`(?:^|\\D)${num}(?:\\D|$)`).test(office)) return false
+    } else if (!norm.includes(normName(district))) {
+      return false
+    }
+  }
+
+  const county = contest.county ? String(contest.county).trim() : ''
+  if (county && !norm.includes(normName(county))) return false
+
+  return true
+}
+
+/**
+ * Match a reported office string to a stored contest; unique matches only.
+ * An EXACT (normalized) name match is taken as-is. A loose substring match has
+ * to survive the district/county cross-check above.
+ */
 function matchContest(office, contests) {
   const want = normName(office)
   if (!want) return null
-  const exact = contests.filter(c => normName(c.office) === want)
+  const list = Array.isArray(contests) ? contests : []
+  const exact = list.filter(c => normName(c.office) === want)
   if (exact.length === 1) return exact[0]
   if (exact.length > 1) return null
-  const loose = contests.filter(c => {
+  const loose = list.filter(c => {
     const have = normName(c.office)
-    return have && (have.includes(want) || want.includes(have))
+    if (!have || !(have.includes(want) || want.includes(have))) return false
+    return districtCountyAgree(office, c)
   })
   return loose.length === 1 ? loose[0] : null
 }
@@ -990,6 +1162,12 @@ exports.handler = async (event = {}) => {
   }
 
   const sb = serviceClient()
+  // ONE deadline for the whole run: AI calls, database writes and the email
+  // pass all measure themselves against it, and everything that does not fit
+  // is carried to the next cycle rather than killed mid-flight.
+  const deadline = startedAt + RUN_BUDGET_MS
+  // One 429 closes this gate and the rest of the run stops dispatching.
+  const gate = makeRunGate()
   // Counts are DISTINCT rows touched across discovery + update, not the number
   // of write calls — a contest that is bootstrapped and then filled in during
   // the same run is one contest, not two.
@@ -1040,6 +1218,7 @@ exports.handler = async (event = {}) => {
         dryRun,
         deadline: startedAt + COUNTY_DISCOVER_BUDGET_MS,
         touched,
+        gate,
       })
       runMeta.notes.push(...disc.notes)
       await writeLog(sb, { ...runMeta, startedAt })
@@ -1067,7 +1246,7 @@ exports.handler = async (event = {}) => {
     const pastBootstrapTime = clock.phase !== 'peak' || ct.minutes >= BOOTSTRAP_AFTER_MINUTES
     let bootstrappedIds = new Set()
     if (!contests.length && pastBootstrapTime) {
-      const boot = await bootstrapContests(sb, election, { dryRun, deadline: startedAt + RUN_BUDGET_MS, touched })
+      const boot = await bootstrapContests(sb, election, { dryRun, deadline, touched, gate })
       runMeta.notes.push(...boot.notes)
       bootstrappedIds = boot.contestIds
       if (!dryRun && boot.created) contests = await loadContests(sb, election.id)
@@ -1077,9 +1256,9 @@ exports.handler = async (event = {}) => {
 
     // ── 4–6. Tiered update pass ────────────────────────────────────────────
     if (contests.length) {
-      const remaining = startedAt + RUN_BUDGET_MS - Date.now()
+      const remaining = deadline - Date.now()
       if (remaining < 4000) {
-        runMeta.notes.push('Run budget exhausted after discovery — the results pull waits for the next cycle.')
+        runMeta.notes.push('Run budget exhausted after discovery — the results pull is deferred to the next cycle.')
       } else {
         const upd = await runTieredUpdates(sb, election, contests, {
           dryRun,
@@ -1087,7 +1266,8 @@ exports.handler = async (event = {}) => {
           touched,
           ct,
           cadence: decision.cadence || clock.cadence || 'every 5 minutes',
-          deadline: startedAt + RUN_BUDGET_MS,
+          deadline,
+          gate,
         })
         runMeta.notes.push(...upd.notes)
       }
@@ -1101,7 +1281,13 @@ exports.handler = async (event = {}) => {
     // nobody.
     let notified = null
     if (!dryRun && touched.contests.size) {
-      notified = await notifyContestChanges(sb, touched.contests, { trigger: `poller:${scheduled ? 'auto' : 'manual'}` })
+      // Same run deadline, minus the reserve writeLog needs: the notifier stops
+      // before starting another subscriber's work rather than being killed
+      // between the send and the bookkeeping write.
+      notified = await notifyContestChanges(sb, touched.contests, {
+        trigger: `poller:${scheduled ? 'auto' : 'manual'}`,
+        deadline: deadline - LOG_RESERVE_MS,
+      })
       runMeta.notes.push(...notified.notes)
       if (!notified.sent && !notified.failed && notified.subscriptions) {
         runMeta.notes.push(`Notifications: ${notified.subscriptions} subscription(s) checked, nothing worth emailing yet.`)
@@ -1109,11 +1295,15 @@ exports.handler = async (event = {}) => {
     }
 
     // ── 7. Audit row for this ACTIVE run ───────────────────────────────────
+    if (gate.rateLimited) {
+      runMeta.notes.push('Perplexity rate-limited this run (HTTP 429) — remaining calls were skipped; the next cycle retries.')
+    }
     await writeLog(sb, { ...runMeta, startedAt })
     return json(200, {
       ok: true,
       dry_run: dryRun,
       phase: decision.phase,
+      rate_limited: gate.rateLimited,
       forced: force && !decision.run,
       election: { id: election.id, name: election.name, election_date: runMeta.electionDate },
       contests_synced: touched.contests.size,
@@ -1148,19 +1338,30 @@ async function loadContests(sb, electionId) {
   const list = contests || []
   if (!list.length) return list
 
+  // FK-JOIN, never a 250-id .in(): a November general carries 400+ contests and
+  // an .in() of that many uuids is a ~16KB request URL, which the gateway will
+  // refuse. Filtering through the join keeps the URL constant-sized.
   const { data: results, error: rErr } = await sb
     .from('election_results')
-    .select('id, contest_id, candidate_name, votes, party')
-    .in('contest_id', list.map(c => c.id))
+    .select('*, election_contests!inner(election_id)')
+    .eq('election_contests.election_id', electionId)
   if (rErr) throw new Error(`results load failed: ${rErr.message}`)
 
-  for (const c of list) c._results = (results || []).filter(r => r.contest_id === c.id)
+  // Strip the joined key back off so downstream sees exactly the row shape it
+  // saw before the join.
+  const rows = (results || []).map((r) => {
+    if (!r || typeof r !== 'object') return r
+    const { election_contests, ...rest } = r
+    return rest
+  })
+
+  for (const c of list) c._results = rows.filter(r => r && r.contest_id === c.id)
   return list
 }
 
 // ── 3. discovery ────────────────────────────────────────────────────────────
 
-async function bootstrapContests(sb, election, { dryRun, deadline, touched }) {
+async function bootstrapContests(sb, election, { dryRun, deadline, touched, gate = null }) {
   const notes = []
   const out = { created: 0, candidates: 0, contestIds: new Set(), notes }
 
@@ -1175,7 +1376,8 @@ async function bootstrapContests(sb, election, { dryRun, deadline, touched }) {
     user: discoveryPrompt(election),
     schema: DISCOVERY_SCHEMA,
     maxTokens: 1500,
-    timeoutMs: Math.min(budget - 2000, 18000),
+    timeoutMs: Math.min(budget - 2000, 12000),
+    gate,
   })
   if (error || !text) {
     notes.push(`Contest discovery returned nothing (${error || 'empty reply'}) — no contests created.`)
@@ -1259,7 +1461,7 @@ async function bootstrapContests(sb, election, { dryRun, deadline, touched }) {
  * the county field set and offices like "Portage County Sheriff — Democratic
  * Primary". Existing offices are never duplicated and never overwritten.
  */
-async function discoverCountyContests(sb, election, { chunkIndex, dryRun, deadline, touched }) {
+async function discoverCountyContests(sb, election, { chunkIndex, dryRun, deadline, touched, gate = null }) {
   const notes = []
   const counties = countyChunk(chunkIndex)
   const out = { counties, created: [], skipped: [], notes }
@@ -1276,6 +1478,7 @@ async function discoverCountyContests(sb, election, { chunkIndex, dryRun, deadli
     schema: COUNTY_SCHEMA,
     maxTokens: 2000,
     timeoutMs: Math.min(budget - 2000, 20000),
+    gate,
   })
   if (error || !text) {
     notes.push(`County discovery chunk ${chunkIndex} (${counties[0]}–${counties[counties.length - 1]}) returned nothing (${error || 'empty reply'}) — no contests created.`)
@@ -1358,78 +1561,98 @@ async function discoverCountyContests(sb, election, { chunkIndex, dryRun, deadli
  * everything else — stopping early whenever less than CHUNK_MIN_BUDGET_MS of
  * the run budget is left, so the audit row always gets written.
  */
-async function runTieredUpdates(sb, election, contests, { dryRun, bootstrappedIds, touched, ct, cadence, deadline }) {
+async function runTieredUpdates(sb, election, contests, { dryRun, bootstrappedIds, touched, ct, cadence, deadline, gate = null }) {
   const notes = []
-  const out = { contests: 0, results: 0, calls: 0, notes }
+  const out = { contests: 0, results: 0, calls: 0, deferred: 0, notes }
 
-  const call = async (list, label) => {
+  const call = async (list, label, timeoutCap = 20000) => {
     const remaining = deadline - Date.now()
     if (remaining < CHUNK_MIN_BUDGET_MS) {
       notes.push(`${label}: only ${Math.max(0, remaining)}ms of the run budget left — deferred to the next cycle.`)
       return false
     }
     const upd = await updatePass(sb, election, list, {
-      dryRun, bootstrappedIds, touched,
-      timeoutMs: Math.min(remaining - 2000, 20000),
+      dryRun, bootstrappedIds, touched, deadline, gate,
+      timeoutMs: Math.min(remaining - 2000, timeoutCap),
     })
     notes.push(...upd.notes)
     out.contests += upd.contests
     out.results  += upd.results
+    out.deferred += upd.deferred
     out.calls    += 1
     return true
   }
 
   // ── Tier 1 — statewide, every single run ──────────────────────────────────
+  // Capped at 10s: this call runs on every cycle, and one hung request used to
+  // swallow the entire down-ballot budget.
   const tierOne = contests.filter(isTierOne)
   if (tierOne.length) {
-    await call(tierOne, `Tier 1 (${tierOne.length} statewide contest(s))`)
+    await call(tierOne, `Tier 1 (${tierOne.length} statewide contest(s))`, TIER1_TIMEOUT_MS)
   }
 
   // ── Tier 2 — rotating chunks of everything else ───────────────────────────
-  const queue = tierTwoQueue(contests, ct)
-  const parked = contests.filter(c => !isTierOne(c) && DONE_STATUSES.has(c.status)).length
-  if (!queue.length) {
-    if (parked) notes.push(`Tier 2: all ${parked} down-ballot contest(s) are called or certified — nothing left to rotate.`)
+  // The queue is the UNFILTERED tier-2 field, so chunk membership is stable for
+  // the night; decided contests are dropped inside their chunk, for free.
+  const queue = tierTwoQueue(contests)
+  const parked = queue.filter(c => DONE_STATUSES.has(c.status)).length
+  if (!queue.length) return out
+  if (parked === queue.length) {
+    notes.push(`Tier 2: all ${parked} down-ballot contest(s) are called or certified — nothing left to rotate.`)
     return out
   }
 
   const rot = selectRotationChunks(queue, ct, { cadence, size: TIER2_CHUNK_SIZE, maxCalls: TIER2_MAX_CALLS })
   notes.push(
     `Tier 2 rotation: chunk(s) ${rot.indices.join(', ')} of ${rot.nChunks} ` +
-    `(${queue.length} contest(s) in rotation${parked ? `, ${parked} parked as decided` : ''}, ` +
+    `(${queue.length} contest(s) in the stable rotation${parked ? `, ${parked} parked as decided` : ''}, ` +
     `full sweep every ${Math.ceil(rot.nChunks / Math.max(1, rot.indices.length))} run(s)).`
   )
 
   for (let i = 0; i < rot.selected.length; i++) {
     const list = rot.selected[i]
+    if (!list.length) continue   // every contest in this chunk is already decided
     const ok = await call(list, `Tier 2 chunk ${rot.indices[i]}/${rot.nChunks - 1} (${list.length} contest(s))`)
     if (!ok) break
   }
   return out
 }
 
-async function updatePass(sb, election, contests, { dryRun, bootstrappedIds, touched, timeoutMs }) {
+async function updatePass(sb, election, contests, { dryRun, bootstrappedIds, touched, timeoutMs, deadline = null, gate = null }) {
   const notes = []
-  const out = { contests: 0, results: 0, notes }
+  const out = { contests: 0, results: 0, deferred: 0, notes }
 
   const { text, error } = await queryPerplexity({
     system: EXTRACTOR_SYSTEM,
     user: resultsPrompt(election, contests),
     schema: RESULTS_SCHEMA,
-    maxTokens: 2500,
+    // Roomy enough that an 8-contest chunk comes back whole; if it still gets
+    // cut off, parseContestsLoose salvages the contests that did arrive.
+    maxTokens: 4000,
     timeoutMs,
+    gate,
   })
   if (error || !text) {
     notes.push(`Results pull returned nothing (${error || 'empty reply'}) — nothing written.`)
     return out
   }
-  const reported = contestArrayFrom(parseJsonLoose(text))
+  const { contests: reported, salvaged } = parseContestsLoose(text)
   if (!reported) {
     notes.push('Results JSON was unparseable — nothing written (never guessing).')
     return out
   }
+  if (salvaged) {
+    notes.push(`Results reply was truncated — salvaged ${reported.length} complete contest object(s); the rest wait for the next pass.`)
+  }
 
+  const deferredOffices = []
   for (const payload of reported) {
+    // Deadline-aware WRITES: everything already written has landed, and the
+    // contests we do not reach are picked up by the next run.
+    if (deadline && !dryRun && deadline - Date.now() < WRITE_MIN_BUDGET_MS) {
+      deferredOffices.push(String((payload && payload.office) || 'unnamed contest'))
+      continue
+    }
     const contest = matchContest(payload && payload.office, contests)
     if (!contest) {
       notes.push(`Reported contest "${payload && payload.office}" does not match any contest on file — skipped.`)
@@ -1464,6 +1687,14 @@ async function updatePass(sb, election, contests, { dryRun, bootstrappedIds, tou
       for (const name of written) touched.results.add(`${contest.id}::${normName(name)}`)
     }
   }
+
+  if (deferredOffices.length) {
+    out.deferred = deferredOffices.length
+    notes.push(
+      `Run deadline reached mid-write: ${deferredOffices.length} contest(s) deferred to the next cycle — ` +
+      `${deferredOffices.slice(0, 8).join('; ')}${deferredOffices.length > 8 ? '; …' : ''}`
+    )
+  }
   return out
 }
 
@@ -1474,6 +1705,9 @@ async function updatePass(sb, election, contests, { dryRun, bootstrappedIds, tou
  */
 async function applyContestUpdate(sb, contest, verdict, notes) {
   const roster = contest._results || []
+  // Captured before anything writes: "did this contest just ENTER
+  // recount_possible?" is what decides whether stale winner flags come off.
+  const previousStatus = contest.status
   const newVotes = new Map(verdict.updates.map(u => [u.id, u.votes]))
 
   // Merged picture: every row in the contest, carrying the accepted numbers.
@@ -1530,15 +1764,38 @@ async function applyContestUpdate(sb, contest, verdict, notes) {
   if (sErr) notes.push(`${contest.office}: status write failed — ${sErr.message}`)
 
   // Mirror the math onto the rows exactly as admin-elections does: winner flags
-  // on a decided contest with a real margin, and `declared` is NEVER touched —
-  // declaring a winner stays an admin action.
-  if ((status === 'called' || status === 'recount_possible') && detail && detail.margin > 0) {
+  // ONLY on a called contest with a real margin, and `declared` is NEVER
+  // touched — declaring a winner stays an admin action.
+  const action = winnerFlagAction(status, previousStatus, detail)
+  if (action === 'apply') {
     const { data: rows } = await sb.from('election_results')
       .select('id, votes').eq('contest_id', contest.id)
     await applyWinnerFlags(sb, rows || [], contest.seats || 1)
+  } else if (action === 'clear') {
+    // The race just entered recount_possible: nobody has won it, so any green
+    // "Winner" left over from an earlier pass has to come off the board.
+    await clearWinnerFlags(sb, contest.id)
+    notes.push(`${contest.office}: entered recount_possible — winner flags cleared (nobody has won this race).`)
   }
 
   return upsertRows.map(r => r.candidate_name)
+}
+
+/**
+ * What should happen to the rows' winner flags, given the engine's new status
+ * and the status the contest carried before? PURE.
+ *
+ *   'apply' — status is 'called' with a real margin: flag the top N
+ *   'clear' — the contest just ENTERED recount_possible: strip stale flags
+ *   'none'  — leave the rows alone
+ *
+ * 'recount_possible' deliberately does NOT flag a winner: the engine is
+ * refusing to call the race, so the board must not paint anyone green.
+ */
+function winnerFlagAction(status, previousStatus = null, detail = null) {
+  if (status === 'called' && detail && detail.margin > 0) return 'apply'
+  if (status === 'recount_possible' && previousStatus !== 'recount_possible') return 'clear'
+  return 'none'
 }
 
 async function applyWinnerFlags(sb, results, seats) {
@@ -1550,11 +1807,32 @@ async function applyWinnerFlags(sb, results, seats) {
   if (losers.length) await sb.from('election_results').update({ winner: false }).in('id', losers)
 }
 
+/** Take winner=true off every row in a contest. One statement, no id list. */
+async function clearWinnerFlags(sb, contestId) {
+  const { error } = await sb.from('election_results')
+    .update({ winner: false }).eq('contest_id', contestId).eq('winner', true)
+  if (error) console.warn('[election-results-poller] winner-flag clear failed:', error.message)
+}
+
 // ── 7. the audit row ────────────────────────────────────────────────────────
+
+/**
+ * The `error` column is for things that went WRONG — a healthy run must leave
+ * it null, or "error is not null" reads as a 100% failure rate. Only fatals,
+ * quarantines and work that was skipped/deferred qualify; the running commentary
+ * lives in the JSON response. PURE.
+ */
+function fatalNotesOnly(notes) {
+  return (Array.isArray(notes) ? notes : []).filter((n) => {
+    const s = String(n == null ? '' : n)
+    return /^\s*FATAL/.test(s) || /quarantin/i.test(s) || /skipped/i.test(s) || /deferred/i.test(s)
+  })
+}
 
 async function writeLog(sb, { source, electionDate, touched, notes, startedAt }) {
   try {
-    const error = notes && notes.length ? notes.join(' | ').slice(0, 4000) : null
+    const bad = fatalNotesOnly(notes)
+    const error = bad.length ? bad.join(' | ').slice(0, 4000) : null
     await sb.from('election_poller_log').insert({
       source,
       election_date: electionDate || null,
@@ -1569,16 +1847,34 @@ async function writeLog(sb, { source, electionDate, touched, notes, startedAt })
 }
 
 module.exports.decideWindow          = decideWindow
+// I/O halves, exported so the write path can be unit-tested against a mock client
+module.exports.loadContests          = loadContests
+module.exports.updatePass            = updatePass
+module.exports.applyWinnerFlags      = applyWinnerFlags
+module.exports.clearWinnerFlags      = clearWinnerFlags
 module.exports.clockWindow           = clockWindow
 module.exports.ctParts               = ctParts
 module.exports.validateContestUpdate = validateContestUpdate
 module.exports.matchCandidate        = matchCandidate
+module.exports.matchContest          = matchContest
+module.exports.districtCountyAgree   = districtCountyAgree
 module.exports.parseJsonLoose        = parseJsonLoose
+module.exports.salvageJsonObjects    = salvageJsonObjects
+module.exports.parseContestsLoose    = parseContestsLoose
+module.exports.queryPerplexity       = queryPerplexity
+module.exports.makeRunGate           = makeRunGate
+module.exports.winnerFlagAction      = winnerFlagAction
+module.exports.fatalNotesOnly        = fatalNotesOnly
 module.exports.MAX_TOTAL_VOTES       = MAX_TOTAL_VOTES
+module.exports.RUN_BUDGET_MS         = RUN_BUDGET_MS
+module.exports.TIER1_TIMEOUT_MS      = TIER1_TIMEOUT_MS
 
 // full-ballot tiering (pure, unit-tested)
 module.exports.chunkList             = chunkList
 module.exports.tierTwoQueue          = tierTwoQueue
+module.exports.assignChunks          = assignChunks
+module.exports.orderChunk            = orderChunk
+module.exports.chunkIndexOf          = chunkIndexOf
 module.exports.selectRotationChunks  = selectRotationChunks
 module.exports.rotationTick          = rotationTick
 module.exports.contestLine           = contestLine
