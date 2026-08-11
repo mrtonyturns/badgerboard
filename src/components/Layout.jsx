@@ -40,10 +40,17 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.25.1'
+const APP_VERSION = 'v1.26.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.26.0',
+    date: 'August 11, 2026',
+    changes: [
+      'Full-ballot election coverage: every U.S. House, State Senate and State Assembly primary in Wisconsin is on the board \u2014 grouped by level, searchable by district, county or candidate, with county sheriff and courthouse races discovered as they post',
+    ],
+  },
   {
     version: 'v1.25.1',
     date: 'August 10, 2026',

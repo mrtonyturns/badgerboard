@@ -383,6 +383,10 @@ async function route(sb, action, params, headers, event) {
     // ── Manually trigger the scheduled poller (scheduled functions are not
     //    URL-invocable on Netlify, so the admin console reaches it here).
     //    The poller re-validates the same admin JWT from the forwarded headers.
+    //
+    //    { discover: 'county', chunk: 0…5 } runs ONE 12-county discovery call
+    //    instead of the results pass — this function has a 26-second cap, so a
+    //    full 72-county sweep is six calls, one per chunk.
     case 'run_poller': {
       const poller = require('./election-results-poller')
       const res = await poller.handler({
@@ -392,6 +396,8 @@ async function route(sb, action, params, headers, event) {
           force: params.force !== false,          // default true — that's the point
           dry_run: params.dry_run === true,
           election_date: params.election_date || undefined,
+          discover: params.discover === 'county' ? 'county' : undefined,
+          chunk: params.discover === 'county' ? (Number(params.chunk) || 0) : undefined,
         }),
       })
       let parsed

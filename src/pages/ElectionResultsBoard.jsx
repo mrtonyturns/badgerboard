@@ -11,7 +11,7 @@ import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { format, parseISO, isToday, isFuture, isPast } from 'date-fns'
 import {
   BarChart2, Filter, TrendingUp, Trophy,
-  Clock, MapPin, Users, ExternalLink, ChevronDown, Download, Info,
+  Clock, MapPin, Users, ExternalLink, ChevronDown, Download, Info, Search, Landmark,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import SearchableSelect from '../components/SearchableSelect'
@@ -27,15 +27,54 @@ const PARTY = {
 }
 const partyStyle = (p) => PARTY[p] || PARTY.Nonpartisan
 
+// Full-ballot office types. The first five are the groups a Wisconsin partisan
+// ballot actually produces and they render in ballot order; the rest are legacy
+// office_type values still present on older elections.
 const OFFICE_LABELS = {
-  statewide:   'Statewide',
-  judicial:    'Courts',
-  legislative: 'Legislature',
-  county:      'County',
-  municipal:   'Municipal',
-  referendum:  'Referenda',
+  statewide:      'Statewide',
+  us_house:       'U.S. House',
+  state_senate:   'State Senate',
+  state_assembly: 'State Assembly',
+  county:         'County',
+  judicial:       'Courts',
+  legislative:    'Legislature',
+  municipal:      'Municipal',
+  referendum:     'Referenda',
 }
-const ORDER = { statewide: 0, judicial: 1, legislative: 2, county: 3, municipal: 4, referendum: 5 }
+const ORDER = {
+  statewide: 0, us_house: 1, state_senate: 2, state_assembly: 3, county: 4,
+  judicial: 5, legislative: 6, municipal: 7, referendum: 8,
+}
+
+// A group icon, matching the existing header treatment (3.5 × 3.5, gray).
+const GROUP_ICON = {
+  statewide:      TrendingUp,
+  us_house:       Landmark,
+  state_senate:   Users,
+  state_assembly: BarChart2,
+  county:         MapPin,
+  judicial:       Users,
+  legislative:    BarChart2,
+  municipal:      MapPin,
+}
+
+// Above this many contests the board is a full ballot rather than a handful of
+// statewide races, so everything but Statewide starts collapsed.
+const BIG_BALLOT_CONTESTS = 30
+
+/**
+ * Instant, case-insensitive search across office name, district, county and
+ * candidate names. Multiple words are ANDed, so "assembly 85" narrows the way
+ * a user expects and "sheriff marathon" finds one county race out of hundreds.
+ */
+function matchesQuery(contest, results, terms) {
+  if (!terms.length) return true
+  const hay = [
+    contest.office, contest.district, contest.county, OFFICE_LABELS[contest.office_type],
+    ...(results || []).map(r => r.candidate_name),
+  ].filter(Boolean).join(' ').toLowerCase()
+  return terms.every(term => hay.includes(term))
+}
 
 // Whether an election type is a primary (affects "Called" display and winner framing)
 const isPrimaryType = (type) => type === 'primary' || type === 'spring_primary'
@@ -328,6 +367,10 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
   const [lastSync,     setLastSync]     = useState(null)
   const [officeFilter, setOfficeFilter] = useState('all')
   const [countyFilter, setCountyFilter] = useState('all')
+  const [query,        setQuery]        = useState('')
+  // Per-group open/closed overrides. Absent key = fall back to the default for
+  // this ballot size. Purely presentational — see the realtime note below.
+  const [groupOpen,    setGroupOpen]    = useState({})
   const [pulse,        setPulse]        = useState(false)
   const realtimeRef = useRef(null)
 
@@ -373,6 +416,8 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
     setResultsMap({})
     setOfficeFilter('all')
     setCountyFilter('all')
+    setQuery('')
+    setGroupOpen({})
     if (electionId) loadData(electionId)
   }, [electionId, loadData])
 
@@ -438,18 +483,28 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
   }
 
   // ── Filters ─────────────────────────────────────────────────────────────────
-  const officeTypes = useMemo(() => [...new Set(contests.map(c => c.office_type).filter(Boolean))].sort(), [contests])
+  // Office-type pills read in ballot order (Statewide → County), not alphabetical.
+  const officeTypes = useMemo(
+    () => [...new Set(contests.map(c => c.office_type).filter(Boolean))]
+      .sort((a, b) => (ORDER[a] ?? 99) - (ORDER[b] ?? 99) || a.localeCompare(b)),
+    [contests])
   const counties    = useMemo(() => [...new Set(contests.map(c => c.county).filter(Boolean))].sort(), [contests])
+
+  const terms = useMemo(
+    () => query.trim().toLowerCase().split(/\s+/).filter(Boolean),
+    [query])
+  const searching = terms.length > 0
 
   const filtered = useMemo(() => contests.filter(c => {
     if (officeFilter !== 'all' && c.office_type !== officeFilter) return false
     if (countyFilter !== 'all' && c.county !== countyFilter)       return false
+    if (!matchesQuery(c, resultsMap[c.id], terms))                 return false
     return true
-  }), [contests, officeFilter, countyFilter])
+  }), [contests, officeFilter, countyFilter, resultsMap, terms])
 
-  const sorted = [...filtered].sort(
-    (a, b) => (ORDER[a.office_type] ?? 9) - (ORDER[b.office_type] ?? 9) || a.office.localeCompare(b.office)
-  )
+  const sorted = useMemo(() => [...filtered].sort(
+    (a, b) => (ORDER[a.office_type] ?? 99) - (ORDER[b.office_type] ?? 99) || a.office.localeCompare(b.office)
+  ), [filtered])
 
   const grouped = useMemo(() => {
     const g = {}
@@ -460,6 +515,23 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
     }
     return g
   }, [sorted])
+
+  // ── Group collapse ──────────────────────────────────────────────────────────
+  // On a full ballot (hundreds of cards) only Statewide is open to begin with;
+  // a search auto-opens every group that still has a match. This is display
+  // state ONLY — realtime writes land in `contests` / `resultsMap` whether or
+  // not a group is on screen, so a collapsed group is already up to date the
+  // instant it is opened.
+  const bigBallot = contests.length > BIG_BALLOT_CONTESTS
+  const isGroupOpen = (type) => {
+    if (Object.prototype.hasOwnProperty.call(groupOpen, type)) return groupOpen[type]
+    if (searching) return true
+    return !bigBallot || type === 'statewide'
+  }
+  const toggleGroup = (type) => setGroupOpen(prev => ({ ...prev, [type]: !isGroupOpen(type) }))
+  // Entering or leaving a search resets manual toggles so the auto-expand is
+  // never fighting a collapse the user made three keystrokes ago.
+  useEffect(() => { setGroupOpen({}) }, [searching])
 
   const isLive    = election ? isToday(parseISO(election.election_date)) && contests.length > 0 : false
   const isPrimary = election ? isPrimaryType(election.type) : false
@@ -532,6 +604,27 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
               </span>
             </button>
           ))}
+        </div>
+      )}
+
+      {/* ── Search ── */}
+      {contests.length > 0 && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="relative flex-1 min-w-[220px] max-w-md">
+            <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="search"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search races, districts, counties or candidates…"
+              className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg border border-gray-200 bg-white text-gray-700 placeholder-gray-400 focus:outline-none focus:border-brand-red/40"
+            />
+          </div>
+          {searching && (
+            <span className="text-xs text-gray-400">
+              {filtered.length} of {contests.length} race{contests.length !== 1 ? 's' : ''}
+            </span>
+          )}
         </div>
       )}
 
@@ -675,24 +768,37 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
             )
           })()}
 
-          {/* Race sections */}
-          {Object.entries(grouped).map(([type, typeContests]) => (
-            <div key={type} className="space-y-3">
-              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
-                {type === 'statewide'   && <TrendingUp className="w-3.5 h-3.5" />}
-                {type === 'judicial'    && <Users className="w-3.5 h-3.5" />}
-                {type === 'legislative' && <BarChart2 className="w-3.5 h-3.5" />}
-                {(type === 'county' || type === 'municipal') && <MapPin className="w-3.5 h-3.5" />}
-                {OFFICE_LABELS[type] || type}
-                <span className="font-normal text-gray-400 normal-case tracking-normal">({typeContests.length})</span>
-              </h3>
-              <div className="grid sm:grid-cols-1 lg:grid-cols-2 gap-3">
-                {typeContests.map(c => (
-                  <RaceCard key={c.id} contest={c} results={resultsMap[c.id] || []} />
-                ))}
+          {/* Race sections — collapsible, so a 250-contest ballot still scans */}
+          {sorted.length === 0 ? (
+            <p className="text-center text-sm text-gray-400 py-10">
+              No races match “{query}”.
+            </p>
+          ) : Object.entries(grouped).map(([type, typeContests]) => {
+            const Icon = GROUP_ICON[type]
+            const open = isGroupOpen(type)
+            return (
+              <div key={type} className="space-y-3">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(type)}
+                  aria-expanded={open}
+                  className="w-full text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2 hover:text-gray-700 transition-colors"
+                >
+                  {Icon && <Icon className="w-3.5 h-3.5" />}
+                  {OFFICE_LABELS[type] || type}
+                  <span className="font-normal text-gray-400 normal-case tracking-normal">({typeContests.length})</span>
+                  <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+                </button>
+                {open && (
+                  <div className="grid sm:grid-cols-1 lg:grid-cols-2 gap-3">
+                    {typeContests.map(c => (
+                      <RaceCard key={c.id} contest={c} results={resultsMap[c.id] || []} />
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            )
+          })}
 
           {/* Attribution */}
           <div className="flex items-center gap-2 text-xs text-gray-400 pt-2 border-t border-gray-100">

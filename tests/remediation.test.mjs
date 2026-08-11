@@ -708,6 +708,202 @@ console.log('Phases 2-3 — election-results-poller window decision')
   t('precincts accepted once votes exist', v2.precincts && v2.precincts.precincts_total === 3600 && v2.precincts.precincts_rptg === 10)
 }
 
+// ── poller: full-ballot tiering — chunk math ────────────────────────────────
+// NOTE: everything must go ABOVE the summary/process.exit lines at the bottom
+// of this file. Anything appended after them never runs.
+{
+  console.log('Full ballot — tier-2 chunking + rotation')
+  const {
+    chunkList, tierTwoQueue, selectRotationChunks, rotationTick, contestLine,
+    countyChunk, countyDiscoveryPrompt, shapeCountyContests,
+    WI_COUNTIES, COUNTY_CHUNKS, TIER2_CHUNK_SIZE, TIER2_MAX_CALLS,
+  } = require('../netlify/functions/election-results-poller.js')
+
+  // A realistic full ballot: 9 statewide + 8 US House + 17 senate + 99 assembly.
+  const mk = (n, office_type, status = 'reporting', prefix = office_type) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `${prefix}-${String(i).padStart(3, '0')}`,
+      office: `${office_type} ${i}`,
+      office_type,
+      status,
+    }))
+  const ballot = [
+    ...mk(9,  'statewide'),
+    ...mk(8,  'us_house'),
+    ...mk(17, 'state_senate'),
+    ...mk(99, 'state_assembly'),
+  ]
+  const ct = (hour, minute = 0) => ({ hour, minute, minutes: hour * 60 + minute })
+
+  // — slicing —
+  t('chunkList splits into fixed-size chunks, last one short',
+    (() => { const c = chunkList(Array.from({ length: 25 }, (_, i) => i), 12)
+      return c.length === 3 && c[0].length === 12 && c[1].length === 12 && c[2].length === 1 })())
+  t('chunkList of an empty list is no chunks', chunkList([], 12).length === 0)
+  t('chunkList survives junk input', chunkList(null, 0).length === 0 && chunkList([1, 2], NaN).length === 1)
+  t('default chunk size is 12 and at most 3 tier-2 calls per run',
+    TIER2_CHUNK_SIZE === 12 && TIER2_MAX_CALLS === 3)
+
+  // — queue composition —
+  const q = tierTwoQueue(ballot, ct(20, 30))
+  t('statewide contests are NEVER in the tier-2 rotation',
+    q.length === 124 && q.every(c => c.office_type !== 'statewide'))
+  t('tier-2 queue is ordered by id, so the rotation is stable between runs',
+    q.map(c => c.id).join('|') === [...q].sort((a, b) => a.id.localeCompare(b.id)).map(c => c.id).join('|'))
+
+  const decided = [
+    ...mk(4, 'state_assembly', 'called',    'called'),
+    ...mk(3, 'state_assembly', 'certified', 'cert'),
+    ...mk(5, 'state_assembly', 'reporting', 'live'),
+    ...mk(2, 'statewide',      'reporting', 'sw'),
+  ]
+  const qd = tierTwoQueue(decided, ct(21, 0))
+  t('called and certified contests drop out of the rotation entirely',
+    qd.length === 5 && qd.every(c => c.status === 'reporting'))
+
+  // — waiting deprioritisation —
+  const mixed = [
+    { id: 'a', office_type: 'state_assembly', status: 'waiting'   },
+    { id: 'b', office_type: 'state_assembly', status: 'reporting' },
+    { id: 'c', office_type: 'state_assembly', status: 'waiting'   },
+    { id: 'd', office_type: 'state_assembly', status: 'too_close' },
+  ]
+  t('before 11 PM CT the queue is plain id order (waiting races still matter)',
+    tierTwoQueue(mixed, ct(21, 45)).map(c => c.id).join('') === 'abcd')
+  t('after 11 PM CT the still-waiting contests sort LAST',
+    tierTwoQueue(mixed, ct(23, 0)).map(c => c.id).join('') === 'bdac')
+  t('the 1 AM hourly run also deprioritises waiting contests',
+    tierTwoQueue(mixed, ct(1, 0)).map(c => c.id).join('') === 'bdac')
+  t('deprioritisation keeps id order inside each band',
+    tierTwoQueue(mixed, ct(23, 0)).slice(2).map(c => c.id).join('') === 'ac')
+
+  // — time-derived rotation: deterministic, disjoint, and it comes back round —
+  const peak = (h, m) => selectRotationChunks(q, ct(h, m), { cadence: 'every 5 minutes' })
+  t('rotation is fully determined by the clock — same instant, same chunks',
+    peak(20, 15).indices.join(',') === peak(20, 15).indices.join(','))
+  t('124 contests in rotation → 11 chunks of 12', peak(20, 0).nChunks === 11)
+  t('each run takes 3 chunks', peak(20, 0).indices.length === 3 && peak(20, 5).indices.length === 3)
+  t('the 20:00 run starts at chunk 0', peak(20, 0).indices.join(',') === '0,1,2')
+  t('consecutive 5-minute runs cover DISJOINT chunks',
+    peak(20, 5).indices.join(',') === '3,4,5' && peak(20, 10).indices.join(',') === '6,7,8')
+  t('any minute inside a 5-minute bucket picks the same slice',
+    peak(20, 5).indices.join(',') === peak(20, 9).indices.join(','))
+  t('the rotation wraps rather than running off the end',
+    peak(20, 15).indices.join(',') === '9,10,0')
+  t('every tier-2 contest is refreshed within one full cycle of 5-minute runs', (() => {
+    const seen = new Set()
+    for (let m = 0; m < 60; m += 5) for (const i of peak(20, m).indices) seen.add(i)
+    return seen.size === peak(20, 0).nChunks
+  })())
+  t('the hourly cadence advances hour by hour, not minute by minute', (() => {
+    const at = (h) => selectRotationChunks(q, ct(h, 0), { cadence: 'hourly' }).indices.join(',')
+    return at(22) !== at(23) && at(23) !== at(0) && at(22) === at(22)
+  })())
+  t('the clock ticks forward across midnight instead of jumping backwards',
+    rotationTick(ct(20, 0), 'hourly') === 0 && rotationTick(ct(23, 0), 'hourly') === 3 &&
+    rotationTick(ct(0, 0), 'hourly') === 4 && rotationTick(ct(3, 0), 'hourly') === 7)
+  t('the 5-minute tick is 12 per hour off the same origin',
+    rotationTick(ct(20, 0)) === 0 && rotationTick(ct(20, 55)) === 11 && rotationTick(ct(21, 0)) === 12)
+  t('rotation math survives a junk clock',
+    selectRotationChunks(q, {}, {}).indices.length === 3 && selectRotationChunks([], ct(20, 0), {}).nChunks === 0)
+  t('a single short chunk is still selected exactly once',
+    selectRotationChunks(mixed, ct(20, 20), {}).indices.join(',') === '0')
+
+  // — chunk prompts carry district + county —
+  t('a chunk prompt line pins the exact district',
+    contestLine({ office: 'State Assembly District 85 — Democratic Primary', district: 'District 85',
+      _results: [{ candidate_name: 'Ann Lee' }, { candidate_name: 'Bo Ray' }] }, 0)
+      === '1. State Assembly District 85 — Democratic Primary (candidates on file: Ann Lee, Bo Ray)')
+  t('a chunk prompt line pins the county when the office does not name it',
+    contestLine({ office: 'Sheriff — Republican Primary', county: 'Marathon', _results: [] }, 0)
+      .includes('Marathon County, Wisconsin'))
+  t('district is appended when the office string omits it',
+    contestLine({ office: 'State Senate — Democratic Primary', district: 'District 9', _results: [] }, 2)
+      === '3. State Senate — Democratic Primary — District 9')
+  t('nothing is duplicated when office already carries district and county',
+    contestLine({ office: 'Marathon County Sheriff — Republican Primary', county: 'Marathon', _results: [] }, 0)
+      === '1. Marathon County Sheriff — Republican Primary')
+
+  // ── county discovery ──────────────────────────────────────────────────────
+  console.log('Full ballot — county discovery shaping')
+  t('all 72 Wisconsin counties, alphabetical, in 6 chunks of 12',
+    WI_COUNTIES.length === 72 && COUNTY_CHUNKS === 6 &&
+    WI_COUNTIES[0] === 'Adams' && WI_COUNTIES[71] === 'Wood')
+  t('the six county chunks partition the state exactly once', (() => {
+    const all = []
+    for (let i = 0; i < COUNTY_CHUNKS; i++) all.push(...countyChunk(i))
+    return all.length === 72 && new Set(all).size === 72 && all.join('|') === WI_COUNTIES.join('|')
+  })())
+  t('each county chunk is 12 counties', countyChunk(0).length === 12 && countyChunk(5).length === 12)
+  t('an out-of-range chunk index is clamped, never thrown',
+    countyChunk(-4)[0] === 'Adams' && countyChunk(99)[11] === 'Wood' && countyChunk('x')[0] === 'Adams')
+
+  const slice = ['Marathon', 'Milwaukee', 'Monroe', 'Oneida', 'Pepin', 'Portage']
+  const prompt = countyDiscoveryPrompt({ name: 'Partisan Primary', election_date: '2026-08-11' }, slice)
+  t('the discovery prompt names every county in the slice',
+    slice.every(c => prompt.includes(`- ${c} County`)))
+  t('the discovery prompt asks only for contested partisan county offices',
+    /CONTESTED PARTISAN COUNTY-OFFICE/.test(prompt) && prompt.includes('Sheriff, County Clerk, County Treasurer'))
+  t('the discovery prompt forbids inventing and expects most counties to be omitted',
+    /Never invent/.test(prompt) && /NO CONTESTED PARTISAN COUNTY PRIMARY/.test(prompt))
+  t('the discovery prompt demands a source per contest',
+    /No source, no contest/.test(prompt))
+
+  // Mocked Perplexity reply — one of everything the extractor can get wrong.
+  const reply = { contests: [
+    { county: 'Marathon',        office: 'Sheriff',            party: 'Republican', candidates: ['Ann Lee', 'Bo Ray'], source: 'Marathon County Clerk (https://x)' },
+    { county: 'Milwaukee County', office: 'County Treasurer',  party: 'Democratic', candidates: ['Cy Doe', 'Dee Fox'], source: 'WEC' },
+    { county: 'Monroe',          office: 'Sheriff',            party: 'Republican', candidates: ['Solo Guy'],          source: 'clerk' },
+    { county: 'Oneida',          office: 'County Board Supervisor District 3', party: 'Republican', candidates: ['A A', 'B B'], source: 'clerk' },
+    { county: 'Pepin',           office: 'Coroner',            party: 'Democratic', candidates: ['E F', 'G H'],        source: '  ' },
+    { county: 'Marathon',        office: 'sheriff',            party: 'Rep',        candidates: ['Ann Lee', 'Bo Ray'], source: 'dup' },
+    { county: 'Dane',            office: 'Sheriff',            party: 'Democratic', candidates: ['X Y', 'Z W'],        source: 'clerk' },
+  ] }
+  const shaped = shapeCountyContests(reply, slice)
+
+  t('county discovery shapes a contested race into the house office format',
+    shaped.contests[0].office === 'Marathon County Sheriff — Republican Primary' &&
+    shaped.contests[0].county === 'Marathon' &&
+    shaped.contests[0].office_type === 'county' &&
+    shaped.contests[0].party === 'Republican')
+  t('the county name is not doubled on a "County <Office>" title',
+    shaped.contests[1].office === 'Milwaukee County Treasurer — Democratic Primary')
+  t('an UNCONTESTED county primary is dropped',
+    !shaped.contests.some(c => /Monroe/.test(c.office)) &&
+    shaped.notes.some(n => /not a contested primary/.test(n)))
+  t('an office Wisconsin does not elect on a partisan county ballot is dropped',
+    !shaped.contests.some(c => /Supervisor/i.test(c.office)) &&
+    shaped.notes.some(n => /not a partisan county office/.test(n)))
+  t('an unsourced county contest is dropped',
+    !shaped.contests.some(c => /Coroner/.test(c.office)) &&
+    shaped.notes.some(n => /no source cited/.test(n)))
+  t('a county outside this chunk cannot be smuggled in',
+    !shaped.contests.some(c => /Dane/.test(c.office)) &&
+    shaped.notes.some(n => /not in this chunk's county list/.test(n)))
+  t('a contest reported twice is created once',
+    shaped.contests.filter(c => /Marathon County Sheriff/.test(c.office)).length === 1)
+  t('exactly the two valid contests survive out of seven reported', shaped.contests.length === 2)
+  t('every shaped contest carries its source',
+    shaped.contests.every(c => typeof c.source === 'string' && c.source.trim().length > 0))
+  t('every shaped contest carries at least two candidates',
+    shaped.contests.every(c => c.candidates.length >= 2))
+  t('an empty reply is a valid answer, not an error',
+    shapeCountyContests({ contests: [] }, slice).contests.length === 0 &&
+    shapeCountyContests({ contests: [] }, slice).notes.length === 0)
+  t('unparseable discovery JSON creates nothing and says so',
+    shapeCountyContests(null, slice).contests.length === 0 &&
+    shapeCountyContests(null, slice).notes.some(n => /unparseable/.test(n)))
+  t('county shaping never throws on hostile input', (() => {
+    const hostile = [undefined, 'nope', 42, { contests: 'x' },
+      { contests: [null, [], 7, { county: 'Marathon' }, { county: 'Marathon', office: 'Sheriff', party: null, candidates: 'x', source: 5 }] }]
+    try { hostile.forEach(h => shapeCountyContests(h, slice)); return true } catch { return false }
+  })())
+  t('duplicate candidate names inside one contest are collapsed',
+    shapeCountyContests({ contests: [{ county: 'Pepin', office: 'Register of Deeds', party: 'Democratic',
+      candidates: ['E F', 'e  f', 'G H'], source: 'clerk' }] }, slice).contests[0].candidates.length === 2)
+}
+
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
 

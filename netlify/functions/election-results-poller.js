@@ -27,7 +27,12 @@
 //   3. Bootstrap    zero contests and it is past 8:30 PM CT → ONE Perplexity
 //                   discovery call to learn tonight's statewide contests and
 //                   their candidates; create contests + zeroed result rows.
-//   4. Update       ONE batched Perplexity call for current unofficial totals.
+//   4. Update       TIERED. Tier 1 (office_type 'statewide') is one Perplexity
+//                   call on EVERY run. Tier 2 (everything else — US House,
+//                   state senate, state assembly, county) is sliced into chunks
+//                   of TIER2_CHUNK_SIZE contests and up to TIER2_MAX_CALLS
+//                   chunks are refreshed per run on a time-derived rotation.
+//                   See "Tiered rotation" below.
 //   5. Validate     every number, before anything is written (see
 //                   validateContestUpdate) — failures are quarantined, noted
 //                   in the log row's `error` field, and never written.
@@ -52,11 +57,43 @@
 // that path runs as poller:auto and still obeys the time window. Scheduled
 // functions also have a hard 30-second execution limit — see RUN_BUDGET_MS.
 //
+// ── Tiered rotation (full-ballot coverage) ──────────────────────────────────
+//
+// A full Wisconsin partisan primary ballot is 250+ contests: 9-ish statewide,
+// 8 US House, 17 state senate, 99 assembly, plus whatever county primaries are
+// contested. One batched call cannot carry that inside a 24-second budget, so
+// each run refreshes a slice:
+//
+//   Tier 1  office_type = 'statewide'   → one call, EVERY run.
+//   Tier 2  everything else             → chunks of 12, at most 3 chunks/run.
+//
+// The rotation cursor is derived from the Central-time clock rather than stored
+// anywhere, so it needs no new table and no read-modify-write race between
+// concurrent invocations. rotationTick() counts 5-minute ticks (or whole hours,
+// on the hourly cadence) from 8 PM CT, and each run starts at
+// (tick × chunksPerRun) mod nChunks — consecutive runs therefore cover disjoint
+// chunks and the whole tier-2 field comes round on a predictable cycle.
+//
+// Two things fall out of rotation to save budget:
+//   · contests already 'called' or 'certified' — there is nothing left to learn
+//   · after 11 PM CT, contests still 'waiting' sort LAST, so the races that are
+//     actually counting get the calls
+//
+// ── County discovery (manual only) ──────────────────────────────────────────
+// {discover:'county', chunk:N} runs ONE Perplexity call over 12 of Wisconsin's
+// 72 counties (N = 0…5, alphabetical) asking only for CONTESTED partisan
+// county-office primaries. It is reached through admin-elections' run_poller,
+// a normal 26-second function, hence one chunk per invocation — call it six
+// times to sweep the state. Never runs on the scheduled path.
+//
 // Exports: handler plus the pure pieces, unit-tested in tests/remediation.test.mjs
-//   decideWindow, clockWindow, ctParts, validateContestUpdate, matchCandidate
+//   decideWindow, clockWindow, ctParts, validateContestUpdate, matchCandidate,
+//   chunkList, tierTwoQueue, selectRotationChunks, rotationTick, contestLine,
+//   countyChunk, countyDiscoveryPrompt, shapeCountyContests, WI_COUNTIES
 
 const { cors, json, serviceClient, requireAdmin } = require('./_shared')
 const { determineStatus } = require('./_determination')
+const COUNTY_SOURCES = require('./_county-sources.json')
 
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY
 const PPLX_URL   = 'https://api.perplexity.ai/chat/completions'
@@ -74,6 +111,35 @@ const RUN_BUDGET_MS = Number(process.env.POLLER_BUDGET_MS) || 24000
 
 // Discovery only makes sense once polls have been closed a while.
 const BOOTSTRAP_AFTER_MINUTES = 20 * 60 + 30   // 20:30 CT
+
+// ── Tiered rotation knobs ───────────────────────────────────────────────────
+// 12 contests is about as much as one `sonar` reply can carry without the model
+// starting to drop or conflate races; 3 chunks + the statewide call is 4 calls,
+// ~20s worst case, inside RUN_BUDGET_MS.
+const TIER2_CHUNK_SIZE = Number(process.env.POLLER_CHUNK_SIZE) || 12
+const TIER2_MAX_CALLS  = Number(process.env.POLLER_TIER2_CALLS) || 3
+
+// Never START another chunk with less than this left in the budget — a chunk
+// that gets killed mid-flight costs the whole run its audit row.
+const CHUNK_MIN_BUDGET_MS = 8000
+
+// Nothing left to learn about these, so they leave the rotation entirely.
+const DONE_STATUSES = new Set(['called', 'certified'])
+
+// County discovery is manual-only and arrives via admin-elections' run_poller,
+// which is a regular 26-second function — hence ONE 12-county call per call.
+const COUNTY_CHUNK_SIZE     = 12
+const COUNTY_DISCOVER_BUDGET_MS = Number(process.env.POLLER_DISCOVER_BUDGET_MS) || 22000
+
+/** Wisconsin's 72 counties, alphabetical — the same list the events researcher uses. */
+const WI_COUNTIES = Object.keys(COUNTY_SOURCES).sort((a, b) => a.localeCompare(b, 'en'))
+const COUNTY_CHUNKS = Math.ceil(WI_COUNTIES.length / COUNTY_CHUNK_SIZE)
+
+// The partisan county offices Wisconsin actually elects. Anything else coming
+// back from discovery is a hallucination or a nonpartisan/spring office.
+const COUNTY_OFFICES = [
+  'Sheriff', 'County Clerk', 'County Treasurer', 'Register of Deeds', 'Coroner', 'District Attorney',
+]
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Time — America/Chicago via Intl, never a hardcoded UTC offset
@@ -187,6 +253,113 @@ function decideWindow(when = new Date(), electionDates = []) {
     run: true, phase: w.phase, cadence: w.cadence, electionDate: w.targetDate, ct: w.ct,
     reason: `${clock} — ${w.phase} window for the ${w.targetDate} election (${w.cadence}).`,
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tiered rotation — PURE. No I/O, no randomness, no stored cursor.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Tier 1 is exactly the statewide field; everything else rotates. */
+function isTierOne(contest) {
+  return Boolean(contest) && contest.office_type === 'statewide'
+}
+
+/** Split a list into fixed-size chunks. A 0/NaN size degrades to one chunk. */
+function chunkList(list, size = TIER2_CHUNK_SIZE) {
+  const arr = Array.isArray(list) ? list : []
+  const n = Math.max(1, Math.floor(Number(size) || 0) || TIER2_CHUNK_SIZE)
+  const out = []
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
+  return out
+}
+
+/**
+ * After 11 PM CT the races that are still 'waiting' are the ones nobody has
+ * published a single number for — the counting races deserve the calls, so the
+ * waiting ones sort last. 20:00–22:59 is "early"; everything else is "late",
+ * which covers 23:00, the 00:00–03:59 hourly runs and the 10 AM final sweep.
+ */
+function deprioritizeWaiting(ct) {
+  const h = Number(ct && ct.hour)
+  if (!Number.isFinite(h)) return false
+  return h >= 23 || h < 20
+}
+
+/**
+ * The tier-2 field, in rotation order: everything that is not statewide and is
+ * not already decided, ordered by id (stable across runs) with waiting contests
+ * pushed to the back late in the night.
+ */
+function tierTwoQueue(contests, ct = {}) {
+  const late = deprioritizeWaiting(ct)
+  const live = (Array.isArray(contests) ? contests : [])
+    .filter(c => c && !isTierOne(c) && !DONE_STATUSES.has(c.status))
+  return live.sort((a, b) => {
+    if (late) {
+      const aw = a.status === 'waiting' ? 1 : 0
+      const bw = b.status === 'waiting' ? 1 : 0
+      if (aw !== bw) return aw - bw
+    }
+    return String(a.id).localeCompare(String(b.id))
+  })
+}
+
+/**
+ * A monotonically increasing tick across one election night, derived purely
+ * from the Central-time clock.
+ *
+ *   5-minute cadence → 12 ticks an hour, counted from 20:00 CT
+ *   hourly cadence   → one tick an hour, counted from 20:00 CT
+ *
+ * 20:00 is tick 0, so the night runs 20,21,22,23,00,01,02,03 → 0..7 without
+ * wrapping, and the 10 AM final sweep lands at 14. That keeps the rotation
+ * moving forward all night instead of jumping backwards at midnight.
+ */
+function rotationTick(ct = {}, cadence = 'every 5 minutes') {
+  const hour   = Number(ct.hour)
+  const minute = Number(ct.minute)
+  const h = Number.isFinite(hour) ? ((hour + 4) % 24) : 0
+  if (cadence === 'hourly' || cadence === 'once') return h
+  return h * 12 + Math.floor((Number.isFinite(minute) ? minute : 0) / 5)
+}
+
+/**
+ * Which tier-2 chunks does THIS run refresh? Deterministic for a given clock
+ * reading, and disjoint from the previous run's slice (the cursor advances by
+ * the number of chunks a run can actually make).
+ *
+ * @returns {{nChunks:number, indices:number[], selected:Array<Array>, chunks:Array<Array>}}
+ */
+function selectRotationChunks(queue, ct = {}, opts = {}) {
+  const size     = opts.size || TIER2_CHUNK_SIZE
+  const maxCalls = Math.max(1, Math.floor(Number(opts.maxCalls) || TIER2_MAX_CALLS))
+  const cadence  = opts.cadence || 'every 5 minutes'
+  const chunks   = chunkList(queue, size)
+  const n = chunks.length
+  if (!n) return { nChunks: 0, indices: [], selected: [], chunks }
+
+  const take  = Math.min(maxCalls, n)
+  const start = ((rotationTick(ct, cadence) * take) % n + n) % n
+  const indices = []
+  for (let i = 0; i < take; i++) indices.push((start + i) % n)
+  return { nChunks: n, indices, selected: indices.map(i => chunks[i]), chunks }
+}
+
+/**
+ * One line of a results prompt. Carries the district and county explicitly so
+ * the extractor targets a single race — "State Assembly District 85" and
+ * "State Assembly District 8" are otherwise one substring apart.
+ */
+function contestLine(contest, i = 0) {
+  const c = contest || {}
+  let line = `${i + 1}. ${c.office || 'unknown contest'}`
+  const district = c.district ? String(c.district).trim() : ''
+  if (district && !normName(c.office).includes(normName(district))) line += ` — ${district}`
+  const county = c.county ? String(c.county).trim() : ''
+  if (county && !normName(c.office).includes(normName(`${county} county`))) line += ` — ${county} County, Wisconsin`
+  const names = (Array.isArray(c._results) ? c._results : []).map(r => r && r.candidate_name).filter(Boolean)
+  if (names.length) line += ` (candidates on file: ${names.join(', ')})`
+  return line
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -533,10 +706,7 @@ function discoveryPrompt(election) {
 }
 
 function resultsPrompt(election, contests) {
-  const list = contests.map((c, i) => {
-    const names = (c._results || []).map(r => r.candidate_name).filter(Boolean)
-    return `${i + 1}. ${c.office}${names.length ? ` (candidates on file: ${names.join(', ')})` : ''}`
-  }).join('\n')
+  const list = contests.map((c, i) => contestLine(c, i)).join('\n')
 
   return [
     `Wisconsin ${election.name || 'election'}, ${election.election_date}. Report the CURRENT UNOFFICIAL`,
@@ -556,12 +726,182 @@ function resultsPrompt(election, contests) {
     '  service or outlet name, with the URL if you have it). No source, no contest.',
     '- Vote counts are whole numbers with no separators. Precincts reporting can never exceed',
     '  precincts total. Use the candidate spellings listed above wherever they match.',
+    '- Match the EXACT district number and county shown above. District 8 and District 85 are',
+    '  different contests, and the same office exists in many counties — never merge or substitute',
+    '  one for another. Echo the office string back exactly as it is written above.',
     '- Do not decide, call or project a winner. You are reporting counts only.',
     '',
     'Return strict JSON in exactly this shape and nothing else:',
     '{"contests":[{"office":"Governor — Democratic Primary","candidates":[{"name":"Full Name","votes":12345}],' +
       '"precincts_reporting":100,"precincts_total":300,"source":"Dane County Clerk (https://…)"}]}',
   ].join('\n')
+}
+
+// ── County discovery (manual only) ──────────────────────────────────────────
+
+const COUNTY_SCHEMA = {
+  type: 'object',
+  properties: {
+    contests: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          county:     { type: 'string' },
+          office:     { type: 'string' },
+          party:      { type: 'string' },
+          candidates: { type: 'array', items: { type: 'string' } },
+          source:     { type: 'string' },
+        },
+        required: ['county', 'office', 'party', 'candidates', 'source'],
+      },
+    },
+  },
+  required: ['contests'],
+}
+
+/** The Nth 12-county slice of Wisconsin's 72 counties, alphabetical. N = 0…5. */
+function countyChunk(n) {
+  const i = Math.floor(Number(n))
+  const idx = Number.isFinite(i) ? Math.max(0, Math.min(COUNTY_CHUNKS - 1, i)) : 0
+  return WI_COUNTIES.slice(idx * COUNTY_CHUNK_SIZE, (idx + 1) * COUNTY_CHUNK_SIZE)
+}
+
+function countyDiscoveryPrompt(election, counties) {
+  return [
+    `Wisconsin ${election.name || 'election'}, held ${election.election_date}.`,
+    '',
+    'For each of the counties listed below, report ONLY the CONTESTED PARTISAN COUNTY-OFFICE',
+    'primaries that are actually on this ballot.',
+    '',
+    'Counties to check (and no others):',
+    counties.map(c => `- ${c} County`).join('\n'),
+    '',
+    `County offices in scope, and nothing else: ${COUNTY_OFFICES.join(', ')}.`,
+    '',
+    'Definitions:',
+    '- "Contested" means TWO OR MORE candidates appear on the ballot in the SAME party\'s primary for',
+    '  the same county office. One candidate in a party primary is NOT contested — omit it.',
+    '- Each party\'s primary for an office is its own contest. If both parties have a contested',
+    '  primary for the same office, return two entries.',
+    '',
+    'Rules — these are absolute:',
+    '- MOST WISCONSIN COUNTIES HAVE NO CONTESTED PARTISAN COUNTY PRIMARY on this ballot. Omitting a',
+    '  county is the normal, correct answer. Returning an empty list is a valid and expected reply.',
+    '- Never invent a county, an office, a primary or a candidate. If you cannot confirm a contest',
+    '  and its full candidate list from a published source, omit it.',
+    '- Use only ballot information published by the county clerk, the Wisconsin Elections Commission,',
+    '  or established news coverage of this election. Do not reason from past elections.',
+    '- Candidate names spelled exactly as they are printed on the ballot.',
+    '- Every contest you return MUST carry the source you took it from (county clerk site, WEC, or',
+    '  outlet name, with the URL if you have it). No source, no contest.',
+    '- Report ballot lines only. No vote totals, no winners, no projections, no predictions.',
+    '',
+    'Return strict JSON in exactly this shape and nothing else:',
+    '{"contests":[{"county":"Portage","office":"Sheriff","party":"Democratic",' +
+      '"candidates":["Full Name","Full Name"],"source":"Portage County Clerk (https://…)"}]}',
+    'If none of these counties has a contested partisan county primary, return exactly {"contests":[]}.',
+  ].join('\n')
+}
+
+/** "Democrat" → "Democratic Primary"; anything else keeps its own adjective. */
+function primaryLabel(party) {
+  const p = PARTY_LABEL(party)
+  if (p === 'Democrat') return 'Democratic'
+  return p || ''
+}
+
+const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Strip the county name, party adjective and "Primary" tail off a reported office. */
+function countyOfficeCore(rawOffice, county) {
+  let s = String(rawOffice == null ? '' : rawOffice).trim()
+  s = s.split(/\s+[—–]\s+|\s+-\s+/)[0].trim()                 // drop a "— Democratic Primary" tail
+  s = s.replace(new RegExp(`^${escapeRe(county)}\\s+County\\s+`, 'i'), '').trim()
+  s = s.replace(/\s+Primary$/i, '').trim()
+  s = s.replace(/^(Democratic|Democrat|Republican|GOP)\s+/i, '').trim()
+  const want = normName(s)
+  // Only the offices Wisconsin actually elects on a partisan county ballot.
+  const canonical = COUNTY_OFFICES.find(o => {
+    const n = normName(o)
+    return n === want || want === n.replace(/^county /, '') || `county ${want}` === n
+  })
+  return canonical || null
+}
+
+/**
+ * Shape a county-discovery reply into contest rows. PURE — never throws, never
+ * invents. Anything the model returned that is out of slice, off the office
+ * whitelist, uncontested or unsourced is dropped and explained in `notes`.
+ *
+ * @param {*} parsed            already-parsed JSON from the model
+ * @param {string[]} counties   the 12 counties this call was allowed to answer for
+ * @returns {{contests:Array, notes:string[]}}
+ */
+function shapeCountyContests(parsed, counties = []) {
+  const notes = []
+  const allowed = new Map((Array.isArray(counties) ? counties : []).map(c => [normName(c), c]))
+  const rows = contestArrayFrom(parsed)
+  if (!rows) {
+    notes.push('County discovery JSON was unparseable — nothing created (never guessing).')
+    return { contests: [], notes }
+  }
+
+  const out = []
+  const seen = new Set()
+  for (const raw of rows) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+
+    const countyKey = normName(String(raw.county || '').replace(/\s+county$/i, ''))
+    const county = allowed.get(countyKey)
+    if (!county) {
+      notes.push(`Discovery returned "${raw.county}", which is not in this chunk's county list — skipped.`)
+      continue
+    }
+
+    const office = countyOfficeCore(raw.office, county)
+    if (!office) {
+      notes.push(`${county} County: "${raw.office}" is not a partisan county office Wisconsin elects — skipped.`)
+      continue
+    }
+
+    const adjective = primaryLabel(raw.party)
+    if (!adjective) {
+      notes.push(`${county} County ${office}: no party given for the primary — skipped.`)
+      continue
+    }
+
+    const source = typeof raw.source === 'string' ? raw.source.trim() : ''
+    if (!source) {
+      notes.push(`${county} County ${office} — ${adjective} Primary: no source cited — skipped.`)
+      continue
+    }
+
+    const nameSeen = new Set()
+    const candidates = (Array.isArray(raw.candidates) ? raw.candidates : [])
+      .map(n => (typeof n === 'string' ? n : n && n.name))
+      .filter(n => typeof n === 'string' && n.trim())
+      .map(n => n.trim().slice(0, 150))
+      .filter(n => { const k = normName(n); if (!k || nameSeen.has(k)) return false; nameSeen.add(k); return true })
+
+    if (candidates.length < 2) {
+      notes.push(`${county} County ${office} — ${adjective} Primary: ${candidates.length} candidate(s), so not a contested primary — skipped.`)
+      continue
+    }
+
+    // "County Treasurer" + "Milwaukee County " would read "Milwaukee County
+    // County Treasurer" — the county name already supplies the word.
+    const suffix = office.replace(/^County\s+/i, '')
+    const label = `${county} County ${suffix} — ${adjective} Primary`.slice(0, 200)
+    const key = normName(label)
+    if (seen.has(key)) {
+      notes.push(`${label}: reported twice in one reply — kept once.`)
+      continue
+    }
+    seen.add(key)
+    out.push({ office: label, county, office_type: 'county', party: PARTY_LABEL(raw.party), candidates, source })
+  }
+  return { contests: out, notes }
 }
 
 /** Both shapes we accept back: a bare array, or { contests: [...] }. */
@@ -621,12 +961,19 @@ exports.handler = async (event = {}) => {
   // Netlify's scheduler POSTs { next_run: <ISO> }. Anything without it is a
   // human (or a script) and needs an admin JWT.
   const scheduled = Boolean(body && body.next_run)
-  let force = false, dryRun = false
+  let force = false, dryRun = false, discoverCounty = false, countyChunkIndex = 0
   if (!scheduled) {
     const auth = await requireAdmin(event)
     if (auth.errorResponse) return auth.errorResponse
     force  = body.force === true
     dryRun = body.dry_run === true
+    // County discovery is an admin sweep, never a scheduled behaviour. It runs
+    // whatever the clock says, so it implies force.
+    if (body.discover === 'county') {
+      discoverCounty = true
+      force = true
+      countyChunkIndex = Math.max(0, Math.min(COUNTY_CHUNKS - 1, Math.floor(Number(body.chunk) || 0)))
+    }
   }
 
   const now = new Date()
@@ -644,7 +991,7 @@ exports.handler = async (event = {}) => {
   // the same run is one contest, not two.
   const touched = { contests: new Set(), results: new Set() }
   const runMeta = {
-    source: `poller:${scheduled ? 'auto' : 'manual'}${dryRun ? ':dry' : ''}`,
+    source: `poller:${scheduled ? 'auto' : 'manual'}${discoverCounty ? ':county-discovery' : ''}${dryRun ? ':dry' : ''}`,
     electionDate: null,
     touched,
     notes: [],
@@ -680,6 +1027,35 @@ exports.handler = async (event = {}) => {
     }
     runMeta.electionDate = String(election.election_date).slice(0, 10)
 
+    // ── 2c. County discovery (manual sweep) ────────────────────────────────
+    // One 12-county Perplexity call, then straight to the audit row. It shares
+    // nothing with the results pipeline below and never touches a result total.
+    if (discoverCounty) {
+      const disc = await discoverCountyContests(sb, election, {
+        chunkIndex: countyChunkIndex,
+        dryRun,
+        deadline: startedAt + COUNTY_DISCOVER_BUDGET_MS,
+        touched,
+      })
+      runMeta.notes.push(...disc.notes)
+      await writeLog(sb, { ...runMeta, startedAt })
+      return json(200, {
+        ok: true,
+        mode: 'county-discovery',
+        dry_run: dryRun,
+        chunk: countyChunkIndex,
+        chunks_total: COUNTY_CHUNKS,
+        counties: disc.counties,
+        created: disc.created,
+        skipped: disc.skipped,
+        election: { id: election.id, name: election.name, election_date: runMeta.electionDate },
+        contests_synced: touched.contests.size,
+        results_upserted: touched.results.size,
+        notes: runMeta.notes,
+        duration_ms: Date.now() - startedAt,
+      }, headers)
+    }
+
     // ── 2b. Contests + results ─────────────────────────────────────────────
     let contests = await loadContests(sb, election.id)
 
@@ -695,17 +1071,19 @@ exports.handler = async (event = {}) => {
       runMeta.notes.push(`No contests on file and it is only ${pad2(ct.hour)}:${pad2(ct.minute)} CT — discovery waits until 20:30 CT.`)
     }
 
-    // ── 4–6. Update pass ───────────────────────────────────────────────────
+    // ── 4–6. Tiered update pass ────────────────────────────────────────────
     if (contests.length) {
       const remaining = startedAt + RUN_BUDGET_MS - Date.now()
       if (remaining < 4000) {
         runMeta.notes.push('Run budget exhausted after discovery — the results pull waits for the next cycle.')
       } else {
-        const upd = await updatePass(sb, election, contests, {
+        const upd = await runTieredUpdates(sb, election, contests, {
           dryRun,
           bootstrappedIds,
           touched,
-          timeoutMs: Math.min(remaining - 2000, 20000),
+          ct,
+          cadence: decision.cadence || clock.cadence || 'every 5 minutes',
+          deadline: startedAt + RUN_BUDGET_MS,
         })
         runMeta.notes.push(...upd.notes)
       }
@@ -738,7 +1116,10 @@ exports.handler = async (event = {}) => {
 async function loadContests(sb, electionId) {
   const { data: contests, error } = await sb
     .from('election_contests')
-    .select('id, office, office_type, seats, precincts_total, precincts_rptg, status, status_source')
+    // district + county come along so the chunk prompts can target a single
+    // race — "Assembly District 8" and "Assembly District 85" are otherwise
+    // one substring apart, and a county office exists 72 times over.
+    .select('id, office, office_type, district, county, seats, precincts_total, precincts_rptg, status, status_source')
     .eq('election_id', electionId)
   if (error) throw new Error(`contest load failed: ${error.message}`)
   const list = contests || []
@@ -847,7 +1228,162 @@ async function bootstrapContests(sb, election, { dryRun, deadline, touched }) {
   return out
 }
 
-// ── 4–6. the batched update pass ────────────────────────────────────────────
+// ── 3b. county discovery (manual sweep) ─────────────────────────────────────
+
+/**
+ * ONE Perplexity call covering 12 Wisconsin counties, asking only for contested
+ * partisan county-office primaries. Creates office_type='county' contests with
+ * the county field set and offices like "Portage County Sheriff — Democratic
+ * Primary". Existing offices are never duplicated and never overwritten.
+ */
+async function discoverCountyContests(sb, election, { chunkIndex, dryRun, deadline, touched }) {
+  const notes = []
+  const counties = countyChunk(chunkIndex)
+  const out = { counties, created: [], skipped: [], notes }
+
+  const budget = deadline - Date.now()
+  if (budget < 5000) {
+    notes.push('No time budget left for county discovery — nothing attempted.')
+    return out
+  }
+
+  const { text, error } = await queryPerplexity({
+    system: EXTRACTOR_SYSTEM,
+    user: countyDiscoveryPrompt(election, counties),
+    schema: COUNTY_SCHEMA,
+    maxTokens: 2000,
+    timeoutMs: Math.min(budget - 2000, 20000),
+  })
+  if (error || !text) {
+    notes.push(`County discovery chunk ${chunkIndex} (${counties[0]}–${counties[counties.length - 1]}) returned nothing (${error || 'empty reply'}) — no contests created.`)
+    return out
+  }
+
+  const shaped = shapeCountyContests(parseJsonLoose(text), counties)
+  notes.push(...shaped.notes)
+  if (!shaped.contests.length) {
+    notes.push(`County discovery chunk ${chunkIndex} (${counties[0]}–${counties[counties.length - 1]}): no contested partisan county primaries found — that is the normal answer.`)
+    return out
+  }
+
+  // Whatever is already on file for this election wins — discovery only adds.
+  const { data: existing, error: exErr } = await sb
+    .from('election_contests')
+    .select('id, office')
+    .eq('election_id', election.id)
+  if (exErr) {
+    notes.push(`County discovery could not read the existing contest list (${exErr.message}) — nothing created.`)
+    return out
+  }
+  const onFile = new Set((existing || []).map(c => normName(c.office)))
+
+  for (const c of shaped.contests) {
+    if (onFile.has(normName(c.office))) {
+      out.skipped.push(c.office)
+      notes.push(`${c.office}: already on file — left alone.`)
+      continue
+    }
+    onFile.add(normName(c.office))
+
+    if (dryRun) {
+      notes.push(`[dry run] would create "${c.office}" (${c.county} County) with ${c.candidates.length} candidate(s), source: ${c.source}.`)
+      out.created.push({ office: c.office, county: c.county, candidates: c.candidates, source: c.source })
+      touched.contests.add(`office:${normName(c.office)}`)
+      for (const n of c.candidates) touched.results.add(`office:${normName(c.office)}::${normName(n)}`)
+      continue
+    }
+
+    const { data: rows, error: cErr } = await sb.from('election_contests').insert({
+      election_id: election.id,
+      office: c.office,
+      office_type: 'county',
+      county: c.county,
+      seats: 1,
+      status: 'waiting',
+      status_source: 'auto',
+      precincts_total: 0,
+      precincts_rptg: 0,
+    }).select('id')
+    if (cErr || !rows || !rows.length) {
+      notes.push(`Could not create contest "${c.office}": ${cErr ? cErr.message : 'no row returned'}`)
+      continue
+    }
+    const contestId = rows[0].id
+    touched.contests.add(contestId)
+
+    const resultRows = c.candidates.map(n => ({
+      contest_id: contestId, candidate_name: n, party: c.party, votes: 0, vote_pct: 0,
+    }))
+    const { error: rErr } = await sb.from('election_results')
+      .upsert(resultRows, { onConflict: 'contest_id,candidate_name' })
+    if (rErr) {
+      notes.push(`Contest "${c.office}" created, but its candidate rows failed: ${rErr.message}`)
+    } else {
+      for (const r of resultRows) touched.results.add(`${contestId}::${normName(r.candidate_name)}`)
+    }
+    out.created.push({ id: contestId, office: c.office, county: c.county, candidates: c.candidates, source: c.source })
+  }
+
+  notes.push(`County discovery chunk ${chunkIndex}/${COUNTY_CHUNKS - 1} (${counties[0]}–${counties[counties.length - 1]}): created ${out.created.length}, already on file ${out.skipped.length}.`)
+  return out
+}
+
+// ── 4–6. the tiered update pass ─────────────────────────────────────────────
+
+/**
+ * Tier 1 (statewide) every run, then up to TIER2_MAX_CALLS rotating chunks of
+ * everything else — stopping early whenever less than CHUNK_MIN_BUDGET_MS of
+ * the run budget is left, so the audit row always gets written.
+ */
+async function runTieredUpdates(sb, election, contests, { dryRun, bootstrappedIds, touched, ct, cadence, deadline }) {
+  const notes = []
+  const out = { contests: 0, results: 0, calls: 0, notes }
+
+  const call = async (list, label) => {
+    const remaining = deadline - Date.now()
+    if (remaining < CHUNK_MIN_BUDGET_MS) {
+      notes.push(`${label}: only ${Math.max(0, remaining)}ms of the run budget left — deferred to the next cycle.`)
+      return false
+    }
+    const upd = await updatePass(sb, election, list, {
+      dryRun, bootstrappedIds, touched,
+      timeoutMs: Math.min(remaining - 2000, 20000),
+    })
+    notes.push(...upd.notes)
+    out.contests += upd.contests
+    out.results  += upd.results
+    out.calls    += 1
+    return true
+  }
+
+  // ── Tier 1 — statewide, every single run ──────────────────────────────────
+  const tierOne = contests.filter(isTierOne)
+  if (tierOne.length) {
+    await call(tierOne, `Tier 1 (${tierOne.length} statewide contest(s))`)
+  }
+
+  // ── Tier 2 — rotating chunks of everything else ───────────────────────────
+  const queue = tierTwoQueue(contests, ct)
+  const parked = contests.filter(c => !isTierOne(c) && DONE_STATUSES.has(c.status)).length
+  if (!queue.length) {
+    if (parked) notes.push(`Tier 2: all ${parked} down-ballot contest(s) are called or certified — nothing left to rotate.`)
+    return out
+  }
+
+  const rot = selectRotationChunks(queue, ct, { cadence, size: TIER2_CHUNK_SIZE, maxCalls: TIER2_MAX_CALLS })
+  notes.push(
+    `Tier 2 rotation: chunk(s) ${rot.indices.join(', ')} of ${rot.nChunks} ` +
+    `(${queue.length} contest(s) in rotation${parked ? `, ${parked} parked as decided` : ''}, ` +
+    `full sweep every ${Math.ceil(rot.nChunks / Math.max(1, rot.indices.length))} run(s)).`
+  )
+
+  for (let i = 0; i < rot.selected.length; i++) {
+    const list = rot.selected[i]
+    const ok = await call(list, `Tier 2 chunk ${rot.indices[i]}/${rot.nChunks - 1} (${list.length} contest(s))`)
+    if (!ok) break
+  }
+  return out
+}
 
 async function updatePass(sb, election, contests, { dryRun, bootstrappedIds, touched, timeoutMs }) {
   const notes = []
@@ -1016,3 +1552,17 @@ module.exports.validateContestUpdate = validateContestUpdate
 module.exports.matchCandidate        = matchCandidate
 module.exports.parseJsonLoose        = parseJsonLoose
 module.exports.MAX_TOTAL_VOTES       = MAX_TOTAL_VOTES
+
+// full-ballot tiering (pure, unit-tested)
+module.exports.chunkList             = chunkList
+module.exports.tierTwoQueue          = tierTwoQueue
+module.exports.selectRotationChunks  = selectRotationChunks
+module.exports.rotationTick          = rotationTick
+module.exports.contestLine           = contestLine
+module.exports.countyChunk           = countyChunk
+module.exports.countyDiscoveryPrompt = countyDiscoveryPrompt
+module.exports.shapeCountyContests   = shapeCountyContests
+module.exports.WI_COUNTIES           = WI_COUNTIES
+module.exports.COUNTY_CHUNKS         = COUNTY_CHUNKS
+module.exports.TIER2_CHUNK_SIZE      = TIER2_CHUNK_SIZE
+module.exports.TIER2_MAX_CALLS       = TIER2_MAX_CALLS
