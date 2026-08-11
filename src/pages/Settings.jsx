@@ -433,7 +433,11 @@ export default function Settings() {
   // Centred: name + email stacked, the three stat tiles in a row beneath them.
   // There is deliberately NO avatar tile here — the only photo control lives in
   // the "Your account" card, where it can be changed.
-  const displayName = savedName || user?.email?.split('@')[0] || 'Your account'
+  // Fallback to the email prefix, capitalized ("tony" → "Tony"). A saved
+  // display name is shown exactly as the user typed it.
+  const emailName = user?.email?.split('@')[0] || ''
+  const displayName = savedName ||
+    (emailName ? emailName.charAt(0).toUpperCase() + emailName.slice(1) : 'Your account')
   const heroStats = useMemo(() => ([
     {
       label: 'PROFILES LEFT',
@@ -521,10 +525,6 @@ export default function Settings() {
         marginBottom: 20, boxShadow: '0 12px 30px rgba(13,21,38,.18)',
         background: 'linear-gradient(135deg, #0D1526 0%, #16203A 58%, #263255 100%)',
       }}>
-        <div aria-hidden="true" style={{
-          position: 'absolute', top: -120, right: '18%', width: 320, height: 320, borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(165,28,36,.38) 0%, rgba(165,28,36,0) 70%)',
-        }} />
         <div style={{
           position: 'relative', display: 'flex', flexDirection: 'column',
           alignItems: 'center', gap: 14,
