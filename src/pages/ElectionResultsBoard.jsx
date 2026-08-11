@@ -48,6 +48,86 @@ const ELECTION_TYPE_LABEL = {
   special:        { label: 'Special', cls: 'bg-purple-100 text-purple-800' },
 }
 
+// ── Contest status (determination engine — Phase 1) ───────────────────────────
+// election_contests.status is written by netlify/functions/_determination.js
+// (or by an admin override). Badge copy and colour live here; the redesign
+// token language is 9.5px/700 pills on Geist, so these are inline-styled
+// rather than Tailwind text-xs.
+const BADGE_FONT = "'Geist','Inter',system-ui,-apple-system,sans-serif"
+
+const STATUS_UI = {
+  waiting:          { label: 'AWAITING RESULTS',          fg: '#57534E', bg: '#F1F1EF', ring: 'border-gray-200'   },
+  reporting:        { label: 'REPORTING',                 fg: '#1D4ED8', bg: '#E8EFFC', ring: 'border-blue-200'   },
+  projected:        { label: 'VICTORY LIKELY — NOT FINAL', fg: '#B45309', bg: '#FDF3E3', ring: 'border-amber-300' },
+  called:           { label: 'WINNER CALLED',             fg: '#15803D', bg: '#E6F5EC', ring: 'border-green-200'  },
+  too_close:        { label: 'TOO CLOSE TO CALL',         fg: '#B91C1C', bg: '#FDECEC', ring: 'border-red-200'    },
+  recount_possible: { label: 'RECOUNT POSSIBLE',          fg: '#C2410C', bg: '#FEF0E6', ring: 'border-orange-300' },
+  certified:        { label: 'CERTIFIED',                 fg: '#14532D', bg: '#DCEEE3', ring: 'border-green-700/40' },
+}
+
+// Contests written before the status migration (or held in stale local state)
+// have no status — fall back to what the rows themselves say rather than
+// showing a misleading "AWAITING RESULTS".
+function contestStatus(contest, results) {
+  if (contest?.status && STATUS_UI[contest.status]) return contest.status
+  const sorted = [...results].sort((a, b) => (b.votes || 0) - (a.votes || 0))
+  const totalVotes = sorted.reduce((s, r) => s + (r.votes || 0), 0)
+  if (sorted.some(r => r.declared)) return 'called'
+  if (totalVotes <= 0) return 'waiting'
+  if (sorted.length >= 2 && Math.abs((sorted[0]?.vote_pct || 0) - (sorted[1]?.vote_pct || 0)) < 0.5) return 'too_close'
+  return 'reporting'
+}
+
+function StatusBadge({ status, contest }) {
+  const ui  = STATUS_UI[status] || STATUS_UI.waiting
+  const pct = contest?.precincts_total > 0
+    ? Math.min(100, Math.round((contest.precincts_rptg / contest.precincts_total) * 100))
+    : null
+  const label = status === 'reporting' && pct != null ? `REPORTING ${pct}%` : ui.label
+  return (
+    <span
+      title={contest?.status_source === 'admin' ? 'Set by a Badger Board editor' : 'Determined automatically from reported returns'}
+      style={{
+        fontSize: 9.5, fontWeight: 700, letterSpacing: '.2px', lineHeight: 1.6,
+        color: ui.fg, background: ui.bg, fontFamily: BADGE_FONT,
+        borderRadius: 99, padding: '2px 8px', whiteSpace: 'nowrap',
+        display: 'inline-block', flex: 'none',
+      }}
+    >{label}</span>
+  )
+}
+
+function VerifiedStamp({ at }) {
+  if (!at) return null
+  let when = null
+  try { when = format(parseISO(at), 'MMM d, h:mm a') } catch { when = null }
+  return (
+    <span
+      title={when ? `Checked line-by-line against the county's final unofficial numbers on ${when}` : 'Checked against official county numbers'}
+      style={{
+        fontSize: 9.5, fontWeight: 700, letterSpacing: '.2px', lineHeight: 1.6,
+        color: '#14532D', background: 'transparent', fontFamily: BADGE_FONT,
+        border: '1px solid #14532D', borderRadius: 99, padding: '1px 7px',
+        whiteSpace: 'nowrap', display: 'inline-block', flex: 'none',
+      }}
+    >✓ VERIFIED</span>
+  )
+}
+
+// "Last updated" — engine/admin stamp first, newest row timestamp as fallback.
+function lastUpdatedAt(contest, results) {
+  const stamps = [contest?.status_updated_at, ...results.map(r => r.updated_at)]
+    .filter(Boolean)
+    .map(s => { const d = new Date(s); return Number.isNaN(d.getTime()) ? null : d })
+    .filter(Boolean)
+  if (!stamps.length) return null
+  return contest?.status_updated_at && !Number.isNaN(new Date(contest.status_updated_at).getTime())
+    ? new Date(contest.status_updated_at)
+    : new Date(Math.max(...stamps.map(d => d.getTime())))
+}
+
+const fmtStamp = (d) => (isToday(d) ? format(d, 'h:mm a') : format(d, 'MMM d, h:mm a'))
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 function PrecinctBar({ reporting, total }) {
   const pct = total > 0 ? Math.min(100, Math.round((reporting / total) * 100)) : 0
@@ -61,19 +141,29 @@ function PrecinctBar({ reporting, total }) {
   )
 }
 
-function CandidateRow({ cand, totalVotes, isWinner, declared, isNonpartisan }) {
+function CandidateRow({ cand, totalVotes, isWinner, declared, isNonpartisan, leadsProjection }) {
   const style    = partyStyle(cand.party)
   // Bars scale to 100% of total votes cast — not relative to the leader
   const widthPct = totalVotes > 0 ? Math.min(100, (cand.votes / totalVotes) * 100) : 0
   // Show party badge only when the race is partisan
   const showPartyBadge = cand.party && !isNonpartisan
+  const won = isWinner && declared
   return (
     <div className={`relative rounded-lg px-4 py-3 transition-all duration-700 ${
-      isWinner && declared ? 'bg-green-50 border border-green-200 shadow-sm' : 'bg-white border border-gray-100'
+      won ? 'bg-green-50 border border-green-200 shadow-sm'
+          : leadsProjection ? 'bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400'
+          : 'bg-white border border-gray-100'
     }`}>
+      {/* Projection is NOT a call — say so, right next to the leader. */}
+      {leadsProjection && (
+        <p className="text-[10px] font-bold uppercase tracking-wide text-amber-700 mb-1.5" style={{ fontFamily: BADGE_FONT }}>
+          Projected — not final
+        </p>
+      )}
       <div className="flex items-center gap-3">
         <div className="w-5 flex-shrink-0">
-          {isWinner && declared && <Trophy className="w-4 h-4 text-green-500" />}
+          {won && <Trophy className="w-4 h-4 text-green-500" />}
+          {!won && leadsProjection && <TrendingUp className="w-4 h-4 text-amber-500" />}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1.5 flex-wrap">
@@ -117,21 +207,31 @@ function RaceCard({ contest, results }) {
   const [expanded, setExpanded] = useState(true)
   // Total votes across all candidates — bars scale to this so proportions are accurate
   const totalVotes = results.reduce((sum, r) => sum + (r.votes || 0), 0)
-  const isDeclared = results.some(r => r.winner && r.declared)
-  const margin     = results.length >= 2
-    ? Math.abs((results[0]?.vote_pct || 0) - (results[1]?.vote_pct || 0))
-    : 100
-  const isContested = !isDeclared && margin < 10
   const sorted = [...results].sort((a, b) => {
     if (a.winner && !b.winner) return -1
     if (!a.winner && b.winner) return 1
     return (b.votes || 0) - (a.votes || 0)
   })
 
+  // ── Determination-engine status ───────────────────────────────────────────
+  const status  = contestStatus(contest, results)
+  const ui      = STATUS_UI[status] || STATUS_UI.waiting
+  const detail  = contest.status_detail && typeof contest.status_detail === 'object' ? contest.status_detail : null
+  const reason  = typeof detail?.reason === 'string' ? detail.reason : null
+  const feeFree = status === 'recount_possible' && detail?.fee_free === true
+  const updated = lastUpdatedAt(contest, results)
+  const seats   = contest.seats || 1
+  // Engine-called races flag `winner` without `declared` (declaring stays an
+  // admin action) — trust either signal for the on-card winner treatment.
+  const showWinner = (r) => !!r.winner && (r.declared || status === 'called' || status === 'certified')
+  // Strictly by votes — a projection follows the count, never a winner flag.
+  const projectedLeaders = status === 'projected'
+    ? new Set([...results].sort((a, b) => (b.votes || 0) - (a.votes || 0))
+        .filter(r => (r.votes || 0) > 0).slice(0, seats).map(r => r.id))
+    : new Set()
+
   return (
-    <div className={`rounded-xl border-2 overflow-hidden transition-all duration-300 ${
-      isDeclared ? 'border-green-200' : isContested ? 'border-amber-200' : 'border-gray-200'
-    }`}>
+    <div className={`rounded-xl border-2 overflow-hidden transition-all duration-300 ${ui.ring}`}>
       <button
         type="button"
         onClick={() => setExpanded(e => !e)}
@@ -141,16 +241,25 @@ function RaceCard({ contest, results }) {
           <div className="flex items-center gap-2 flex-wrap">
             <h3 className="font-bold text-gray-900 text-sm">{contest.office}</h3>
             {contest.district && <span className="text-xs text-gray-500">{contest.district}</span>}
-            {isDeclared && (
-              <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-semibold">Called</span>
-            )}
-            {isContested && !isDeclared && (
-              <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-semibold">Too close to call</span>
-            )}
+            <StatusBadge status={status} contest={contest} />
+            <VerifiedStamp at={contest.verified_at} />
           </div>
+          {/* What the determination engine (or the editor who overrode it) thinks */}
+          {reason && (
+            <p className="text-xs text-gray-400 mt-1 leading-snug">
+              {reason}{feeFree ? ' (fee-free band)' : ''}
+            </p>
+          )}
           {contest.county && (
             <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
               <MapPin className="w-3 h-3" />{contest.county} County
+            </p>
+          )}
+          {updated && (
+            <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              Last updated {fmtStamp(updated)}
+              {contest.status_source === 'admin' && <span className="text-gray-300">· editor override</span>}
             </p>
           )}
           {contest.precincts_total > 0 && (
@@ -182,8 +291,9 @@ function RaceCard({ contest, results }) {
               key={cand.id}
               cand={cand}
               totalVotes={totalVotes}
-              isWinner={cand.winner}
-              declared={cand.declared}
+              isWinner={showWinner(cand)}
+              declared={showWinner(cand)}
+              leadsProjection={projectedLeaders.has(cand.id)}
               isNonpartisan={contest.is_nonpartisan}
             />
           ))}
@@ -226,6 +336,9 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
     if (!id) return
     if (!quiet) setLoading(true)
     try {
+      // select('*') deliberately — it already carries the Phase 1 status
+      // columns (status, status_source, status_updated_at, status_detail,
+      // verified_at) added by migration 20260810000002.
       const { data: contestRows } = await supabase
         .from('election_contests')
         .select('*')
@@ -285,7 +398,14 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
         })
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'election_contests' }, (payload) => {
-        setContests(prev => prev.map(c => c.id === payload.new.id ? payload.new : c))
+        if (!payload?.new?.id) return
+        // Merge rather than replace: the payload carries the status columns
+        // (status, status_source, status_updated_at, status_detail,
+        // verified_at) so a determination-engine write lands on the board
+        // instantly, and anything the replication payload happens to omit
+        // keeps its loaded value instead of going undefined.
+        setContests(prev => prev.map(c => c.id === payload.new.id ? { ...c, ...payload.new } : c))
+        setLastSync(new Date())
       })
       .subscribe()
 
@@ -303,10 +423,11 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
   // ── CSV export ──────────────────────────────────────────────────────────────
   const exportCSV = () => {
     if (!election) return
-    const rows = [['Race', 'District', 'Candidate', 'Party', 'Votes', 'Pct', 'Winner', 'Precincts Rptg', 'Precincts Total']]
+    const rows = [['Race', 'District', 'Candidate', 'Party', 'Votes', 'Pct', 'Winner', 'Precincts Rptg', 'Precincts Total', 'Status', 'Status Source', 'Status Updated']]
     for (const c of contests) {
+      const st = contestStatus(c, resultsMap[c.id] || [])
       for (const r of (resultsMap[c.id] || [])) {
-        rows.push([c.office, c.district || '', r.candidate_name, r.party || '', r.votes, r.vote_pct, r.winner ? 'Yes' : 'No', c.precincts_rptg, c.precincts_total])
+        rows.push([c.office, c.district || '', r.candidate_name, r.party || '', r.votes, r.vote_pct, r.winner ? 'Yes' : 'No', c.precincts_rptg, c.precincts_total, st, c.status_source || 'auto', c.status_updated_at || ''])
       }
     }
     const csv  = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
@@ -505,7 +626,7 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
             ) : (
               <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
                 <p className="text-2xl font-bold text-green-600">
-                  {contests.filter(c => (resultsMap[c.id] || []).some(r => r.declared)).length}
+                  {contests.filter(c => ['called', 'certified'].includes(contestStatus(c, resultsMap[c.id] || []))).length}
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">Called</p>
               </div>
@@ -527,20 +648,29 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
             </div>
           </div>
 
-          {/* Too close to call banner */}
+          {/* Too close / recount banner — driven by the determination engine */}
           {(() => {
-            const close = sorted.filter(c => {
-              const rs = (resultsMap[c.id] || []).sort((a, b) => (b.votes || 0) - (a.votes || 0))
-              if (rs.length < 2 || rs[0]?.votes === 0) return false
-              return !rs.some(r => r.declared) && Math.abs((rs[0]?.vote_pct || 0) - (rs[1]?.vote_pct || 0)) < 5
-            })
-            if (!close.length) return null
+            const close   = sorted.filter(c => contestStatus(c, resultsMap[c.id] || []) === 'too_close')
+            const recount = sorted.filter(c => contestStatus(c, resultsMap[c.id] || []) === 'recount_possible')
+            if (!close.length && !recount.length) return null
             return (
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2">
-                <TrendingUp className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                <span className="text-sm text-amber-800 font-medium">
-                  {close.length} race{close.length !== 1 ? 's' : ''} within 5 points — too close to call
-                </span>
+              <div className="space-y-2">
+                {close.length > 0 && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4 text-red-600 flex-shrink-0" />
+                    <span className="text-sm text-red-800 font-medium">
+                      {close.length} race{close.length !== 1 ? 's' : ''} too close to call — margin under 0.5% with nearly all precincts in
+                    </span>
+                  </div>
+                )}
+                {recount.length > 0 && (
+                  <div className="p-3 bg-orange-50 border border-orange-200 rounded-xl flex items-center gap-2">
+                    <Info className="w-4 h-4 text-orange-600 flex-shrink-0" />
+                    <span className="text-sm text-orange-800 font-medium">
+                      {recount.length} race{recount.length !== 1 ? 's' : ''} finished inside Wisconsin's 1% recount-petition window
+                    </span>
+                  </div>
+                )}
               </div>
             )
           })()}

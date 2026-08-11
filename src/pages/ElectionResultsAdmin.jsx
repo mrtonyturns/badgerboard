@@ -36,6 +36,30 @@ const PARTY_COLORS = {
   Green:       'bg-green-100 text-green-800',
 }
 
+// ── Determination-engine status (Phase 1) ─────────────────────────────────────
+// election_contests.status is normally written by netlify/functions/_determination.js
+// after every result/precinct change. An admin override pins status_source to
+// 'admin' and the engine backs off until "Back to auto" is pressed.
+const STATUS_OPTIONS = [
+  { value: 'waiting',          label: 'Awaiting results' },
+  { value: 'reporting',        label: 'Reporting' },
+  { value: 'projected',        label: 'Victory likely (projected)' },
+  { value: 'called',           label: 'Winner called' },
+  { value: 'too_close',        label: 'Too close to call' },
+  { value: 'recount_possible', label: 'Recount possible' },
+  { value: 'certified',        label: 'Certified' },
+]
+const STATUS_LABEL = Object.fromEntries(STATUS_OPTIONS.map(o => [o.value, o.label]))
+const STATUS_CHIP = {
+  waiting:          'bg-gray-100 text-gray-600',
+  reporting:        'bg-blue-100 text-blue-700',
+  projected:        'bg-amber-100 text-amber-800',
+  called:           'bg-green-100 text-green-700',
+  too_close:        'bg-red-100 text-red-700',
+  recount_possible: 'bg-orange-100 text-orange-700',
+  certified:        'bg-emerald-900/10 text-emerald-900',
+}
+
 const defaultContest = {
   office: '', office_type: 'judicial', district: '', county: '',
   precincts_total: '', precincts_rptg: '', is_nonpartisan: false, seats: 1,
@@ -263,6 +287,31 @@ export default function ElectionResultsAdmin({ showToast }) {
     loadContests(selectedElection.id)
   }
 
+  // ── Status override / determination engine ────────────────────────────────
+  const [statusSaving, setStatusSaving] = useState(null) // contestId being written
+
+  const overrideStatus = async (contestId, status) => {
+    if (!status) return
+    setStatusSaving(contestId)
+    const { error } = await adminElections('set_status', { contest_id: contestId, status, source: 'admin' })
+    setStatusSaving(null)
+    if (error) { showToast('Status override failed: ' + error.message, 'error'); return }
+    showToast(`Status set to "${STATUS_LABEL[status] || status}" — the engine will leave this race alone`)
+    loadContests(selectedElection.id)
+  }
+
+  const backToAuto = async (contestId) => {
+    setStatusSaving(contestId)
+    const { data, error } = await adminElections('reset_status_auto', { contest_id: contestId })
+    setStatusSaving(null)
+    if (error) { showToast('Reset failed: ' + error.message, 'error'); return }
+    const engineSaid = data?.determination?.status
+    showToast(engineSaid
+      ? `Back on auto — engine says "${STATUS_LABEL[engineSaid] || engineSaid}"`
+      : 'Back on auto')
+    loadContests(selectedElection.id)
+  }
+
   // ── Precinct quick-update ─────────────────────────────────────────────────
   const [precEdit, setPrecEdit] = useState({}) // contestId -> { rptg, total }
 
@@ -441,6 +490,69 @@ export default function ElectionResultsAdmin({ showToast }) {
                           ({Math.round((contest.precincts_rptg / contest.precincts_total) * 100)}% in)
                         </span>
                       )}
+                    </div>
+
+                    {/* ── Determination engine: what it decided, and the override ── */}
+                    <div className="mt-2 pt-2 border-t border-dashed border-gray-100">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-gray-500">Board status:</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${STATUS_CHIP[contest.status] || STATUS_CHIP.waiting}`}>
+                          {STATUS_LABEL[contest.status] || contest.status || 'unknown'}
+                        </span>
+                        <span
+                          className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                            contest.status_source === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-500'
+                          }`}
+                          title={contest.status_source === 'admin'
+                            ? 'Manually overridden — the determination engine will not touch this contest'
+                            : 'Set automatically by the determination engine after each results change'}
+                        >
+                          {contest.status_source === 'admin' ? 'manual override' : 'auto'}
+                        </span>
+                        {contest.verified_at && (
+                          <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-emerald-100 text-emerald-800">
+                            verified {format(parseISO(contest.verified_at), 'MMM d, h:mm a')}
+                          </span>
+                        )}
+                        {contest.status_updated_at && (
+                          <span className="text-xs text-gray-400">
+                            updated {format(parseISO(contest.status_updated_at), 'MMM d, h:mm a')}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Why — straight from the engine (or from whoever overrode it) */}
+                      {contest.status_detail?.reason && (
+                        <p className="text-xs text-gray-400 mt-1 leading-snug">
+                          {contest.status_detail.reason}
+                          {contest.status_detail.fee_free ? ' (fee-free band)' : ''}
+                        </p>
+                      )}
+
+                      <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                        <select
+                          value=""
+                          disabled={statusSaving === contest.id}
+                          onChange={e => overrideStatus(contest.id, e.target.value)}
+                          className="text-xs border border-gray-200 rounded px-1.5 py-1 bg-white text-gray-600"
+                          title="Override the engine and pin this status"
+                        >
+                          <option value="">Override status…</option>
+                          {STATUS_OPTIONS.map(o => (
+                            <option key={o.value} value={o.value}>{o.label}</option>
+                          ))}
+                        </select>
+                        {contest.status_source === 'admin' && (
+                          <button
+                            onClick={() => backToAuto(contest.id)}
+                            disabled={statusSaving === contest.id}
+                            className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                            title="Hand this contest back to the determination engine and recompute now"
+                          >
+                            {statusSaving === contest.id ? 'Working…' : 'Back to auto'}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
 

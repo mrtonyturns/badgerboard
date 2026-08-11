@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Building2, Search, Plus, ChevronDown, ChevronUp, ChevronsUpDown,
-         MapPin, Briefcase, Scale, Map, LayoutList, X, Users, ChevronRight } from 'lucide-react'
+         MapPin, Briefcase, Scale, Map, X, Users, ChevronRight } from 'lucide-react'
 import { getOffices, createOffice, getCandidates, getOfficeHistory } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { ADMIN_EMAILS } from '../lib/tiers'
@@ -455,8 +455,8 @@ export default function Offices() {
   // payloads (readMapCtx already try/catches the parse).
   const [restoredMapCtx] = useState(() => readMapCtx(OFFICES_MAP_CTX_KEY))
 
-  const [viewMode, setViewMode]       = useState(() =>
-    (restoredMapCtx?.viewMode === 'table' || restoredMapCtx?.viewMode === 'map') ? restoredMapCtx.viewMode : 'map')
+  // The table/list view was removed (Aug 2026) — the map is the only view.
+  const viewMode = 'map'
   const [mapEverShown, setMapEverShown] = useState(true)
   const [activeLayer, setActiveLayer]   = useState(() =>
     typeof restoredMapCtx?.activeLayer === 'string' ? restoredMapCtx.activeLayer : '')
@@ -524,11 +524,6 @@ export default function Offices() {
   // Municipal-click demographics lookup — resolves to null (no-op) for
   // non-municipal clicks, or once the JSON is loaded and no entry exists.
   const { loading: placeLoading, place: cityPlace } = usePlaceLookup(selectedDistrict)
-
-  const switchView = (mode) => {
-    if (mode === 'map') setMapEverShown(true)
-    setViewMode(mode)
-  }
 
   const toggleLayer = (key) => {
     setSelectedDistrict(null)
@@ -611,14 +606,6 @@ export default function Offices() {
       {/* ── Header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-4">
         <div className="sm:ml-auto flex items-center gap-2">
-          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
-            <button onClick={() => switchView('table')}
-              className={`p-1.5 rounded transition-colors ${viewMode==='table' ? 'bg-white text-brand-red shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-              title="Table view"><LayoutList className="w-4 h-4" /></button>
-            <button onClick={() => switchView('map')}
-              className={`p-1.5 rounded transition-colors ${viewMode==='map' ? 'bg-white text-brand-red shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-              title="Map view"><Map className="w-4 h-4" /></button>
-          </div>
           {isAdmin && (
             <button onClick={() => setShowModal(true)} className="btn-primary flex items-center gap-2 whitespace-nowrap">
               <Plus className="w-4 h-4" /> Add Office
@@ -721,107 +708,6 @@ export default function Offices() {
         </div>
       )}
 
-      {/* ── Table view ── */}
-      {viewMode === 'table' && (fetchError ? (
-        <div className="flex flex-col items-center justify-center py-20 gap-4">
-          <Building2 className="w-10 h-10 text-gray-300" />
-          <p className="text-sm font-medium text-red-600">{fetchError}</p>
-          <button type="button" onClick={fetchOffices} className="btn-secondary text-sm px-5">
-            Retry
-          </button>
-        </div>
-      ) : loading ? (
-        <div className="flex items-center justify-center py-20">
-          <div className="w-8 h-8 border-4 border-brand-red border-t-transparent rounded-full animate-spin" />
-        </div>
-      ) : (
-        <div className="space-y-6">
-          {levelOrder.map(level => {
-            const group = grouped[level]
-            if (!group || group.length === 0) return null
-            return (
-              <div key={level}>
-                <div className="flex items-center gap-3 mb-3">
-                  <span className={`px-3 py-1 rounded-full text-sm font-semibold ${levelColors[level]}`}>{LEVEL_LABELS[level]}</span>
-                  <span className="text-sm text-gray-400">{group.length} offices</span>
-                  <div className="flex-1 h-px bg-gray-200" />
-                </div>
-                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr>
-                        <th className={thClass} onClick={() => handleSort('name')}><span className="flex items-center">Office <SortIcon field="name" /></span></th>
-                        <th className={`${thClass} hidden md:table-cell`} onClick={() => handleSort('district')}><span className="flex items-center">District <SortIcon field="district" /></span></th>
-                        <th className={`${thClass} hidden lg:table-cell`} onClick={() => handleSort('location')}><span className="flex items-center">County / City <SortIcon field="location" /></span></th>
-                        <th className={thClass} onClick={() => handleSort('office_type')}><span className="flex items-center">Type <SortIcon field="office_type" /></span></th>
-                        <th className={`${thClass} hidden sm:table-cell`} onClick={() => handleSort('term_years')}><span className="flex items-center">Term <SortIcon field="term_years" /></span></th>
-                        <th className={`${thClass} hidden lg:table-cell`} onClick={() => handleSort('current_officeholder')}><span className="flex items-center">Current Officeholder <SortIcon field="current_officeholder" /></span></th>
-                        <th className={`${thClass} hidden xl:table-cell`} onClick={() => handleSort('notes')}><span className="flex items-center">Notes <SortIcon field="notes" /></span></th>
-                        <th className="table-header w-20"><span className="sr-only">History</span></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(expandedGroups[level] ? sortOffices(group) : sortOffices(group).slice(0, 150)).map((office, i) => {
-                        const TypeIcon = typeIcons[office.office_type] || Building2
-                        return (
-                          <tr key={office.id} className={`table-row ${i%2===0?'bg-white':'bg-gray-50/50'}`}>
-                            <td className="table-cell">
-                              <div className="flex items-center gap-2">
-                                <TypeIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                                <span className="font-medium text-gray-900">{office.name}</span>
-                              </div>
-                            </td>
-                            <td className="table-cell hidden md:table-cell text-gray-500">
-                              {office.district_number ? <span>District {office.district_number}</span>
-                                : office.district_name ? <span>{office.district_name}</span>
-                                : <span className="text-gray-300">—</span>}
-                            </td>
-                            <td className="table-cell hidden lg:table-cell text-gray-500">
-                              {office.county||office.city ? [office.county,office.city].filter(Boolean).join(' / ')
-                                : <span className="text-gray-300">Statewide</span>}
-                            </td>
-                            <td className="table-cell">
-                              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 capitalize">
-                                {TYPE_LABELS[office.office_type]||office.office_type}
-                              </span>
-                            </td>
-                            <td className="table-cell hidden sm:table-cell text-gray-500">{office.term_years}yr</td>
-                            <td className="table-cell hidden lg:table-cell text-gray-600 text-sm">
-                              {office.current_officeholder || <span className="text-gray-300">—</span>}
-                            </td>
-                            <td className="table-cell hidden xl:table-cell text-gray-400 text-xs max-w-xs truncate">{office.notes||'—'}</td>
-                            <td className="table-cell text-right">
-                              <button
-                                type="button"
-                                onClick={() => setHistoryOffice(office)}
-                                title="Election history & previous office holders"
-                                className="text-xs font-medium text-brand-red hover:underline whitespace-nowrap"
-                              >
-                                History
-                              </button>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                  {!expandedGroups[level] && group.length > 150 && (
-                    <div className="p-3 text-center border-t border-gray-100 bg-gray-50/50">
-                      <button
-                        type="button"
-                        onClick={() => setExpandedGroups(g => ({ ...g, [level]: true }))}
-                        className="text-sm font-medium text-brand-red hover:underline"
-                      >
-                        Show all {group.length.toLocaleString()} {LEVEL_LABELS[level].toLowerCase()} offices
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      ))}
 
       {/* ── District intelligence dashboard (state & federal districts) ── */}
       {selectedDistrict && districtKeyFor(selectedDistrict) && (

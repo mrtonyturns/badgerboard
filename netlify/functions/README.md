@@ -24,7 +24,11 @@ Node 22). Files prefixed with `_` are **shared modules, not endpoints** — a re
 `research-incumbent`, `research-swot`, `autofill-candidate`, `discover-candidates`,
 `classify-csv-prospects`, `generate-prospecting`, `fetch-candidate-x-feed`
 
-**Elections** — `election-night-update` (manual admin entry; results flow realtime to the board)
+**Elections** — `admin-elections` (all election/contest/result writes, admin-gated service-role;
+runs the determination engine in `_determination.js` after every vote or precinct change and
+logs each mutation to `election_poller_log`). Results flow realtime to the board.
+`election-night-update` was deleted in Phase 1 of the live-results build — it was never
+scheduled, never called, wrote to a JSON blob nothing read, and carried two crash bugs.
 
 **Volunteers / field** — `volunteer-auth`, `invite-volunteer`
 

@@ -189,10 +189,11 @@ Tests marked `[INT]` involve an external integration (Stripe, Claude, Perplexity
 **FE-5.3.2** After update, reporting percentage and precinct count are visible.  
 **FE-5.3.3** Results panel shows candidates with votes, party, and winner flag.
 
-**BE-5.3.1** `[INT]` `election-night-update.js` calls the external election data vendor API and parses the response correctly.  
-**BE-5.3.2** Parsed results are written back to `elections.notes` as valid JSON: `{ results, summary, reporting_pct, auto_updated }`.  
-**BE-5.3.3** If the external API is unavailable, the function returns a graceful error (not a 500 crash) and the frontend shows an appropriate message.  
-**BE-5.3.4** `[CRITICAL]` The function does not accept arbitrary note content from the request body — results come only from the external source.
+**BE-5.3.1** `[UNIT]` `_determination.js` `determineStatus()` returns the right status at each threshold: waiting, reporting, projected (above/below the outstanding-vote ceiling), too close (<0.5% at ≥95%), recount possible (≤1%, fee-free ≤0.25%), called, unopposed, multi-seat. Covered in `tests/remediation.test.mjs`.  
+**BE-5.3.2** `[INT]` After `save_result` / `delete_result` / `update_precincts`, `admin-elections.js` recomputes `election_contests.status` — but only when `status_source = 'auto'`.  
+**BE-5.3.3** `[CRITICAL]` `call_race` / `set_status` flip `status_source` to `'admin'`, and the engine never overwrites an admin's status afterwards; `reset_status_auto` hands control back.  
+**BE-5.3.4** Every admin mutation appends an audit row to `election_poller_log` with `source = 'admin:<action>'`.  
+*(`election-night-update.js` was deleted — dead code with two crash bugs, never scheduled, never called.)*
 
 ### 5.4 Election Results Page
 

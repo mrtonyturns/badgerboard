@@ -21,6 +21,7 @@ import {
   Loader2, AlertTriangle, List, ChevronUp,
 } from 'lucide-react'
 import {
+  supabase,
   getMilestones, createMilestone, createMilestoneBatch,
   updateMilestone, deleteMilestone, deleteTemplateMilestones,
   getElections, createElection, updateElection, deleteElection,
@@ -738,22 +739,37 @@ export default function GamePlan() {
   const [electError,    setElectError]   = useState(null)
   const [deleting,      setDeleting]     = useState(null)
   const [yearFilter,    setYearFilter]   = useState(String(new Date().getFullYear()))
+  // Bug fix: a failed elections fetch used to leave the Results tab spinning
+  // on "Loading elections…" forever. Record the failure and say so instead.
+  const [electFetchError, setElectFetchError] = useState(null)
+  // election ids that actually have at least one contest row (null = not looked
+  // up yet) — used to pick a sensible default election for the Results tab.
+  const [electionsWithContests, setElectionsWithContests] = useState(null)
 
   // ── Load data ─────────────────────────────────────────────────────────────
   useEffect(() => { fetchAll() }, [])
 
   const fetchAll = async () => {
-    try {
-      const [mRes, cRes, eRes] = await Promise.all([getMilestones(), getCandidates(), getElections()])
-      setMilestones(mRes.data || [])
-      setCandidates(cRes.data || [])
-      setElections(eRes.data || [])
-    } catch (err) {
-      console.error('fetchAll error:', err)
-    } finally {
-      setLoading(false)
-      setElectLoading(false)
+    // allSettled, not all: a milestones failure must not also blank the
+    // elections list (and vice-versa).
+    const [mRes, cRes, eRes] = await Promise.allSettled([getMilestones(), getCandidates(), getElections()])
+    if (mRes.status === 'fulfilled') setMilestones(mRes.value?.data || [])
+    else console.error('fetchAll milestones error:', mRes.reason)
+    if (cRes.status === 'fulfilled') setCandidates(cRes.value?.data || [])
+    else console.error('fetchAll candidates error:', cRes.reason)
+
+    if (eRes.status === 'fulfilled' && !eRes.value?.error) {
+      setElections(eRes.value?.data || [])
+      setElectFetchError(null)
+    } else {
+      const err = eRes.status === 'fulfilled' ? eRes.value.error : eRes.reason
+      console.error('fetchAll elections error:', err)
+      setElections([])
+      setElectFetchError(err?.message || 'Elections could not be loaded.')
     }
+
+    setLoading(false)
+    setElectLoading(false)
   }
 
   const fetchMilestones = async () => {
@@ -763,10 +779,48 @@ export default function GamePlan() {
 
   const fetchElections = async () => {
     setElectLoading(true)
-    const { data } = await getElections()
-    setElections(data || [])
+    try {
+      const { data, error } = await getElections()
+      if (error) throw error
+      setElections(data || [])
+      setElectFetchError(null)
+    } catch (err) {
+      console.error('fetchElections error:', err)
+      setElectFetchError(err?.message || 'Elections could not be loaded.')
+    }
     setElectLoading(false)
   }
+
+  const retryElections = () => {
+    setElectionsWithContests(null)
+    fetchElections()
+  }
+
+  // Which elections actually have contests? Cheap: one `.in` select of a single
+  // column, only once the Results tab is open. Drives the default selection so
+  // the tab doesn't land on a stale past election with nothing in it.
+  useEffect(() => {
+    if (activeTab !== 'results') return
+    if (!elections.length) return
+    if (electionsWithContests !== null) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { data, error } = await supabase
+          .from('election_contests')
+          .select('election_id')
+          .in('election_id', elections.map(e => e.id))
+        if (cancelled) return
+        if (error) throw error
+        setElectionsWithContests(new Set((data || []).map(r => r.election_id)))
+      } catch (err) {
+        if (cancelled) return
+        console.warn('[GamePlan] contest lookup failed, falling back to date order:', err?.message)
+        setElectionsWithContests(new Set())   // empty ⇒ resolution falls through
+      }
+    })()
+    return () => { cancelled = true }
+  }, [activeTab, elections, electionsWithContests])
 
   const goToTab     = (t)  => setSearchParams(t === 'milestones' ? {} : { tab: t })
   const goToResults = (id) => {
@@ -928,10 +982,50 @@ export default function GamePlan() {
   const upcoming         = filteredElect.filter(e => isFuture(parseISO(e.election_date)) || isToday(parseISO(e.election_date)))
   const past             = filteredElect.filter(e => isPast(parseISO(e.election_date)) && !isToday(parseISO(e.election_date)))
                              .sort((a, b) => parseISO(b.election_date) - parseISO(a.election_date))
-  const resolvedResultsId = selectedResultsId
-    || elections.find(e => isToday(parseISO(e.election_date)))?.id
-    || [...elections].filter(e => isPast(parseISO(e.election_date))).sort((a, b) => parseISO(b.election_date) - parseISO(a.election_date))[0]?.id
-    || null
+  // ── Default election for the Results tab ──────────────────────────────────
+  // Bug fix: this used to fall straight to "most recent past election", which
+  // on a fresh account is an election with no contest rows — the board then
+  // said "No results yet" forever. Preference order:
+  //   1. an election happening today
+  //   2. the most recent PAST election that actually has contests
+  //   3. the next upcoming election
+  //   4. the most recent past election (last resort)
+  const resolvedResultsId = useMemo(() => {
+    if (selectedResultsId) return selectedResultsId
+    if (!elections.length) return null
+
+    const today = elections.find(e => isToday(parseISO(e.election_date)))
+    if (today) return today.id
+
+    const pastDesc = [...elections]
+      .filter(e => isPast(parseISO(e.election_date)))
+      .sort((a, b) => parseISO(b.election_date) - parseISO(a.election_date))
+
+    if (electionsWithContests?.size) {
+      const withResults = pastDesc.find(e => electionsWithContests.has(e.id))
+      if (withResults) return withResults.id
+    }
+
+    const nextUp = [...elections]
+      .filter(e => isFuture(parseISO(e.election_date)))
+      .sort((a, b) => parseISO(a.election_date) - parseISO(b.election_date))[0]
+    if (nextUp) return nextUp.id
+
+    return pastDesc[0]?.id || null
+  }, [selectedResultsId, elections, electionsWithContests])
+
+  // Push the resolved id into the URL so the Results tab is linkable and a
+  // refresh lands on the same election (mirrors Elections.jsx). replace:true —
+  // auto-selection is not a navigation the back button should have to undo.
+  useEffect(() => {
+    if (activeTab !== 'results') return
+    if (selectedResultsId) return
+    if (!elections.length) return
+    if (electionsWithContests === null) return   // wait for the contest lookup
+    if (resolvedResultsId) {
+      setSearchParams({ tab: 'results', election: resolvedResultsId }, { replace: true })
+    }
+  }, [activeTab, selectedResultsId, elections.length, electionsWithContests, resolvedResultsId, setSearchParams])
 
   const hasFilters = !!(filterCand || filterStatus || filterElection)
 
@@ -1083,11 +1177,35 @@ export default function GamePlan() {
       {/* RESULTS TAB                                              */}
       {/* ══════════════════════════════════════════════════════════ */}
       {activeTab === 'results' && (
-        <ElectionResultsBoard
-          elections={elections}
-          selectedId={resolvedResultsId}
-          onSelectElection={goToResults}
-        />
+        electFetchError ? (
+          // Honest failure beats an eternal spinner.
+          <div className="text-center py-16 border-2 border-dashed border-red-200 bg-red-50/40 rounded-2xl">
+            <AlertTriangle className="w-10 h-10 text-red-400 mx-auto mb-3" />
+            <p className="text-gray-800 font-semibold text-sm">Couldn't load elections</p>
+            <p className="text-gray-500 text-sm mt-1 max-w-sm mx-auto">{electFetchError}</p>
+            <button onClick={retryElections} disabled={electLoading} className="btn-secondary text-sm mt-4">
+              {electLoading ? 'Retrying…' : 'Retry'}
+            </button>
+          </div>
+        ) : electLoading ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-3">
+            <div className="w-8 h-8 border-4 border-brand-red border-t-transparent rounded-full animate-spin" />
+            <p className="text-gray-400 text-sm">Loading elections…</p>
+          </div>
+        ) : elections.length === 0 ? (
+          <div className="text-center py-16 border-2 border-dashed border-gray-200 rounded-2xl">
+            <CalendarDays className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+            <p className="text-gray-500 font-medium text-sm mb-1">No elections yet</p>
+            <p className="text-gray-400 text-sm mb-4">Add an election on the Calendar tab and results will show up here.</p>
+            <button onClick={() => goToTab('calendar')} className="btn-secondary text-sm">Go to Calendar</button>
+          </div>
+        ) : (
+          <ElectionResultsBoard
+            elections={elections}
+            selectedId={resolvedResultsId}
+            onSelectElection={goToResults}
+          />
+        )
       )}
 
       {/* ── Modals ── */}

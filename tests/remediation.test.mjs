@@ -216,5 +216,269 @@ console.log('F5 — error-log contract')
   global.fetch = realFetch
 }
 
+// ─── Live results Phase 1: determination engine ──────────────────────────────
+// SPEC: RESULTS-live-election-game-plan.md → "Determination engine".
+// The engine is pure, so these are plain input/output assertions.
+console.log('Phase 1 — determineStatus (contest status engine)')
+{
+  const { determineStatus, ALLOWED_STATUSES, THRESHOLDS } = require('../netlify/functions/_determination.js')
+  // Vote rows the way election_results hands them over
+  const R = (...votes) => votes.map((v, i) => ({ id: `r${i}`, candidate_name: `C${i}`, votes: v }))
+  const run = (results, total, rptg, seats) =>
+    determineStatus({ results, precinctsTotal: total, precinctsRptg: rptg, seats })
+
+  // — thresholds are the ones the spec names —
+  t('thresholds: recount 1.0 / fee-free 0.25 / too-close 0.5 @95%',
+    THRESHOLDS.RECOUNT_PCT === 1.0 && THRESHOLDS.FEE_FREE_PCT === 0.25 &&
+    THRESHOLDS.TOO_CLOSE_PCT === 0.5 && THRESHOLDS.TOO_CLOSE_REPORTING_PCT === 95)
+  t('thresholds: projection needs 60% + 5 precincts, 1.5x safety factor',
+    THRESHOLDS.PROJECT_MIN_REPORTING_PCT === 60 && THRESHOLDS.PROJECT_MIN_PRECINCTS === 5 &&
+    THRESHOLDS.PROJECT_SAFETY_FACTOR === 1.5)
+
+  // — waiting —
+  const wNoRows = run([], 10, 0, 1)
+  t('waiting: no result rows', wNoRows.status === 'waiting')
+  t('waiting: zeroed rows (polls just closed)', run(R(0, 0, 0), 10, 2, 1).status === 'waiting')
+  t('waiting detail carries a reason + computed_at',
+    typeof wNoRows.detail.reason === 'string' && wNoRows.detail.reason.length > 0 &&
+    !Number.isNaN(Date.parse(wNoRows.detail.computed_at)))
+
+  // — reporting —
+  const rep = run(R(600, 400), 10, 3, 1)
+  t('reporting: 30% in, nothing decidable', rep.status === 'reporting')
+  t('reporting: no ceiling computed below the 60% gate', rep.detail.outstanding_ceiling === undefined)
+  t('reporting detail shape (margin/pct/total/reporting_pct)',
+    rep.detail.margin === 200 && rep.detail.margin_pct === 20 &&
+    rep.detail.total_votes === 1000 && rep.detail.reporting_pct === 30)
+
+  // — projection: ceiling = (total-rptg) * (total_votes/rptg) * 1.5 —
+  // 100 precincts, 80 in, 8,000 votes → ceiling = 20 * 100 * 1.5 = 3,000
+  const projOver  = run(R(5501, 2499), 100, 80, 1)   // margin 3,002 > 3,000
+  const projEdge  = run(R(5500, 2500), 100, 80, 1)   // margin 3,000 — NOT > ceiling
+  t('projected: margin just above the outstanding ceiling', projOver.status === 'projected')
+  t('projected: ceiling recorded in detail', projOver.detail.outstanding_ceiling === 3000)
+  t('NOT projected: margin exactly equal to the ceiling stays reporting',
+    projEdge.status === 'reporting' && projEdge.detail.outstanding_ceiling === 3000)
+  t('projection gate: 60% reporting is too early for any real margin',
+    run(R(9000, 1000), 100, 60, 1).status === 'reporting')
+  t('projection gate: <5 precincts reporting never projects (tiny races)',
+    run(R(900, 100), 6, 4, 1).status === 'reporting' &&
+    run(R(900, 100), 6, 4, 1).detail.outstanding_ceiling === undefined)
+  t('projection detail says "not final"', /not final/i.test(projOver.detail.reason))
+
+  // — too close to call —
+  const tc = run(R(50100, 49900), 100, 96, 1)        // 96% in, margin 0.2%
+  t('too_close: >=95% reporting and margin under 0.5%', tc.status === 'too_close')
+  t('too_close: 95% exactly is inside the band', run(R(50100, 49900), 100, 95, 1).status === 'too_close')
+  t('too_close: margin of exactly 0.5% is NOT too close',
+    run(R(50250, 49750), 100, 96, 1).status === 'reporting')
+  t('too_close: 94% reporting is below the band',
+    run(R(50100, 49900), 100, 94, 1).status !== 'too_close')
+
+  // — recount band at 100% precincts —
+  const rc100 = run(R(5050, 4950), 50, 50, 1)        // margin 100/10,000 = 1.00%
+  const rc026 = run(R(5013, 4987), 50, 50, 1)        // margin  26/10,000 = 0.26%
+  const rc025 = run(R(10025, 9975), 50, 50, 1)       // margin  50/20,000 = 0.25%
+  t('recount_possible at exactly 1.0%', rc100.status === 'recount_possible' && rc100.detail.margin_pct === 1)
+  t('1.0% is NOT fee-free', rc100.detail.fee_free === false)
+  t('recount_possible at 0.26%', rc026.status === 'recount_possible' && rc026.detail.margin_pct === 0.26)
+  t('0.26% is NOT fee-free', rc026.detail.fee_free === false)
+  t('recount_possible at exactly 0.25%', rc025.status === 'recount_possible' && rc025.detail.margin_pct === 0.25)
+  t('0.25% IS fee-free', rc025.detail.fee_free === true)
+  t('recount reason names the Wisconsin threshold', /recount-petition threshold/i.test(rc100.detail.reason))
+  t('just over 1.0% is called, not a recount',
+    run(R(5051, 4949), 50, 50, 1).status === 'called')
+
+  // — called —
+  const called = run(R(6000, 4000), 50, 50, 1)
+  t('called: all precincts in, 20-point margin', called.status === 'called')
+  t('called: reporting_pct is 100', called.detail.reporting_pct === 100)
+  t('called: no ceiling needed at 100%', called.detail.outstanding_ceiling === undefined)
+
+  // — unopposed —
+  const unop = run(R(500), 10, 10, 1)
+  t('unopposed: single candidate at 100% is simply called',
+    unop.status === 'called' && unop.detail.unopposed === true)
+  t('unopposed 2-seat race with 2 candidates is called',
+    run(R(500, 480), 10, 10, 2).status === 'called')
+  t('unopposed but only 50% in is still reporting, never called',
+    run(R(500), 10, 5, 1).status !== 'called')
+
+  // — multi-seat: margin is Nth vs (N+1)th —
+  const ms = run(R(1000, 800, 300, 100), 20, 20, 2)
+  t('seats=2: margin measured between 2nd and 3rd place', ms.detail.margin === 500)
+  t('seats=2: comfortable margin → called', ms.status === 'called')
+  const msClose = run(R(1000, 500, 495, 5), 20, 20, 2)  // 2nd−3rd = 5 of 2,000 = 0.25%
+  t('seats=2: thin 2nd/3rd margin → recount_possible',
+    msClose.status === 'recount_possible' && msClose.detail.margin === 5 && msClose.detail.fee_free === true)
+  t('seats=2: a landslide leader does NOT mask a tied 2nd seat',
+    run(R(9000, 500, 499), 20, 20, 2).status === 'recount_possible')
+
+  // — zero-precinct + garbage-input safety —
+  const noPrec = run(R(600, 400), 0, 0, 1)
+  t('zero precinct totals: reporting, 0% reporting_pct, no projection',
+    noPrec.status === 'reporting' && noPrec.detail.reporting_pct === 0 &&
+    noPrec.detail.outstanding_ceiling === undefined)
+  t('precincts reporting above total is clamped to 100%',
+    run(R(6000, 4000), 10, 99, 1).status === 'called' &&
+    run(R(6000, 4000), 10, 99, 1).detail.reporting_pct === 100)
+  t('garbage: null input → waiting/insufficient data',
+    determineStatus(null).status === 'waiting' && determineStatus(null).detail.reason === 'insufficient data')
+  t('garbage: undefined / string / array inputs → waiting',
+    determineStatus(undefined).status === 'waiting' &&
+    determineStatus('nonsense').status === 'waiting' &&
+    determineStatus([1, 2, 3]).status === 'waiting')
+  t('garbage: results not an array → waiting',
+    determineStatus({ results: 'oops', precinctsTotal: 5, precinctsRptg: 5 }).status === 'waiting')
+  t('garbage: non-numeric votes coerce to 0 → waiting',
+    run([{ votes: 'abc' }, { votes: null }, {}], 10, 10, 1).status === 'waiting')
+  t('garbage: negative votes coerce to 0, not a negative margin',
+    run([{ votes: -500 }, { votes: 100 }], 10, 10, 1).detail.margin === 100)
+  t('garbage: NaN/undefined precinct counts fall back to 0 precincts',
+    run(R(600, 400), NaN, undefined, 1).status === 'reporting')
+  t('garbage: seats 0 / negative / "2" behave sanely',
+    run(R(600, 400), 10, 10, 0).status === 'called' &&
+    run(R(600, 400), 10, 10, -3).status === 'called' &&
+    run(R(1000, 800, 300, 100), 20, 20, '2').detail.margin === 500)
+  t('numeric-string votes are parsed',
+    run([{ votes: '6000' }, { votes: '4000' }], 50, 50, 1).status === 'called')
+
+  // — invariants —
+  const samples = [wNoRows, rep, projOver, projEdge, tc, rc100, rc025, called, unop, ms, msClose, noPrec]
+  t('every status returned is in the DB check-constraint list',
+    samples.every(s => ALLOWED_STATUSES.includes(s.status)))
+  t('every detail has a one-sentence reason and computed_at',
+    samples.every(s => typeof s.detail.reason === 'string' && s.detail.reason.trim().length > 0 &&
+                       !Number.isNaN(Date.parse(s.detail.computed_at))))
+  t('every scored detail carries margin / margin_pct / total_votes / reporting_pct',
+    samples.slice(1).every(s => typeof s.detail.margin === 'number' &&
+      typeof s.detail.margin_pct === 'number' && typeof s.detail.total_votes === 'number' &&
+      typeof s.detail.reporting_pct === 'number'))
+  t('engine never throws on hostile input', (() => {
+    const hostile = [
+      {}, { results: [] }, { results: [{ votes: Infinity }] }, { results: [{ votes: {} }] },
+      { results: [{ votes: 1 }], precinctsTotal: -5, precinctsRptg: -5 },
+      { results: new Array(3), precinctsTotal: '10', precinctsRptg: '10', seats: 'x' },
+    ]
+    try { hostile.forEach(h => determineStatus(h)); return true } catch { return false }
+  })())
+}
+
+// ─── Live results Phase 1: engine ↔ admin-elections wiring ───────────────────
+// The safety property that matters on election night: an admin's manual status
+// always beats the engine, and the engine never sets `declared`.
+console.log('Phase 1 — admin-elections determination wiring (mocked Supabase)')
+{
+  const shared = require('../netlify/functions/_shared.js')
+  const realServiceClient = shared.serviceClient
+  const realRequireAdmin  = shared.requireAdmin
+
+  const CID = '11111111-1111-4111-8111-111111111111'
+  const R1  = '22222222-2222-4222-8222-222222222222'
+  const R2  = '33333333-3333-4333-8333-333333333333'
+  let db
+  const reset = () => {
+    db = {
+      election_contests: [{ id: CID, seats: 1, precincts_total: 10, precincts_rptg: 10, status: 'waiting', status_source: 'auto' }],
+      election_results: [
+        { id: R1, contest_id: CID, votes: 6000, winner: false, declared: false, candidate_name: 'A' },
+        { id: R2, contest_id: CID, votes: 4000, winner: true,  declared: false, candidate_name: 'B' },
+      ],
+      election_poller_log: [],
+      offices: [],
+    }
+  }
+  reset()
+
+  // Just enough of the supabase-js query builder for the calls this function makes.
+  const matches = (row, fs) => fs.every(([c, v, op]) => (op === 'in' ? v.includes(row[c]) : row[c] === v))
+  const from = (table) => {
+    const st = { filters: [], op: null, payload: null, sel: false }
+    const rows = () => (db[table] || []).filter(r => matches(r, st.filters))
+    const exec = () => {
+      if (st.op === 'update') { const hit = rows(); hit.forEach(r => Object.assign(r, st.payload)); return { data: st.sel ? hit : null, error: null } }
+      if (st.op === 'insert') { const r = { id: `new-${db[table].length + 1}`, ...st.payload }; db[table].push(r); return { data: [r], error: null } }
+      if (st.op === 'delete') { const hit = rows(); db[table] = db[table].filter(r => !hit.includes(r)); return { data: hit, error: null } }
+      return { data: rows(), error: null }
+    }
+    const chain = {
+      select() { st.sel = true; return chain },
+      eq(c, v) { st.filters.push([c, v]); return chain },
+      in(c, v) { st.filters.push([c, v, 'in']); return chain },
+      ilike() { return chain }, limit() { return chain }, order() { return chain },
+      update(p) { st.op = 'update'; st.payload = p; return chain },
+      insert(p) { st.op = 'insert'; st.payload = p; return chain },
+      delete() { st.op = 'delete'; return chain },
+      single() { const r = exec(); return Promise.resolve({ data: r.data?.[0] || null, error: r.data?.length ? null : { message: 'no rows' } }) },
+      then(ok, no) { return Promise.resolve(exec()).then(ok, no) },
+    }
+    return chain
+  }
+
+  shared.serviceClient = () => ({ from })
+  shared.requireAdmin  = async () => ({ user: { email: 'admin@badgerboard.test' } })
+  const { handler: adminElections } = require('../netlify/functions/admin-elections.js')
+  const call = (action, params) =>
+    adminElections({ httpMethod: 'POST', headers: {}, body: JSON.stringify({ action, params }) })
+  const contest = () => db.election_contests[0]
+  const result  = (id) => db.election_results.find(r => r.id === id)
+
+  // — auto contest: a precinct update runs the engine —
+  let res = await call('update_precincts', { contest_id: CID, rptg: 10, total: 10 })
+  t('update_precincts → 200', res.statusCode === 200)
+  t('engine wrote status=called at 100% precincts', contest().status === 'called')
+  t('engine wrote status_detail + status_updated_at',
+    contest().status_detail?.margin === 2000 && typeof contest().status_detail?.reason === 'string' && !!contest().status_updated_at)
+  t('engine set winner=true on the leader, false on the rest',
+    result(R1).winner === true && result(R2).winner === false)
+  t('engine NEVER sets declared (that stays an admin action)',
+    db.election_results.every(r => r.declared === false))
+  t('mutation appended an admin audit row to election_poller_log',
+    db.election_poller_log.at(-1)?.source === 'admin:update_precincts' &&
+    typeof db.election_poller_log.at(-1)?.duration_ms === 'number')
+
+  // — admin override beats the engine —
+  res = await call('set_status', { contest_id: CID, status: 'too_close', source: 'admin' })
+  t('set_status → 200 and pins status_source=admin',
+    res.statusCode === 200 && contest().status === 'too_close' && contest().status_source === 'admin')
+  t('set_status rejects a status outside the check constraint',
+    (await call('set_status', { contest_id: CID, status: 'bogus' })).statusCode === 400)
+  await call('update_precincts', { contest_id: CID, rptg: 10, total: 10 })
+  t('engine does NOT overwrite an admin-set status', contest().status === 'too_close')
+
+  // — handing it back —
+  res = await call('reset_status_auto', { contest_id: CID })
+  t('reset_status_auto → auto source and an immediate recompute',
+    res.statusCode === 200 && contest().status_source === 'auto' && contest().status === 'called')
+  t('reset_status_auto reports the engine verdict back to the UI',
+    JSON.parse(res.body).data?.determination?.status === 'called')
+
+  // — call_race / uncall_race take the contest out of the engine's hands —
+  res = await call('call_race', { result_id: R1, contest_id: CID, candidate_name: 'A' })
+  t('call_race → 200, status called, source admin, declared set',
+    res.statusCode === 200 && contest().status === 'called' &&
+    contest().status_source === 'admin' && result(R1).declared === true)
+  await call('uncall_race', { contest_id: CID })
+  t('uncall_race → reporting, still admin-owned, declared cleared',
+    contest().status === 'reporting' && contest().status_source === 'admin' &&
+    db.election_results.every(r => r.declared === false))
+
+  // — failures are audited too —
+  const before = db.election_poller_log.length
+  res = await call('update_precincts', { contest_id: 'not-a-uuid' })
+  t('invalid contest_id → 400, and the failure is still logged',
+    res.statusCode === 400 && db.election_poller_log.length === before + 1 &&
+    !!db.election_poller_log.at(-1).error)
+
+  // — a contest with no votes stays 'waiting' —
+  reset()
+  db.election_results.forEach(r => { r.votes = 0 })
+  await call('update_precincts', { contest_id: CID, rptg: 0, total: 10 })
+  t('no votes anywhere → waiting', contest().status === 'waiting')
+
+  shared.serviceClient = realServiceClient
+  shared.requireAdmin  = realRequireAdmin
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

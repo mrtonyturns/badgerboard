@@ -40,10 +40,19 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.24.2'
+const APP_VERSION = 'v1.25.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.25.0',
+    date: 'August 10, 2026',
+    changes: [
+      'Election results gained a real status engine: contests now progress through Reporting, Victory Likely, Winner Called, Too Close to Call, Recount Possible and Certified \u2014 computed from the math, with admin override always in charge',
+      'Results tab recovers from load failures with a Retry, and lands on the most recent election that actually has results',
+      'Offices is now map-first \u2014 the list view is retired',
+    ],
+  },
   {
     version: 'v1.24.2',
     date: 'August 10, 2026',
