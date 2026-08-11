@@ -255,7 +255,10 @@ function SessionsCard() {
 
 export default function AccountPane({ user, savedName = '', nameField, orgField, onName, onOrg }) {
   const email     = user?.email || ''
-  const shownName = savedName || email.split('@')[0] || 'Your account'
+  const emailName = email.split('@')[0] || ''
+  // Capitalized email-prefix fallback, matching the hero.
+  const shownName = savedName ||
+    (emailName ? emailName.charAt(0).toUpperCase() + emailName.slice(1) : 'Your account')
   const initial   = (savedName || email || 'U').charAt(0).toUpperCase()
 
   // ── Photo ───────────────────────────────────────────────────────────────────
