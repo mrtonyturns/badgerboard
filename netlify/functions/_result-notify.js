@@ -253,15 +253,14 @@ function buildUpdateEmail(rawContest = {}, results = [], rawOpts = {}) {
   const { leader, margin, marginPct, totalVotes, unopposed } = marginOf(results, contest.seats)
   const status = opts.status || contest.status || 'reporting'
 
+  // One basic summary line — nothing else above the table (owner's spec).
   const lead = leader
     ? (unopposed
-        ? `${esc(leader.candidate_name)} has ${nf(leader.votes)} votes with no one else on the ballot.`
-        : `${esc(leader.candidate_name)} leads by ${nf(margin)} vote${margin === 1 ? '' : 's'} (${pf(marginPct)}%) of ${nf(totalVotes)} counted so far.`)
-    : 'No votes have been reported in this race yet.'
+        ? `${esc(leader.candidate_name)} has ${nf(leader.votes)} votes, unopposed.`
+        : `${esc(leader.candidate_name)} leads by ${nf(margin)} vote${margin === 1 ? '' : 's'} (${pf(marginPct)}%).`)
+    : 'No votes have been reported yet.'
 
-  const body = `${electionLine(contest, opts)}
-<p style="margin:0 0 14px;font-size:16px;font-weight:700;color:#111827">${esc(name)}</p>
-<p style="margin:0">${lead}</p>
+  const body = `<p style="margin:0">${lead}</p>
 ${candidateTable(results)}
 <p style="margin:0 0 6px">${esc(precinctsLine(contest))}</p>
 <p style="margin:0 0 6px"><strong>Status:</strong> ${esc(statusLine(contest, status))}</p>
@@ -273,13 +272,14 @@ ${candidateTable(results)}
 
   return {
     subject: `📊 ${String(contest.office || 'Your race')}: new numbers in`,
-    title: `New numbers — ${name}`,
+    title: name,
     preheader: leader
       ? `${leader.candidate_name} ${unopposed ? 'is at' : 'leads with'} ${pf(leaderPct)}%. ${statusLine(contest, status)}.`
       : `${statusLine(contest, status)}.`,
     body,
     ctaText: 'View live results',
     ctaUrl: ctaUrlFor(contest, opts),
+    flagBar: false,
     footerNote: UPDATE_FOOTER,
   }
 }
@@ -300,8 +300,8 @@ function buildWinnerEmail(rawContest = {}, results = [], rawOpts = {}) {
   const highlight = new Set(winnerNames)
 
   const headline = winnerNames.length
-    ? `${winnerNames.join(', ')} ${winnerNames.length > 1 ? 'have' : 'has'} won the ${office}.`
-    : `The ${office} has been decided.`
+    ? `${winnerNames.join(', ')} ${winnerNames.length > 1 ? 'have' : 'has'} won.`
+    : 'This race has been decided.'
 
   const marginSentence = !winnerNames.length ? ''
     : (unopposed || !runnerUp)
@@ -315,10 +315,8 @@ function buildWinnerEmail(rawContest = {}, results = [], rawOpts = {}) {
         ? 'The result has been certified by the canvassing authority.'
         : 'Decided from the reported returns on file.')
 
-  const body = `${electionLine(contest, opts)}
-<p style="margin:0 0 6px;font-size:16px;font-weight:700;color:#111827">${esc(name)}</p>
-<p style="margin:18px 0;padding:18px 20px;background:#E6F5EC;border:1px solid #bbe5ca;border-radius:10px;font-size:20px;line-height:1.35;font-weight:700;color:#14532D">🏆 ${esc(headline)}</p>
-${marginSentence ? `<p style="margin:0">${esc(marginSentence)}</p>` : ''}
+  const body = `<p style="margin:0 0 6px;padding:18px 20px;background:#E6F5EC;border:1px solid #bbe5ca;border-radius:10px;font-size:20px;line-height:1.35;font-weight:700;color:#14532D">🏆 ${esc(headline)}</p>
+${marginSentence ? `<p style="margin:12px 0 0">${esc(marginSentence)}</p>` : ''}
 ${candidateTable(results, { highlight })}
 <p style="margin:0 0 6px">${esc(precinctsLine(contest))}</p>
 <p style="margin:0 0 6px"><strong>How it was decided:</strong> ${esc(reason)}</p>
@@ -331,6 +329,7 @@ ${candidateTable(results, { highlight })}
     body,
     ctaText: 'View live results',
     ctaUrl: ctaUrlFor(contest, opts),
+    flagBar: false,
     footerNote: FINAL_FOOTER,
   }
 }
@@ -354,10 +353,10 @@ function buildRecountEmail(rawContest = {}, results = [], rawOpts = {}) {
     ? `${leader.candidate_name} finished ahead of ${runnerUp.candidate_name} by ${nf(margin)} vote${margin === 1 ? '' : 's'} — ${pf(marginPct)}% of the ${nf(totalVotes)} votes cast.`
     : `The final unofficial margin in this race is ${pf(marginPct)}% of ${nf(totalVotes)} votes cast.`
 
-  const body = `${electionLine(contest, opts)}
-<p style="margin:0 0 6px;font-size:16px;font-weight:700;color:#111827">${esc(name)}</p>
-<p style="margin:18px 0;padding:18px 20px;background:#FEF0E6;border:1px solid #fbd0aa;border-radius:10px;font-size:16px;line-height:1.45;font-weight:700;color:#9A3412">⚖️ Every precinct is in, but this race is close enough that a recount can be petitioned.</p>
-<p style="margin:0">${esc(marginSentence)}</p>
+  const banner = leader && runnerUp
+    ? `Recount possible — ${leader.candidate_name} leads ${runnerUp.candidate_name} by ${nf(margin)} vote${margin === 1 ? '' : 's'} (${pf(marginPct)}%).`
+    : `Recount possible — the final margin is ${pf(marginPct)}%.`
+  const body = `<p style="margin:0 0 6px;padding:18px 20px;background:#FEF0E6;border:1px solid #fbd0aa;border-radius:10px;font-size:16px;line-height:1.45;font-weight:700;color:#9A3412">⚖️ ${esc(banner)}</p>
 ${candidateTable(results)}
 <p style="margin:0 0 6px">${esc(precinctsLine(contest))}</p>
 <p style="margin:14px 0 0;padding:14px 16px;background:#FAFAF9;border-left:3px solid #C2410C;border-radius:0 6px 6px 0;font-size:14px;color:#4b5563">
@@ -377,6 +376,7 @@ ${candidateTable(results)}
     body,
     ctaText: 'View live results',
     ctaUrl: ctaUrlFor(contest, opts),
+    flagBar: false,
     footerNote: FINAL_FOOTER,
   }
 }

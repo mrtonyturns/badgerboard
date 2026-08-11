@@ -4,7 +4,7 @@
 const RESEND_API_KEY = process.env.RESEND_API_KEY
 const FROM = 'Badger Board <noreply@noreply.badgerboardwi.com>'
 
-function emailTemplate({ title, preheader = '', body, ctaText, ctaUrl, footerNote = '' }) {
+function emailTemplate({ title, preheader = '', body, ctaText, ctaUrl, footerNote = '', flagBar = true }) {
   return `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head>
@@ -13,15 +13,15 @@ function emailTemplate({ title, preheader = '', body, ctaText, ctaUrl, footerNot
   <table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 16px">
     <tr><td align="center">
       <table width="580" cellpadding="0" cellspacing="0" style="max-width:580px;width:100%">
-        <!-- WI flag accent bar -->
+        ${flagBar ? `<!-- WI flag accent bar -->
         <tr>
           <td style="background:#8B0000;height:4px;border-radius:4px 4px 0 0;width:33%"></td>
           <td style="background:#ffffff;height:4px;width:34%"></td>
           <td style="background:#1e40af;height:4px;border-radius:4px 4px 0 0;width:33%"></td>
-        </tr>
+        </tr>` : ''}
         <!-- Logo header -->
         <tr>
-          <td colspan="3" style="background:#000000;padding:20px 40px;text-align:center">
+          <td colspan="3" style="background:#000000;padding:20px 40px;text-align:center;${'${'}flagBar ? '' : 'border-radius:12px 12px 0 0'}">
             <img src="https://www.badgerboardwi.com/badger-board-logo.png"
                  alt="Badger Board"
                  width="200"
@@ -53,7 +53,7 @@ function emailTemplate({ title, preheader = '', body, ctaText, ctaUrl, footerNot
 </html>`
 }
 
-async function sendEmail({ to, subject, title, preheader, body, ctaText, ctaUrl, footerNote }) {
+async function sendEmail({ to, subject, title, preheader, body, ctaText, ctaUrl, footerNote, flagBar }) {
   if (!RESEND_API_KEY) {
     console.warn('[email] RESEND_API_KEY not set — skipping email to', to)
     return { skipped: true }
@@ -62,7 +62,7 @@ async function sendEmail({ to, subject, title, preheader, body, ctaText, ctaUrl,
     console.warn('[email] No recipient — skipping')
     return { skipped: true }
   }
-  const html = emailTemplate({ title: title || subject, preheader, body, ctaText, ctaUrl, footerNote })
+  const html = emailTemplate({ title: title || subject, preheader, body, ctaText, ctaUrl, footerNote, flagBar: flagBar !== false })
   try {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',

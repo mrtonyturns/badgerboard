@@ -977,8 +977,9 @@ console.log('Phases 2-3 — election-results-poller window decision')
   const win = buildWinnerEmail(calledContest, resultsFinal, opts)
   t('the winner subject names the winner and the office',
     win.subject === '🏆 Winner: Marla Vandenberg — State Senate District 31')
-  t('the winner headline is an announcement, not a celebration',
-    win.title === 'Marla Vandenberg has won the State Senate District 31.' &&
+  t('the winner headline is a bare announcement (redesign: winner + "has won.", nothing more)',
+    win.title === 'Marla Vandenberg has won.' &&
+    win.body.includes('Marla Vandenberg has won.') &&
     !/congratulations/i.test(win.body))
   t('the winner email states the final margin with separators',
     win.body.includes('Final margin: 1,211 votes (2.6%) over Dale Kupferschmidt, out of 47,425 cast.'))
@@ -1008,8 +1009,8 @@ console.log('Phases 2-3 — election-results-poller window decision')
   const rec = buildRecountEmail(recountContest, recountResults, opts)
   t('the recount subject flags final numbers and the recount window',
     rec.subject === '⚖️ Final numbers — recount possible: State Senate District 31')
-  t('the recount email states the margin between the top two',
-    rec.body.includes('Marla Vandenberg finished ahead of Dale Kupferschmidt by 95 votes — 0.2% of the 47,425 votes cast.'))
+  t('the recount banner states the margin between the top two (redesign: single concise line)',
+    rec.body.includes('Recount possible — Marla Vandenberg leads Dale Kupferschmidt by 95 votes (0.2%).'))
   t('the recount email explains both Wisconsin thresholds',
     rec.body.includes('may petition for a recount when the margin is 1% of the votes cast or less') &&
     rec.body.includes('0.25% or less, the recount is fee-free'))
