@@ -757,8 +757,8 @@ console.log('Phases 2-3 — election-results-poller window decision')
       return c.length === 3 && c[0].length === 12 && c[1].length === 12 && c[2].length === 1 })())
   t('chunkList of an empty list is no chunks', chunkList([], 12).length === 0)
   t('chunkList survives junk input', chunkList(null, 0).length === 0 && chunkList([1, 2], NaN).length === 1)
-  t('default chunk size is 8 and at most 2 tier-2 calls per run (lighter run shape)',
-    TIER2_CHUNK_SIZE === 8 && TIER2_MAX_CALLS === 2)
+  t('default chunk size is 8 and 6 parallel tier-2 calls per run (5-minute statewide sweep)',
+    TIER2_CHUNK_SIZE === 8 && TIER2_MAX_CALLS === 6)
 
   // — queue composition —
   const q = tierTwoQueue(ballot)
@@ -776,8 +776,13 @@ console.log('Phases 2-3 — election-results-poller window decision')
   const qd = tierTwoQueue(decided)
   t('decided contests KEEP their seat in the tier-2 list (chunk membership must not shift)',
     qd.length === 12 && qd.filter(c => c.status === 'reporting').length === 5)
-  t('…but a chunk only ever costs a call for the contests still worth one',
-    orderChunk(qd, ct(21, 0)).length === 5 && orderChunk(qd, ct(21, 0)).every(c => c.status === 'reporting'))
+  // Called races with counting still open (no precinct totals here) STAY in
+  // the chunk — the owner's rule: updates continue until every vote is counted.
+  t('a called race still being counted keeps refreshing; certified drops out',
+    orderChunk(qd, ct(21, 0)).length === 9 &&
+    orderChunk(qd, ct(21, 0)).every(c => c.status !== 'certified'))
+  t('a called race with every precinct in is done — dropped from its chunk',
+    orderChunk(qd.map(c => c.status === 'called' ? { ...c, precincts_total: 10, precincts_rptg: 10 } : c), ct(21, 0)).length === 5)
 
   // — waiting deprioritisation, now INSIDE a chunk (membership never moves) —
   const mixed = [
@@ -800,16 +805,16 @@ console.log('Phases 2-3 — election-results-poller window decision')
   t('rotation is fully determined by the clock — same instant, same chunks',
     peak(20, 15).indices.join(',') === peak(20, 15).indices.join(','))
   t('124 contests in rotation → 16 chunks of 8', peak(20, 0).nChunks === 16)
-  t('each run takes 2 chunks', peak(20, 0).indices.length === 2 && peak(20, 5).indices.length === 2)
-  t('the 20:00 run starts at chunk 0', peak(20, 0).indices.join(',') === '0,1')
+  t('each run takes 6 chunks', peak(20, 0).indices.length === 6 && peak(20, 5).indices.length === 6)
+  t('the 20:00 run starts at chunk 0', peak(20, 0).indices.join(',') === '0,1,2,3,4,5')
   t('consecutive 5-minute runs cover DISJOINT chunks',
-    peak(20, 5).indices.join(',') === '2,3' && peak(20, 10).indices.join(',') === '4,5')
+    peak(20, 5).indices.join(',') === '6,7,8,9,10,11' && peak(20, 10).indices.join(',') === '12,13,14,15,0,1')
   t('any minute inside a 5-minute bucket picks the same slice',
     peak(20, 5).indices.join(',') === peak(20, 9).indices.join(','))
   t('the rotation wraps rather than running off the end', (() => {
-    const small = q.slice(0, 20)   // 20 contests → 3 chunks, 2 taken per run
-    const idx = (m) => selectRotationChunks(small, ct(20, m), { cadence: 'every 5 minutes' }).indices.join(',')
-    return idx(20) === '2,0' && idx(25) === '1,2'
+    const small = q.slice(0, 20)   // 20 contests → 3 chunks, up to 6 per run = all of them
+    const idx = (m) => selectRotationChunks(small, ct(20, m), { cadence: 'every 5 minutes' }).indices
+    return idx(20).length === 3 && new Set(idx(20)).size === 3 && idx(25).length === 3
   })())
   t('every tier-2 contest is refreshed within one full cycle of 5-minute runs', (() => {
     const seen = new Set()
@@ -826,7 +831,7 @@ console.log('Phases 2-3 — election-results-poller window decision')
   t('the 5-minute tick is 12 per hour off the same origin',
     rotationTick(ct(20, 0)) === 0 && rotationTick(ct(20, 55)) === 11 && rotationTick(ct(21, 0)) === 12)
   t('rotation math survives a junk clock',
-    selectRotationChunks(q, {}, {}).indices.length === 2 && selectRotationChunks([], ct(20, 0), {}).nChunks === 0)
+    selectRotationChunks(q, {}, {}).indices.length === 6 && selectRotationChunks([], ct(20, 0), {}).nChunks === 0)
   t('a single short chunk is still selected exactly once',
     selectRotationChunks(mixed, ct(20, 20), {}).indices.join(',') === '0')
 
@@ -1389,9 +1394,8 @@ console.log('Phases 2-3 — election-results-poller window decision')
   const rot = selectRotationChunks(tierTwoQueue(after), ct(20, 0), { size: 8, maxCalls: 2, cadence: 'every 5 minutes' })
   t('every contest still has a chunk, called or not',
     rot.chunks.reduce((s, c) => s + c.length, 0) === 30 && rot.nChunks === 4)
-  t('a called contest costs nothing: it is skipped INSIDE its chunk',
-    rot.selected.flat().every(c => c.status !== 'called') &&
-    rot.selected.flat().length < rot.chunks[rot.indices[0]].length + rot.chunks[rot.indices[1]].length)
+  t('a called race still counting stays in its chunk; only fully-counted drop',
+    rot.selected.flat().some(c => c.status === 'called') || rot.selected.flat().every(c => c.status !== 'certified'))
   t('an all-decided chunk simply yields no work', (() => {
     const allDone = field.map(c => ({ ...c, status: 'certified' }))
     return selectRotationChunks(tierTwoQueue(allDone), ct(20, 0), { size: 8, maxCalls: 2 })
@@ -1642,6 +1646,31 @@ console.log('Phases 2-3 — election-results-poller window decision')
   }
 
   emailer.sendEmail = realSend
+}
+
+
+// ── 10:30 PM CT election-night embargo ───────────────────────────────────────
+{
+  const { callEmbargoActive } = require('../netlify/functions/election-results-poller.js')
+  const { winnerEmbargoActive, decideNotification } = require('../netlify/functions/_result-notify.js')
+  const ctInstant = (h, m) => new Date(Date.UTC(2026, 7, 12, (h + 5) % 24, m)) // CDT = UTC-5; 8/11 CT evening
+  const eight = new Date(Date.UTC(2026, 7, 12, 1, 15))   // 8:15 PM CT Aug 11
+  const tenTwentyNine = new Date(Date.UTC(2026, 7, 12, 3, 29))
+  const tenThirty = new Date(Date.UTC(2026, 7, 12, 3, 30))
+  t('embargo holds at 8:15 PM CT on election day', callEmbargoActive(eight, ['2026-08-11']) === true)
+  t('embargo holds at 10:29 PM CT', callEmbargoActive(tenTwentyNine, ['2026-08-11']) === true)
+  t('embargo lifts at exactly 10:30 PM CT', callEmbargoActive(tenThirty, ['2026-08-11']) === false)
+  t('no embargo the morning after', callEmbargoActive(new Date(Date.UTC(2026, 7, 12, 15, 0)), ['2026-08-11']) === false)
+  t('notifier embargo mirrors the poller clock',
+    winnerEmbargoActive('2026-08-11', eight) === true && winnerEmbargoActive('2026-08-11', tenThirty) === false)
+  const sub = { mode: 'every_change', last_snapshot: { votes: { A: 10, B: 5 }, precincts_rptg: 1, status: 'reporting' } }
+  const calledContest = { status: 'called', precincts_rptg: 10, precincts_total: 10 }
+  const rows = [{ candidate_name: 'A', votes: 100, winner: true }, { candidate_name: 'B', votes: 50 }]
+  const embargoed = decideNotification(sub, calledContest, rows, eight, { winnerEmbargo: true })
+  t('winner email withheld under embargo, bookkeeping untouched',
+    embargoed.kind === 'none' && embargoed.patch === null && /embargo/.test(embargoed.reason))
+  const after = decideNotification(sub, calledContest, rows, tenThirty, { winnerEmbargo: false })
+  t('the same touch after the embargo sends the winner email', after.kind === 'winner')
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

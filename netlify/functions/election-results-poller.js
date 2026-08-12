@@ -136,7 +136,7 @@ const BOOTSTRAP_AFTER_MINUTES = 20 * 60 + 30   // 20:30 CT
 // 2 chunks + the statewide call is 3 calls, which fits the 18s run budget with
 // room left for the writes and the emails.
 const TIER2_CHUNK_SIZE = Number(process.env.POLLER_CHUNK_SIZE) || 8
-const TIER2_MAX_CALLS  = Number(process.env.POLLER_TIER2_CALLS) || 2
+const TIER2_MAX_CALLS  = Number(process.env.POLLER_TIER2_CALLS) || 6 // parallel since v1.27.3
 
 // Never START another chunk with less than this left in the budget — a chunk
 // that gets killed mid-flight costs the whole run its audit row.
@@ -148,6 +148,30 @@ const TIER1_TIMEOUT_MS = 10000
 
 // Nothing left to learn about these, so they leave the rotation entirely.
 const DONE_STATUSES = new Set(['called', 'certified'])
+
+// ── Election-night call embargo (owner directive, Aug 11 2026) ───────────────
+// No race may be auto-called before 22:30 CT on election night: early county
+// feeds carry junk precinct totals ("1 of 1 reporting") that made races look
+// 100% counted at 8 PM. The clock, not the data, lifts this.
+const CALL_EMBARGO_CT_MINUTES = Number(process.env.CALL_EMBARGO_CT_MINUTES) || (22 * 60 + 30)
+function callEmbargoActive(when = new Date(), electionDates = []) {
+  const ct = ctParts(when)
+  const dates = toDateSet(electionDates)
+  if (!dates.has(ct.date)) return false // day after: counting is done, calls allowed
+  return ct.minutes < CALL_EMBARGO_CT_MINUTES
+}
+
+// A contest is only DONE (dropped from the update rotation) when there is
+// nothing left to count: certified, or called WITH every precinct reported.
+// A called race that is still counting keeps refreshing — the owner's rule:
+// "do not stop sending the updates until all the votes are counted."
+function doneCounting(c) {
+  if (!c) return false
+  if (c.status === 'certified') return true
+  const total = parseInt(c.precincts_total, 10) || 0
+  const rptg  = parseInt(c.precincts_rptg, 10) || 0
+  return c.status === 'called' && total > 0 && rptg >= total
+}
 
 // County discovery is manual-only and arrives via admin-elections' run_poller,
 // which is a regular 26-second function — hence ONE 12-county call per call.
@@ -347,7 +371,7 @@ function assignChunks(list, size = TIER2_CHUNK_SIZE) {
 function orderChunk(chunk, ct = {}) {
   const late = deprioritizeWaiting(ct)
   return (Array.isArray(chunk) ? chunk : [])
-    .filter(c => c && !DONE_STATUSES.has(c.status))
+    .filter(c => c && !doneCounting(c))
     .sort((a, b) => {
       if (late) {
         const aw = a.status === 'waiting' ? 1 : 0
@@ -580,6 +604,13 @@ function validateContestUpdate(payload, existing = {}, opts = {}) {
   // have nothing real to say about precinct counts — anything offered is noise
   // (e.g. "50" showed up pre-election on 2026-08-10). Ignore precinct changes
   // until the contest carries at least one nonzero vote, incoming or stored.
+  // Implausibly tiny precinct totals are county-site partials ("1 of 1
+  // reporting" on a page that has counted one ward) — the exact junk that made
+  // races look 100% counted at 8 PM. No real contest here has < 5 precincts.
+  if (total !== null && total > 0 && total < 5) {
+    notes.push(`${office}: implausible precincts_total ${total} — ignored`)
+    total = storedTotal
+  }
   const anyVotes =
     updates.some(u => (u.votes || 0) > 0) ||
     (existing.results || []).some(r => (toInt(r.votes) || 0) > 0)
@@ -1255,6 +1286,17 @@ exports.handler = async (event = {}) => {
     }
 
     // ── 4–6. Tiered update pass ────────────────────────────────────────────
+    // The clock decides whether races may be called at all tonight.
+    gate.embargo = callEmbargoActive(now, [election.election_date])
+    if (gate.embargo) runMeta.notes.push('Call embargo active: no race is auto-called before 10:30 PM CT tonight.')
+
+    // Every contest someone subscribed to refreshes EVERY run, like statewide.
+    let prioritySet = new Set()
+    try {
+      const { data: subRows } = await sb.from('election_subscriptions').select('contest_id')
+      prioritySet = new Set((subRows || []).map(r => r.contest_id))
+    } catch { /* priority is best-effort */ }
+
     if (contests.length) {
       const remaining = deadline - Date.now()
       if (remaining < 4000) {
@@ -1268,6 +1310,7 @@ exports.handler = async (event = {}) => {
           cadence: decision.cadence || clock.cadence || 'every 5 minutes',
           deadline,
           gate,
+          prioritySet,
         })
         runMeta.notes.push(...upd.notes)
       }
@@ -1561,7 +1604,8 @@ async function discoverCountyContests(sb, election, { chunkIndex, dryRun, deadli
  * everything else — stopping early whenever less than CHUNK_MIN_BUDGET_MS of
  * the run budget is left, so the audit row always gets written.
  */
-async function runTieredUpdates(sb, election, contests, { dryRun, bootstrappedIds, touched, ct, cadence, deadline, gate = null }) {
+async function runTieredUpdates(sb, election, contests, opts) {
+  const { dryRun, bootstrappedIds, touched, ct, cadence, deadline, gate = null } = opts
   const notes = []
   const out = { contests: 0, results: 0, calls: 0, deferred: 0, notes }
 
@@ -1583,22 +1627,25 @@ async function runTieredUpdates(sb, election, contests, { dryRun, bootstrappedId
     return true
   }
 
-  // ── Tier 1 — statewide, every single run ──────────────────────────────────
-  // Capped at 10s: this call runs on every cycle, and one hung request used to
-  // swallow the entire down-ballot budget.
-  const tierOne = contests.filter(isTierOne)
+  // ── Tier 1 — statewide + every contest someone subscribed to, every run ──
+  // Runs CONCURRENTLY with the tier-2 chunks (v1.27.3): wall time for a full
+  // cycle is one Perplexity round-trip, not four, which is what makes a real
+  // 5-minute statewide refresh fit inside the budget.
+  const priority = opts.prioritySet instanceof Set ? opts.prioritySet : new Set()
+  const tierOne = contests.filter(c => isTierOne(c) || priority.has(c.id))
+  const parallel = []
   if (tierOne.length) {
-    await call(tierOne, `Tier 1 (${tierOne.length} statewide contest(s))`, TIER1_TIMEOUT_MS)
+    parallel.push(call(tierOne, `Tier 1 (${tierOne.length} statewide/subscribed contest(s))`, TIER1_TIMEOUT_MS))
   }
 
   // ── Tier 2 — rotating chunks of everything else ───────────────────────────
   // The queue is the UNFILTERED tier-2 field, so chunk membership is stable for
   // the night; decided contests are dropped inside their chunk, for free.
   const queue = tierTwoQueue(contests)
-  const parked = queue.filter(c => DONE_STATUSES.has(c.status)).length
+  const parked = queue.filter(doneCounting).length
   if (!queue.length) return out
   if (parked === queue.length) {
-    notes.push(`Tier 2: all ${parked} down-ballot contest(s) are called or certified — nothing left to rotate.`)
+    notes.push(`Tier 2: all ${parked} down-ballot contest(s) are fully counted — nothing left to rotate.`)
     return out
   }
 
@@ -1610,11 +1657,11 @@ async function runTieredUpdates(sb, election, contests, { dryRun, bootstrappedId
   )
 
   for (let i = 0; i < rot.selected.length; i++) {
-    const list = rot.selected[i]
-    if (!list.length) continue   // every contest in this chunk is already decided
-    const ok = await call(list, `Tier 2 chunk ${rot.indices[i]}/${rot.nChunks - 1} (${list.length} contest(s))`)
-    if (!ok) break
+    const list = rot.selected[i].filter(c => !priority.has(c.id)) // already covered in tier 1 this run
+    if (!list.length) continue   // every contest in this chunk is already covered or fully counted
+    parallel.push(call(list, `Tier 2 chunk ${rot.indices[i]}/${rot.nChunks - 1} (${list.length} contest(s))`))
   }
+  await Promise.all(parallel)
   return out
 }
 
@@ -1679,7 +1726,7 @@ async function updatePass(sb, election, contests, { dryRun, bootstrappedIds, tou
       continue
     }
 
-    const written = await applyContestUpdate(sb, contest, verdict, notes)
+    const written = await applyContestUpdate(sb, contest, verdict, notes, { embargo: gate && gate.embargo })
     if (written !== null) {
       out.contests += 1
       out.results  += written.length
@@ -1703,7 +1750,7 @@ async function updatePass(sb, election, contests, { dryRun, bootstrappedIds, tou
  * precincts, then the determination engine — status only where the contest is
  * still 'auto'. Returns the candidate names written, or null on failure.
  */
-async function applyContestUpdate(sb, contest, verdict, notes) {
+async function applyContestUpdate(sb, contest, verdict, notes, opts = {}) {
   const roster = contest._results || []
   // Captured before anything writes: "did this contest just ENTER
   // recount_possible?" is what decides whether stale winner flags come off.
@@ -1750,12 +1797,19 @@ async function applyContestUpdate(sb, contest, verdict, notes) {
     return upsertRows.map(r => r.candidate_name)
   }
 
-  const { status, detail } = determineStatus({
+  let { status, detail } = determineStatus({
     results: merged,
     precinctsTotal,
     precinctsRptg,
     seats: contest.seats,
   })
+  // Election-night embargo: the clock, not the data, is allowed to call races.
+  if (status === 'called' && opts.embargo) {
+    detail = { ...(detail || {}), embargoed_call: true,
+      reason: `${(detail && detail.reason) || ''} Call withheld — no race is called before 10:30 PM CT on election night.`.trim() }
+    status = 'reporting'
+    notes.push(`${contest.office}: engine result was 'called' — withheld under the 10:30 PM CT embargo.`)
+  }
   const { error: sErr } = await sb.from('election_contests').update({
     status,
     status_detail: detail,
@@ -1864,6 +1918,8 @@ module.exports.parseContestsLoose    = parseContestsLoose
 module.exports.queryPerplexity       = queryPerplexity
 module.exports.makeRunGate           = makeRunGate
 module.exports.winnerFlagAction      = winnerFlagAction
+module.exports.callEmbargoActive     = callEmbargoActive
+module.exports.doneCounting          = doneCounting
 module.exports.fatalNotesOnly        = fatalNotesOnly
 module.exports.MAX_TOTAL_VOTES       = MAX_TOTAL_VOTES
 module.exports.RUN_BUDGET_MS         = RUN_BUDGET_MS

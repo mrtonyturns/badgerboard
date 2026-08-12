@@ -40,10 +40,17 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.27.2'
+const APP_VERSION = 'v1.27.3'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.27.3',
+    date: 'August 11, 2026',
+    changes: [
+      'Election-night guardrails: no race is called or winner announced before 10:30 PM CT, junk precinct figures from early county feeds are rejected, updates keep flowing until every vote is counted, and the statewide sweep now truly refreshes every five minutes',
+    ],
+  },
   {
     version: 'v1.27.2',
     date: 'August 11, 2026',

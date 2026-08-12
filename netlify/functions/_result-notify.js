@@ -474,6 +474,24 @@ function snapshotChanged(prev, next) {
   return false
 }
 
+
+// ── Election-night winner embargo (duplicated tiny CT clock; requiring the
+// poller here would be a circular import) ────────────────────────────────────
+const NOTIFY_CT_FORMAT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/Chicago', hourCycle: 'h23',
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+})
+const EMBARGO_CT_MINUTES = Number(process.env.CALL_EMBARGO_CT_MINUTES) || (22 * 60 + 30)
+function winnerEmbargoActive(electionDate, when = new Date()) {
+  try {
+    const p = {}
+    for (const part of NOTIFY_CT_FORMAT.formatToParts(when)) if (part.type !== 'literal') p[part.type] = part.value
+    const today = `${p.year}-${p.month}-${p.day}`
+    if (String(electionDate || '').slice(0, 10) !== today) return false
+    return ((parseInt(p.hour, 10) % 24) * 60 + parseInt(p.minute, 10)) < EMBARGO_CT_MINUTES
+  } catch { return false }
+}
+
 const isDecided = (contest = {}, results = []) =>
   DECIDED_STATUSES.has(asObj(contest).status) || rankResults(results).some(r => r.declared)
 
@@ -486,7 +504,8 @@ const isDecided = (contest = {}, results = []) =>
  * @param {Date}   now
  * @returns {{kind:'winner'|'recount'|'update'|'none', reason:string, snapshot:Object, patch:Object|null}}
  */
-function decideNotification(rawSub = {}, rawContest = {}, results = [], now = new Date()) {
+function decideNotification(rawSub = {}, rawContest = {}, results = [], now = new Date(), opts = {}) {
+  const winnerEmbargo = opts.winnerEmbargo === true
   const sub = asObj(rawSub)
   const contest = asObj(rawContest)
   const at = asDate(now)
@@ -510,7 +529,7 @@ function decideNotification(rawSub = {}, rawContest = {}, results = [], now = ne
     // …and if the race was ALREADY decided when they subscribed, seed the
     // winner stamp too: nobody wants a "🏆 Winner" blast for a race that was
     // called before they ever pressed the bell.
-    if (isDecided(contest, results) && !sub.winner_notified_at) {
+    if (!winnerEmbargo && isDecided(contest, results) && !sub.winner_notified_at) {
       patch.winner_notified_at = iso
       reason = 'first sight of an already-decided race — baseline seeded, no retroactive winner email'
     }
@@ -519,6 +538,12 @@ function decideNotification(rawSub = {}, rawContest = {}, results = [], now = ne
 
   // ── a. Winner announcement — both modes, once, throttle ignored ───────────
   if (isDecided(contest, results)) {
+    if (winnerEmbargo) {
+      // Owner directive: nobody is told a race is won before 10:30 PM CT on
+      // election night. Bookkeeping is deliberately NOT written — the first
+      // touch after the embargo lifts sends the real announcement.
+      return none('winner email withheld under the 10:30 PM CT election-night embargo')
+    }
     if (!sub.winner_notified_at) {
       return {
         kind: 'winner',
@@ -676,9 +701,10 @@ async function notifyContestChanges(sb, contestIds, { trigger = 'unknown', now =
 
     const electionIds = [...new Set((contests || []).map(c => c.election_id).filter(isUuid))]
     const electionNames = {}
+    const electionDates = {}
     if (electionIds.length) {
-      const { data: elections } = await sb.from('elections').select('id, name').in('id', electionIds)
-      for (const e of elections || []) electionNames[e.id] = e.name
+      const { data: elections } = await sb.from('elections').select('id, name, election_date').in('id', electionIds)
+      for (const e of elections || []) electionNames[e.id] = e.name, electionDates[e.id] = e.election_date
     }
 
     const byId = new Map((contests || []).map(c => [c.id, c]))
@@ -716,7 +742,7 @@ async function notifyContestChanges(sb, contestIds, { trigger = 'unknown', now =
           return
         }
 
-        const decision = decideNotification(sub, contest, rows, at)
+        const decision = decideNotification(sub, contest, rows, at, { winnerEmbargo: winnerEmbargoActive(electionDates[contest.election_id], at) })
         if (decision.kind === 'none') {
           out.skipped++
           // A 'none' can still carry a patch — first sight seeds the baseline
@@ -781,6 +807,7 @@ async function notifyContestChanges(sb, contestIds, { trigger = 'unknown', now =
 }
 
 module.exports = {
+  winnerEmbargoActive,
   notifyContestChanges,
   // pure, testable, previewable
   decideNotification,
