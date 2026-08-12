@@ -861,7 +861,7 @@ async function sendStatusUpdateNow(sb, { contestId = null } = {}) {
         if (!email) { out.skipped++; return }
         const election = elections[contest.election_id] || {}
         const built = buildUpdateEmail(contest, rows, { election, now })
-        const res = await sendEmail({ to: email, ...built })
+        const res = await emailer.sendEmail({ to: email, ...built })
         if (res && !res.error && !res.skipped) {
           out.sent++
           await sb.from('election_subscriptions').update({
