@@ -136,7 +136,7 @@ const BOOTSTRAP_AFTER_MINUTES = 20 * 60 + 30   // 20:30 CT
 // 2 chunks + the statewide call is 3 calls, which fits the 18s run budget with
 // room left for the writes and the emails.
 const TIER2_CHUNK_SIZE = Number(process.env.POLLER_CHUNK_SIZE) || 8
-const TIER2_MAX_CALLS  = Number(process.env.POLLER_TIER2_CALLS) || 6 // parallel since v1.27.3
+const TIER2_MAX_CALLS  = Number(process.env.POLLER_TIER2_CALLS) || 3 // parallel, staggered — 7 concurrent tripped Perplexity's 429 limit on election night
 
 // Never START another chunk with less than this left in the budget — a chunk
 // that gets killed mid-flight costs the whole run its audit row.
@@ -1656,10 +1656,15 @@ async function runTieredUpdates(sb, election, contests, opts) {
     `full sweep every ${Math.ceil(rot.nChunks / Math.max(1, rot.indices.length))} run(s)).`
   )
 
+  let stagger = 0
   for (let i = 0; i < rot.selected.length; i++) {
     const list = rot.selected[i].filter(c => !priority.has(c.id)) // already covered in tier 1 this run
     if (!list.length) continue   // every contest in this chunk is already covered or fully counted
-    parallel.push(call(list, `Tier 2 chunk ${rot.indices[i]}/${rot.nChunks - 1} (${list.length} contest(s))`))
+    const delay = stagger; stagger += 800 // spread call starts so we do not burst past the rate limit
+    parallel.push((async () => {
+      if (delay) await new Promise(res => setTimeout(res, delay))
+      return call(list, `Tier 2 chunk ${rot.indices[i]}/${rot.nChunks - 1} (${list.length} contest(s))`)
+    })())
   }
   await Promise.all(parallel)
   return out

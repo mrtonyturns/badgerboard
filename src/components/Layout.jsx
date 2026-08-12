@@ -40,10 +40,17 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.27.3'
+const APP_VERSION = 'v1.27.4'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.27.4',
+    date: 'August 11, 2026',
+    changes: [
+      'Results flow restored: extraction calls pace themselves under the data provider\u2019s rate limit, the 10:30 PM call embargo now covers every data path, and admins can push a current-numbers email to all race subscribers on demand',
+    ],
+  },
   {
     version: 'v1.27.3',
     date: 'August 11, 2026',

@@ -806,8 +806,87 @@ async function notifyContestChanges(sb, contestIds, { trigger = 'unknown', now =
   }
 }
 
+
+/**
+ * Owner-triggered "send the current numbers NOW" push. Bypasses
+ * change-detection and throttles entirely: every subscription (or every
+ * subscription on one contest) gets an update email with the numbers as they
+ * stand. Winner bookkeeping is untouched; last_notified_at/last_snapshot are
+ * stamped so the regular pipeline resumes cleanly afterwards.
+ */
+async function sendStatusUpdateNow(sb, { contestId = null } = {}) {
+  const out = { sent: 0, failed: 0, skipped: 0, notes: [] }
+  try {
+    let q = sb.from('election_subscriptions').select('*')
+    if (contestId) q = q.eq('contest_id', contestId)
+    const { data: subs, error } = await q
+    if (error) { out.notes.push(`subscription load failed: ${error.message}`); return out }
+    if (!subs || !subs.length) { out.notes.push('no subscriptions'); return out }
+
+    const ids = [...new Set(subs.map(s => s.contest_id))]
+    const { data: contests } = await sb.from('election_contests')
+      .select('id, election_id, office, district, county, seats, status, status_detail, precincts_rptg, precincts_total')
+      .in('id', ids)
+    const { data: results } = await sb.from('election_results')
+      .select('contest_id, candidate_name, party, votes, vote_pct, winner, declared')
+      .in('contest_id', ids)
+    const byId = new Map((contests || []).map(c => [c.id, c]))
+    const resultsById = new Map()
+    for (const r of results || []) {
+      if (!resultsById.has(r.contest_id)) resultsById.set(r.contest_id, [])
+      resultsById.get(r.contest_id).push(r)
+    }
+    const eIds = [...new Set((contests || []).map(c => c.election_id).filter(Boolean))]
+    const elections = {}
+    if (eIds.length) {
+      const { data: es } = await sb.from('elections').select('id, name, election_date').in('id', eIds)
+      for (const e of es || []) elections[e.id] = e
+    }
+
+    const emailCache = new Map()
+    const now = new Date()
+    await runPool(subs, NOTIFY_CONCURRENCY, async (sub) => {
+      try {
+        const contest = byId.get(sub.contest_id)
+        if (!contest) { out.skipped++; return }
+        const rows = resultsById.get(sub.contest_id) || []
+        let email = emailCache.get(sub.user_id)
+        if (email === undefined) {
+          try {
+            const { data } = await sb.auth.admin.getUserById(sub.user_id)
+            email = data && data.user ? data.user.email || null : null
+          } catch { email = null }
+          emailCache.set(sub.user_id, email)
+        }
+        if (!email) { out.skipped++; return }
+        const election = elections[contest.election_id] || {}
+        const built = buildUpdateEmail(contest, rows, { election, now })
+        const res = await sendEmail({ to: email, ...built })
+        if (res && !res.error && !res.skipped) {
+          out.sent++
+          await sb.from('election_subscriptions').update({
+            last_notified_at: now.toISOString(),
+            last_snapshot: snapshotOf(contest, rows),
+          }).eq('id', sub.id)
+        } else {
+          out.failed++
+          out.notes.push(`${contest.office}: send failed${res && res.error ? ` — ${JSON.stringify(res.error).slice(0, 120)}` : res && res.skipped ? ' — email disabled (missing key)' : ''}`)
+        }
+      } catch (e) {
+        out.failed++
+        out.notes.push(`push-update error: ${e.message}`)
+      }
+    })
+    return out
+  } catch (e) {
+    out.notes.push(`sendStatusUpdateNow failed: ${e.message}`)
+    return out
+  }
+}
+
 module.exports = {
   winnerEmbargoActive,
+  sendStatusUpdateNow,
   notifyContestChanges,
   // pure, testable, previewable
   decideNotification,

@@ -43,7 +43,8 @@
 
 const { cors, json, serviceClient, requireAdmin } = require('./_shared')
 const { determineStatus, ALLOWED_STATUSES } = require('./_determination')
-const { notifyContestChanges } = require('./_result-notify')
+const { notifyContestChanges, sendStatusUpdateNow } = require('./_result-notify')
+const { callEmbargoActive } = require('./election-results-poller')
 
 // Column whitelists — never pass client objects straight to the DB
 const ELECTION_FIELDS = ['name', 'election_date', 'filing_deadline', 'type', 'year', 'notes']
@@ -124,12 +125,29 @@ async function runDetermination(sb, contestId, { force = false } = {}) {
       .from('election_results').select('id, votes').eq('contest_id', contestId)
     const results = rows || []
 
-    const { status, detail } = determineStatus({
+    let { status, detail } = determineStatus({
       results,
       precinctsTotal: contest.precincts_total,
       precinctsRptg:  contest.precincts_rptg,
       seats:          contest.seats,
     })
+
+    // Election-night embargo: the ENGINE may not call races before 10:30 PM CT
+    // even on the admin's data-entry path. The admin's explicit call_race /
+    // set_status actions are untouched — the human always outranks the clock.
+    if (status === 'called') {
+      try {
+        const { data: erow } = await sb.from('elections')
+          .select('election_date').eq('id',
+            (await sb.from('election_contests').select('election_id').eq('id', contestId).single()).data?.election_id
+          ).single()
+        if (erow && callEmbargoActive(new Date(), [erow.election_date])) {
+          detail = { ...(detail || {}), embargoed_call: true,
+            reason: `${(detail && detail.reason) || ''} Call withheld — no race is auto-called before 10:30 PM CT on election night.`.trim() }
+          status = 'reporting'
+        }
+      } catch { /* embargo check is best-effort; engine result stands */ }
+    }
 
     const { error: uErr } = await sb.from('election_contests').update({
       status,
@@ -471,6 +489,13 @@ async function route(sb, action, params, headers, event) {
       let parsed
       try { parsed = JSON.parse(res.body) } catch { parsed = { raw: String(res.body).slice(0, 500) } }
       return json(res.statusCode || 200, parsed, headers)
+    }
+
+    // Push a "current numbers" update email to every subscriber right now,
+    // bypassing change-detection and throttles. Owner-triggered only.
+    case 'send_status_update': {
+      const out = await sendStatusUpdateNow(sb, { contestId: isUuid(params.contest_id) ? params.contest_id : null })
+      return json(200, { data: out }, headers)
     }
 
     default:

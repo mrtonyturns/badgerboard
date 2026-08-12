@@ -697,6 +697,11 @@ console.log('Phases 2-3 — election-results-poller window decision')
 
   // — the manual-invocation guard runs BEFORE anything else, so this holds at
   //   any time of day (including inside a live window) —
+  // admin-elections now requires the poller at module load, which can pull it
+  // into the cache while _shared is mocked by earlier blocks — re-require both
+  // fresh so this asserts the REAL auth guard.
+  delete require.cache[require.resolve('../netlify/functions/election-results-poller.js')]
+  delete require.cache[require.resolve('../netlify/functions/_shared.js')]
   const { handler: poller } = require('../netlify/functions/election-results-poller.js')
   const noAuth = await poller({ httpMethod: 'POST', headers: {}, body: JSON.stringify({ force: true, dry_run: true }) })
   t('manual invocation without an admin JWT → 401 before any DB or AI call', noAuth.statusCode === 401)
@@ -757,8 +762,8 @@ console.log('Phases 2-3 — election-results-poller window decision')
       return c.length === 3 && c[0].length === 12 && c[1].length === 12 && c[2].length === 1 })())
   t('chunkList of an empty list is no chunks', chunkList([], 12).length === 0)
   t('chunkList survives junk input', chunkList(null, 0).length === 0 && chunkList([1, 2], NaN).length === 1)
-  t('default chunk size is 8 and 6 parallel tier-2 calls per run (5-minute statewide sweep)',
-    TIER2_CHUNK_SIZE === 8 && TIER2_MAX_CALLS === 6)
+  t('default chunk size is 8 and 3 staggered tier-2 calls per run (rate-limit safe)',
+    TIER2_CHUNK_SIZE === 8 && TIER2_MAX_CALLS === 3)
 
   // — queue composition —
   const q = tierTwoQueue(ballot)
@@ -805,10 +810,10 @@ console.log('Phases 2-3 — election-results-poller window decision')
   t('rotation is fully determined by the clock — same instant, same chunks',
     peak(20, 15).indices.join(',') === peak(20, 15).indices.join(','))
   t('124 contests in rotation → 16 chunks of 8', peak(20, 0).nChunks === 16)
-  t('each run takes 6 chunks', peak(20, 0).indices.length === 6 && peak(20, 5).indices.length === 6)
-  t('the 20:00 run starts at chunk 0', peak(20, 0).indices.join(',') === '0,1,2,3,4,5')
+  t('each run takes 3 chunks', peak(20, 0).indices.length === 3 && peak(20, 5).indices.length === 3)
+  t('the 20:00 run starts at chunk 0', peak(20, 0).indices.join(',') === '0,1,2')
   t('consecutive 5-minute runs cover DISJOINT chunks',
-    peak(20, 5).indices.join(',') === '6,7,8,9,10,11' && peak(20, 10).indices.join(',') === '12,13,14,15,0,1')
+    peak(20, 5).indices.join(',') === '3,4,5' && peak(20, 10).indices.join(',') === '6,7,8')
   t('any minute inside a 5-minute bucket picks the same slice',
     peak(20, 5).indices.join(',') === peak(20, 9).indices.join(','))
   t('the rotation wraps rather than running off the end', (() => {
@@ -831,7 +836,7 @@ console.log('Phases 2-3 — election-results-poller window decision')
   t('the 5-minute tick is 12 per hour off the same origin',
     rotationTick(ct(20, 0)) === 0 && rotationTick(ct(20, 55)) === 11 && rotationTick(ct(21, 0)) === 12)
   t('rotation math survives a junk clock',
-    selectRotationChunks(q, {}, {}).indices.length === 6 && selectRotationChunks([], ct(20, 0), {}).nChunks === 0)
+    selectRotationChunks(q, {}, {}).indices.length === 3 && selectRotationChunks([], ct(20, 0), {}).nChunks === 0)
   t('a single short chunk is still selected exactly once',
     selectRotationChunks(mixed, ct(20, 20), {}).indices.join(',') === '0')
 
