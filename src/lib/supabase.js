@@ -397,6 +397,56 @@ export const deleteVoterSavedList = async (id) => {
   return q
 }
 
+// ── Recruit: searches, prospects, research progress (USER-SCOPED) ────────────
+// RLS (migration 20260812000011) is creator-owns-row on all three tables; the
+// explicit created_by filters here are belt-and-suspenders, matching the
+// voter-list helpers above.
+export const getRecruitmentSearches = async () => {
+  const uid = await currentUserId()
+  let q = supabase.from('recruitment_searches').select('*').order('created_at', { ascending: false })
+  if (uid) q = q.eq('created_by', uid)
+  return q
+}
+
+export const createRecruitmentSearch = async (data) => {
+  const uid = await currentUserId()
+  return supabase.from('recruitment_searches').insert({ ...data, created_by: uid }).select().single()
+}
+
+export const updateRecruitmentSearch = async (id, data) => {
+  const uid = await currentUserId()
+  let q = supabase.from('recruitment_searches').update({ ...data, updated_at: new Date().toISOString() }).eq('id', id)
+  if (uid) q = q.eq('created_by', uid)
+  return q.select().single()
+}
+
+export const deleteRecruitmentSearch = async (id) => {
+  const uid = await currentUserId()
+  let q = supabase.from('recruitment_searches').delete().eq('id', id)
+  if (uid) q = q.eq('created_by', uid)
+  return q
+}
+
+export const getRecruitmentProspects = async (searchId) =>
+  supabase.from('recruitment_prospects').select('*').eq('search_id', searchId).order('last_name')
+
+// No .select() — a 25–500 row insert should not echo the whole payload back.
+export const createRecruitmentProspects = async (rows) =>
+  supabase.from('recruitment_prospects').insert(rows)
+
+export const updateRecruitmentProspect = async (id, data) => {
+  const uid = await currentUserId()
+  let q = supabase.from('recruitment_prospects').update(data).eq('id', id)
+  if (uid) q = q.eq('created_by', uid)
+  return q.select().single()
+}
+
+/** The background run's only durable channel — polled by the Recruit page. */
+export const getRecruitmentProgress = async (searchId) =>
+  supabase.from('recruitment_research_progress')
+    .select('stage, status, message, processed, total, started_at, updated_at')
+    .eq('search_id', searchId).maybeSingle()
+
 // ── Door Knocking: candidate config ──────────────────────────
 // Fetches only the CURRENT USER's candidates so DoorKnocking.jsx
 // can derive geojson file + feature matcher without hardcoding.

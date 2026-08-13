@@ -5,6 +5,7 @@ import {
   FileText, Settings, LogOut, Menu, X, ChevronRight,
   User, CreditCard, Shield, ChevronDown, Tag, DoorOpen, UserCheck,
   ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink, Users2, Swords, BarChart2, FlaskConical,
+  UserPlus,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import BluejackLogo from './BluejackLogo'
@@ -40,10 +41,18 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.28.0'
+const APP_VERSION = 'v1.29.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.29.0',
+    date: 'August 12, 2026',
+    changes: [
+      'Prospecting rebuilt for agencies: discover candidates, enrich them with win-odds scoring you can inspect factor by factor, website and social detection, agency-relationship signals with evidence, and sourced contact info \u2014 exportable to CSV',
+      'New for Action plans \u2014 Recruit: pick a voter list, an office and a district to find residents who could run, research their affiliation and public reputation (Unknown when the record is thin), and export the shortlist',
+    ],
+  },
   {
     version: 'v1.28.0',
     date: 'August 12, 2026',
@@ -426,8 +435,12 @@ const NAV_SECTIONS = [
     { to: '/voter-lists', icon: UserCheck,    label: 'Voter Lists' },
   ] },
   { key: 'connect', label: 'Campaign Connect', icon: Users2, paidOnly: true, direct: { to: '/campaign-connect' } },
+  // v1.29: Action is a real tab strip now — Recruit joins Prospecting. Both are
+  // Action-plan exclusive (tiers.js features.prospecting / features.recruit),
+  // and each owns a route gated by hasFeature() inside its own page.
   { key: 'action', label: 'Action', icon: ListChecks, actionOnly: true, items: [
     { to: '/prospecting', icon: ListChecks, label: 'Prospecting' },
+    { to: '/recruit',     icon: UserPlus,   label: 'Recruit', feature: 'recruit' },
   ] },
   { key: 'beta', label: 'Beta', icon: FlaskConical, betaOnly: true, items: [
     { to: '/polling',   icon: BarChart2, label: 'Polling', betaOnly: true },
@@ -1026,6 +1039,7 @@ export default function Layout() {
     { match: /^\/candidates\/.+/,  title: 'Candidates',             sub: 'Candidate profile' },
     { match: /^\/candidates/,       title: 'Candidates',             sub: 'All tracked candidates across Wisconsin' },
     { match: /^\/prospecting/,      title: 'Prospecting Lists',      sub: 'AI-powered candidate prospecting for political marketing outreach' },
+    { match: /^\/recruit/,          title: 'Recruit',                sub: 'Find and vet candidate prospects for local seats from your voter list' },
     { match: /^\/voter-lists/,      title: 'Voter Lists',            sub: 'Upload voter CSV files, map addresses, and build targeted prospect lists' },
     { match: /^\/(dossiers|profiler)/, title: 'Profiler',            sub: 'AI-generated 14-section political intelligence reports' },
     { match: /^\/compare/,          title: 'Candidate Comparison',   sub: 'Side-by-side intelligence on two candidates', badge: 'Beta' },

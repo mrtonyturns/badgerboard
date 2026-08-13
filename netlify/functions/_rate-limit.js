@@ -31,6 +31,10 @@ const RATE_LIMITS = {
   'research-incumbent':          { perMinute: 6,  perDay: 60  },
   'research-district-history':   { perMinute: 6,  perDay: 60  },
   'generate-prospecting':        { perMinute: 6,  perDay: 60  },
+  // Prospecting v2 enrichment: up to 10 prospects per run, each costing a
+  // Perplexity research call + a Haiku classification + a live site fetch.
+  // 2/min × 10 = 20 prospects a minute; 20 runs a day = 200 prospects a day.
+  'enrich-prospects':            { perMinute: 2,  perDay: 20  },
   'autofill-candidate':          { perMinute: 10, perDay: 100 },
   'generate-bio-summary':        { perMinute: 10, perDay: 100 },
   // BROADSIDE sparring sessions are rapid-fire spoken lines — higher per-minute
@@ -44,6 +48,10 @@ const RATE_LIMITS = {
   'research-district-events':    { perMinute: 2,  perDay: 20  },
   // Beta polling snapshots — heavy pipeline (Perplexity + Grok + Opus per run)
   'polling-snapshot':            { perMinute: 2,  perDay: 15  },
+  // Recruit prospect research: up to 25 people × (Perplexity + Haiku) per run.
+  // Modelled on polling-snapshot's tight budget — the monthly lookup allowance
+  // in tiers.js is the real spend ceiling, this only stops loops/abuse.
+  'recruit-research-background': { perMinute: 2,  perDay: 20  },
 }
 
 const DEFAULT_LIMITS = { perMinute: 10, perDay: 100 }

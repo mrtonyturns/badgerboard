@@ -102,6 +102,7 @@ function ElectionResultsRedirect() {
 const Candidates = lazyRetry(() => import('./pages/Candidates'))  // code-split: trims the initial bundle (M1)
 const CandidateDetail = lazyRetry(() => import('./pages/CandidateDetail'))  // code-split: trims the initial bundle (M1)
 const Prospecting = lazyRetry(() => import('./pages/Prospecting'))  // code-split: trims the initial bundle (M1)
+const Recruit = lazyRetry(() => import('./pages/Recruit'))  // code-split: Action-plan exclusive (v1.29)
 const VoterLists = lazyRetry(() => import('./pages/VoterLists'))  // code-split: trims the initial bundle (M1)
 // Door Knocking parked — restore import + route to re-enable
 // import DoorKnocking from './pages/DoorKnocking'
@@ -233,6 +234,10 @@ const AppRoutes = () => {
         <Route path="candidates" element={<Candidates />} />
         <Route path="candidates/:id" element={<CandidateDetail />} />
         <Route path="prospecting" element={<Prospecting />} />
+        {/* Recruit gates in-page with hasFeature(tier,'recruit') + UpgradePrompt,
+            exactly like Prospecting — the page sells the upgrade instead of
+            bouncing the user to the dashboard. */}
+        <Route path="recruit" element={<Recruit />} />
         <Route path="voter-lists" element={<VoterLists />} />
         {/* <Route path="door-knocking" element={<AdminRoute><DoorKnocking /></AdminRoute>} /> */}
         <Route path="dossiers" element={<Dossiers />} />

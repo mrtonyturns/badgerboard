@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:unit": "node tests/remediation.test.mjs",
+    "test:unit": "node tests/remediation.test.mjs && node tests/prospecting.test.mjs && node tests/recruit.test.mjs",
+    "test:prospecting": "node tests/prospecting.test.mjs",
     "test:security": "node --experimental-vm-modules tests/security.test.js",
     "test:security:local": "APP_BASE_URL=http://localhost:8888 node --experimental-vm-modules tests/security.test.js"
   },

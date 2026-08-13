@@ -1,218 +1,422 @@
+// src/pages/Prospecting.jsx
+// ─── Prospecting v2 — discover → enrich → score → export ─────────────────────
+//
+// Replaces the old three-mode list builder (manual / AI / CSV) with the pipeline
+// from PROSPECTING-redesign-gameplan.md §6. The list builder is no longer the
+// product; it is the LAST step of one.
+//
+//   DISCOVER  filter your candidates DB (+ upcoming-election filters, + CSV
+//             import) and queue prospects
+//   ENRICH    run enrich-prospects-background on up to 10 at a time, with live
+//             server-side progress (a background function's status codes are
+//             discarded by Netlify, so progress lives in a table we poll)
+//   RESULTS   sortable table: win odds with a "why this score" breakdown,
+//             affiliation, verified website, socials, agency-detected badge with
+//             evidence links, contact info with per-field source + confidence
+//   EXPORT    full CSV of every enriched field, or save as a prospecting list
+//
+// COMPLIANCE (owner directive): nothing here reads WEC/CFIS campaign-finance
+// data. Contact info comes from candidate-published pages and cited coverage;
+// agency detection comes from web-visible signals. See the compliance note in
+// netlify/functions/enrich-prospects-background.js and Wis. Stat. §11.1304(12).
+//
+// Design language: the redesign shell tokens (Geist) shared with the Profiler
+// and the dashboards — src/pages/profiler/shared.jsx.
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import React, { useEffect, useState, useRef } from 'react'
 import { format } from 'date-fns'
 import {
-  ListChecks, Sparkles, Plus, Search, Trash2, Download,
-  Copy, Check, AlertCircle, X, Users, FileText, Lock,
-  PenLine, Bot, UserCheck, Mail, Upload, ChevronRight,
-  TrendingUp, TrendingDown, HelpCircle, UserPlus, Filter,
+  Search, Plus, Download, X, AlertCircle, Upload, Globe,
+  RefreshCw, ExternalLink, ShieldAlert, ShieldCheck, ListChecks, Trash2,
+  Sparkles, Mail, Phone, UserPlus, ArrowUp, ArrowDown, Info, Facebook,
+  Instagram, Linkedin, Twitter, Music2,
 } from 'lucide-react'
 import {
-  getCandidates, getOffices, getElections,
-  getProspectingLists, createProspectingList, deleteProspectingList,
-  createCandidate, supabase,
+  getCandidates, getElections, createCandidate, createProspectingList, supabase,
 } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserTier, hasFeature } from '../lib/tiers'
 import UpgradePrompt from '../components/UpgradePrompt'
-import LoadingBar from '../components/LoadingBar'
+import { parseCsvRows } from '../lib/csv'
+import { buildProspectCsv, csvFilename, factorSummary } from '../lib/prospectCsv'
+import { T, cardStyle, Btn, Pill, Spinner, EmptyNote } from './profiler/shared.jsx'
 
-// ── Lean badge ────────────────────────────────────────────────────────────────
-function LeanBadge({ lean, confidence }) {
-  if (lean === 'conservative') return (
-    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-semibold bg-red-100 text-brand-red border border-red-200">
-      <TrendingUp className="w-3 h-3" /> Conservative {confidence ? `${confidence}%` : ''}
-    </span>
-  )
-  if (lean === 'liberal') return (
-    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-semibold bg-blue-100 text-blue-700 border border-blue-200">
-      <TrendingDown className="w-3 h-3" /> Liberal {confidence ? `${confidence}%` : ''}
-    </span>
-  )
+// Must match MAX_PROSPECTS_PER_RUN in enrich-prospects-background.js. The server
+// enforces it; this is the number the UI promises.
+const MAX_BATCH = 10
+
+// Stage labels mirror STAGE_* in the background function.
+const PHASE_LABELS = [
+  'Scoring from your own election data…',
+  'Researching public sources (cited only)…',
+  'Verifying websites, socials and agency signals…',
+  'Saving enriched prospects…',
+]
+const POLL_MS            = 3000
+const MAX_WAIT_MS        = 12 * 60 * 1000
+const HEARTBEAT_STALE_MS = 3 * 60 * 1000
+
+const PARTY_OPTIONS  = ['Republican', 'Democrat', 'Independent', 'Nonpartisan', 'Libertarian', 'Green', 'Other']
+const STATUS_OPTIONS = ['exploring', 'declared', 'primary_winner', 'general', 'elected']
+const LEVEL_OPTIONS  = [
+  { v: '', l: 'All levels' }, { v: 'federal', l: 'Federal' }, { v: 'state', l: 'State' },
+  { v: 'county', l: 'County' }, { v: 'municipal', l: 'Municipal' },
+]
+
+const BAND_TINT = {
+  strong:      { c: '#15803D', bg: '#E6F5EC' },
+  competitive: { c: '#B45309', bg: '#FDF3E3' },
+  longshot:    { c: '#6B6B73', bg: '#F1F1EF' },
+  unknown:     { c: '#6B6B73', bg: '#F1F1EF' },
+}
+
+const freshMs = (iso) => {
+  const t = Date.parse(iso || '')
+  return Number.isFinite(t) ? Date.now() - t : Infinity
+}
+const fmtDay = (d) => {
+  const t = Date.parse(d || '')
+  return Number.isFinite(t) ? format(new Date(t), 'MMM d, yyyy') : '—'
+}
+const lower = (s) => String(s ?? '').toLowerCase()
+
+// ── Small primitives ──────────────────────────────────────────────────────────
+
+function Field({ label, children, style }) {
   return (
-    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-semibold bg-gray-100 text-gray-600 border border-gray-200">
-      <HelpCircle className="w-3 h-3" /> Unknown
-    </span>
+    <div style={{ minWidth: 0, ...style }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.ink4, marginBottom: 5, letterSpacing: '.2px' }}>{label}</div>
+      {children}
+    </div>
   )
 }
 
-// ── Simple CSV parser (handles quoted fields) ─────────────────────────────────
-function parseCSV(text) {
-  const lines = text.split(/\r?\n/).filter(l => l.trim())
-  if (lines.length < 2) return { headers: [], rows: [] }
-
-  function parseLine(line) {
-    const fields = []
-    let cur = ''
-    let inQuote = false
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i]
-      if (ch === '"') {
-        if (inQuote && line[i + 1] === '"') { cur += '"'; i++ }
-        else inQuote = !inQuote
-      } else if (ch === ',' && !inQuote) {
-        fields.push(cur.trim())
-        cur = ''
-      } else {
-        cur += ch
-      }
-    }
-    fields.push(cur.trim())
-    return fields
-  }
-
-  const headers = parseLine(lines[0])
-  const rows = lines.slice(1).map(line => {
-    const vals = parseLine(line)
-    const row = {}
-    headers.forEach((h, i) => { row[h] = vals[i] || '' })
-    return row
-  })
-  return { headers, rows }
+const inputStyle = {
+  width: '100%', border: `1px solid ${T.field}`, borderRadius: 10, padding: '8px 10px',
+  fontSize: 12.5, fontFamily: 'inherit', color: T.ink, background: '#fff', outline: 'none',
 }
 
-// ── MultiSelect ───────────────────────────────────────────────────────────────
-function MultiSelect({ label, options, selected, onChange, open, setOpen, labelFn = (o) => o }) {
-  const optionsArray = Array.isArray(options) ? options : []
-  const selectedArray = Array.isArray(selected) ? selected : []
-  const displayLabel = selectedArray.length === 0 ? `All ${label}` : `${selectedArray.length} selected`
-
+function Chip({ active, children, onClick, title }) {
   return (
-    <div className="relative">
-      <label className="label text-xs">{label}</label>
-      <button
-        type="button"
-        onClick={() => setOpen(open === label ? null : label)}
-        className="input text-sm w-full text-left flex items-center justify-between cursor-pointer"
-      >
-        <span>{displayLabel}</span>
-        <span className="text-xs">▼</span>
-      </button>
-      {open === label && (
-        <div className="absolute top-full left-0 right-0 z-10 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg p-2 max-h-48 overflow-y-auto">
-          {optionsArray.map((opt) => {
-            const val = typeof opt === 'object' && opt.id ? opt.id : opt
-            const display = typeof labelFn === 'function' ? labelFn(opt) : (typeof opt === 'object' ? opt.name : opt)
-            const isSelected = selectedArray.includes(val)
-            return (
-              <label key={val} className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded cursor-pointer text-sm">
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  onChange={() => {
-                    if (isSelected) onChange(selectedArray.filter(s => s !== val))
-                    else onChange([...selectedArray, val])
-                  }}
-                  className="w-4 h-4 accent-brand-red"
-                />
-                {display}
-              </label>
-            )
-          })}
-        </div>
+    <button
+      type="button" onClick={onClick} title={title}
+      style={{
+        border: `1px solid ${active ? T.ink : T.border}`, background: active ? T.ink : '#fff',
+        color: active ? '#fff' : T.ink3, borderRadius: 99, padding: '5px 11px', fontSize: 11.5,
+        fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
+      }}
+    >{children}</button>
+  )
+}
+
+/** Click-away popover anchored under its trigger. */
+function Popover({ open, onClose, children, width = 340 }) {
+  if (!open) return null
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          position: 'absolute', zIndex: 41, top: 'calc(100% + 6px)', left: 0, width,
+          ...cardStyle, borderRadius: 12, padding: 14, boxShadow: '0 10px 30px rgba(0,0,0,.12)',
+          textAlign: 'left', whiteSpace: 'normal', cursor: 'default',
+        }}
+      >{children}</div>
+    </>
+  )
+}
+
+function Banner({ kind = 'error', children, onClose }) {
+  const tint = kind === 'error'
+    ? { bg: '#FDF1F1', br: '#F3D6D6', c: '#9F1239' }
+    : kind === 'warn'
+      ? { bg: T.warmBg, br: T.warmBr, c: T.amber }
+      : { bg: '#F1F6F2', br: '#DCEBE0', c: T.green }
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 8, background: tint.bg,
+      border: `1px solid ${tint.br}`, color: tint.c, borderRadius: 12, padding: '10px 12px',
+      fontSize: 12.5, lineHeight: 1.55, marginBottom: 14,
+    }}>
+      <AlertCircle style={{ width: 15, height: 15, flex: 'none', marginTop: 1 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
+      {onClose && (
+        <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0 }}>
+          <X style={{ width: 14, height: 14 }} />
+        </button>
       )}
     </div>
   )
 }
 
-// ── Add to Candidates modal ───────────────────────────────────────────────────
-function AddToCandidatesModal({ prospects, onClose, onSuccess }) {
-  const [selected, setSelected] = useState(new Set(prospects.map((_, i) => i)))
+// ── Result-table cells ────────────────────────────────────────────────────────
+
+function ScoreCell({ row }) {
+  const [open, setOpen] = useState(false)
+  const score = row.win_odds_score
+  const band = row.win_odds_band || 'unknown'
+  const tint = BAND_TINT[band] || BAND_TINT.unknown
+  const meta = row.win_odds_factors || {}
+  const factors = Array.isArray(meta.factors) ? meta.factors : []
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        type="button" onClick={() => setOpen(o => !o)}
+        title="Why this score"
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6, background: 'none',
+          border: 'none', padding: 0, cursor: factors.length ? 'pointer' : 'default', fontFamily: 'inherit',
+        }}
+      >
+        <span style={{ fontSize: 17, fontWeight: 800, color: score == null ? T.faint : T.ink }}>
+          {score == null ? '—' : Math.round(score)}
+        </span>
+        <Pill c={tint.c} bg={tint.bg}>{band}</Pill>
+        {factors.length > 0 && <Info style={{ width: 12, height: 12, color: T.faint }} />}
+      </button>
+
+      <Popover open={open} onClose={() => setOpen(false)} width={380}>
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: T.ink, marginBottom: 2 }}>Why this score</div>
+        <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>
+          {meta.confidence != null
+            ? `Computed from ${Math.round(Number(meta.confidence) * 100)}% of the model — factors we could not measure are dropped, not guessed.`
+            : 'Transparent weighted model.'}
+        </div>
+        {factors.length === 0 && <EmptyNote>Not scored yet.</EmptyNote>}
+        {factors.map(f => (
+          <div key={f.key} style={{
+            display: 'flex', gap: 10, alignItems: 'baseline', padding: '6px 0',
+            borderTop: `1px solid ${T.divider}`, opacity: f.available ? 1 : 0.6,
+          }}>
+            <div style={{ width: 108, flex: 'none' }}>
+              <div style={{ fontSize: 11.5, fontWeight: 700, color: T.ink2 }}>{f.label}</div>
+              <div style={{ fontSize: 10.5, color: T.faint }}>weight {Math.round(f.weight * 100)}%</div>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 11.5, color: T.ink3, lineHeight: 1.5 }}>{f.basis}</div>
+              {!f.enabled && (
+                <div style={{ fontSize: 10.5, color: T.amber, marginTop: 2 }}>{f.source}</div>
+              )}
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: f.available ? T.ink : T.faint, flex: 'none' }}>
+              {f.available ? `+${f.points}` : '—'}
+            </div>
+          </div>
+        ))}
+        {meta.model_version && (
+          <div style={{ fontSize: 10.5, color: T.faint, marginTop: 10, lineHeight: 1.5 }}>{meta.model_version}</div>
+        )}
+      </Popover>
+    </div>
+  )
+}
+
+const SOCIAL_ICONS = {
+  facebook:  Facebook,
+  instagram: Instagram,
+  x:         Twitter,
+  linkedin:  Linkedin,
+  tiktok:    Music2,
+}
+
+function SocialLinks({ socials }) {
+  const entries = Object.entries(socials || {}).filter(([, v]) => v)
+  if (!entries.length) return <span style={{ color: T.faint, fontSize: 12 }}>—</span>
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+      {entries.map(([k, url]) => {
+        const Icon = SOCIAL_ICONS[k] || Globe
+        return (
+          <a
+            key={k} href={url} target="_blank" rel="noopener noreferrer" title={`${k}: ${url}`}
+            style={{
+              width: 24, height: 24, borderRadius: 7, background: T.chip, display: 'inline-flex',
+              alignItems: 'center', justifyContent: 'center', color: T.ink3,
+            }}
+          >
+            <Icon style={{ width: 13, height: 13 }} />
+          </a>
+        )
+      })}
+    </div>
+  )
+}
+
+function AgencyCell({ row }) {
+  const [open, setOpen] = useState(false)
+  const sig = row.agency_signals || {}
+  const evidence = Array.isArray(sig.evidence) ? sig.evidence : []
+  const detected = sig.detected === true
+  if (!row.enriched_at) return <span style={{ color: T.faint, fontSize: 12 }}>—</span>
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        type="button" onClick={() => setOpen(o => !o)}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', padding: '3px 8px',
+          borderRadius: 99, cursor: evidence.length ? 'pointer' : 'default', fontFamily: 'inherit',
+          fontSize: 11, fontWeight: 700,
+          background: detected ? '#FDF1F1' : '#F1F6F2',
+          color: detected ? '#9F1239' : T.green,
+        }}
+        title={detected ? 'Evidence of an existing agency/consultant' : 'No agency evidence found — open lane'}
+      >
+        {detected ? <ShieldAlert style={{ width: 12, height: 12 }} /> : <ShieldCheck style={{ width: 12, height: 12 }} />}
+        {detected ? `Has help (${sig.confidence ?? 0}%)` : 'No agency found'}
+      </button>
+
+      <Popover open={open} onClose={() => setOpen(false)} width={380}>
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: T.ink, marginBottom: 8 }}>Agency signals</div>
+        {evidence.length === 0 ? (
+          <EmptyNote>
+            No web-visible signal of a paid consultant was found. Campaign-finance
+            (CFIS) vendor records are deliberately not checked — see the compliance note below the table.
+          </EmptyNote>
+        ) : evidence.map((e, i) => (
+          <div key={i} style={{ padding: '6px 0', borderTop: i ? `1px solid ${T.divider}` : 'none' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: T.ink2, textTransform: 'uppercase', letterSpacing: '.3px' }}>
+              {String(e.type || '').replace(/_/g, ' ')}
+            </div>
+            <div style={{ fontSize: 11.5, color: T.ink3, lineHeight: 1.5, marginTop: 2 }}>{e.detail}</div>
+            {e.url && (
+              <a href={e.url} target="_blank" rel="noopener noreferrer"
+                 style={{ fontSize: 11, color: T.red, display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 3 }}>
+                evidence <ExternalLink style={{ width: 10, height: 10 }} />
+              </a>
+            )}
+          </div>
+        ))}
+      </Popover>
+    </div>
+  )
+}
+
+function ContactCell({ row }) {
+  const c = row.contact || {}
+  const emails = Array.isArray(c.emails) ? c.emails : []
+  const phones = Array.isArray(c.phones) ? c.phones : []
+  if (!emails.length && !phones.length) return <span style={{ color: T.faint, fontSize: 12 }}>—</span>
+  return (
+    <div style={{ display: 'grid', gap: 3 }}>
+      {emails.slice(0, 2).map(e => (
+        <div key={e.value} style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+          <Mail style={{ width: 11, height: 11, color: T.faint, flex: 'none' }} />
+          <a href={`mailto:${e.value}`} style={{ fontSize: 11.5, color: T.ink2, textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.value}</a>
+          <Pill c={T.ink4} bg={T.chip} style={{ fontSize: 10 }}>{(e.source || '').replace(/_/g, ' ')} {e.confidence ?? 0}%</Pill>
+        </div>
+      ))}
+      {phones.slice(0, 1).map(p => (
+        <div key={p.value} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <Phone style={{ width: 11, height: 11, color: T.faint, flex: 'none' }} />
+          <span style={{ fontSize: 11.5, color: T.ink2 }}>{p.value}</span>
+          <Pill c={T.ink4} bg={T.chip} style={{ fontSize: 10 }}>{(p.source || '').replace(/_/g, ' ')} {p.confidence ?? 0}%</Pill>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Add-to-Candidates modal (CSV import path) ────────────────────────────────
+// Rewritten from the original: it used to count an "added" for every attempt
+// because createCandidate() resolves with { data, error } instead of throwing —
+// a failed insert was reported as a success. It now counts REAL successes and
+// surfaces the first failure.
+function AddToCandidatesModal({ rows, onClose, onDone }) {
+  const [selected, setSelected] = useState(() => new Set(rows.map((_, i) => i)))
   const [saving, setSaving] = useState(false)
-  const [done, setDone] = useState(false)
-  const [count, setCount] = useState(0)
+  const [result, setResult] = useState(null)   // { added, failed, firstError }
 
   const toggle = (i) => setSelected(prev => {
     const next = new Set(prev)
-    next.has(i) ? next.delete(i) : next.add(i)
+    if (next.has(i)) next.delete(i); else next.add(i)
     return next
   })
 
   const handleAdd = async () => {
     setSaving(true)
-    let added = 0
+    let added = 0, failed = 0, firstError = null
     for (const i of selected) {
-      const p = prospects[i]
+      const p = rows[i]
       try {
-        await createCandidate({
+        const { data, error } = await createCandidate({
           name:   p.name || 'Unknown',
-          email:  p.email  || null,
-          phone:  p.phone  || null,
-          party:  p.lean === 'conservative' ? 'Republican' : p.lean === 'liberal' ? 'Democrat' : null,
+          email:  p.email || null,
+          phone:  p.phone || null,
           status: 'exploring',
-          notes:  p.reasoning ? `AI Classification: ${p.lean} (${p.confidence}% confidence). ${p.reasoning}` : null,
+          notes:  p.note || null,
         })
-        added++
+        if (error || !data) {
+          failed++
+          if (!firstError) firstError = error?.message || 'The database rejected the row.'
+        } else {
+          added++
+        }
       } catch (e) {
-        console.error('Failed to add', p.name, e)
+        failed++
+        if (!firstError) firstError = e.message
       }
     }
-    setCount(added)
-    setDone(true)
+    setResult({ added, failed, firstError })
     setSaving(false)
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between p-5 border-b border-gray-100 flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <UserPlus className="w-5 h-5 text-brand-red" />
-            <h2 className="text-lg font-bold text-gray-900">Add to Candidates</h2>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)' }} />
+      <div style={{ ...cardStyle, position: 'relative', width: '100%', maxWidth: 520, maxHeight: '82vh', display: 'flex', flexDirection: 'column', fontFamily: T.font }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottom: `1px solid ${T.divider}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <UserPlus style={{ width: 16, height: 16, color: T.red }} />
+            <span style={{ fontSize: 14, fontWeight: 800, color: T.ink }}>Add imported rows to Candidates</span>
           </div>
-          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+            <X style={{ width: 16, height: 16, color: T.faint }} />
+          </button>
         </div>
 
-        {done ? (
-          <div className="p-8 text-center">
-            <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-3">
-              <Check className="w-8 h-8 text-green-600" />
+        {result ? (
+          <div style={{ padding: 28, textAlign: 'center' }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: T.ink, marginBottom: 6 }}>
+              {result.added} candidate{result.added === 1 ? '' : 's'} added
             </div>
-            <p className="text-lg font-bold text-gray-900 mb-1">{count} candidate{count !== 1 ? 's' : ''} added</p>
-            <p className="text-sm text-gray-500 mb-4">They now appear in your Candidates section with "Exploring" status.</p>
-            <button onClick={onSuccess} className="btn-primary">View Candidates →</button>
+            {result.failed > 0 && (
+              <div style={{ fontSize: 12.5, color: T.amber, lineHeight: 1.6, marginBottom: 10 }}>
+                {result.failed} row{result.failed === 1 ? '' : 's'} could not be saved.
+                {result.firstError ? ` First error: ${result.firstError}` : ''}
+              </div>
+            )}
+            <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 16 }}>
+              They now appear in Discover with “Exploring” status, ready to queue for enrichment.
+            </div>
+            <Btn kind="primary" onClick={onDone}>Back to Discover</Btn>
           </div>
         ) : (
           <>
-            <div className="flex items-center justify-between px-5 py-2 bg-gray-50 border-b border-gray-100 flex-shrink-0">
-              <p className="text-xs text-gray-500">{selected.size} of {prospects.length} selected</p>
-              <div className="flex gap-3 text-xs text-brand-red font-medium">
-                <button onClick={() => setSelected(new Set(prospects.map((_, i) => i)))}>All</button>
-                <button onClick={() => setSelected(new Set())}>None</button>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 16px', background: T.hover, borderBottom: `1px solid ${T.divider}` }}>
+              <span style={{ fontSize: 11.5, color: T.muted }}>{selected.size} of {rows.length} selected</span>
+              <div style={{ display: 'flex', gap: 12 }}>
+                <button onClick={() => setSelected(new Set(rows.map((_, i) => i)))} style={{ background: 'none', border: 'none', color: T.red, fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}>All</button>
+                <button onClick={() => setSelected(new Set())} style={{ background: 'none', border: 'none', color: T.red, fontSize: 11.5, fontWeight: 700, cursor: 'pointer' }}>None</button>
               </div>
             </div>
-
-            <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
-              {prospects.map((p, i) => (
-                <label key={i} className={`flex items-center gap-3 px-5 py-3 cursor-pointer hover:bg-gray-50 ${selected.has(i) ? 'bg-brand-red/5' : ''}`}>
-                  <input
-                    type="checkbox"
-                    checked={selected.has(i)}
-                    onChange={() => toggle(i)}
-                    className="w-4 h-4 accent-brand-red flex-shrink-0"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{p.name}</p>
-                    {p.email && <p className="text-xs text-gray-400 truncate">{p.email}</p>}
+            <div style={{ flex: 1, overflowY: 'auto' }}>
+              {rows.map((p, i) => (
+                <label key={i} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 16px', borderBottom: `1px solid ${T.divider}`, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={selected.has(i)} onChange={() => toggle(i)} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: T.ink }}>{p.name}</div>
+                    {(p.email || p.phone) && <div style={{ fontSize: 11, color: T.faint }}>{[p.email, p.phone].filter(Boolean).join(' · ')}</div>}
                   </div>
-                  <LeanBadge lean={p.lean} confidence={p.confidence} />
                 </label>
               ))}
             </div>
-
-            <div className="p-4 border-t border-gray-100 flex-shrink-0">
-              <button
-                onClick={handleAdd}
-                disabled={saving || selected.size === 0}
-                className="btn-primary w-full flex items-center justify-center gap-2"
-              >
-                {saving ? (
-                  <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Adding...</>
-                ) : (
-                  <><UserPlus className="w-4 h-4" /> Add {selected.size} to Candidates</>
-                )}
-              </button>
+            <div style={{ padding: 14, borderTop: `1px solid ${T.divider}` }}>
+              <Btn kind="primary" onClick={handleAdd} disabled={saving || selected.size === 0} style={{ width: '100%' }}>
+                {saving ? <><Spinner size={14} color="#fff" /> Adding…</> : <>Add {selected.size} to Candidates</>}
+              </Btn>
             </div>
           </>
         )}
@@ -221,824 +425,839 @@ function AddToCandidatesModal({ prospects, onClose, onSuccess }) {
   )
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
+// ── Main page ────────────────────────────────────────────────────────────────
+
 export default function Prospecting() {
   const navigate = useNavigate()
   const { user } = useAuth()
-  const [lists, setLists]           = useState([])
-  const [selected, setSelected]     = useState(null)
-  const [candidates, setCandidates] = useState([])
-  const [offices, setOffices]       = useState([])
-  const [elections, setElections]   = useState([])
-  const [loading, setLoading]       = useState(false)
-  const [generating, setGenerating] = useState(false)
-  const [error, setError]           = useState('')
-  const [showBuilder, setShowBuilder]     = useState(false)
-  const [listTypeModal, setListTypeModal] = useState(false)
-  const [builderMode, setBuilderMode]     = useState('ai')   // 'ai' | 'manual' | 'csv'
-  const [copied, setCopied]               = useState(false)
-  const [searchList, setSearchList]       = useState('')
-  const [leanFilter, setLeanFilter]       = useState('all')  // 'all' | 'conservative' | 'liberal' | 'unknown'
-  const [showAddModal, setShowAddModal]   = useState(false)
-
-  // Manual list state
-  const [manualSelected, setManualSelected]   = useState(new Set())
-  const [manualSearch, setManualSearch]       = useState('')
-
-  // CSV state
-  const fileInputRef                = useRef(null)
-  const [csvHeaders, setCsvHeaders] = useState([])
-  const [csvRows, setCsvRows]       = useState([])
-  const [csvProgress, setCsvProgress] = useState(null) // { done, total }
-  const [csvFileName, setCsvFileName] = useState('')
-
-  // Builder form state
-  const [listName, setListName]         = useState('')
-  const [listDesc, setListDesc]         = useState('')
-  const [filterLevel, setFilterLevel]   = useState('')
-  const [filterParties, setFilterParties]   = useState([])
-  const [filterElections, setFilterElections] = useState([])
-  const [filterStatuses, setFilterStatuses]   = useState(['declared'])
-  const [includeContact, setIncludeContact]   = useState(true)
-  const [customInstructions, setCustomInstructions] = useState('')
-  const [openDropdown, setOpenDropdown]             = useState(null)
-
   const userTier = getUserTier(user)
 
-  useEffect(() => { fetchData() }, [])
+  const [tab, setTab] = useState('discover')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [schemaMissing, setSchemaMissing] = useState(false)
 
-  const fetchData = async () => {
-    const [{ data: l }, { data: c }, { data: o }, { data: e }] = await Promise.all([
-      getProspectingLists(),
-      getCandidates({}),
-      getOffices(),
-      getElections(),
-    ])
-    setLists(l || [])
-    setCandidates(c || [])
-    setOffices(o || [])
-    setElections(e || [])
-  }
+  const [candidates, setCandidates] = useState([])
+  const [elections, setElections] = useState([])
+  const [prospects, setProspects] = useState([])
 
-  // ── AI list generation ──────────────────────────────────────────────────────
-  const handleGenerate = async () => {
-    if (!listName) return
-    setGenerating(true)
-    setError('')
+  // Discover filters
+  const [q, setQ] = useState('')
+  const [level, setLevel] = useState('')
+  const [party, setParty] = useState('')
+  const [statuses, setStatuses] = useState(['exploring', 'declared'])
+  const [electionId, setElectionId] = useState('')
+  const [upcomingOnly, setUpcomingOnly] = useState(true)
+  const [picked, setPicked] = useState(() => new Set())
 
-    let filtered = candidates
-    if (filterLevel) filtered = filtered.filter(c => c.office?.level === filterLevel)
-    if (filterParties.length > 0) filtered = filtered.filter(c => filterParties.includes(c.party))
-    if (filterElections.length > 0) filtered = filtered.filter(c => filterElections.includes(c.election_id))
-    if (filterStatuses.length > 0) filtered = filtered.filter(c => filterStatuses.includes(c.status))
+  // Enrich queue
+  const [queued, setQueued] = useState(() => new Set())
+  const [run, setRun] = useState(null)   // { runId, stage, status, total, completed, failed, message }
+  const runAlive = useRef(false)
 
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      const token = session?.access_token
-      const res = await fetch('/.netlify/functions/generate-prospecting', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          listName, listDesc,
-          candidates: filtered,
-          filters: { filterLevel, filterParties, filterElections, filterStatuses },
-          includeContact, customInstructions,
-        }),
-      })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error || 'Generation failed')
+  // Results filters
+  const [rq, setRq] = useState('')
+  const [minScore, setMinScore] = useState(0)
+  const [hideAgency, setHideAgency] = useState(false)
+  const [onlyContact, setOnlyContact] = useState(false)
+  const [websiteFilter, setWebsiteFilter] = useState('all')  // all | yes | facebook_only | no
+  const [sort, setSort] = useState({ key: 'win_odds_score', dir: 'desc' })
 
-      const { data } = await createProspectingList({
-        name: listName, description: listDesc,
-        filters: { filterLevel, filterParties, filterElections, filterStatuses },
-        candidates: json.candidates,
-        total_count: json.candidates?.length || filtered.length,
-        notes: json.notes || '',
-        created_by: user?.id,
-      })
-      await fetchData()
-      setSelected(data)
-      setShowBuilder(false)
-      resetForm()
-    } catch (err) {
-      setError(err.message || 'Generation failed. Check your Anthropic API key in Settings.')
+  // CSV import
+  const fileRef = useRef(null)
+  const [csvRows, setCsvRows] = useState([])
+  const [csvName, setCsvName] = useState('')
+  const [showAddModal, setShowAddModal] = useState(false)
+
+  // ── Data loading ───────────────────────────────────────────────────────────
+  const loadProspects = useCallback(async () => {
+    const { data, error: err } = await supabase
+      .from('prospect_profiles')
+      .select('*')
+      .order('created_at', { ascending: false })
+    if (err) {
+      // The migration ships with this release but is applied by the owner —
+      // until then the page must degrade, not explode.
+      if (/does not exist|schema cache|relation/i.test(err.message || '')) setSchemaMissing(true)
+      else setError(err.message)
+      return
     }
-    setGenerating(false)
-  }
+    setSchemaMissing(false)
+    setProspects(data || [])
+  }, [])
 
-  // ── Manual list save ────────────────────────────────────────────────────────
-  const handleSaveManualList = async () => {
-    if (!listName) return
-    setGenerating(true)
-    setError('')
+  const loadAll = useCallback(async () => {
+    setLoading(true)
     try {
-      const entries = candidates
-        .filter(c => manualSelected.has(c.id))
-        .map(c => ({
-          name: c.name, party: c.party,
-          office: c.office?.name, district: c.office?.district_name,
-          status: c.status,
-          email: includeContact ? c.email : undefined,
-          phone: includeContact ? c.phone : undefined,
-          website: includeContact ? c.website : undefined,
-        }))
-
-      const { data } = await createProspectingList({
-        name: listName, description: listDesc || 'Manual list',
-        filters: { type: 'manual' },
-        candidates: entries, total_count: entries.length,
-        notes: 'Manually assembled prospecting list',
-        created_by: user?.id,
-      })
-      await fetchData()
-      setSelected(data)
-      setShowBuilder(false)
-      resetForm()
-    } catch (err) {
-      setError(err.message || 'Failed to save list.')
+      const [{ data: c }, { data: e }] = await Promise.all([getCandidates({}), getElections()])
+      setCandidates(c || [])
+      setElections(e || [])
+      await loadProspects()
+    } catch (e) {
+      setError(e.message || 'Could not load your prospecting data.')
     }
-    setGenerating(false)
+    setLoading(false)
+  }, [loadProspects])
+
+  useEffect(() => { loadAll() }, [loadAll])
+  useEffect(() => () => { runAlive.current = false }, [])
+
+  // ── Discover ───────────────────────────────────────────────────────────────
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const upcomingElections = useMemo(
+    () => (elections || []).filter(e => !e.election_date || e.election_date >= today),
+    [elections, today]
+  )
+
+  const queuedCandidateIds = useMemo(
+    () => new Set(prospects.map(p => p.candidate_id).filter(Boolean)),
+    [prospects]
+  )
+
+  const discoverRows = useMemo(() => {
+    const needle = lower(q).trim()
+    return (candidates || []).filter(c => {
+      if (level && c.office?.level !== level) return false
+      if (party && c.party !== party) return false
+      if (statuses.length && !statuses.includes(c.status)) return false
+      if (electionId && c.election_id !== electionId) return false
+      if (upcomingOnly) {
+        const d = c.election?.election_date
+        if (!d || d < today) return false
+      }
+      if (needle) {
+        const hay = `${c.name || ''} ${c.office?.name || ''} ${c.office?.district_name || ''} ${c.office?.county || ''}`
+        if (!lower(hay).includes(needle)) return false
+      }
+      return true
+    })
+  }, [candidates, q, level, party, statuses, electionId, upcomingOnly, today])
+
+  const addToQueue = async () => {
+    setError(''); setNotice('')
+    if (schemaMissing) { setError('The prospecting tables have not been migrated yet.'); return }
+    const chosen = discoverRows.filter(c => picked.has(c.id))
+    const fresh = chosen.filter(c => !queuedCandidateIds.has(c.id))
+    const skipped = chosen.length - fresh.length
+    if (!fresh.length) {
+      setNotice(skipped ? `All ${skipped} selected prospect${skipped === 1 ? ' is' : 's are'} already in the queue.` : 'Select at least one candidate first.')
+      return
+    }
+    const rows = fresh.map(c => ({
+      created_by: user?.id,
+      candidate_id: c.id,
+      name: c.name,
+      office_name: c.office?.name || null,
+      district_name: c.office?.district_name || null,
+      county: c.office?.county || null,
+      level: c.office?.level || null,
+      election_id: c.election_id || null,
+      election_date: c.election?.election_date || null,
+      party: c.party || null,
+      discovery_source: 'candidates_db',
+      enrichment_status: 'pending',
+    }))
+    const { data, error: err } = await supabase.from('prospect_profiles').insert(rows).select()
+    // Count REAL inserts. A partial failure must not report a clean success.
+    const added = Array.isArray(data) ? data.length : 0
+    if (err && added === 0) { setError(`Could not queue prospects: ${err.message}`); return }
+    setProspects(prev => [...(data || []), ...prev])
+    setPicked(new Set())
+    setNotice(
+      `${added} prospect${added === 1 ? '' : 's'} queued for enrichment` +
+      `${skipped ? ` · ${skipped} already queued` : ''}` +
+      `${err ? ` · some rows failed: ${err.message}` : ''}`
+    )
+    setTab('enrich')
   }
 
-  // ── CSV: file picked ────────────────────────────────────────────────────────
-  const handleCsvFile = (e) => {
-    const file = e.target.files?.[0]
+  // ── CSV import (uses the shared, quoted-field-safe parser) ─────────────────
+  const handleCsvFile = (ev) => {
+    const file = ev.target.files?.[0]
+    ev.target.value = ''
     if (!file) return
-    setCsvFileName(file.name)
+    setCsvName(file.name)
     const reader = new FileReader()
-    reader.onload = (ev) => {
-      const { headers, rows } = parseCSV(ev.target.result)
-      setCsvHeaders(headers)
-      setCsvRows(rows)
-      setCsvProgress(null)
+    reader.onload = (e) => {
+      try {
+        const rows = parseCsvRows(e.target.result)
+        if (rows.length < 2) { setError('That CSV has no data rows.'); return }
+        const headers = rows[0].map(h => lower(h).trim())
+        const find = (...names) => headers.findIndex(h => names.some(n => h.includes(n)))
+        const iName = find('name', 'full name', 'candidate')
+        const iEmail = find('email', 'e-mail')
+        const iPhone = find('phone', 'mobile', 'cell')
+        if (iName < 0) { setError('That CSV has no recognisable name column.'); return }
+        const parsed = rows.slice(1)
+          .map(r => ({
+            name: String(r[iName] ?? '').trim(),
+            email: iEmail >= 0 ? String(r[iEmail] ?? '').trim() : '',
+            phone: iPhone >= 0 ? String(r[iPhone] ?? '').trim() : '',
+            note: `Imported from ${file.name}`,
+          }))
+          .filter(r => r.name)
+        if (!parsed.length) { setError('No named rows were found in that CSV.'); return }
+        setError('')
+        setCsvRows(parsed)
+        setShowAddModal(true)
+      } catch (e) {
+        setError(`Could not read that CSV: ${e.message}`)
+      }
     }
     reader.readAsText(file)
-    // Reset input so same file can be re-uploaded
-    e.target.value = ''
   }
 
-  // ── CSV: run AI classification ──────────────────────────────────────────────
-  const handleClassifyAndSave = async () => {
-    if (!listName || csvRows.length === 0) return
-    setGenerating(true)
-    setError('')
-    setCsvProgress({ done: 0, total: csvRows.length })
+  // ── Enrichment run ─────────────────────────────────────────────────────────
+  const queueRows = useMemo(
+    () => prospects.filter(p => p.enrichment_status !== 'enriched'),
+    [prospects]
+  )
+  const enrichedRows = useMemo(
+    () => prospects.filter(p => p.enriched_at),
+    [prospects]
+  )
 
+  const pollRun = useCallback(async (runId, startedAt) => {
+    const deadline = startedAt + MAX_WAIT_MS
+    for (;;) {
+      await new Promise(r => setTimeout(r, POLL_MS))
+      if (!runAlive.current) return
+      const { data } = await supabase
+        .from('prospecting_enrichment_progress')
+        .select('stage,status,message,total,completed,failed,current_name,started_at,updated_at')
+        .eq('run_id', runId).maybeSingle()
+
+      if (data) {
+        setRun(r => ({ ...(r || {}), runId, ...data }))
+        if (data.status === 'error') {
+          setError(data.message || 'Enrichment failed. Anything it finished before the failure was saved.')
+          setRun(null)
+          await loadProspects()
+          return
+        }
+        if (data.status === 'done') {
+          setNotice(data.message || `Enriched ${data.completed} of ${data.total} prospects.`)
+          setRun(null)
+          await loadProspects()
+          setTab('results')
+          return
+        }
+        if (freshMs(data.updated_at) > HEARTBEAT_STALE_MS) {
+          setError('That enrichment run stopped reporting. Any prospects it finished were saved — try the rest again.')
+          setRun(null)
+          await loadProspects()
+          return
+        }
+      }
+      if (Date.now() > deadline) {
+        setError('The enrichment run took too long. Any prospects it finished were saved.')
+        setRun(null)
+        await loadProspects()
+        return
+      }
+    }
+  }, [loadProspects])
+
+  const startEnrichment = async () => {
+    setError(''); setNotice('')
+    const ids = [...queued].slice(0, MAX_BATCH)
+    if (!ids.length) { setNotice('Select at least one queued prospect.'); return }
+    const runId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}`.padEnd(36, '0')
+    const startedAt = Date.now()
+    setRun({ runId, stage: 1, status: 'running', total: ids.length, completed: 0, failed: 0 })
+    runAlive.current = true
     try {
       const { data: { session } } = await supabase.auth.getSession()
-      const token = session?.access_token
-
-      // Send ALL rows at once — the function batches internally (20/batch)
-      const res = await fetch('/.netlify/functions/classify-csv-prospects', {
+      const res = await fetch('/.netlify/functions/enrich-prospects-background', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         },
-        body: JSON.stringify({ prospects: csvRows }),
+        body: JSON.stringify({ run_id: runId, prospect_ids: ids }),
       })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error || 'Classification failed')
-
-      const results = json.results || []
-      setCsvProgress({ done: results.length, total: results.length })
-
-      const { data } = await createProspectingList({
-        name: listName,
-        description: listDesc || `CSV import — ${csvFileName}`,
-        filters: { type: 'csv', source_file: csvFileName },
-        candidates: results,
-        total_count: results.length,
-        notes: `AI-classified ${results.length} prospects from CSV. Conservative: ${results.filter(r => r.lean === 'conservative').length}, Liberal: ${results.filter(r => r.lean === 'liberal').length}, Unknown: ${results.filter(r => r.lean === 'unknown').length}.`,
-        created_by: user?.id,
-      })
-
-      await fetchData()
-      setSelected(data)
-      setShowBuilder(false)
-      resetForm()
-    } catch (err) {
-      setError(err.message || 'CSV classification failed.')
-      setCsvProgress(null)
+      // Netlify answers a background invocation with 202 before the handler runs —
+      // anything else here is a genuine dispatch failure.
+      if (res.status !== 202 && !res.ok) {
+        let detail = ''
+        try { detail = (await res.json())?.error || '' } catch { /* non-JSON */ }
+        throw new Error(detail || 'Could not start enrichment — try again.')
+      }
+      setQueued(new Set())
+      await pollRun(runId, startedAt)
+    } catch (e) {
+      setError(e.message)
+      setRun(null)
+    } finally {
+      runAlive.current = false
     }
-    setGenerating(false)
   }
 
-  const resetForm = () => {
-    setListName(''); setListDesc(''); setFilterLevel('')
-    setFilterParties([]); setFilterElections([])
-    setFilterStatuses(['declared']); setIncludeContact(true)
-    setCustomInstructions('')
-    setManualSelected(new Set()); setManualSearch('')
-    setCsvHeaders([]); setCsvRows([]); setCsvProgress(null); setCsvFileName('')
-    setError('')
-  }
-
-  const openNewListModal = () => setListTypeModal(true)
-
-  const filteredManualCandidates = manualSearch
-    ? candidates.filter(c =>
-        c.name?.toLowerCase().includes(manualSearch.toLowerCase()) ||
-        c.office?.name?.toLowerCase().includes(manualSearch.toLowerCase())
-      )
-    : candidates
-
-  const handleDelete = async (id) => {
-    if (!window.confirm('Delete this prospecting list?')) return
-    await deleteProspectingList(id)
-    if (selected?.id === id) setSelected(null)
-    fetchData()
-  }
-
-  const handleCopy = () => {
-    if (!selected) return
-    navigator.clipboard?.writeText(formatListAsText(selected))
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-
-  const handleDownload = () => {
-    if (!selected) return
-    const text = formatListAsText(selected)
-    const blob = new Blob([text], { type: 'text/plain' })
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = `${selected.name.replace(/\s+/g, '_')}_${format(new Date(), 'yyyy-MM-dd')}.txt`
-    a.click()
-  }
-
-  const formatListAsText = (list) => {
-    const lines = [`PROSPECTING LIST: ${list.name}`, `Generated: ${format(new Date(list.created_at), 'MMMM d, yyyy')}`, '']
-    if (list.description) lines.push(list.description, '')
-    lines.push('='.repeat(60), '')
-    const items = list.candidates || []
-    items.forEach((c, i) => {
-      lines.push(`${i + 1}. ${c.name || c.candidate_name || 'Unknown'}`)
-      if (c.lean) lines.push(`   Political Lean: ${c.lean}${c.confidence ? ` (${c.confidence}% confidence)` : ''}`)
-      if (c.party) lines.push(`   Party: ${c.party}`)
-      if (c.office) lines.push(`   Office: ${c.office}`)
-      if (c.district) lines.push(`   District: ${c.district}`)
-      if (c.status) lines.push(`   Status: ${c.status}`)
-      if (c.email) lines.push(`   Email: ${c.email}`)
-      if (c.phone) lines.push(`   Phone: ${c.phone}`)
-      if (c.website) lines.push(`   Website: ${c.website}`)
-      if (c.reasoning) lines.push(`   AI Notes: ${c.reasoning}`)
-      lines.push('')
+  // ── Results ────────────────────────────────────────────────────────────────
+  const visibleResults = useMemo(() => {
+    const needle = lower(rq).trim()
+    let rows = enrichedRows.filter(p => {
+      if (needle) {
+        const hay = `${p.name || ''} ${p.office_name || ''} ${p.district_name || ''} ${p.county || ''} ${p.affiliation || ''}`
+        if (!lower(hay).includes(needle)) return false
+      }
+      if (minScore > 0 && !(Number(p.win_odds_score) >= minScore)) return false
+      if (hideAgency && p.agency_signals?.detected === true) return false
+      if (websiteFilter !== 'all' && p.website_state !== websiteFilter) return false
+      if (onlyContact) {
+        const c = p.contact || {}
+        if (!(c.emails?.length || c.phones?.length)) return false
+      }
+      return true
     })
-    return lines.join('\n')
+    const dir = sort.dir === 'asc' ? 1 : -1
+    const val = (row) => {
+      switch (sort.key) {
+        case 'win_odds_score': return row.win_odds_score == null ? null : Number(row.win_odds_score)
+        case 'name':           return lower(row.name)
+        case 'office_name':    return lower(row.office_name)
+        case 'affiliation':    return lower(row.affiliation)
+        case 'website_state':  return lower(row.website_state)
+        case 'agency':         return row.agency_signals?.detected ? 1 : 0
+        case 'contact':        return (row.contact?.emails?.length || 0) + (row.contact?.phones?.length || 0)
+        case 'enriched_at':    return Date.parse(row.enriched_at || '') || 0
+        default:               return 0
+      }
+    }
+    rows = [...rows].sort((a, b) => {
+      const av = val(a), bv = val(b)
+      // Nulls always sink, whichever way the column is sorted.
+      if (av == null && bv == null) return 0
+      if (av == null) return 1
+      if (bv == null) return -1
+      if (av < bv) return -1 * dir
+      if (av > bv) return 1 * dir
+      return 0
+    })
+    return rows
+  }, [enrichedRows, rq, minScore, hideAgency, onlyContact, websiteFilter, sort])
+
+  const exportCsv = () => {
+    try {
+      const csv = buildProspectCsv(visibleResults)
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = csvFilename('badgerboard_prospects')
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      setNotice(`Exported ${visibleResults.length} prospect${visibleResults.length === 1 ? '' : 's'}.`)
+    } catch (e) {
+      setError(`Export failed: ${e.message}`)
+    }
   }
 
-  const previewCount = (() => {
-    let f = candidates
-    if (filterLevel) f = f.filter(c => c.office?.level === filterLevel)
-    if (filterParties.length > 0) f = f.filter(c => filterParties.includes(c.party))
-    if (filterElections.length > 0) f = f.filter(c => filterElections.includes(c.election_id))
-    if (filterStatuses.length > 0) f = f.filter(c => filterStatuses.includes(c.status))
-    return f.length
-  })()
-
-  const filteredLists = searchList
-    ? lists.filter(l => (l?.name || '').toLowerCase().includes(searchList.toLowerCase()))
-    : lists
-
-  const selectedCandidates = selected?.candidates || []
-  const isCsvList = selected?.filters?.type === 'csv'
-
-  // Filter prospecting list by lean
-  const visibleCandidates = leanFilter === 'all'
-    ? selectedCandidates
-    : selectedCandidates.filter(c => c.lean === leanFilter)
-
-  // Lean summary counts
-  const leanCounts = {
-    conservative: selectedCandidates.filter(c => c.lean === 'conservative').length,
-    liberal:      selectedCandidates.filter(c => c.lean === 'liberal').length,
-    unknown:      selectedCandidates.filter(c => !c.lean || c.lean === 'unknown').length,
+  const saveAsList = async () => {
+    setError(''); setNotice('')
+    if (!visibleResults.length) { setNotice('Nothing to save — adjust your filters.'); return }
+    const name = window.prompt('Name this prospecting list', `Enriched prospects — ${format(new Date(), 'MMM d, yyyy')}`)
+    if (!name) return
+    const entries = visibleResults.map(p => ({
+      name: p.name, office: p.office_name, district: p.district_name,
+      party: p.affiliation, win_odds: p.win_odds_score, win_odds_why: factorSummary(p),
+      website: p.website_url, website_state: p.website_state, socials: p.socials,
+      agency_detected: p.agency_signals?.detected === true,
+      email: p.contact?.emails?.[0]?.value || null,
+      email_source: p.contact?.emails?.[0]?.source || null,
+      phone: p.contact?.phones?.[0]?.value || null,
+    }))
+    const { data, error: err } = await createProspectingList({
+      name,
+      description: `Enriched prospect list (${entries.length} prospects)`,
+      filters: { type: 'enriched_v2', minScore, hideAgency, onlyContact, websiteFilter },
+      candidates: entries,
+      total_count: entries.length,
+      notes: 'Built from the Prospecting v2 enrichment pipeline. Contact data from candidate-published sources only; no CFIS campaign-finance data.',
+      created_by: user?.id,
+    })
+    // createProspectingList resolves with { data, error } — it does NOT throw.
+    // The old page treated any resolution as success and showed a saved list
+    // that never existed.
+    if (err || !data) { setError(`Could not save the list: ${err?.message || 'the database rejected it'}`); return }
+    setNotice(`Saved “${data.name}” with ${entries.length} prospects.`)
   }
 
-  // Feature gate
+  const removeProspect = async (id) => {
+    if (!window.confirm('Remove this prospect from your pipeline?')) return
+    const { error: err } = await supabase.from('prospect_profiles').delete().eq('id', id)
+    if (err) { setError(`Could not remove: ${err.message}`); return }
+    setProspects(prev => prev.filter(p => p.id !== id))
+  }
+
+  // ── Feature gate ───────────────────────────────────────────────────────────
+  // (All hooks above run unconditionally — the gate is the last thing.)
   if (!hasFeature(userTier, 'prospecting')) return (
-    <div className="max-w-xl mx-auto pt-12">
+    <div style={{ maxWidth: 620, margin: '0 auto', paddingTop: 40, fontFamily: T.font }}>
       <UpgradePrompt
-        feature="Outreach Prospecting"
-        hook="Stop guessing who to target. Campaign plan generates AI-filtered candidate lists sorted by race competitiveness, party, office, and district — ready to export and act on."
-        plan="Campaign"
+        feature="Prospecting"
+        hook="Find the candidates who are winnable, reachable, and don't have an agency yet — before your competitors do."
+        plan="Action — Monitor"
         price="from $89/mo"
         benefits={[
-          'AI-generated prospecting lists with custom filters',
-          'Filter by party, office type, district, competitiveness',
-          'CSV upload with AI political lean classification',
-          'Export to CSV for outreach campaigns',
-          'Unlimited Campaign Intel briefs',
+          'Win-odds scoring with a transparent factor breakdown',
+          'Verified campaign websites, socials and public contact info',
+          '“Already has an agency” detection with evidence links',
+          'Filter to the open lane: no agency, no website, real odds',
+          'Full CSV export of every enriched field',
         ]}
       />
     </div>
   )
 
-  return (
-    <div className="space-y-6">
-      <LoadingBar loading={loading} />
-      <div className="flex items-start justify-end">
-        <button onClick={openNewListModal} className="btn-primary flex items-center gap-2">
-          <Plus className="w-4 h-4" /> New List
+  const sortBtn = (key, label, width) => {
+    const active = sort.key === key
+    const Arrow = sort.dir === 'asc' ? ArrowUp : ArrowDown
+    return (
+      <th style={{ ...thStyle, width }}>
+        <button
+          type="button"
+          onClick={() => setSort(s => ({ key, dir: s.key === key && s.dir === 'desc' ? 'asc' : 'desc' }))}
+          style={{
+            background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'inherit',
+            fontSize: 11, fontWeight: 700, color: active ? T.ink : T.ink4, letterSpacing: '.3px',
+            display: 'inline-flex', alignItems: 'center', gap: 4, textTransform: 'uppercase',
+          }}
+        >
+          {label}{active && <Arrow style={{ width: 11, height: 11 }} />}
         </button>
-      </div>
+      </th>
+    )
+  }
 
-      <div className="grid lg:grid-cols-3 gap-6">
-        {/* Left: saved lists */}
-        <div className="space-y-4">
-          <div className="card">
-            <h2 className="text-sm font-bold text-gray-900 mb-3">Saved Lists ({lists.length})</h2>
-            <div className="relative mb-3">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
-              <input className="input pl-8 text-xs py-1.5" placeholder="Search lists..." value={searchList} onChange={e => setSearchList(e.target.value)} />
-            </div>
-            <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
-              {filteredLists.length === 0 ? (
-                <div className="text-center py-8">
-                  <ListChecks className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-                  <p className="text-xs text-gray-400">No lists yet</p>
-                  <button onClick={openNewListModal} className="text-xs text-brand-red font-medium mt-1 hover:underline">Build first list →</button>
-                </div>
-              ) : (
-                filteredLists.map(l => (
-                  <div
-                    key={l.id}
-                    onClick={() => { setSelected(l); setLeanFilter('all') }}
-                    className={`group p-3 rounded-lg cursor-pointer transition-colors border ${selected?.id === l.id ? 'bg-brand-red/10 border-brand-red/30' : 'hover:bg-gray-50 border-transparent'}`}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <p className={`text-xs font-semibold truncate ${selected?.id === l.id ? 'text-brand-red' : 'text-gray-800'}`}>{l.name}</p>
-                          {l.filters?.type === 'csv' && (
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 font-medium flex-shrink-0">CSV</span>
-                          )}
-                        </div>
-                        <p className="text-xs text-gray-400 mt-0.5">{l.total_count} entries · {format(new Date(l.created_at), 'MMM d, yyyy')}</p>
-                        {l.description && <p className="text-xs text-gray-400 truncate mt-0.5 italic">{l.description}</p>}
-                      </div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleDelete(l.id) }}
-                        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-50 text-gray-300 hover:text-brand-red transition-all ml-1"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
+  const stage = Math.min(Math.max(Number(run?.stage) || 1, 1), 4)
+
+  return (
+    <div style={{ fontFamily: T.font, color: T.ink }}>
+      <style>{`
+        @keyframes pfSpin { 0% { transform: rotate(0) } 100% { transform: rotate(360deg) } }
+        .pp-row:hover { background: ${T.hover} }
+        .pp-scroll { overflow-x: auto }
+      `}</style>
+
+      {/* Header + pipeline tabs */}
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: '-.2px' }}>Prospecting</div>
+          <div style={{ fontSize: 12.5, color: T.muted, marginTop: 3 }}>
+            Discover → enrich → score → export. {enrichedRows.length} enriched · {queueRows.length} queued
           </div>
         </div>
-
-        {/* Right: selected list detail */}
-        <div className="lg:col-span-2">
-          {!selected ? (
-            <div className="card flex flex-col items-center justify-center py-24 text-center">
-              <ListChecks className="w-16 h-16 text-gray-200 mb-4" />
-              <p className="text-gray-500 font-semibold">No list selected</p>
-              <p className="text-gray-400 text-sm mt-1">Build a new prospecting list or select one from the left</p>
-              <button onClick={openNewListModal} className="btn-primary mt-6 flex items-center gap-2">
-                <Plus className="w-4 h-4" /> New List
-              </button>
-            </div>
-          ) : (
-            <div className="card">
-              <div className="flex items-start justify-between mb-4 pb-4 border-b border-gray-100">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-xl font-bold text-gray-900">{selected.name}</h2>
-                    {isCsvList && <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-semibold border border-purple-200">CSV Import</span>}
-                  </div>
-                  {selected.description && <p className="text-sm text-gray-500 mt-1">{selected.description}</p>}
-                  <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
-                    <span><span className="font-semibold text-gray-700">{selectedCandidates.length}</span> entries</span>
-                    <span>Created {format(new Date(selected.created_at), 'MMM d, yyyy')}</span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button onClick={handleCopy} className="btn-secondary text-xs flex items-center gap-1.5 py-1.5">
-                    {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-                    {copied ? 'Copied!' : 'Copy'}
-                  </button>
-                  <button onClick={handleDownload} className="btn-secondary text-xs flex items-center gap-1.5 py-1.5">
-                    <Download className="w-3.5 h-3.5" /> Export
-                  </button>
-                </div>
-              </div>
-
-              {/* AI notes */}
-              {selected.notes && (
-                <div className="mb-4 p-3 bg-brand-red/5 border border-brand-red/20 rounded-lg">
-                  <p className="text-xs font-semibold text-brand-red mb-1">AI Summary</p>
-                  <p className="text-xs text-gray-600">{selected.notes}</p>
-                </div>
-              )}
-
-              {/* Lean breakdown + filter (CSV lists only) */}
-              {isCsvList && selectedCandidates.some(c => c.lean) && (
-                <div className="mb-4 flex flex-wrap gap-2">
-                  {[
-                    { key: 'all',          label: `All (${selectedCandidates.length})`, cls: 'bg-gray-100 text-gray-700 border-gray-200' },
-                    { key: 'conservative', label: `Conservative (${leanCounts.conservative})`, cls: 'bg-red-50 text-brand-red border-red-200' },
-                    { key: 'liberal',      label: `Liberal (${leanCounts.liberal})`, cls: 'bg-blue-50 text-blue-700 border-blue-200' },
-                    { key: 'unknown',      label: `Unknown (${leanCounts.unknown})`, cls: 'bg-gray-50 text-gray-500 border-gray-200' },
-                  ].map(({ key, label, cls }) => (
-                    <button
-                      key={key}
-                      onClick={() => setLeanFilter(key)}
-                      className={`text-xs px-3 py-1 rounded-full border font-medium transition-all ${cls} ${leanFilter === key ? 'ring-2 ring-offset-1 ring-gray-400' : 'opacity-70 hover:opacity-100'}`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {/* Candidate/prospect list */}
-              <div className="space-y-3">
-                {visibleCandidates.length === 0 ? (
-                  <p className="text-sm text-gray-400 text-center py-8">No entries in this view</p>
-                ) : (
-                  visibleCandidates.map((c) => (
-                    <div key={c.id || `${c.name || c.candidate_name || 'entry'}|${c.email || c.phone || ''}`} className="p-4 rounded-xl border border-gray-200 hover:border-brand-red/30 hover:bg-brand-red/5 transition-all">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-bold text-gray-900">{c.name || c.candidate_name}</span>
-                            {c.lean && <LeanBadge lean={c.lean} confidence={c.confidence} />}
-                            {c.party && !c.lean && (
-                              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                                c.party === 'Republican' ? 'bg-red-100 text-brand-red' :
-                                c.party === 'Democrat'   ? 'bg-blue-100 text-blue-700' :
-                                'bg-gray-100 text-gray-600'
-                              }`}>{c.party}</span>
-                            )}
-                            {c.status && <span className="text-xs text-gray-400 capitalize">{c.status?.replace('_', ' ')}</span>}
-                          </div>
-                          {c.office && <p className="text-sm text-gray-600 mt-0.5">{c.office}{c.district ? ` · ${c.district}` : ''}</p>}
-                          {c.reasoning && <p className="text-xs text-gray-400 mt-1 italic">{c.reasoning}</p>}
-                          {c.notes && !c.reasoning && <p className="text-xs text-gray-400 mt-1 italic">{c.notes}</p>}
-                        </div>
-
-                        {/* Contact actions */}
-                        <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
-                          {c.email && (
-                            <a
-                              href={`mailto:${c.email}`}
-                              className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg bg-brand-navy/10 text-brand-navy hover:bg-brand-navy hover:text-white transition-all font-medium"
-                              title={c.email}
-                            >
-                              <Mail className="w-3 h-3" /> Email
-                            </a>
-                          )}
-                          {c.phone && <p className="text-xs text-gray-500">{c.phone}</p>}
-                          {c.website && (
-                            <a href={c.website} target="_blank" rel="noopener noreferrer" className="text-xs text-brand-red hover:underline">Website →</a>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {/* Add to Candidates button (CSV lists only) */}
-              {isCsvList && selectedCandidates.length > 0 && (
-                <div className="mt-6 pt-4 border-t border-gray-100">
-                  <button
-                    onClick={() => setShowAddModal(true)}
-                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border-2 border-dashed border-brand-navy/30 text-brand-navy hover:border-brand-navy hover:bg-brand-navy/5 transition-all text-sm font-semibold"
-                  >
-                    <UserPlus className="w-4 h-4" />
-                    Add Selected Prospects to Candidates
-                  </button>
-                </div>
-              )}
-            </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Btn onClick={loadAll} title="Reload"><RefreshCw style={{ width: 13, height: 13 }} /> Refresh</Btn>
+          {tab === 'results' && (
+            <>
+              <Btn onClick={saveAsList}><ListChecks style={{ width: 13, height: 13 }} /> Save as list</Btn>
+              <Btn kind="primary" onClick={exportCsv} disabled={!visibleResults.length}>
+                <Download style={{ width: 13, height: 13 }} /> Export CSV
+              </Btn>
+            </>
           )}
         </div>
       </div>
 
-      {/* List Type Choice Modal */}
-      {listTypeModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setListTypeModal(false)} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg">
-            <div className="flex items-center justify-between p-6 border-b border-gray-100">
-              <div className="flex items-center gap-2">
-                <Plus className="w-5 h-5 text-brand-red" />
-                <h2 className="text-lg font-bold text-gray-900">Create New List</h2>
-              </div>
-              <button onClick={() => setListTypeModal(false)}><X className="w-5 h-5 text-gray-400" /></button>
-            </div>
-            <div className="p-6">
-              <p className="text-sm text-gray-500 mb-6 text-center">How would you like to build this list?</p>
-              <div className="grid grid-cols-3 gap-3">
-                {/* Manual */}
-                <button
-                  onClick={() => { setListTypeModal(false); setBuilderMode('manual'); setShowBuilder(true) }}
-                  className="flex flex-col items-center gap-3 p-5 rounded-xl border-2 border-gray-200 hover:border-brand-navy hover:bg-brand-navy/5 transition-all group"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-gray-100 group-hover:bg-brand-navy/10 flex items-center justify-center transition-colors">
-                    <PenLine className="w-5 h-5 text-gray-500 group-hover:text-brand-navy" />
-                  </div>
-                  <div className="text-center">
-                    <p className="font-bold text-gray-900 group-hover:text-brand-navy text-sm">Manual</p>
-                    <p className="text-xs text-gray-500 mt-0.5">Pick from your candidates</p>
-                  </div>
-                </button>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+        {[
+          ['discover', `Discover (${discoverRows.length})`],
+          ['enrich', `Enrich (${queueRows.length})`],
+          ['results', `Results (${enrichedRows.length})`],
+        ].map(([key, label]) => (
+          <Chip key={key} active={tab === key} onClick={() => setTab(key)}>{label}</Chip>
+        ))}
+      </div>
 
-                {/* AI */}
-                <button
-                  onClick={() => { setListTypeModal(false); setBuilderMode('ai'); setShowBuilder(true) }}
-                  className="flex flex-col items-center gap-3 p-5 rounded-xl border-2 border-gray-200 hover:border-brand-red hover:bg-brand-red/5 transition-all group"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-gray-100 group-hover:bg-brand-red/10 flex items-center justify-center transition-colors">
-                    <Bot className="w-5 h-5 text-gray-500 group-hover:text-brand-red" />
-                  </div>
-                  <div className="text-center">
-                    <p className="font-bold text-gray-900 group-hover:text-brand-red text-sm">AI List</p>
-                    <p className="text-xs text-gray-500 mt-0.5">Let Claude filter & rank</p>
-                  </div>
-                </button>
+      {error && <Banner kind="error" onClose={() => setError('')}>{error}</Banner>}
+      {notice && <Banner kind="ok" onClose={() => setNotice('')}>{notice}</Banner>}
+      {schemaMissing && (
+        <Banner kind="warn">
+          The Prospecting v2 tables aren’t in the database yet. Apply
+          <code style={{ margin: '0 4px' }}>supabase/migrations/20260812000010_prospecting_v2.sql</code>
+          to enable queueing, enrichment and the results table.
+        </Banner>
+      )}
 
-                {/* CSV Upload */}
-                <button
-                  onClick={() => { setListTypeModal(false); setBuilderMode('csv'); setShowBuilder(true) }}
-                  className="flex flex-col items-center gap-3 p-5 rounded-xl border-2 border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition-all group"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-gray-100 group-hover:bg-purple-100 flex items-center justify-center transition-colors">
-                    <Upload className="w-5 h-5 text-gray-500 group-hover:text-purple-600" />
-                  </div>
-                  <div className="text-center">
-                    <p className="font-bold text-gray-900 group-hover:text-purple-600 text-sm">CSV Upload</p>
-                    <p className="text-xs text-gray-500 mt-0.5">AI classifies each person</p>
-                  </div>
-                </button>
-              </div>
-            </div>
-          </div>
+      {loading && (
+        <div style={{ ...cardStyle, padding: 28, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Spinner /> <span style={{ fontSize: 12.5, color: T.muted }}>Loading your pipeline…</span>
         </div>
       )}
 
-      {/* Builder modal */}
-      {showBuilder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-black/50" onClick={() => { setShowBuilder(false); resetForm(); }} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between p-6 border-b border-gray-100 flex-shrink-0">
-              <div className="flex items-center gap-2">
-                {builderMode === 'ai'     && <><Bot    className="w-5 h-5 text-brand-red"    /><h2 className="text-lg font-bold text-gray-900">AI Prospecting List</h2></>}
-                {builderMode === 'manual' && <><PenLine className="w-5 h-5 text-brand-navy"  /><h2 className="text-lg font-bold text-gray-900">Manual Prospecting List</h2></>}
-                {builderMode === 'csv'    && <><Upload  className="w-5 h-5 text-purple-600"  /><h2 className="text-lg font-bold text-gray-900">CSV Import &amp; Classify</h2></>}
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => { setShowBuilder(false); setListTypeModal(true) }} className="text-xs text-gray-400 hover:text-gray-600 font-medium">← Back</button>
-                <button onClick={() => { setShowBuilder(false); resetForm() }}><X className="w-5 h-5 text-gray-400" /></button>
-              </div>
+      {/* ── DISCOVER ─────────────────────────────────────────────────────── */}
+      {!loading && tab === 'discover' && (
+        <>
+          <div style={{ ...cardStyle, padding: 16, marginBottom: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+              <Field label="Search">
+                <div style={{ position: 'relative' }}>
+                  <Search style={{ width: 13, height: 13, color: T.faint, position: 'absolute', left: 9, top: 10 }} />
+                  <input style={{ ...inputStyle, paddingLeft: 27 }} value={q} onChange={e => setQ(e.target.value)} placeholder="Name, office, county…" />
+                </div>
+              </Field>
+              <Field label="Office level">
+                <select style={inputStyle} value={level} onChange={e => setLevel(e.target.value)}>
+                  {LEVEL_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+                </select>
+              </Field>
+              <Field label="Party">
+                <select style={inputStyle} value={party} onChange={e => setParty(e.target.value)}>
+                  <option value="">All parties</option>
+                  {PARTY_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </Field>
+              <Field label="Election">
+                <select style={inputStyle} value={electionId} onChange={e => setElectionId(e.target.value)}>
+                  <option value="">{upcomingOnly ? 'All upcoming elections' : 'All elections'}</option>
+                  {(upcomingOnly ? upcomingElections : elections).map(e => (
+                    <option key={e.id} value={e.id}>{e.name}{e.election_date ? ` — ${fmtDay(e.election_date)}` : ''}</option>
+                  ))}
+                </select>
+              </Field>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              {error && (
-                <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />{error}
-                </div>
-              )}
+            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 12, alignItems: 'center' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: T.ink4, marginRight: 2 }}>STATUS</span>
+              {STATUS_OPTIONS.map(s => (
+                <Chip
+                  key={s} active={statuses.includes(s)}
+                  onClick={() => setStatuses(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s])}
+                >{s.replace(/_/g, ' ')}</Chip>
+              ))}
+              <span style={{ width: 10 }} />
+              <Chip active={upcomingOnly} onClick={() => setUpcomingOnly(v => !v)} title="Only candidates in an election that hasn't happened yet">
+                Upcoming elections only
+              </Chip>
+            </div>
 
-              <div>
-                <label className="label">List Name *</label>
-                <input className="input" value={listName} onChange={e => setListName(e.target.value)} placeholder="e.g. 2026 Assembly Targets — Southeast WI" required />
-              </div>
-              <div>
-                <label className="label">Description</label>
-                <input className="input" value={listDesc} onChange={e => setListDesc(e.target.value)} placeholder="Brief description of this list's purpose..." />
-              </div>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.divider}` }}>
+              <Btn kind="primary" onClick={addToQueue} disabled={!picked.size || schemaMissing}>
+                <Plus style={{ width: 13, height: 13 }} /> Queue {picked.size || ''} for enrichment
+              </Btn>
+              <Btn onClick={() => setPicked(new Set(discoverRows.map(c => c.id)))} disabled={!discoverRows.length}>Select all {discoverRows.length}</Btn>
+              <Btn kind="quiet" onClick={() => setPicked(new Set())} disabled={!picked.size}>Clear</Btn>
+              <span style={{ flex: 1 }} />
+              <Btn onClick={() => fileRef.current?.click()} title="Import a CSV of names into your candidates">
+                <Upload style={{ width: 13, height: 13 }} /> Import CSV
+              </Btn>
+              <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={handleCsvFile} style={{ display: 'none' }} />
+            </div>
+            {csvName && !showAddModal && (
+              <div style={{ fontSize: 11.5, color: T.muted, marginTop: 8 }}>Last import: {csvName} ({csvRows.length} rows)</div>
+            )}
+          </div>
 
-              {/* ── CSV MODE ── */}
-              {builderMode === 'csv' && (
-                <div className="space-y-4">
-                  <div className="p-4 bg-purple-50 rounded-xl border border-purple-200">
-                    <p className="text-xs font-bold text-purple-700 uppercase tracking-wider mb-2">How it works</p>
-                    <p className="text-xs text-purple-600 leading-relaxed">Upload any CSV file with names and optional fields (email, city, employer, etc.). Claude will classify each person as <strong>Conservative</strong>, <strong>Liberal</strong>, or <strong>Unknown</strong> based on a 70% confidence threshold. Results save as a prospecting list — no one is added to Candidates unless you choose to.</p>
-                  </div>
-
-                  {/* File drop zone */}
-                  <div
-                    onClick={() => fileInputRef.current?.click()}
-                    className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
-                      csvRows.length > 0 ? 'border-purple-400 bg-purple-50' : 'border-gray-200 hover:border-purple-300 hover:bg-purple-50/50'
-                    }`}
-                  >
-                    <Upload className={`w-8 h-8 mx-auto mb-2 ${csvRows.length > 0 ? 'text-purple-500' : 'text-gray-300'}`} />
-                    {csvRows.length > 0 ? (
-                      <>
-                        <p className="text-sm font-semibold text-purple-700">{csvFileName}</p>
-                        <p className="text-xs text-purple-500 mt-1">{csvRows.length} rows · {csvHeaders.length} columns detected</p>
-                        <p className="text-xs text-gray-400 mt-2">Click to replace</p>
-                      </>
-                    ) : (
-                      <>
-                        <p className="text-sm font-semibold text-gray-600">Click to upload CSV</p>
-                        <p className="text-xs text-gray-400 mt-1">Accepts any .csv with a name column</p>
-                      </>
-                    )}
-                    <input ref={fileInputRef} type="file" accept=".csv,text/csv" onChange={handleCsvFile} className="hidden" />
-                  </div>
-
-                  {/* Detected columns preview */}
-                  {csvHeaders.length > 0 && (
-                    <div className="p-3 bg-gray-50 rounded-lg">
-                      <p className="text-xs font-semibold text-gray-600 mb-1.5">Detected columns:</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {csvHeaders.map(h => (
-                          <span key={h} className="text-xs px-2 py-0.5 rounded bg-white border border-gray-200 text-gray-600">{h}</span>
-                        ))}
-                      </div>
-                    </div>
+          <div style={{ ...cardStyle, overflow: 'hidden' }}>
+            <div className="pp-scroll">
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th style={{ ...thStyle, width: 34 }} />
+                    <th style={thStyle}>Candidate</th>
+                    <th style={thStyle}>Office</th>
+                    <th style={thStyle}>Party</th>
+                    <th style={thStyle}>Status</th>
+                    <th style={thStyle}>Election</th>
+                    <th style={{ ...thStyle, width: 110 }}>Pipeline</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {discoverRows.length === 0 && (
+                    <tr><td colSpan={7} style={{ padding: 28, textAlign: 'center' }}>
+                      <EmptyNote>
+                        No candidates match these filters. Widen the status chips, turn off
+                        “upcoming elections only”, or import a CSV.
+                      </EmptyNote>
+                    </td></tr>
                   )}
-
-                  {/* Progress bar during classification */}
-                  {generating && csvProgress && (
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between text-xs text-gray-500">
-                        <span>Classifying prospects...</span>
-                        <span>{csvProgress.done} / {csvProgress.total}</span>
-                      </div>
-                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-purple-500 rounded-full transition-all duration-300"
-                          style={{ width: `${Math.max(5, (csvProgress.done / Math.max(1, csvProgress.total)) * 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  <button
-                    onClick={handleClassifyAndSave}
-                    disabled={!listName || generating || csvRows.length === 0}
-                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {generating ? (
-                      <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Classifying with Claude AI...</>
-                    ) : (
-                      <><Sparkles className="w-4 h-4" /> Classify {csvRows.length > 0 ? csvRows.length : ''} Prospects</>
-                    )}
-                  </button>
-                </div>
-              )}
-
-              {/* ── MANUAL MODE ── */}
-              {builderMode === 'manual' && (
-                <>
-                  <div className="p-4 bg-gray-50 rounded-xl space-y-3">
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-bold text-gray-700 uppercase tracking-wider">Select Candidates</p>
-                      <span className="text-xs text-gray-500 font-medium">{manualSelected.size} selected</span>
-                    </div>
-                    <div className="relative">
-                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
-                      <input
-                        className="input pl-8 text-xs py-1.5"
-                        placeholder="Search candidates or office..."
-                        value={manualSearch}
-                        onChange={e => setManualSearch(e.target.value)}
-                      />
-                    </div>
-                    <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-56 overflow-y-auto">
-                      {filteredManualCandidates.length === 0 ? (
-                        <p className="text-xs text-gray-400 text-center py-4 italic">No candidates found</p>
-                      ) : (
-                        filteredManualCandidates.map(c => (
-                          <label
-                            key={c.id}
-                            className={`flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-gray-50 transition-colors ${manualSelected.has(c.id) ? 'bg-brand-navy/5' : ''}`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={manualSelected.has(c.id)}
-                              onChange={() => {
-                                setManualSelected(prev => {
-                                  const next = new Set(prev)
-                                  next.has(c.id) ? next.delete(c.id) : next.add(c.id)
-                                  return next
-                                })
-                              }}
-                              className="rounded border-gray-300"
-                            />
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs font-semibold text-gray-800 truncate">{c.name}</p>
-                              <p className="text-xs text-gray-400 truncate">{c.office?.name || 'No office'}{c.office?.district_name ? ` · ${c.office.district_name}` : ''}</p>
-                            </div>
-                            {c.party && <span className="text-xs text-gray-500 flex-shrink-0">{c.party}</span>}
-                          </label>
-                        ))
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg">
-                    <input type="checkbox" id="include-contact-manual" checked={includeContact} onChange={e => setIncludeContact(e.target.checked)} className="w-4 h-4 accent-brand-red" />
-                    <label htmlFor="include-contact-manual" className="text-sm text-gray-700 cursor-pointer">Include available contact info in export</label>
-                  </div>
-
-                  <button
-                    onClick={handleSaveManualList}
-                    disabled={!listName || generating || manualSelected.size === 0}
-                    className="btn-primary w-full flex items-center justify-center gap-2"
-                    style={{ backgroundColor: '#1e3a5f', borderColor: '#1e3a5f' }}
-                  >
-                    {generating ? (
-                      <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Saving...</>
-                    ) : (
-                      <><UserCheck className="w-4 h-4" /> Save Manual List ({manualSelected.size} selected)</>
-                    )}
-                  </button>
-                </>
-              )}
-
-              {/* ── AI MODE ── */}
-              {builderMode === 'ai' && (
-                <>
-                  <div className="p-4 bg-gray-50 rounded-xl space-y-3">
-                    <p className="text-xs font-bold text-gray-700 uppercase tracking-wider">Filter Candidates</p>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="label text-xs">Office Level</label>
-                        <select className="input text-sm" value={filterLevel} onChange={e => setFilterLevel(e.target.value)}>
-                          <option value="">All Levels</option>
-                          <option value="federal">Federal</option>
-                          <option value="state">State</option>
-                          <option value="county">County</option>
-                          <option value="municipal">Municipal</option>
-                        </select>
-                      </div>
-                      <div>
-                        <MultiSelect label="Parties" options={['Republican','Democrat','Independent','Nonpartisan','Libertarian']} selected={filterParties} onChange={setFilterParties} open={openDropdown} setOpen={setOpenDropdown} />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <MultiSelect label="Elections" options={elections} selected={filterElections} onChange={setFilterElections} open={openDropdown} setOpen={setOpenDropdown} labelFn={(e) => e.name} />
-                      </div>
-                      <div>
-                        <MultiSelect label="Status" options={['exploring','declared','primary_winner','general','elected']} selected={filterStatuses} onChange={setFilterStatuses} open={openDropdown} setOpen={setOpenDropdown} labelFn={(s) => s.replace('_', ' ')} />
-                      </div>
-                    </div>
-                    <div className="pt-1">
-                      <div className="flex items-center gap-2">
-                        <Users className="w-4 h-4 text-brand-red" />
-                        <span className="text-sm font-semibold text-gray-900">{previewCount} candidates match your filters</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="label">Custom Instructions for AI</label>
-                    <textarea
-                      className="input"
-                      rows={3}
-                      value={customInstructions}
-                      onChange={e => setCustomInstructions(e.target.value)}
-                      placeholder="e.g. Focus on candidates who are first-time runners, prioritize competitive districts..."
-                    />
-                  </div>
-
-                  <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg">
-                    <input type="checkbox" id="include-contact" checked={includeContact} onChange={e => setIncludeContact(e.target.checked)} className="w-4 h-4 accent-brand-red" />
-                    <label htmlFor="include-contact" className="text-sm text-gray-700 cursor-pointer">Include all available contact information in the list</label>
-                  </div>
-
-                  <button
-                    onClick={handleGenerate}
-                    disabled={!listName || generating || previewCount === 0}
-                    className="btn-primary w-full flex items-center justify-center gap-2"
-                  >
-                    {generating ? (
-                      <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Building with Claude AI...</>
-                    ) : (
-                      <><Sparkles className="w-4 h-4" /> Generate Prospect List ({previewCount} candidates)</>
-                    )}
-                  </button>
-                </>
-              )}
+                  {discoverRows.map(c => {
+                    const already = queuedCandidateIds.has(c.id)
+                    return (
+                      <tr key={c.id} className="pp-row" style={trStyle}>
+                        <td style={tdStyle}>
+                          <input
+                            type="checkbox"
+                            checked={picked.has(c.id)}
+                            disabled={already}
+                            onChange={() => setPicked(prev => {
+                              const next = new Set(prev)
+                              if (next.has(c.id)) next.delete(c.id); else next.add(c.id)
+                              return next
+                            })}
+                          />
+                        </td>
+                        <td style={{ ...tdStyle, fontWeight: 700 }}>{c.name}</td>
+                        <td style={tdStyle}>
+                          {c.office?.name || '—'}
+                          {c.office?.district_name && <span style={{ color: T.muted }}> · {c.office.district_name}</span>}
+                        </td>
+                        <td style={tdStyle}>{c.party || <span style={{ color: T.faint }}>—</span>}</td>
+                        <td style={{ ...tdStyle, textTransform: 'capitalize' }}>{String(c.status || '').replace(/_/g, ' ')}</td>
+                        <td style={tdStyle}>{c.election?.name || '—'}</td>
+                        <td style={tdStyle}>
+                          {already ? <Pill c={T.green} bg="#E6F5EC">queued</Pill> : <span style={{ color: T.faint }}>—</span>}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
-        </div>
+        </>
       )}
 
-      {/* Add to Candidates modal */}
-      {showAddModal && selected && (
+      {/* ── ENRICH ───────────────────────────────────────────────────────── */}
+      {!loading && tab === 'enrich' && (
+        <>
+          {run && (
+            <div style={{ ...cardStyle, padding: 16, marginBottom: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                <Spinner />
+                <div style={{ fontSize: 12.5, fontWeight: 700 }}>{PHASE_LABELS[stage - 1]}</div>
+                <span style={{ flex: 1 }} />
+                <div style={{ fontSize: 12, color: T.muted }}>
+                  {run.completed || 0} / {run.total || 0} done{run.failed ? ` · ${run.failed} failed` : ''}
+                </div>
+              </div>
+              {run.current_name && (
+                <div style={{ fontSize: 11.5, color: T.muted, marginBottom: 8 }}>Working on {run.current_name}</div>
+              )}
+              <div style={{ height: 6, background: T.track, borderRadius: 99, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', background: T.red, borderRadius: 99, transition: 'width .4s ease',
+                  width: `${Math.max(6, ((run.completed || 0) / Math.max(1, run.total || 1)) * 100)}%`,
+                }} />
+              </div>
+              <div style={{ fontSize: 11, color: T.faint, marginTop: 8, lineHeight: 1.55 }}>
+                Enrichment runs on the server — you can leave this page and come back.
+              </div>
+            </div>
+          )}
+
+          <div style={{ ...cardStyle, padding: 16, marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Btn kind="primary" onClick={startEnrichment} disabled={!!run || !queued.size}>
+              <Sparkles style={{ width: 13, height: 13 }} /> Enrich {Math.min(queued.size, MAX_BATCH) || ''} prospect{queued.size === 1 ? '' : 's'}
+            </Btn>
+            <Btn onClick={() => setQueued(new Set(queueRows.slice(0, MAX_BATCH).map(p => p.id)))} disabled={!queueRows.length || !!run}>
+              Select first {Math.min(MAX_BATCH, queueRows.length)}
+            </Btn>
+            <Btn kind="quiet" onClick={() => setQueued(new Set())} disabled={!queued.size}>Clear</Btn>
+            <span style={{ flex: 1 }} />
+            <EmptyNote style={{ fontSize: 11.5 }}>
+              Up to {MAX_BATCH} prospects per run (the server enforces the same cap).
+            </EmptyNote>
+          </div>
+
+          <div style={{ ...cardStyle, overflow: 'hidden' }}>
+            <div className="pp-scroll">
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th style={{ ...thStyle, width: 34 }} />
+                    <th style={thStyle}>Prospect</th>
+                    <th style={thStyle}>Office</th>
+                    <th style={thStyle}>Queued</th>
+                    <th style={thStyle}>Status</th>
+                    <th style={{ ...thStyle, width: 40 }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {queueRows.length === 0 && (
+                    <tr><td colSpan={6} style={{ padding: 28, textAlign: 'center' }}>
+                      <EmptyNote>Nothing queued. Pick candidates on the Discover tab first.</EmptyNote>
+                    </td></tr>
+                  )}
+                  {queueRows.map(p => {
+                    const atCap = !queued.has(p.id) && queued.size >= MAX_BATCH
+                    return (
+                      <tr key={p.id} className="pp-row" style={trStyle}>
+                        <td style={tdStyle}>
+                          <input
+                            type="checkbox" checked={queued.has(p.id)} disabled={!!run || atCap}
+                            onChange={() => setQueued(prev => {
+                              const next = new Set(prev)
+                              if (next.has(p.id)) next.delete(p.id); else next.add(p.id)
+                              return next
+                            })}
+                          />
+                        </td>
+                        <td style={{ ...tdStyle, fontWeight: 700 }}>{p.name}</td>
+                        <td style={tdStyle}>{p.office_name || '—'}{p.district_name ? ` · ${p.district_name}` : ''}</td>
+                        <td style={tdStyle}>{fmtDay(p.discovered_at || p.created_at)}</td>
+                        <td style={tdStyle}>
+                          {p.enrichment_status === 'error'
+                            ? <span title={p.enrichment_error || ''}><Pill c="#9F1239" bg="#FDF1F1">failed</Pill></span>
+                            : <Pill>{p.enrichment_status}</Pill>}
+                        </td>
+                        <td style={tdStyle}>
+                          <button onClick={() => removeProspect(p.id)} title="Remove"
+                                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint }}>
+                            <Trash2 style={{ width: 13, height: 13 }} />
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── RESULTS ──────────────────────────────────────────────────────── */}
+      {!loading && tab === 'results' && (
+        <>
+          <div style={{ ...cardStyle, padding: 16, marginBottom: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
+              <Field label="Search">
+                <div style={{ position: 'relative' }}>
+                  <Search style={{ width: 13, height: 13, color: T.faint, position: 'absolute', left: 9, top: 10 }} />
+                  <input style={{ ...inputStyle, paddingLeft: 27 }} value={rq} onChange={e => setRq(e.target.value)} placeholder="Name, office, affiliation…" />
+                </div>
+              </Field>
+              <Field label={`Minimum win odds — ${minScore}`}>
+                <input type="range" min={0} max={90} step={5} value={minScore}
+                       onChange={e => setMinScore(Number(e.target.value))} style={{ width: '100%', accentColor: T.red }} />
+              </Field>
+              <Field label="Website">
+                <select style={inputStyle} value={websiteFilter} onChange={e => setWebsiteFilter(e.target.value)}>
+                  <option value="all">Any</option>
+                  <option value="yes">Has a live site</option>
+                  <option value="facebook_only">Facebook only</option>
+                  <option value="no">No web presence</option>
+                </select>
+              </Field>
+              <Field label="Focus">
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <Chip active={hideAgency} onClick={() => setHideAgency(v => !v)} title="Hide prospects that already show agency/consultant evidence">
+                    Hide already-with-agency
+                  </Chip>
+                  <Chip active={onlyContact} onClick={() => setOnlyContact(v => !v)}>Has contact info</Chip>
+                </div>
+              </Field>
+            </div>
+            <div style={{ fontSize: 11.5, color: T.muted, marginTop: 12 }}>
+              Showing {visibleResults.length} of {enrichedRows.length} enriched prospects.
+            </div>
+          </div>
+
+          <div style={{ ...cardStyle, overflow: 'visible' }}>
+            <div className="pp-scroll">
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    {sortBtn('name', 'Prospect', 170)}
+                    {sortBtn('office_name', 'Office')}
+                    {sortBtn('win_odds_score', 'Win odds', 150)}
+                    {sortBtn('affiliation', 'Affiliation', 130)}
+                    {sortBtn('website_state', 'Website', 130)}
+                    <th style={thStyle}>Socials</th>
+                    {sortBtn('agency', 'Agency', 140)}
+                    {sortBtn('contact', 'Contact', 230)}
+                    {sortBtn('enriched_at', 'Enriched', 100)}
+                    <th style={{ ...thStyle, width: 40 }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleResults.length === 0 && (
+                    <tr><td colSpan={10} style={{ padding: 28, textAlign: 'center' }}>
+                      <EmptyNote>
+                        No enriched prospects match these filters
+                        {enrichedRows.length ? '.' : ' — run an enrichment from the Enrich tab first.'}
+                      </EmptyNote>
+                    </td></tr>
+                  )}
+                  {visibleResults.map(p => (
+                    <tr key={p.id} className="pp-row" style={trStyle}>
+                      <td style={{ ...tdStyle, fontWeight: 700 }}>
+                        {p.name}
+                        {p.enrichment_status === 'partial' && (
+                          <div title={p.enrichment_error || ''} style={{ marginTop: 3 }}>
+                            <Pill c={T.amber} bg={T.warmBg}>partial</Pill>
+                          </div>
+                        )}
+                      </td>
+                      <td style={tdStyle}>
+                        {p.office_name || '—'}
+                        {p.district_name && <div style={{ color: T.muted, fontSize: 11 }}>{p.district_name}</div>}
+                      </td>
+                      <td style={{ ...tdStyle, overflow: 'visible' }}><ScoreCell row={p} /></td>
+                      <td style={tdStyle}>
+                        {p.affiliation || <span style={{ color: T.faint }}>unknown</span>}
+                        {p.affiliation_detail?.inferred && (
+                          <div title={p.affiliation_detail?.basis || ''} style={{ marginTop: 3 }}>
+                            <Pill c={T.amber} bg={T.warmBg}>inferred {p.affiliation_detail?.confidence ?? 0}%</Pill>
+                          </div>
+                        )}
+                      </td>
+                      <td style={tdStyle}>
+                        {p.website_state === 'yes' && p.website_url ? (
+                          <a href={p.website_url} target="_blank" rel="noopener noreferrer"
+                             style={{ fontSize: 11.5, color: T.red, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            live site <ExternalLink style={{ width: 10, height: 10 }} />
+                          </a>
+                        ) : p.website_state === 'facebook_only' ? (
+                          <Pill c="#2563EB" bg="#E7F0FD">Facebook only</Pill>
+                        ) : p.website_state === 'no' ? (
+                          <Pill c={T.green} bg="#E6F5EC">no site</Pill>
+                        ) : <span style={{ color: T.faint }}>—</span>}
+                      </td>
+                      <td style={tdStyle}><SocialLinks socials={p.socials} /></td>
+                      <td style={{ ...tdStyle, overflow: 'visible' }}><AgencyCell row={p} /></td>
+                      <td style={tdStyle}><ContactCell row={p} /></td>
+                      <td style={{ ...tdStyle, color: T.muted, fontSize: 11.5 }}>{fmtDay(p.enriched_at)}</td>
+                      <td style={tdStyle}>
+                        <button onClick={() => removeProspect(p.id)} title="Remove"
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint }}>
+                          <Trash2 style={{ width: 13, height: 13 }} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.6, marginTop: 12, maxWidth: 820 }}>
+            <strong style={{ color: T.ink3 }}>Where this data comes from.</strong> Win odds are computed from your
+            own candidates and election-results data with a published weighted model — open any score to see the
+            factors. Websites are confirmed by fetching them. Contact details and agency signals come only from
+            candidate-published pages, their public social profiles, and cited news coverage. Wisconsin
+            campaign-finance (CFIS/WEC) records are deliberately not used for contact or vendor data pending a
+            legal review of Wis. Stat. §11.1304(12). Outreach you send from this list is a commercial message —
+            include a physical address and a working opt-out.
+          </div>
+        </>
+      )}
+
+      {showAddModal && (
         <AddToCandidatesModal
-          prospects={selectedCandidates}
+          rows={csvRows}
           onClose={() => setShowAddModal(false)}
-          onSuccess={() => { setShowAddModal(false); navigate('/candidates') }}
+          onDone={async () => { setShowAddModal(false); await loadAll(); setTab('discover') }}
         />
       )}
     </div>
   )
 }
+
+// ── Table styling ─────────────────────────────────────────────────────────────
+const tableStyle = { width: '100%', borderCollapse: 'collapse', fontSize: 12.5, minWidth: 900 }
+const thStyle = {
+  textAlign: 'left', padding: '10px 12px', fontSize: 11, fontWeight: 700, color: T.ink4,
+  textTransform: 'uppercase', letterSpacing: '.3px', borderBottom: `1px solid ${T.border}`,
+  background: T.hover, whiteSpace: 'nowrap',
+}
+const trStyle = { borderBottom: `1px solid ${T.divider}` }
+const tdStyle = { padding: '11px 12px', verticalAlign: 'top', color: T.ink2 }

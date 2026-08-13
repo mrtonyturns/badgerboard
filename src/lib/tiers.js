@@ -29,6 +29,7 @@ export const CANDIDATE_PLAN_CONFIG = {
       gameplan:           false,  // locked on Scout — unlocks at Monitor (v1.18 pricing update)
       compare:            false,
       prospecting:        false,
+      recruit:            false,
       offices:            false,
       multiGamePlan:      false,
       bulkProfiler:       false,
@@ -65,6 +66,7 @@ export const CANDIDATE_PLAN_CONFIG = {
       gameplan:           true,
       compare:            false,
       prospecting:        false,
+      recruit:            false,
       offices:            false,
       multiGamePlan:      false,
       bulkProfiler:       false,
@@ -106,6 +108,7 @@ export const CANDIDATE_PLAN_CONFIG = {
       gameplan:           true,
       compare:            true,
       prospecting:        false,
+      recruit:            false,
       offices:            false,
       multiGamePlan:      false,
       bulkProfiler:       false,
@@ -148,6 +151,7 @@ export const CANDIDATE_PLAN_CONFIG = {
       gameplan:           true,
       compare:            true,
       prospecting:        false,
+      recruit:            false,
       offices:            false,
       multiGamePlan:      false,
       bulkProfiler:       false,
@@ -191,6 +195,7 @@ export const ACTION_PLAN_CONFIG = {
       gameplan:           true,
       multiGamePlan:      true,
       prospecting:        true,
+      recruit:            true,  // v1.29 Recruit-from-voter-list (Action-plan exclusive)
       offices:            true,
       officesScope:       'county',
       compare:            false,
@@ -205,6 +210,7 @@ export const ACTION_PLAN_CONFIG = {
     },
     unlocks: [
       'Prospecting',
+      'Recruit from voter list',
       'Multi-Candidate Game Plan',
       'Offices — county view',
       '1 profile per candidate / month',
@@ -233,6 +239,7 @@ export const ACTION_PLAN_CONFIG = {
       gameplan:           true,
       multiGamePlan:      true,
       prospecting:        true,
+      recruit:            true,  // v1.29 Recruit-from-voter-list (Action-plan exclusive)
       offices:            true,
       officesScope:       'district',
       compare:            true,
@@ -276,6 +283,7 @@ export const ACTION_PLAN_CONFIG = {
       gameplan:           true,
       multiGamePlan:      true,
       prospecting:        true,
+      recruit:            true,  // v1.29 Recruit-from-voter-list (Action-plan exclusive)
       offices:            true,
       officesScope:       'state',
       compare:            true,
@@ -434,6 +442,29 @@ export const CREDIT_PACKS = [
   { key: 'c10', qty: 10, price: 349, perCredit: 34.90, savingsPct: 29   },
   { key: 'c25', qty: 25, price: 749, perCredit: 29.96, savingsPct: 39   },
 ]
+
+// ─── Recruit lookups (Action Plan only) ──────────────────────────────────────
+// Reputation lookups are a much cheaper unit than a full AI dossier
+// (~$0.01–0.03 per person vs. $2.40–3.96 per bulk credit), so they are a plain
+// monthly allowance per plan rather than a metered SKU — they deliberately do
+// NOT reuse BULK_CREDIT_PACKS. Numbers are gameplan §3.5's proposal.
+export const RECRUIT_MONTHLY_LOOKUPS = {
+  a_monitor:  100,
+  a_active:   300,
+  a_campaign: 1000,
+}
+
+// Hard cap per research run: bounds both spend and the background function's
+// 15-minute budget. One run researches at most this many people; the user
+// presses Research again to continue a larger list.
+export const RECRUIT_BATCH_CAP = 25
+
+/** Monthly Recruit lookup allowance for a plan (0 when the plan lacks the feature). */
+export function getRecruitLookupLimit(planKey) {
+  const cfg = PLAN_CONFIG[planKey]
+  if (!cfg?.features?.recruit) return 0
+  return RECRUIT_MONTHLY_LOOKUPS[cfg.key] ?? 0
+}
 
 // ─── Bulk profile credit packs (Action Plan Campaign only) ───────────────────
 

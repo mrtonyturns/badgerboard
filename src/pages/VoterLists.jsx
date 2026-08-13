@@ -71,6 +71,7 @@ import {
 import { useAuth } from '../contexts/AuthContext'
 import SearchableSelect from '../components/SearchableSelect'
 import { parseCsvRows } from '../lib/csv'
+import { extractDistrictColumns, RECRUIT_VOTER_COLUMNS } from '../lib/recruit'
 import LoadingBar from '../components/LoadingBar'
 
 // ─── CSV parser ───────────────────────────────────────────────────────────────
@@ -87,6 +88,15 @@ function parseCSV(text) {
     const row = {}
     headers.forEach((h, i) => { row[h] = cols[i] || '' })
 
+    // Sub-municipal district columns the WEC "Badger Voters"/WisVote export
+    // carries (County Supervisory District, Aldermanic District, School
+    // District, Ward). The alias map lives in lib/recruit.js because Recruit
+    // matches seats off these columns — and because it normalises headers to
+    // alphanumerics, so "County Supervisory District",
+    // "county_supervisory_district" and "CountySupervisoryDist" all land.
+    // Unknown columns keep being ignored, exactly as before.
+    const districts = extractDistrictColumns(row)
+
     // Normalize common Wisconsin voter file column names
     return {
       first_name: row['firstname'] || row['first_name'] || row['first'] || '',
@@ -97,10 +107,14 @@ function parseCSV(text) {
       state:      row['state'] || 'WI',
       zip:        row['zip'] || row['zipcode'] || row['zip_code'] || row['postalcode'] || '',
       county:     row['county'] || row['countyname'] || '',
-      ward:       row['ward'] || row['precinct'] || row['wardname'] || '',
+      ward:       row['ward'] || row['precinct'] || row['wardname'] || districts.ward || '',
       congressional_district:   row['con_dist'] || row['congressional_district'] || row['cong_dist'] || '',
       state_senate_district:    row['senate_dist'] || row['state_senate_district'] || row['sen_dist'] || '',
       state_assembly_district:  row['assembly_dist'] || row['state_assembly_district'] || row['assem_dist'] || '',
+      // Sub-municipal districts — the seat-level columns Recruit matches on.
+      county_supervisory_district: districts.county_supervisory_district,
+      aldermanic_district:         districts.aldermanic_district,
+      school_district:             districts.school_district,
       party:      row['party'] || row['party_affiliation'] || row['party_pref'] || '',
       raw_data: row,
     }
@@ -309,8 +323,23 @@ export default function VoterLists() {
       // 20260422000004) — without it every chunk is rejected with 403.
       const rows = csvPreview.map(({ raw_data, ...r }) => ({ ...r, voter_list_id: newList.id, created_by: user?.id }))
       const totalChunks = Math.ceil(rows.length / 200)
+      // The sub-municipal district columns arrive with migration
+      // 20260812000011. If this environment hasn't run it yet, PostgREST
+      // rejects the whole chunk for the unknown column — so drop those three
+      // fields and retry rather than failing an upload that used to work.
+      let dropRecruitCols = false
+      const shape = (chunk) => dropRecruitCols
+        ? chunk.map(r => { const c = { ...r }; RECRUIT_VOTER_COLUMNS.forEach(k => delete c[k]); return c })
+        : chunk
+      const missingColumn = (err) =>
+        RECRUIT_VOTER_COLUMNS.some(c => String(err?.message || '').includes(c))
       for (let i = 0; i < rows.length; i += 200) {
-        const { error: insertErr } = await createVoters(rows.slice(i, i + 200))
+        const chunk = rows.slice(i, i + 200)
+        let { error: insertErr } = await createVoters(shape(chunk))
+        if (insertErr && !dropRecruitCols && missingColumn(insertErr)) {
+          dropRecruitCols = true
+          ;({ error: insertErr } = await createVoters(shape(chunk)))
+        }
         if (insertErr) {
           setError(`Upload failed at row ${i + 1}: ${insertErr.message}`)
           setUploading(false)
