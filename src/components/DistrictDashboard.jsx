@@ -6,7 +6,7 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { X, Sparkles, ChevronRight, Loader2, Users, MapPin, RefreshCw } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { pointInGeometry, geometryBounds } from '../lib/geo'
+import { pointInGeometry } from '../lib/geo'
 import { loadPlaceDemographics, placeKey, placePath } from '../lib/placeDemographics'
 import DistrictElectionHistory from './DistrictElectionHistory'
 
@@ -437,7 +437,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
                         <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#FCA5A5' }}>Current officeholder</div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 8 }}>
                           <div style={{ width: 44, height: 44, borderRadius: 13, background: PARTY_COLOR[current.party] || '#64748B', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 900, flexShrink: 0 }}>
-                            {current.name.split(' ').map(w => w[0]).slice(0, 2).join('')}
+                            {String(current?.name || '').split(' ').filter(Boolean).map(w => w[0]).slice(0, 2).join('')}
                           </div>
                           <div>
                             <div style={{ fontSize: 16.5, fontWeight: 900 }}>{current.name}</div>
@@ -509,7 +509,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
             <div style={{ ...S.card, marginBottom: 14 }}>
               <div style={S.cardTitle}>Eligible to run — people in your lists <span style={S.note}>Addresses inside this district</span></div>
               <div style={{ background: '#0A1628', borderRadius: 14, padding: '15px 18px', fontSize: 13.5, color: 'rgba(255,255,255,0.85)', lineHeight: 1.65, fontWeight: 500 }}>
-                <b style={{ color: '#fff', fontWeight: 800 }}>To run for this seat:</b> {meta.elig(id.num)}
+                <b style={{ color: '#fff', fontWeight: 800 }}>To run for this seat:</b> {meta.elig(id.num, id.countyName)}
               </div>
               {eligible === null ? (
                 <p style={{ fontSize: 13, color: '#94A3B8', fontWeight: 600, marginTop: 12 }}>Checking your voter lists…</p>

@@ -122,7 +122,15 @@ export const handler = async (event) => {
   // Use the server-verified email from Supabase for Stripe lookup — never body.email
   const verifiedEmail = user?.email?.toLowerCase()
 
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
+  // Build the Stripe client inside the handler behind an explicit key check
+  // (same pattern as admin-billing.js). Fail closed: without Stripe the
+  // cancellation below cannot run, and flipping the account to free while the
+  // subscription keeps billing is the worst possible outcome.
+  const stripeKey = process.env.STRIPE_SECRET_KEY
+  if (!stripeKey) {
+    return { statusCode: 503, body: JSON.stringify({ error: 'Stripe is not configured (STRIPE_SECRET_KEY missing)' }) }
+  }
+  const stripe = new Stripe(stripeKey)
 
   try {
     // Audit fix (#7): mark the downgrade as VOLUNTARY before cancelling, so the

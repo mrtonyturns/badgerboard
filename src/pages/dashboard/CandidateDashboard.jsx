@@ -28,7 +28,8 @@ import {
   DistrictHeatMap, HeatLegend, LivePulseDot,
   safeISO, fmtInt, fmtDate, daysUntil, isUpcoming, autoStatus, isMonitored,
   monitoringSlots, nextMonday, loadPopPoints, loadCountyPres,
-  resolveDistrict, loadBoundary,
+  resolveDistrict, loadBoundary, countVotersInDistrict,
+  weekDigestOf, latestDigestOf,
 } from './shared'
 
 // ── self-candidate resolution ────────────────────────────────────────────────
@@ -217,7 +218,6 @@ export default function CandidateDashboard() {
   const [elections, setElections]   = useState([])
   const [dossiers, setDossiers]     = useState([])
   const [voterLists, setVoterLists] = useState([])
-  const [voters, setVoters]         = useState(null)
   const [profilesUsed, setProfilesUsed] = useState(null)
   const [busyId, setBusyId]         = useState(null)
   const [picking, setPicking]       = useState(false)
@@ -233,29 +233,28 @@ export default function CandidateDashboard() {
       const startOfMonth = new Date()
       startOfMonth.setDate(1)
       startOfMonth.setHours(0, 0, 0, 0)
-      const [c, m, e, d, vl, monthly, v] = await Promise.all([
+      const [c, m, e, d, vl] = await Promise.all([
         getCandidates({}),
         getMilestones({}),
         getElections(),
-        getDossiers(),
+        getDossiers(null, { list: true }),   // no `content` — the dashboard only draws digests
         getVoterLists(),
-        // Same quota rule as Dossiers.jsx: only this user's manual generations
-        // count; auto-regenerated rows have generated_by = null.
-        user?.id
-          ? supabase.from('dossiers').select('id')
-              .gte('generated_at', startOfMonth.toISOString())
-              .eq('generated_by', user.id).not('generated_by', 'is', null)
-          : Promise.resolve({ data: [] }),
-        supabase.from('voters').select('latitude, longitude').not('latitude', 'is', null).limit(5000),
       ])
       if (dead) return
+      const allDossiers = d.data || []
       setCandidates(c.data || [])
       setMilestones(m.data || [])
       setElections(e.data || [])
-      setDossiers(d.data || [])
+      setDossiers(allDossiers)
       setVoterLists(vl.data || [])
-      setProfilesUsed((monthly.data || []).length)
-      setVoters(v.data || [])
+      // Quota is derived from the dossiers we just fetched instead of a second
+      // round-trip that asked the same table the same question. Same rule as
+      // Dossiers.jsx: only this user's manual generations count — auto-
+      // regenerated rows carry a null generated_by.
+      setProfilesUsed(allDossiers.filter(x =>
+        x.generated_by && x.generated_by === user?.id &&
+        x.generated_at && new Date(x.generated_at) >= startOfMonth
+      ).length)
       setLoading(false)
     })()
     return () => { dead = true }
@@ -306,10 +305,17 @@ export default function CandidateDashboard() {
   // Registered voters in district = rows from the user's own uploaded voter
   // lists whose geocode falls inside the boundary. Census population is NOT a
   // substitute — it counts residents, not registered voters.
-  const votersInDistrict = useMemo(() => {
-    if (!boundary || !voters) return null
-    return voters.filter(v => v.longitude != null && pointInGeometry(v.longitude, v.latitude, boundary)).length
-  }, [boundary, voters])
+  // countVotersInDistrict filters server-side on the district bbox and pages to
+  // completion, so this is exact; the old `.limit(5000)` prefix under-counted
+  // any account with a large uploaded list.
+  const [votersInDistrict, setVotersInDistrict] = useState(null)
+  useEffect(() => {
+    let dead = false
+    if (!boundary) { setVotersInDistrict(null); return }
+    setVotersInDistrict(null)
+    countVotersInDistrict(boundary).then(n => { if (!dead) setVotersInDistrict(n) })
+    return () => { dead = true }
+  }, [boundary])
 
   const historyRows = useMemo(() => {
     if (!countyMix || !pres) return null
@@ -340,9 +346,12 @@ export default function CandidateDashboard() {
       .sort((a, b) => String(b.generated_at || '').localeCompare(String(a.generated_at || '')))
   ), [dossiers, monitored])
 
-  const latestDigest = useMemo(() => (
-    monitoredDossiers.find(d => d.weekly_digest?.summary) || null
-  ), [monitoredDossiers])
+  // The panel is titled "This week's digest", so it renders THIS week's digest.
+  // It used to render the newest digest of any age, which quietly presented a
+  // three-week-old summary as current. latestDigest is kept only to date the
+  // empty state honestly.
+  const thisWeekDigest = useMemo(() => weekDigestOf(monitoredDossiers), [monitoredDossiers])
+  const latestDigest   = useMemo(() => latestDigestOf(monitoredDossiers), [monitoredDossiers])
 
   const weeks = useMemo(() => {
     const thisWeek = startOfWeek(new Date(), { weekStartsOn: 1 })
@@ -585,34 +594,38 @@ export default function CandidateDashboard() {
             <CardHead
               title={
                 <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {latestDigest && <LivePulseDot />}
+                  {thisWeekDigest && <LivePulseDot />}
                   This week's digest{monitored ? ` — ${monitored.name}` : ''}
                 </span>
               }
-              right={latestDigest && (
+              right={thisWeekDigest && (
                 <span style={{ fontSize: 10.5, color: T.faint }}>
-                  {fmtDate(latestDigest.generated_at, 'MMM d')}
+                  {fmtDate(thisWeekDigest.generated_at, 'MMM d')}
                 </span>
               )}
             />
-            {latestDigest ? (
+            {thisWeekDigest ? (
               <>
                 <div style={{ fontSize: 12.5, lineHeight: 1.6, color: T.ink2, marginTop: 8 }}>
-                  {latestDigest.weekly_digest.summary}
+                  {thisWeekDigest.weekly_digest.summary}
                 </div>
-                <DigestItems items={latestDigest.weekly_digest.items} />
+                <DigestItems items={thisWeekDigest.weekly_digest.items} />
               </>
             ) : monitored ? (
               <EmptyState
-                title="No digest yet"
-                body={`${monitored.name} is being monitored. The first weekly digest is written after the next Monday refresh.`}
+                title={latestDigest ? 'No digest this week yet' : 'No digest yet'}
+                body={latestDigest
+                  ? `${monitored.name} is being monitored. The most recent digest is from ${fmtDate(latestDigest.generated_at, 'MMM d')}; this week's lands after the next Monday refresh.`
+                  : `${monitored.name} is being monitored. The first weekly digest is written after the next Monday refresh.`}
               />
             ) : (
               <EmptyState
                 title="Active Monitoring is off"
                 body={
                   slots.max === 0
-                    ? 'Active Monitoring is available on Candidate Campaign. Weekly digests track news, endorsements, polling and controversy for the candidate you choose.'
+                    // activeCandidateLimit in lib/tiers.js: scout 0, c_monitor 0,
+                    // c_active 1 — monitoring unlocks at Active, not Campaign.
+                    ? 'Active Monitoring is available on Candidate Active. Weekly digests track news, endorsements, polling and controversy for the candidate you choose.'
                     : 'Turn on Active Monitoring for yourself or an opponent from the Candidates page to start receiving weekly digests.'
                 }
                 action={<CtaButton onClick={() => nav('/candidates')}>Choose a candidate</CtaButton>}

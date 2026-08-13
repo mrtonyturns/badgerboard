@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Building2, Search, Plus, ChevronDown, ChevronUp, ChevronsUpDown,
-         MapPin, Briefcase, Scale, Map, X, Users, ChevronRight } from 'lucide-react'
+import { Building2, Search, Plus,
+         MapPin, Briefcase, Scale, X, Users, ChevronRight } from 'lucide-react'
 import { getOffices, createOffice, getCandidates, getOfficeHistory } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { ADMIN_EMAILS } from '../lib/tiers'
@@ -32,15 +32,14 @@ function writeMapCtx(key, payload) {
   try {
     sessionStorage.setItem(key, JSON.stringify(payload))
   } catch (_) {
-    // Likely quota exceeded (e.g. a large selectedDistrict.geometry) — retry without geometry
+    // Likely quota exceeded (e.g. a large selectedDistrict.geometry). Retrying
+    // with `geometry: undefined` used to look like a graceful degrade, but a
+    // restored district without geometry breaks the heat map and the
+    // point-in-polygon math downstream. Drop the selection entirely instead and
+    // keep only the cheap layer/view state.
     try {
-      const slim = {
-        ...payload,
-        selectedDistrict: payload.selectedDistrict
-          ? { ...payload.selectedDistrict, geometry: undefined }
-          : null,
-      }
-      sessionStorage.setItem(key, JSON.stringify(slim))
+      const { selectedDistrict: _drop, ...slim } = payload
+      sessionStorage.setItem(key, JSON.stringify({ ...slim, selectedDistrict: null }))
     } catch (_) {
       // give up silently — restoring the map view is a nicety, not critical
     }
@@ -286,7 +285,7 @@ function DistrictPanel({ district, panelOffices, allCandidates, onClose, navigat
 
   return (
     <div style={{
-      position: 'absolute', left: 0, top: 0, bottom: 0, width: 300,
+      position: 'absolute', left: 0, top: 0, bottom: 0, width: 'min(300px, 85vw)',
       zIndex: 2000, background: 'white',
       boxShadow: '4px 0 24px rgba(0,0,0,0.18)',
       display: 'flex', flexDirection: 'column',
@@ -433,7 +432,12 @@ function DistrictPanel({ district, panelOffices, allCandidates, onClose, navigat
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function Offices() {
   const navigate = useNavigate()
-  const [offices, setOffices]     = useState([])
+  // ONE fetch of the offices table (3,200+ rows, paginated inside getOffices).
+  // The page used to run two: a filtered query feeding the count chips and a
+  // second unfiltered query feeding the map — so the filters moved the chips
+  // while the map and the district panel silently ignored them, and every
+  // filter change refetched thousands of rows. Filtering is now client-side
+  // over the single fetched set, so chips, map and panel all agree.
   const [allOfficesUnfiltered, setAllOfficesUnfiltered] = useState([])
   const [loading, setLoading]     = useState(true)
   const { user } = useAuth()
@@ -445,19 +449,16 @@ export default function Offices() {
   const [typeFilter, setTypeFilter]   = useState('')
   const [showModal, setShowModal]     = useState(false)
   const [historyOffice, setHistoryOffice] = useState(null)   // office row for history modal
-  const [expandedGroups, setExpandedGroups] = useState({})   // level → true (show all rows)
   const [saving, setSaving]           = useState(false)
+  const [saveError, setSaveError]     = useState(null)
   const [fetchError, setFetchError]   = useState(null)
-  const [sortField, setSortField]     = useState(null)
-  const [sortDir, setSortDir]         = useState('asc')
 
   // Restored once, synchronously, from sessionStorage — safe against stale/malformed
   // payloads (readMapCtx already try/catches the parse).
   const [restoredMapCtx] = useState(() => readMapCtx(OFFICES_MAP_CTX_KEY))
 
-  // The table/list view was removed (Aug 2026) — the map is the only view.
-  const viewMode = 'map'
-  const [mapEverShown, setMapEverShown] = useState(true)
+  // The table/list view was removed (Aug 2026) — the map is the only view, so
+  // there is no viewMode/mapEverShown state left to track.
   const [activeLayer, setActiveLayer]   = useState(() =>
     typeof restoredMapCtx?.activeLayer === 'string' ? restoredMapCtx.activeLayer : '')
   const [selectedDistrict, setSelectedDistrict] = useState(() =>
@@ -480,45 +481,49 @@ export default function Offices() {
     return () => clearTimeout(searchDebounceRef.current)
   }, [search])
 
-  // Fetch offices whenever debounced search or filters change
-  useEffect(() => { fetchOffices() }, [debouncedSearch, levelFilter, typeFilter])
-
   // Load all candidates once for the panel
   useEffect(() => {
     getCandidates().then(({ data }) => setAllCandidates(data || []))
   }, [])
 
-  // Load all offices (unfiltered) once for the map panel
-  useEffect(() => {
-    getOffices({}).then(({ data }) => setAllOfficesUnfiltered(data || []))
-  }, [])
+  // Load every office once. Filters are applied client-side below.
+  useEffect(() => { fetchOffices() }, [])
 
   // Persist map context (layer, selection, view) whenever it changes so that
   // navigating to a city page and back restores the exact prior map state.
   useEffect(() => {
-    writeMapCtx(OFFICES_MAP_CTX_KEY, { activeLayer, viewMode, selectedDistrict, view: mapView })
-  }, [activeLayer, viewMode, selectedDistrict, mapView])
+    writeMapCtx(OFFICES_MAP_CTX_KEY, { activeLayer, selectedDistrict, view: mapView })
+  }, [activeLayer, selectedDistrict, mapView])
 
   const fetchOffices = async () => {
     setLoading(true)
     setFetchError(null)
-    const { data, error } = await getOffices({
-      search:      debouncedSearch || undefined,
-      level:       levelFilter     || undefined,
-      office_type: typeFilter      || undefined,
-    })
+    const { data, error } = await getOffices({})
     if (error) {
       setFetchError(error.message || 'Failed to load offices. Please try again.')
     } else {
-      setOffices(data || [])
+      setAllOfficesUnfiltered(data || [])
     }
     setLoading(false)
   }
 
+  // Search + level/type applied to the ONE fetched set. `offices` is what the
+  // count chips, the map layer and the district panel all read, so a filter now
+  // narrows the map and panel too instead of only the chips. Name-only search
+  // matches the previous server-side .ilike('name', …).
+  const offices = useMemo(() => {
+    const q = debouncedSearch.trim().toLowerCase()
+    return allOfficesUnfiltered.filter(o =>
+      (!levelFilter || o.level === levelFilter) &&
+      (!typeFilter  || o.office_type === typeFilter) &&
+      (!q || String(o.name || '').toLowerCase().includes(q))
+    )
+  }, [allOfficesUnfiltered, debouncedSearch, levelFilter, typeFilter])
+
   // Offices matching the currently-selected district polygon
   const panelOffices = useMemo(
-    () => matchOffices(selectedDistrict, allOfficesUnfiltered),
-    [selectedDistrict, allOfficesUnfiltered]
+    () => matchOffices(selectedDistrict, offices),
+    [selectedDistrict, offices]
   )
 
   // Municipal-click demographics lookup — resolves to null (no-op) for
@@ -535,6 +540,7 @@ export default function Offices() {
   const handleSave = async (e) => {
     e.preventDefault()
     setSaving(true)
+    setSaveError(null)
     const { error } = await createOffice({
       ...form,
       term_years:      parseInt(form.term_years),
@@ -543,51 +549,19 @@ export default function Offices() {
       county:          form.county          || null,
       city:            form.city            || null,
     })
-    if (!error) {
-      setShowModal(false)
-      setForm({ name:'', level:'state', office_type:'legislative', district_number:'', district_name:'', county:'', city:'', term_years:4, notes:'' })
-      fetchOffices()
-    }
     setSaving(false)
+    if (error) {
+      // Never leave the modal hanging silently — the old code just stopped.
+      setSaveError(error.message || 'Could not save this office. Please try again.')
+      return
+    }
+    setShowModal(false)
+    setForm({ name:'', level:'state', office_type:'legislative', district_number:'', district_name:'', county:'', city:'', term_years:4, notes:'' })
+    fetchOffices()
   }
 
-  const handleSort = (field) => {
-    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    else { setSortField(field); setSortDir('asc') }
-  }
-
-  const sortOffices = (list) => {
-    if (!sortField) return list
-    return [...list].sort((a, b) => {
-      let av, bv
-      if (sortField === 'district') {
-        av = a.district_number != null ? String(a.district_number).padStart(4,'0') : (a.district_name || '')
-        bv = b.district_number != null ? String(b.district_number).padStart(4,'0') : (b.district_name || '')
-      } else if (sortField === 'location') {
-        av = [a.county, a.city].filter(Boolean).join(' ')
-        bv = [b.county, b.city].filter(Boolean).join(' ')
-      } else if (sortField === 'term_years') {
-        return sortDir === 'asc' ? (a.term_years??0)-(b.term_years??0) : (b.term_years??0)-(a.term_years??0)
-      } else {
-        av = (a[sortField]||'').toLowerCase()
-        bv = (b[sortField]||'').toLowerCase()
-      }
-      if (av < bv) return sortDir === 'asc' ? -1 : 1
-      if (av > bv) return sortDir === 'asc' ?  1 : -1
-      return 0
-    })
-  }
-
-  const SortIcon = ({ field }) => {
-    if (sortField !== field) return <ChevronsUpDown className="w-3 h-3 ml-1 opacity-40" />
-    return sortDir === 'asc'
-      ? <ChevronUp className="w-3 h-3 ml-1 text-brand-red" />
-      : <ChevronDown className="w-3 h-3 ml-1 text-brand-red" />
-  }
-
-  const grouped    = offices.reduce((acc, o) => { acc[o.level] = [...(acc[o.level]||[]), o]; return acc }, {})
-  const levelOrder = ['federal','state','county','municipal']
-  const thClass    = 'table-header cursor-pointer select-none hover:bg-gray-100 transition-colors'
+  // Level → offices, for the count chips under the filter row.
+  const grouped = offices.reduce((acc, o) => { acc[o.level] = [...(acc[o.level]||[]), o]; return acc }, {})
 
   // v1.19.1: state split into Assembly / State Senate, federal split into
   // Congress (U.S. House) / U.S. Senate (statewide) — each its own toggle.
@@ -603,16 +577,28 @@ export default function Offices() {
   return (
     <div className="space-y-6">
       <LoadingBar loading={loading} />
-      {/* ── Header ── */}
-      <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-        <div className="sm:ml-auto flex items-center gap-2">
-          {isAdmin && (
-            <button onClick={() => setShowModal(true)} className="btn-primary flex items-center gap-2 whitespace-nowrap">
-              <Plus className="w-4 h-4" /> Add Office
-            </button>
-          )}
+      {/* ── Header ── (admin-only: for everyone else this row rendered empty) */}
+      {isAdmin && (
+        <div className="flex justify-end">
+          <button onClick={() => setShowModal(true)} className="btn-primary flex items-center gap-2 whitespace-nowrap">
+            <Plus className="w-4 h-4" /> Add Office
+          </button>
         </div>
-      </div>
+      )}
+
+      {/* ── Load failure ──
+          fetchError was set but never rendered: a failed load left an empty map
+          and "0 offices" with no explanation. */}
+      {fetchError && (
+        <div className="card py-4 border border-red-200 bg-red-50">
+          <div className="flex items-center gap-3">
+            <p className="text-sm text-red-800 flex-1">{fetchError}</p>
+            <button onClick={fetchOffices} className="btn-secondary text-sm whitespace-nowrap">
+              Try again
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Filters ── */}
       <div className="card py-4">
@@ -643,38 +629,32 @@ export default function Offices() {
       </div>
 
       {/* ── Map district toggles ── */}
-      {viewMode === 'map' && (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-gray-400 font-medium mr-1">Show district outlines:</span>
-          {LAYER_BUTTONS.map(({ key, label, activeCls, dotColor }) => {
-            const isActive = activeLayer === key
-            return (
-              <button key={key} onClick={() => toggleLayer(key)}
-                title={isActive ? `Hide ${label}` : `Show ${label} boundaries`}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border-2 transition-all ${
-                  isActive ? activeCls : 'bg-white text-gray-500 border-gray-300 hover:border-gray-400'
-                }`}>
-                <span style={{ width:9, height:9, borderRadius:'50%', flexShrink:0, display:'inline-block',
-                  background: isActive ? 'white' : dotColor }} />
-                {label}
-              </button>
-            )
-          })}
-          {activeLayer && (
-            <span className="text-xs text-gray-400 ml-1">— click a district to see its offices</span>
-          )}
-        </div>
-      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-gray-400 font-medium mr-1">Show district outlines:</span>
+        {LAYER_BUTTONS.map(({ key, label, activeCls, dotColor }) => {
+          const isActive = activeLayer === key
+          return (
+            <button key={key} onClick={() => toggleLayer(key)}
+              title={isActive ? `Hide ${label}` : `Show ${label} boundaries`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border-2 transition-all ${
+                isActive ? activeCls : 'bg-white text-gray-500 border-gray-300 hover:border-gray-400'
+              }`}>
+              <span style={{ width:9, height:9, borderRadius:'50%', flexShrink:0, display:'inline-block',
+                background: isActive ? 'white' : dotColor }} />
+              {label}
+            </button>
+          )
+        })}
+        {activeLayer && (
+          <span className="text-xs text-gray-400 ml-1">— click a district to see its offices</span>
+        )}
+      </div>
 
-      {/* ── Map view (with deferred mount + side panel) ── */}
-      {mapEverShown && (
-        <div
-          style={{ display: viewMode === 'map' ? 'block' : 'none', position: 'relative' }}
-          className="rounded-xl overflow-hidden h-[640px]"
-        >
+      {/* ── Map view (with side panel) ── */}
+      <div style={{ position: 'relative' }} className="rounded-xl overflow-hidden h-[640px]">
           <MapErrorBoundary>
             <LeafletMapView
-              offices={allOfficesUnfiltered}
+              offices={offices}
               activeLayer={activeLayer}
               onDistrictClick={handleDistrictClick}
               initialView={mapView}
@@ -705,8 +685,7 @@ export default function Offices() {
               />
             )
           )}
-        </div>
-      )}
+      </div>
 
 
       {/* ── District intelligence dashboard (state & federal districts) ── */}
@@ -781,8 +760,13 @@ export default function Offices() {
                 <label className="label">Notes</label>
                 <textarea className="input" rows={2} value={form.notes} onChange={e => setForm({...form, notes:e.target.value})} placeholder="Additional context..." />
               </div>
+              {saveError && (
+                <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                  {saveError}
+                </div>
+              )}
               <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setShowModal(false)} className="btn-secondary flex-1">Cancel</button>
+                <button type="button" onClick={() => { setShowModal(false); setSaveError(null) }} className="btn-secondary flex-1">Cancel</button>
                 <button type="submit" className="btn-primary flex-1" disabled={saving}>{saving ? 'Saving...' : 'Save Office'}</button>
               </div>
             </form>

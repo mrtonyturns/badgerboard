@@ -128,10 +128,11 @@ console.log('F3 — create-checkout-session validation')
   t('400 on legacy plan without bracket',(await post({ plan: 'agency', billing: 'monthly' })).statusCode === 400)
   t('no Stripe API call was made for any invalid input', stripeCalled === false)
 
-  const { handler: buyCredits } = await import('../netlify/functions/buy-dossier-credits.js')
-  const postPack = (body) => buyCredits({ httpMethod: 'POST', headers: { authorization: 'Bearer tok' }, body: JSON.stringify(body) })
-  t('buy-dossier-credits: 400 on invalid pack', (await postPack({ pack: 7 })).statusCode === 400)
-  t('buy-dossier-credits: 400 on missing pack', (await postPack({})).statusCode === 400)
+  // Credit packs used to have their own ungated endpoint (buy-dossier-credits.js,
+  // deleted); the only purchase path now is create-checkout-session's
+  // `product: 'credits'` branch, which validates the pack before the plan gate.
+  t('credits: 400 on invalid pack', (await post({ product: 'credits', pack: 7 })).statusCode === 400)
+  t('credits: 400 on missing pack', (await post({ product: 'credits' })).statusCode === 400)
   global.fetch = realFetch
 }
 
@@ -1676,6 +1677,33 @@ console.log('Phases 2-3 — election-results-poller window decision')
     embargoed.kind === 'none' && embargoed.patch === null && /embargo/.test(embargoed.reason))
   const after = decideNotification(sub, calledContest, rows, tenThirty, { winnerEmbargo: false })
   t('the same touch after the embargo sends the winner email', after.kind === 'winner')
+}
+
+// ── Stripe price resolution shared by checkout + admin plan changes ──────────
+// admin-billing.js now resolves the price BEFORE writing app_metadata, and
+// resolves it for the subscriber's ACTUAL billing interval instead of always _M.
+{
+  console.log('Stripe price resolution (create-checkout-session exports)')
+  const { resolvePriceId, billingPeriodFromPrice, getPriceEnvKey } =
+    await import('../netlify/functions/create-checkout-session.js')
+
+  t('candidate plans build a bracket-free price key',
+    getPriceEnvKey('c_active', 'b1', 'monthly') === 'STRIPE_PRICE_C_ACTIVE_M')
+  t('action plans keep the bracket segment',
+    getPriceEnvKey('a_active', 'b2_5', 'annual') === 'STRIPE_PRICE_A_ACTIVE_B2_5_A')
+  t('a candidate plan resolves to a baked-in price id',
+    typeof resolvePriceId('c_active', 'b1', 'monthly').priceId === 'string')
+  t('the billing period changes which price is resolved',
+    resolvePriceId('a_active', 'b2_5', 'monthly').priceId !== resolvePriceId('a_active', 'b2_5', 'annual').priceId)
+  t('an unconfigured price resolves to null, never undefined',
+    resolvePriceId('nope', 'b1', 'monthly').priceId === null)
+
+  t('monthly interval → monthly',    billingPeriodFromPrice({ recurring: { interval: 'month', interval_count: 1 } }) === 'monthly')
+  t('3-month interval → quarterly',  billingPeriodFromPrice({ recurring: { interval: 'month', interval_count: 3 } }) === 'quarterly')
+  t('6-month interval → semiannual', billingPeriodFromPrice({ recurring: { interval: 'month', interval_count: 6 } }) === 'semiannual')
+  t('yearly interval → annual',      billingPeriodFromPrice({ recurring: { interval: 'year',  interval_count: 1 } }) === 'annual')
+  t('12-month interval → annual',    billingPeriodFromPrice({ recurring: { interval: 'month', interval_count: 12 } }) === 'annual')
+  t('a one-time price falls back to monthly', billingPeriodFromPrice({}) === 'monthly' && billingPeriodFromPrice(null) === 'monthly')
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

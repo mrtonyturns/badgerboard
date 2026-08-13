@@ -2,6 +2,20 @@
 // Every call verifies an ACTIVE link + the required permission scope, and audit-logs writes.
 const H = require('./_campaign-connect')
 
+// gp_tasks (the Game Plan board's table) → the shape Campaign Connect renders.
+// The board stores `content` + `completed`; the delegate UI reads `title` +
+// `status`, so translate at the boundary rather than in the page.
+const toClientTask = (r) => (r ? {
+  id: r.id,
+  title: r.content,
+  status: r.completed ? 'done' : 'todo',
+  due_date: r.due_date || null,
+  priority: r.priority ?? 4,
+  description: r.description || null,
+  project_id: r.project_id || null,
+  created_at: r.created_at || null,
+} : null)
+
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: H.CORS, body: '' }
   if (event.httpMethod !== 'POST')  return { statusCode: 405, headers: H.CORS, body: JSON.stringify({ error: 'POST only' }) }
@@ -25,40 +39,44 @@ exports.handler = async (event) => {
     switch (action) {
       case 'workspace': {
         need('view')
-        const [cands, doss, miles] = await Promise.all([
+        const [cands, doss, taskRes] = await Promise.all([
           H.sb(`candidates?created_by=eq.${enc(candidate_user_id)}&select=id,name,party,status,office:offices(name,district_name)&order=created_at.desc`),
           H.sb(`dossiers?created_by=eq.${enc(candidate_user_id)}&select=id,title,created_at&order=created_at.desc&limit=50`),
-          H.sb(`game_plan_milestones?created_by=eq.${enc(candidate_user_id)}&select=*&order=due_date.asc.nullslast`),
+          // gp_tasks is the Game Plan board's real table; owner_id is the plan
+          // owner (the candidate), created_by is whoever added the row.
+          H.sb(`gp_tasks?owner_id=eq.${enc(candidate_user_id)}&parent_id=is.null&select=*&order=due_date.asc.nullslast,sort_order.asc`),
         ])
-        const milestones = Array.isArray(miles.data) ? miles.data : []
-        const openCount = milestones.filter(m => m.status !== 'done' && m.status !== 'complete').length
+        const rows  = Array.isArray(taskRes.data) ? taskRes.data : []
+        const tasks = rows.map(toClientTask)
+        const openCount = tasks.filter(t => t.status !== 'done').length
         const metrics = {
           candidates: (cands.data || []).length,
           profiles: (doss.data || []).length,
-          tasks_total: milestones.length,
+          tasks_total: tasks.length,
           tasks_open: openCount,
-          tasks_done: milestones.length - openCount,
+          tasks_done: tasks.length - openCount,
         }
         return reply({ ok: true, permissions: perms, relationship_type: link.relationship_type,
-          candidates: cands.data || [], profiles: doss.data || [], tasks: milestones, metrics })
+          candidates: cands.data || [], profiles: doss.data || [], tasks, metrics })
       }
 
       case 'task_create': {
         need('manage_tasks')
+        const content = String(body.title || '').slice(0, 300)
+        if (!content) return reply({ error: 'Task title required' }, 400)
         const row = {
-          created_by: candidate_user_id,
-          candidate_id: body.candidate_id || null,
-          title: String(body.title || '').slice(0, 300),
-          phase: body.phase || 'planning',
-          category: body.category || 'general',
-          status: body.status || 'todo',
+          owner_id: candidate_user_id,   // the plan this task belongs to
+          created_by: user.id,           // the delegated actor, per gp_can_edit
+          content,
+          description: body.description ? String(body.description).slice(0, 2000) : null,
           due_date: body.due_date || null,
+          completed: body.status === 'done',
+          completed_at: body.status === 'done' ? new Date().toISOString() : null,
         }
-        if (!row.title) return reply({ error: 'Task title required' }, 400)
-        const ins = await H.sb('game_plan_milestones', 'POST', row)
+        const ins = await H.sb('gp_tasks', 'POST', row)
         if (!ins.ok) return reply({ error: 'Could not create task' }, 500)
-        await H.logActivity(link.id, user.id, candidate_user_id, 'task_created', { title: row.title })
-        return reply({ ok: true, task: ins.data[0] })
+        await H.logActivity(link.id, user.id, candidate_user_id, 'task_created', { title: content })
+        return reply({ ok: true, task: toClientTask((ins.data || [])[0]) })
       }
 
       case 'task_update': {
@@ -66,26 +84,42 @@ exports.handler = async (event) => {
         const { task_id } = body
         if (!UUID.test(task_id || '')) return reply({ error: 'valid task_id required' }, 400)
         const patch = {}
-        for (const k of ['title', 'phase', 'category', 'status', 'due_date']) if (k in body) patch[k] = body[k]
-        const upd = await H.sb(`game_plan_milestones?id=eq.${enc(task_id)}&created_by=eq.${enc(candidate_user_id)}`, 'PATCH', patch)
+        if ('title' in body)       patch.content = String(body.title || '').slice(0, 300)
+        if ('description' in body) patch.description = body.description ? String(body.description).slice(0, 2000) : null
+        if ('due_date' in body)    patch.due_date = body.due_date || null
+        if ('status' in body) {
+          patch.completed = body.status === 'done'
+          patch.completed_at = body.status === 'done' ? new Date().toISOString() : null
+        }
+        if (Object.keys(patch).length === 0) return reply({ error: 'Nothing to update' }, 400)
+        const upd = await H.sb(`gp_tasks?id=eq.${enc(task_id)}&owner_id=eq.${enc(candidate_user_id)}`, 'PATCH', patch)
         if (!upd.ok) return reply({ error: 'Could not update task' }, 500)
+        if (!(upd.data || []).length) return reply({ error: 'Task not found' }, 404)
         await H.logActivity(link.id, user.id, candidate_user_id, 'task_updated', { task_id, patch })
-        return reply({ ok: true, task: (upd.data || [])[0] })
+        return reply({ ok: true, task: toClientTask((upd.data || [])[0]) })
       }
 
       case 'task_toggle': {
         need('manage_tasks')
         const { task_id, done } = body
-        const upd = await H.sb(`game_plan_milestones?id=eq.${enc(task_id)}&created_by=eq.${enc(candidate_user_id)}`, 'PATCH', { status: done ? 'done' : 'todo' })
+        if (!UUID.test(task_id || '')) return reply({ error: 'valid task_id required' }, 400)
+        const upd = await H.sb(
+          `gp_tasks?id=eq.${enc(task_id)}&owner_id=eq.${enc(candidate_user_id)}`,
+          'PATCH',
+          { completed: !!done, completed_at: done ? new Date().toISOString() : null }
+        )
         if (!upd.ok) return reply({ error: 'Could not update task' }, 500)
+        if (!(upd.data || []).length) return reply({ error: 'Task not found' }, 404)
         await H.logActivity(link.id, user.id, candidate_user_id, 'task_toggled', { task_id, done })
-        return reply({ ok: true, task: (upd.data || [])[0] })
+        return reply({ ok: true, task: toClientTask((upd.data || [])[0]) })
       }
 
       case 'task_delete': {
         need('manage_tasks')
         const { task_id } = body
-        const del = await H.sb(`game_plan_milestones?id=eq.${enc(task_id)}&created_by=eq.${enc(candidate_user_id)}`, 'DELETE')
+        if (!UUID.test(task_id || '')) return reply({ error: 'valid task_id required' }, 400)
+        const del = await H.sb(`gp_tasks?id=eq.${enc(task_id)}&owner_id=eq.${enc(candidate_user_id)}`, 'DELETE')
+        if (!del.ok) return reply({ error: 'Could not delete task' }, 500)
         await H.logActivity(link.id, user.id, candidate_user_id, 'task_deleted', { task_id })
         return reply({ ok: true })
       }

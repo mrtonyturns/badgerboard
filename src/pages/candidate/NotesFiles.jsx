@@ -71,6 +71,7 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
   const [savingNote, setSavingNote] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState('')
+  const [saveError, setSaveError] = useState('')
   const [togglingId, setTogglingId] = useState(null)
   const [busyId, setBusyId] = useState(null)
   const [dragOver, setDragOver] = useState(false)
@@ -96,10 +97,29 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
     return () => clearInterval(t)
   }, [lock.locked])
 
+  // Optimistic write with a hard rollback: if the row update fails the UI goes
+  // back to exactly what the server still holds and the error is surfaced —
+  // a failed save is never reported as a success.
   const persist = async (newData) => {
-    setData(newData)
-    await updateCandidate(candidate.id, { notes: JSON.stringify(newData) })
+    const previous = data
+    // Any entry that predates the AI switch (legacy import, older client) is
+    // written back with ai_access: false so the UI chip and the server-side
+    // AI filter (_candidate-context.js) read the same value.
+    const stamped = {
+      ...newData,
+      notes: (newData.notes || []).map(n => ({ ...n, ai_access: n.ai_access === true })),
+      files: (newData.files || []).map(f => ({ ...f, ai_access: f.ai_access === true })),
+    }
+    setData(stamped)
+    setSaveError('')
+    const { error } = await updateCandidate(candidate.id, { notes: JSON.stringify(stamped) })
+    if (error) {
+      setData(previous)
+      setSaveError(error.message || 'Could not save — your change was not stored. Try again.')
+      return { error }
+    }
     onSaved?.()
+    return { error: null }
   }
 
   // ── notes ──
@@ -113,8 +133,10 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
       by: userName || 'You',
       ai_access: false,   // AI never sees a note unless the user turns it on
     }
-    await persist({ ...data, notes: [note, ...(data.notes || [])] })
-    setDraft(''); setSavingNote(false)
+    const { error } = await persist({ ...data, notes: [note, ...(data.notes || [])] })
+    setSavingNote(false)
+    if (error) return   // keep the draft so the note isn't lost
+    setDraft('')
   }
 
   const deleteNote = async (noteId) => {
@@ -146,7 +168,7 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
         .from('candidate-files')
         .upload(path, file, { cacheControl: '3600', upsert: false })
       if (upErr) throw new Error(upErr.message)
-      await persist({
+      const { error: rowErr } = await persist({
         ...data,
         files: [...(data.files || []), {
           id: fileId, name: file.name, path,
@@ -155,6 +177,13 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
           ai_access: false, ts: new Date().toISOString(),
         }],
       })
+      if (rowErr) {
+        // The object landed in storage but the row write failed — remove it so
+        // the bucket never accumulates files nothing references.
+        try { await supabase.storage.from('candidate-files').remove([path]) } catch { /* best effort */ }
+        setSaveError('')   // reported through uploadError instead
+        throw new Error(rowErr.message || 'Upload could not be saved — the file was removed.')
+      }
     } catch (err) {
       setUploadError(err.message || 'Upload failed')
     }
@@ -215,6 +244,15 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
       if (res.status === 401 && payload.error === 'invalid-password') {
         setPw('')
         setPwError('That password is not correct. Try again.')
+        setLockBusy(false)
+        return
+      }
+      // Grace window has expired — the server wants the account password.
+      // Open the prompt instead of showing the raw error code.
+      if (res.status === 401 && payload.error === 'password-required') {
+        setPw('')
+        setPwError('')
+        setPwPrompt(true)
         setLockBusy(false)
         return
       }
@@ -355,6 +393,10 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
               borderRadius: 99, padding: '3px 8px', letterSpacing: '.3px',
             }}>{shortLabel}</span>
           </div>
+
+          {saveError && (
+            <div style={{ fontSize: 11.5, color: T.redHot, marginBottom: 10 }}>{saveError}</div>
+          )}
 
           <textarea
             value={draft}

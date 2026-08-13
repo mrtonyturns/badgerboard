@@ -114,9 +114,17 @@ export default function NotificationCenter() {
     toasted.add(candidate.id)
     saveSet(TOAST_KEY, toasted)
     setToast(candidate)
+  }, [announcements, toast, open])
+
+  // Auto-dismiss lives in its own effect keyed on the toast id. Setting the
+  // timer inside the effect above meant its cleanup ran the moment `toast`
+  // changed from null → the announcement, clearing the timer immediately and
+  // leaving the popup on screen forever.
+  useEffect(() => {
+    if (!toast) return undefined
     toastTimerRef.current = setTimeout(() => setToast(null), TOAST_MS)
     return () => clearTimeout(toastTimerRef.current)
-  }, [announcements, toast, open])
+  }, [toast?.id])
 
   const dismissToast = useCallback(() => {
     clearTimeout(toastTimerRef.current)

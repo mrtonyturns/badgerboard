@@ -3,7 +3,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Users, Plus, Search, Filter, ExternalLink, Edit2, Trash2, X, Phone, Mail, Globe, Telescope, Lock, Wand2, CheckCircle, AlertCircle, Map, LayoutList, Upload, Zap, FileText } from 'lucide-react'
 import { supabase, getCandidates, getOffices, getElections, createCandidate, deleteCandidate, updateCandidate } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { getUserTier, getUserBracket, getBracketConfig, getUserPlanType, getActiveCandidateLimit, hasFeature, ADMIN_EMAILS } from '../lib/tiers'
+import { getUserTier, getUserBracket, getBracketConfig, getUserPlanType, getActiveCandidateLimit, hasFeature, ADMIN_EMAILS, SCOUT_CANDIDATE_LIMIT, featureUnlockLabel } from '../lib/tiers'
+import { WebOnlyCta, NATIVE_PLAN_NOTE } from '../components/UpgradeCta'
 import LeafletMapView from '../components/LeafletMapView'
 import SearchableSelect from '../components/SearchableSelect'
 import MapErrorBoundary from '../components/MapErrorBoundary'
@@ -119,6 +120,26 @@ const defaultForm = {
   facebook_url: '', instagram_handle: '',
 }
 
+// candidates.notes holds the v2 note store ({ v:2, notes:[], files:[] }).
+// Every note created outside the Notes tab is written in that shape with
+// ai_access: false so the UI switch and the server-side AI filter
+// (_candidate-context.js, which requires ai_access === true) agree.
+const notesToV2 = (text, by = 'You') => {
+  const t = String(text ?? '').trim()
+  if (!t) return null
+  return JSON.stringify({
+    v: 2,
+    notes: [{
+      id: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(36),
+      text: t,
+      ts: new Date().toISOString(),
+      by,
+      ai_access: false,
+    }],
+    files: [],
+  })
+}
+
 export default function Candidates() {
   const { user, session } = useAuth()
   const navigate = useNavigate()
@@ -127,6 +148,7 @@ export default function Candidates() {
 
   const [candidates, setCandidates]             = useState([])
   const [totalCandidateCount, setTotalCandidateCount] = useState(0) // unfiltered total, for Scout cap
+  const [activeMonitoringCount, setActiveMonitoringCount] = useState(0) // unfiltered server count, for the slot cap
   const [offices, setOffices]       = useState([])
   const [elections, setElections]   = useState([])
   const [loading, setLoading]       = useState(true)
@@ -156,8 +178,15 @@ export default function Candidates() {
   const [mapEverShown, setMapEverShown] = useState(() => restoredMapCtx?.viewMode === 'map')
   const [activeLayer, setActiveLayer] = useState(() =>
     typeof restoredMapCtx?.activeLayer === 'string' ? restoredMapCtx.activeLayer : '')
-  const [selectedDistrict, setSelectedDistrict] = useState(() =>
-    (restoredMapCtx?.selectedDistrict && typeof restoredMapCtx.selectedDistrict === 'object') ? restoredMapCtx.selectedDistrict : null)
+  // A restored selection must still look like a district (a `name` to parse a
+  // district number out of and a `layerKey` to branch on). A stale or truncated
+  // payload used to restore `{}`, and the first render then called
+  // `name.match(...)` on undefined and took the whole page down.
+  const [selectedDistrict, setSelectedDistrict] = useState(() => {
+    const d = restoredMapCtx?.selectedDistrict
+    if (!d || typeof d !== 'object') return null
+    return (typeof d.name === 'string' && typeof d.layerKey === 'string') ? d : null
+  })
   const [mapView, setMapView] = useState(() =>
     (restoredMapCtx?.view && Array.isArray(restoredMapCtx.view.center) && typeof restoredMapCtx.view.zoom === 'number')
       ? restoredMapCtx.view : null)
@@ -189,7 +218,10 @@ export default function Candidates() {
 
   // Candidates visible in the selected district
   const panelCandidates = selectedDistrict ? (() => {
-    const { name, sublabel, layerKey } = selectedDistrict
+    // Defensive: `selectedDistrict` can come back from sessionStorage as well as
+    // from a live map click, so never assume the fields are present.
+    const { sublabel, layerKey } = selectedDistrict
+    const name = String(selectedDistrict.name ?? '')
     const num = parseInt((name.match(/\d+/) || [])[0])
     return candidates.filter(c => {
       const o = c.office
@@ -245,10 +277,26 @@ export default function Candidates() {
     setTotalCandidateCount(count ?? 0)
   }
 
+  // Active-monitoring slots must come from an UNFILTERED server count, exactly
+  // like CandidateDetail.jsx's toggle guard. Counting the rendered `candidates`
+  // array instead let any filter (search, party, office, "unmonitored only")
+  // hide monitored rows, drop activeCount below the cap and re-open slots the
+  // account does not have.
+  const refreshActiveCount = async () => {
+    if (!user?.id) return
+    const { count, error } = await supabase
+      .from('candidates')
+      .select('id', { count: 'exact', head: true })
+      .eq('created_by', user.id)
+      .contains('section_timestamps', { monitoring: true })
+    if (!error) setActiveMonitoringCount(count ?? 0)
+  }
+
   useEffect(() => {
     fetchData()
     fetchOfficesAndElections()
     refreshTotalCount()
+    refreshActiveCount()
   }, [])
 
   useEffect(() => { fetchData() }, [search, partyFilter, statusFilter, officeFilter])
@@ -290,14 +338,17 @@ export default function Candidates() {
 
   const handleSave = async (e) => {
     e.preventDefault()
-    // Scout plan hard cap: check real DB total (not filtered view)
+    // Scout plan cap: check the real DB total (not the filtered view).
+    // Client-side only — see the SCOUT_CANDIDATE_LIMIT note above: there is no
+    // server write path for candidate creation, so server enforcement of this
+    // cap is still pending an RLS/trigger migration.
     if (getUserTier(user) === 'scout') {
       const { count } = await supabase
         .from('candidates')
         .select('id', { count: 'exact', head: true })
         .eq('created_by', user.id)
-      if ((count ?? 0) >= 2) {
-        setModalError('The free Scout plan is limited to 2 candidates. Upgrade your plan to add more.')
+      if ((count ?? 0) >= SCOUT_CANDIDATE_LIMIT) {
+        setModalError(`The free Scout plan is limited to ${SCOUT_CANDIDATE_LIMIT} candidates. Upgrade your plan to add more.`)
         setTotalCandidateCount(count ?? 0)
         return
       }
@@ -308,6 +359,7 @@ export default function Candidates() {
       office_id: form.office_id || null,
       election_id: form.election_id || null,
       party: form.party || null,
+      notes: notesToV2(form.notes, user?.email || 'You'),
     })
     if (!error) {
       setShowModal(false)
@@ -330,6 +382,7 @@ export default function Candidates() {
     }
     fetchData()
     refreshTotalCount()
+    refreshActiveCount()   // deleting a monitored candidate frees a slot
   }
 
   const grouped = candidates.reduce((acc, c) => {
@@ -362,7 +415,21 @@ export default function Candidates() {
           election: selectedElection?.name || '',
         }),
       })
-      const json = await res.json()
+      const json = await res.json().catch(() => ({}))
+      // A 403/429/500 is not "no information found" — say what actually happened.
+      if (!res.ok) {
+        if (res.status === 401) {
+          setAutofillNote('Your session expired. Sign in again to use AI autofill.')
+        } else if (res.status === 403) {
+          setAutofillNote(json.error || 'AI autofill is available on the Campaign plan and above.')
+        } else if (res.status === 429) {
+          setAutofillNote(json.error || 'AI autofill rate limit reached — try again in a few minutes.')
+        } else {
+          setAutofillNote(`Autofill failed (HTTP ${res.status}). ${json.error || 'Please fill in the fields manually.'}`)
+        }
+        setAutofilling(false)
+        return
+      }
       if (json.fields && Object.keys(json.fields).length > 0) {
         // Strip the notes field before merging into form
         const { notes, ...formFields } = json.fields
@@ -418,7 +485,7 @@ export default function Candidates() {
         name: candidate.name,
         party: candidate.party || null,
         status: candidate.status || 'exploring',
-        notes: candidate.notes || '',
+        notes: notesToV2(candidate.notes, user?.email || 'You'),
       })
       if (!error) {
         setSaveProgress(p => ({ ...p, [key]: 'success' }))
@@ -440,9 +507,25 @@ export default function Candidates() {
   const userTier    = getUserTier(user)
   const canDiscover = hasFeature(userTier, 'discoverCandidates')
   const canMonitor  = hasFeature(userTier, 'weeklyProfile')
+  // CSV bulk import is sold from Monitor up (pricing page "CSV bulk import" row,
+  // tiers.js features.csvImport) — enforce it here, the only place it ships.
+  const canCsvImport = hasFeature(userTier, 'csvImport')
 
-  // Scout plan: hard cap at 2 candidates (use totalCandidateCount — not the filtered view)
-  const SCOUT_CANDIDATE_LIMIT = 2
+  // Plan names for the locked-feature badges/blurbs, derived from PLAN_CONFIG.
+  // These read "Pro" and "Campaign & Agency plans" before — neither has ever
+  // been a real plan name in this app.
+  const discoverPlanName = featureUnlockLabel('discoverCandidates', getUserPlanType(user))
+  const csvPlanName      = featureUnlockLabel('csvImport', getUserPlanType(user))
+  const monitorPlanNames = featureUnlockLabel('weeklyProfile')
+
+  // Scout plan cap (use totalCandidateCount — not the filtered view). The number
+  // itself lives in lib/tiers.js so this page, PlanPane and the copy in both
+  // can never disagree.
+  //
+  // NOTE: server enforcement is pending. Candidates are inserted straight from
+  // the client and the RLS policy only checks ownership, so this gate — and the
+  // two DB-count checks in handleSave / the CSV import below — are UI, not a
+  // security boundary. Closing it needs an RLS/trigger migration (out of scope).
   const atScoutCandidateLimit = userTier === 'scout' && totalCandidateCount >= SCOUT_CANDIDATE_LIMIT
 
   // Active monitoring slot accounting
@@ -456,7 +539,10 @@ export default function Candidates() {
     : userPlanType === 'candidate'
       ? getActiveCandidateLimit(userTier) // scout/c_monitor → 0, c_active → 1, c_campaign → 3
       : (bracketCfg?.max ?? Infinity)     // Action Plan: bracket-based
-  const activeCount   = candidates.filter(c => c.section_timestamps?.monitoring === true).length
+  // Server count, not `candidates.filter(...)` — the rendered array is filtered
+  // and paginated, so counting it would let filters manufacture free slots.
+  // The slot counter in the header reads this same value.
+  const activeCount   = activeMonitoringCount
   const slotsLeft     = maxSlots === Infinity ? Infinity : Math.max(0, maxSlots - activeCount)
   const atLimit       = maxSlots !== Infinity && activeCount >= maxSlots
   const slotPct       = maxSlots === Infinity ? 0 : Math.min(100, Math.round((activeCount / maxSlots) * 100))
@@ -480,6 +566,7 @@ export default function Candidates() {
     setCandidates(prev => prev.map(c =>
       c.id === candidate.id ? { ...c, section_timestamps: newTimestamps } : c
     ))
+    setActiveMonitoringCount(prev => Math.max(0, prev + (newVal ? 1 : -1)))
 
     const { data: updated, error } = await updateCandidate(candidate.id, { section_timestamps: newTimestamps })
 
@@ -488,11 +575,14 @@ export default function Candidates() {
       setCandidates(prev => prev.map(c =>
         c.id === candidate.id ? { ...c, section_timestamps: candidate.section_timestamps } : c
       ))
+      setActiveMonitoringCount(prev => Math.max(0, prev + (newVal ? -1 : 1)))
     } else if (updated) {
       // Reconcile with actual server response
       setCandidates(prev => prev.map(c =>
         c.id === candidate.id ? { ...c, ...updated } : c
       ))
+      // Re-read the authoritative count (another tab/device may have changed it)
+      refreshActiveCount()
     }
 
     setMonitoringToggles(prev => {
@@ -512,7 +602,9 @@ export default function Candidates() {
           <Lock className="w-4 h-4 text-amber-600 flex-shrink-0" />
           <p className="text-sm text-amber-800 flex-1">
             <span className="font-semibold">Free plan limit reached.</span> The Scout plan supports up to {SCOUT_CANDIDATE_LIMIT} candidates.{' '}
-            <Link to="/plans" className="underline font-semibold">Upgrade your plan</Link> to track more.
+            <WebOnlyCta native={NATIVE_PLAN_NOTE}>
+              <Link to="/plans" className="underline font-semibold">Upgrade your plan</Link> to track more.
+            </WebOnlyCta>
           </p>
         </div>
       )}
@@ -546,27 +638,45 @@ export default function Candidates() {
               <Telescope className="w-4 h-4" /> Discover
             </button>
           ) : (
-            <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 bg-gray-100 cursor-not-allowed" title="Upgrade to unlock Discover">
+            <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 bg-gray-100 cursor-not-allowed"
+              title={`AI candidate discovery unlocks on ${discoverPlanName}`}>
               <Lock className="w-3.5 h-3.5" /> Discover
-              <span className="text-xs font-bold bg-gray-300 text-gray-600 px-1.5 py-0.5 rounded-full">Pro</span>
+              <span className="text-xs font-bold bg-gray-300 text-gray-600 px-1.5 py-0.5 rounded-full">{discoverPlanName}</span>
             </span>
           )}
-          <button onClick={() => { setCsvRows([]); setCsvHeaders([]); setCsvResult(null); setCsvError(''); setShowCsvModal(true) }}
-            className="btn-secondary flex items-center gap-2">
-            <Upload className="w-4 h-4" /> Upload CSV
-          </button>
+          {canCsvImport ? (
+            <button onClick={() => { setCsvRows([]); setCsvHeaders([]); setCsvResult(null); setCsvError(''); setShowCsvModal(true) }}
+              className="btn-secondary flex items-center gap-2">
+              <Upload className="w-4 h-4" /> Upload CSV
+            </button>
+          ) : (
+            <div className="relative group">
+              <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 bg-gray-100 cursor-not-allowed">
+                <Lock className="w-3.5 h-3.5" /> Upload CSV
+                <span className="text-xs font-bold bg-gray-300 text-gray-600 px-1.5 py-0.5 rounded-full">{csvPlanName}</span>
+              </span>
+              <div className="absolute bottom-full right-0 mb-2 w-56 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl hidden group-hover:block z-20 leading-relaxed">
+                CSV bulk import unlocks on {csvPlanName} and above.{' '}
+                <WebOnlyCta native={NATIVE_PLAN_NOTE}>
+                  <Link to="/plans" className="underline font-semibold text-yellow-300">Upgrade</Link> to import candidates in bulk.
+                </WebOnlyCta>
+              </div>
+            </div>
+          )}
           {atScoutCandidateLimit ? (
             <div className="relative group">
               <button
                 disabled
                 className="btn-primary flex items-center gap-2 opacity-50 cursor-not-allowed"
-                title="Scout plan is limited to 2 candidates"
+                title={`Scout plan is limited to ${SCOUT_CANDIDATE_LIMIT} candidates`}
               >
                 <Lock className="w-4 h-4" /> Add Candidate
               </button>
               <div className="absolute bottom-full right-0 mb-2 w-56 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl hidden group-hover:block z-20 leading-relaxed">
-                The free Scout plan allows up to 2 candidates.{' '}
-                <Link to="/plans" className="underline font-semibold text-yellow-300">Upgrade</Link> to add more.
+                The free Scout plan allows up to {SCOUT_CANDIDATE_LIMIT} candidates.{' '}
+                <WebOnlyCta native={NATIVE_PLAN_NOTE}>
+                  <Link to="/plans" className="underline font-semibold text-yellow-300">Upgrade</Link> to add more.
+                </WebOnlyCta>
               </div>
             </div>
           ) : (
@@ -603,12 +713,14 @@ export default function Candidates() {
                 <span className="text-xs text-gray-400 ml-3 whitespace-nowrap">{activeCount}/{maxSlots}</span>
               )}
               {atLimit && userPlanType === 'action' && (
-                <button
-                  onClick={() => navigate('/plans')}
-                  className="ml-3 flex-shrink-0 text-xs font-bold px-2.5 py-1 rounded-lg bg-brand-red text-white hover:bg-red-700 transition-all whitespace-nowrap"
-                >
-                  Upgrade bracket
-                </button>
+                <WebOnlyCta>
+                  <button
+                    onClick={() => navigate('/plans')}
+                    className="ml-3 flex-shrink-0 text-xs font-bold px-2.5 py-1 rounded-lg bg-brand-red text-white hover:bg-red-700 transition-all whitespace-nowrap"
+                  >
+                    Upgrade bracket
+                  </button>
+                </WebOnlyCta>
               )}
             </div>
             {maxSlots !== Infinity && (
@@ -640,9 +752,13 @@ export default function Candidates() {
         <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-dashed border-gray-200 bg-gray-50">
           <Zap className="w-4 h-4 text-gray-300 flex-shrink-0" />
           <p className="text-xs text-gray-500 flex-1">
-            <span className="font-semibold text-gray-600">Active Monitoring</span> — automatically refresh profiles weekly and track slot usage. Available on Campaign & Agency plans.
+            <span className="font-semibold text-gray-600">Active Monitoring</span> — automatically refresh profiles weekly and track slot usage. Available on the {monitorPlanNames} plans.
           </p>
-          <Link to="/plans" className="text-xs font-semibold text-brand-red hover:underline flex-shrink-0">Upgrade →</Link>
+          <WebOnlyCta
+            native={<span className="text-xs text-gray-400 flex-shrink-0 max-w-[16rem]">{NATIVE_PLAN_NOTE}</span>}
+          >
+            <Link to="/plans" className="text-xs font-semibold text-brand-red hover:underline flex-shrink-0">Upgrade →</Link>
+          </WebOnlyCta>
         </div>
       )}
 
@@ -1343,8 +1459,8 @@ export default function Candidates() {
         </div>
       )}
 
-      {/* ── CSV Upload Modal ── */}
-      {showCsvModal && (
+      {/* ── CSV Upload Modal ── (canCsvImport re-checked so stale state can't open it) */}
+      {showCsvModal && canCsvImport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-black/50" onClick={() => setShowCsvModal(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -1475,7 +1591,9 @@ export default function Candidates() {
                     setCsvError('')
                     let inserted = 0, skipped = 0, errors = 0
 
-                    // Scout plan cap: enforce 2-candidate limit on CSV import too
+                    // Scout plan cap on CSV import too. Client-side only — see
+                    // the SCOUT_CANDIDATE_LIMIT note near the top of this
+                    // component: server enforcement is still pending.
                     let slotsRemaining = Infinity
                     if (getUserTier(user) === 'scout') {
                       const { count } = await supabase
@@ -1485,7 +1603,7 @@ export default function Candidates() {
                       const currentCount = count ?? 0
                       slotsRemaining = Math.max(0, SCOUT_CANDIDATE_LIMIT - currentCount)
                       if (slotsRemaining === 0) {
-                        setCsvError('The free Scout plan is limited to 2 candidates. Upgrade your plan to import more.')
+                        setCsvError(`The free Scout plan is limited to ${SCOUT_CANDIDATE_LIMIT} candidates. Upgrade your plan to import more.`)
                         setCsvImporting(false)
                         setTotalCandidateCount(currentCount)
                         return
@@ -1508,7 +1626,8 @@ export default function Candidates() {
                       }
                       const validParties = ['Republican','Democrat','Independent','Libertarian','Green','Constitution','Nonpartisan','Other']
                       const validStatuses = ['exploring','declared','primary_winner','general','elected','lost','withdrawn']
-                      const party = validParties.find(p => p.toLowerCase() === (row.party||'').toLowerCase()) || ''
+                      // null, not '' — the party CHECK constraint rejects an empty string
+                      const party = validParties.find(p => p.toLowerCase() === (row.party||'').toLowerCase()) || null
                       const status = validStatuses.find(s => s === (row.status||'').toLowerCase()) || 'exploring'
                       const { error } = await createCandidate({
                         name: row.name.trim(),
@@ -1518,7 +1637,7 @@ export default function Candidates() {
                         email: row.email || null,
                         phone: row.phone || null,
                         website: row.website || null,
-                        notes: row.notes || null,
+                        notes: notesToV2(row.notes, user?.email || 'CSV import'),
                         occupation: row.occupation || null,
                         employer: row.employer || null,
                         campaign_city: row.campaign_city || row.city || null,

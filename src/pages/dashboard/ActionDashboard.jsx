@@ -10,14 +10,13 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { format, startOfWeek, differenceInCalendarDays } from 'date-fns'
+import { format, differenceInCalendarDays } from 'date-fns'
 import LoadingBar from '../../components/LoadingBar'
 import { useAuth } from '../../contexts/AuthContext'
 import {
-  supabase, getCandidates, getMilestones, getElections, getDossiers,
+  getCandidates, getMilestones, getElections, getDossiers,
   getProspectingLists, getVoterLists, getRecentActivity,
 } from '../../lib/supabase'
-import { pointInGeometry } from '../../lib/geo'
 import {
   getUserPlan, getPlanConfig, getUserBracket, getBracketConfig,
   getEffectiveProfileLimit, getBankedProfileCredits, hasFeature,
@@ -30,19 +29,13 @@ import {
   PartyAvatar,
   safeISO, fmtInt, fmtDate, daysUntil, isUpcoming, relativeTime, initialsOf, autoStatus,
   isMonitored, monitoringSlots,
-  resolveDistrict, loadBoundary,
+  resolveDistrict, loadBoundary, countVotersInDistrict,
+  latestDigestOf, weekDigestOf,
 } from './shared'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-const MONDAY = { weekStartsOn: 1 }
-
-// A dossier's digest is "this week's" when it was generated in the current
-// Monday-anchored week — the same cadence monitoring-digest.js writes on.
-const isThisWeek = (d) => {
-  const t = safeISO(d)
-  return !!t && +startOfWeek(t, MONDAY) === +startOfWeek(new Date(), MONDAY)
-}
+// isThisWeek / latestDigestOf / weekDigestOf moved to shared.jsx so the two
+// dashboards cannot drift on what "this week's digest" means.
 
 const officeText = (office) => {
   if (!office) return 'No office linked'
@@ -259,7 +252,6 @@ export default function ActionDashboard() {
   const [prospects, setProspects] = useState([])
   const [voterLists, setVLists]   = useState([])
   const [activity, setActivity]   = useState([])
-  const [voters, setVoters]       = useState(null)
   const [profilesUsed, setUsed]   = useState(null)
   const [selId, setSelId]         = useState(null)
 
@@ -269,33 +261,31 @@ export default function ActionDashboard() {
       const startOfMonth = new Date()
       startOfMonth.setDate(1)
       startOfMonth.setHours(0, 0, 0, 0)
-      const [c, m, e, d, pl, vl, act, monthly, v] = await Promise.all([
+      const [c, m, e, d, pl, vl, act] = await Promise.all([
         getCandidates({}),
         getMilestones({}),
         getElections(),
-        getDossiers(),
+        getDossiers(null, { list: true }),   // no `content` — this page only draws digests
         getProspectingLists(),
         getVoterLists(),
         getRecentActivity(8),
-        // Same quota rule as Dossiers.jsx — auto-regenerated rows carry a null
-        // generated_by and don't count against the monthly allotment.
-        user?.id
-          ? supabase.from('dossiers').select('id')
-              .gte('generated_at', startOfMonth.toISOString())
-              .eq('generated_by', user.id).not('generated_by', 'is', null)
-          : Promise.resolve({ data: [] }),
-        supabase.from('voters').select('latitude, longitude').not('latitude', 'is', null).limit(5000),
       ])
       if (dead) return
+      const allDossiers = d.data || []
       setCands(c.data || [])
       setMiles(m.data || [])
       setElections(e.data || [])
-      setDossiers(d.data || [])
+      setDossiers(allDossiers)
       setProspects(pl.data || [])
       setVLists(vl.data || [])
       setActivity(act.data || [])
-      setUsed((monthly.data || []).length)
-      setVoters(v.data || [])
+      // Quota derived from the dossiers already fetched instead of a second
+      // query against the same table. Same rule as Dossiers.jsx — auto-
+      // regenerated rows carry a null generated_by and don't count.
+      setUsed(allDossiers.filter(x =>
+        x.generated_by && x.generated_by === user?.id &&
+        x.generated_at && new Date(x.generated_at) >= startOfMonth
+      ).length)
       setLoading(false)
     })()
     return () => { dead = true }
@@ -314,14 +304,14 @@ export default function ActionDashboard() {
   }, [dossiers])
 
   const latestOf = (id) => byCandidate[id]?.[0] || null
-  const latestDigestOf = (id) => (byCandidate[id] || []).find(d => d.weekly_digest?.summary) || null
-  const weekDigestOf = (id) =>
-    (byCandidate[id] || []).find(d => d.weekly_digest?.summary && isThisWeek(d.generated_at)) || null
+  // Per-candidate wrappers over the shared helpers.
+  const latestDigestForId = (id) => latestDigestOf(byCandidate[id] || [])
+  const weekDigestForId   = (id) => weekDigestOf(byCandidate[id] || [])
 
   const flaggedIds = useMemo(() => {
     const set = new Set()
     candidates.forEach(c => {
-      const wk = weekDigestOf(c.id)
+      const wk = weekDigestForId(c.id)
       if (wk?.weekly_digest?.items?.some(i => i.category === 'controversy')) set.add(c.id)
     })
     return set
@@ -361,7 +351,11 @@ export default function ActionDashboard() {
     return { total, done, next }
   }, [selMilestones])
 
-  const selDigest = useMemo(() => (sel ? latestDigestOf(sel.id) : null), [sel, byCandidate])
+  // The panel this feeds is headed "THIS WEEK'S DIGEST", so it must be this
+  // week's — it used to render the newest digest of any age. selLatestDigest is
+  // kept so the empty state can date the last one honestly.
+  const selDigest       = useMemo(() => (sel ? weekDigestForId(sel.id) : null), [sel, byCandidate])
+  const selLatestDigest = useMemo(() => (sel ? latestDigestForId(sel.id) : null), [sel, byCandidate])
   const selProfile = useMemo(() => (sel ? latestOf(sel.id) : null), [sel, byCandidate])
 
   // Per-candidate voter count: rows from the account's uploaded voter lists whose
@@ -378,11 +372,17 @@ export default function ActionDashboard() {
     return () => { dead = true }
   }, [selDistrict])
 
-  const selVoters = useMemo(() => {
-    if (!selBoundary || !voters) return null
-    return voters.filter(v => v.longitude != null &&
-      pointInGeometry(v.longitude, v.latitude, selBoundary)).length
-  }, [selBoundary, voters])
+  // Exact: countVotersInDistrict narrows on the district bbox server-side and
+  // pages to completion. The previous `.limit(5000)` prefetch under-counted any
+  // account whose uploaded lists exceeded 5,000 geocoded rows.
+  const [selVoters, setSelVoters] = useState(null)
+  useEffect(() => {
+    let dead = false
+    if (!selBoundary) { setSelVoters(null); return }
+    setSelVoters(null)
+    countVotersInDistrict(selBoundary).then(n => { if (!dead) setSelVoters(n) })
+    return () => { dead = true }
+  }, [selBoundary])
 
   // ── portfolio aggregates ──────────────────────────────────────────────────
   const partySplit = useMemo(() => {
@@ -429,7 +429,7 @@ export default function ActionDashboard() {
   const attention = useMemo(() => {
     const out = []
     candidates.forEach(c => {
-      const wk = weekDigestOf(c.id)
+      const wk = weekDigestForId(c.id)
       const hit = wk?.weekly_digest?.items?.find(i => i.category === 'controversy')
       if (hit) {
         out.push({
@@ -580,7 +580,7 @@ export default function ActionDashboard() {
           paddingBottom: 8, marginBottom: 16,
         }}>
           {shown.map(c => {
-            const wk = weekDigestOf(c.id)
+            const wk = weekDigestForId(c.id)
             const last = latestOf(c.id)
             const sub = isMonitored(c)
               ? wk
@@ -658,7 +658,11 @@ export default function ActionDashboard() {
                   THIS WEEK'S DIGEST
                 </span>
                 <span style={{ marginLeft: 'auto', fontSize: 10.5, color: T.faint }}>
-                  {selDigest ? `Week of ${fmtDate(selDigest.generated_at)}` : 'No monitoring'}
+                  {selDigest
+                    ? `Week of ${fmtDate(selDigest.generated_at)}`
+                    : selLatestDigest
+                      ? `Last digest ${fmtDate(selLatestDigest.generated_at)}`
+                      : 'No monitoring'}
                 </span>
               </div>
               {selDigest ? (
@@ -670,8 +674,10 @@ export default function ActionDashboard() {
                 </>
               ) : isMonitored(sel) ? (
                 <EmptyState
-                  title="No digest written yet"
-                  body={`${sel.name} is being monitored. The first weekly digest lands after the next Monday refresh.`}
+                  title={selLatestDigest ? 'No digest this week yet' : 'No digest written yet'}
+                  body={selLatestDigest
+                    ? `${sel.name} is being monitored. The most recent digest is from ${fmtDate(selLatestDigest.generated_at)}; this week's lands after the next Monday refresh.`
+                    : `${sel.name} is being monitored. The first weekly digest lands after the next Monday refresh.`}
                 />
               ) : (
                 <EmptyState

@@ -537,7 +537,7 @@ Tests marked `[INT]` involve an external integration (Stripe, Claude, Perplexity
 
 **BE-15.2.1** `create-portal-session.js` verifies auth before generating the Stripe portal URL.  
 **BE-15.2.2** `[INT]` `create-portal-session.js` uses `STRIPE_SECRET_KEY` and finds or creates the Stripe customer ID from the user's metadata.  
-**BE-15.2.3** `buy-dossier-credits.js` creates a one-time Stripe payment intent and returns the checkout URL.  
+**BE-15.2.3** `create-checkout-session.js` (`product: 'credits'`) validates the pack, gates on `features.creditPacks`, and returns the one-time Stripe Checkout URL. (The old standalone `buy-dossier-credits.js` endpoint was deleted — it predated and bypassed the entitlement gate.)  
 **BE-15.2.4** `[CRITICAL]` The dossier usage count query excludes auto-refreshed dossiers (`is_auto_refresh IS NULL OR is_auto_refresh = false`).
 
 ### 15.3 Account Deletion

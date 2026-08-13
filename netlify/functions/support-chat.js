@@ -58,6 +58,9 @@ async function rls(token, path) {
 // ─── Build per-user system prompt ─────────────────────────────────────────────
 function buildSystemPrompt(user, ctx) {
   const meta = user.user_metadata || {}
+  // Entitlements (plan, bracket, trial) live in app_metadata — user_metadata is
+  // client-writable and was always empty here, so every user looked like Scout.
+  const appMeta = user.app_metadata || {}
 
   // Resolve plan tier label
   const tierMap = {
@@ -79,12 +82,14 @@ function buildSystemPrompt(user, ctx) {
     enterprise: 'Agency',
     trial:      'Scout (Trial)',
   }
-  const planRaw = meta.plan || meta.subscription_tier || meta.tier || 'scout'
+  const planRaw = appMeta.plan || appMeta.subscription_tier || appMeta.tier
+    || meta.plan || meta.subscription_tier || meta.tier || 'scout'
   const plan    = tierMap[planRaw] ?? planRaw
 
-  // Trial end date if present
-  const trialNote = meta.trial_ends_at
-    ? `Trial ends ${new Date(meta.trial_ends_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.`
+  // Trial end date if present (app_metadata.trial_ends_at is the real field)
+  const trialEndsAt = appMeta.trial_ends_at || meta.trial_ends_at
+  const trialNote = trialEndsAt
+    ? `Trial ends ${new Date(trialEndsAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.`
     : ''
 
   const displayName = meta.display_name || user.email?.split('@')[0] || 'this user'
@@ -132,6 +137,18 @@ export const handler = async (event) => {
 
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: 'Method not allowed' }
+  }
+
+  // Without a key the Anthropic call below returns a 401 that surfaced to the
+  // user as a generic "support is unavailable" after a full round trip of
+  // JWT verification, rate-limit spend and context queries. Say so up front.
+  if (!ANTHROPIC_KEY) {
+    console.error('[support-chat] ANTHROPIC_API_KEY is not configured')
+    return {
+      statusCode: 503,
+      headers: CORS_HEADERS,
+      body: JSON.stringify({ error: 'Support chat is not configured on this deployment (ANTHROPIC_API_KEY missing).' }),
+    }
   }
 
   let body

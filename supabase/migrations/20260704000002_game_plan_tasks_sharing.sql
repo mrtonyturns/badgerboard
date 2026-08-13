@@ -53,9 +53,14 @@ CREATE INDEX IF NOT EXISTS idx_gp_labels_owner   ON gp_labels (owner_id);
 -- ─── 2. Access helper functions ───────────────────────────────────────────────
 -- SECURITY DEFINER so the link lookup isn't subject to account_links RLS,
 -- STABLE so the planner can cache per-statement.
+-- plpgsql (was sql): a LANGUAGE sql body is validated at CREATE time, which
+-- failed on clean rebuilds where account_links (created later in the original
+-- lineage, now by 20260812000020) did not yet exist. plpgsql validates at
+-- first execution instead. Behavior identical.
 CREATE OR REPLACE FUNCTION gp_can_view(plan_owner UUID)
-RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
-  SELECT plan_owner = auth.uid() OR EXISTS (
+RETURNS BOOLEAN LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  RETURN plan_owner = auth.uid() OR EXISTS (
     SELECT 1 FROM account_links l
     WHERE l.status = 'active'
       AND l.action_user_id = auth.uid()
@@ -63,17 +68,20 @@ RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
       AND (COALESCE((l.permissions->>'view')::boolean, false)
         OR COALESCE((l.permissions->>'manage_tasks')::boolean, false))
   );
+END;
 $$;
 
 CREATE OR REPLACE FUNCTION gp_can_edit(plan_owner UUID)
-RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
-  SELECT plan_owner = auth.uid() OR EXISTS (
+RETURNS BOOLEAN LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  RETURN plan_owner = auth.uid() OR EXISTS (
     SELECT 1 FROM account_links l
     WHERE l.status = 'active'
       AND l.action_user_id = auth.uid()
       AND l.candidate_user_id = plan_owner
       AND COALESCE((l.permissions->>'manage_tasks')::boolean, false)
   );
+END;
 $$;
 
 REVOKE ALL ON FUNCTION gp_can_view(UUID)  FROM anon;

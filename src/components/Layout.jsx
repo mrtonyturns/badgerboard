@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate, useLocation, Link } from 'react-router-do
 import {
   LayoutDashboard, Building2, CalendarDays, Target, Users, ListChecks,
   FileText, Settings, LogOut, Menu, X, ChevronRight,
-  User, CreditCard, Shield, ChevronDown, Tag, DoorOpen, UserCheck,
+  User, CreditCard, Shield, ChevronDown, Tag, UserCheck,
   ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink, Users2, Swords, BarChart2, FlaskConical,
   UserPlus,
 } from 'lucide-react'
@@ -41,10 +41,17 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.29.1'
+const APP_VERSION = 'v1.30.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.30.0',
+    date: 'August 12, 2026',
+    changes: [
+      'The full-app repair release: every finding from the complete audit is fixed \u2014 email opt-outs actually opt out, saves never fail silently, the AI privacy lock fails closed, manager-delegated tasks reach the candidate, Add Office works again, credit packs are honestly gated, pricing matches Stripe to the cent, and dozens of hardening, mobile and polish fixes',
+    ],
+  },
   {
     version: 'v1.29.1',
     date: 'August 12, 2026',
@@ -389,23 +396,6 @@ const CHANGELOG = [
   },
 ]
 
-const navItems = [
-  { to: '/',            icon: LayoutDashboard, label: 'Dashboard',    end: true },
-  { to: '/offices',     icon: Building2,       label: 'Offices'       },
-  { to: '/game-plan',   icon: Target,          label: 'Game Plan'     },
-  { to: '/candidates',  icon: Users,           label: 'Candidates'    },
-  { to: '/prospecting', icon: ListChecks,      label: 'Prospecting'   },
-  { to: '/voter-lists', icon: UserCheck,       label: 'Voter Lists'   },
-  { to: '/profiler',    icon: FileText,        label: 'Profiler'      },
-  { to: '/compare',     icon: Scale,           label: 'Compare',       badge: 'Beta' },
-  { to: '/broadside',   icon: Swords,          label: 'Broadside',     feature: 'broadside', webOnly: true, badge: 'Beta' },
-  { to: '/polling',     icon: BarChart2,       label: 'Polling',       badge: 'Beta', betaOnly: true },
-  { to: '/events',      icon: CalendarDays,    label: 'Events',        badge: 'New' },
-  { to: '/campaign-connect', icon: Users2,     label: 'Campaign Connect' },
-  // Door Knocking hidden from UI (feature parked — restore this line to re-enable)
-  // { to: '/door-knocking', icon: DoorOpen,      label: 'Door Knocking', badge: 'Beta', adminOnly: true },
-]
-
 // ─── Consolidated navigation (v1.23, restructured v1.28) ─────────────────────
 // Sidebar main tabs; a section's pages are a horizontal tab strip at the top.
 //
@@ -431,9 +421,22 @@ const NAV_SECTIONS = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, direct: { to: '/', end: true } },
   { key: 'todo',      label: 'Todo',      icon: Target, direct: { to: '/game-plan' } },
   { key: 'candidates', label: 'Candidates', icon: Users, direct: { to: '/candidates' } },
-  { key: 'intelligence', label: 'Intelligence', icon: Building2, extra: ['/places', '/elections', '/dossiers'], items: [
-    { to: '/offices',  icon: Building2, label: 'Offices' },
-    { to: '/profiler', icon: FileText,  label: 'Profiler' },
+  // v1.30: /elections was orphaned (reachable only by typing the URL) — it now
+  // owns a tab in this strip, so it comes OUT of `extra`. `extra` is only for
+  // routes with no tab of their own; listing it in both double-claims the tab.
+  //
+  // Compare and Broadside are PAID-PLAN features (tiers.js features.compare /
+  // features.broadside), not beta experiments, so they belong in a plan section
+  // behind their feature gate rather than under Beta. navItemVisible passes on
+  // `isAdmin || isBeta || tierConfig.features[feature]`, so a beta-flag user who
+  // lacks the plan feature still sees the link here — exactly one link either
+  // way, which is why they are NOT also listed under Beta.
+  { key: 'intelligence', label: 'Intelligence', icon: Building2, extra: ['/places', '/dossiers'], items: [
+    { to: '/offices',   icon: Building2,    label: 'Offices' },
+    { to: '/elections', icon: CalendarDays, label: 'Elections' },
+    { to: '/profiler',  icon: FileText,     label: 'Profiler' },
+    { to: '/compare',   icon: Scale,        label: 'Compare',   feature: 'compare' },
+    { to: '/broadside', icon: Swords,       label: 'Broadside', feature: 'broadside', webOnly: true },
   ] },
   { key: 'campaign', label: 'Campaign', icon: CalendarDays, items: [
     { to: '/game-plan?tab=calendar', icon: CalendarDays, label: 'Calendar', q: { path: '/game-plan', tab: 'calendar' } },
@@ -449,10 +452,10 @@ const NAV_SECTIONS = [
     { to: '/prospecting', icon: ListChecks, label: 'Prospecting' },
     { to: '/recruit',     icon: UserPlus,   label: 'Recruit', feature: 'recruit' },
   ] },
+  // Beta holds only what is genuinely beta-gated and sold by no plan.
+  // Compare/Broadside moved to Intelligence — see the note there.
   { key: 'beta', label: 'Beta', icon: FlaskConical, betaOnly: true, items: [
     { to: '/polling',   icon: BarChart2, label: 'Polling', betaOnly: true },
-    { to: '/broadside', icon: Swords,    label: 'Broadside', feature: 'broadside', webOnly: true },
-    { to: '/compare',   icon: Scale,     label: 'Compare' },
   ] },
 ]
 
@@ -689,9 +692,11 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, isActionPlan, isP
             </a>
           </div>
           <div className="flex items-center gap-2">
-            <a href="/terms" className="text-white/25 hover:text-white/50 text-xs transition-colors" style={{ letterSpacing: '0.05em' }}>
+            {/* react-router <Link>: a raw <a href> forced a full page reload
+                (and a cold app boot) just to read the Terms page. */}
+            <Link to="/terms" className="text-white/25 hover:text-white/50 text-xs transition-colors" style={{ letterSpacing: '0.05em' }}>
               Terms of Service
-            </a>
+            </Link>
             <span className="text-white/15 text-xs">·</span>
             <button
               onClick={() => setShowChangelog(v => !v)}
@@ -1040,6 +1045,7 @@ export default function Layout() {
   const PAGE_HEADERS = [
     { match: /^\/offices/,          title: 'Offices & Districts',    sub: 'All political offices tracked across Wisconsin' },
     { match: /^\/elections/,        title: 'Elections',              sub: 'Wisconsin election calendar & live results' },
+    { match: /^\/places/,           title: 'City demographics',      sub: 'Census profile & comparisons' },
     { match: /^\/game-plan\?.*tab=calendar/, title: 'Calendar',       sub: 'Election calendar & key dates', useSearch: true },
     { match: /^\/game-plan\?.*tab=results/,  title: 'Results',        sub: 'Election night results', useSearch: true },
     { match: /^\/game-plan/,        title: 'Todo',                   sub: 'Campaign tasks & priorities' },
@@ -1055,7 +1061,8 @@ export default function Layout() {
     { match: /^\/broadside/,        title: 'Broadside',              sub: 'Take the hit before it\u2019s real', badge: 'Beta' },
     { match: /^\/polling/,          title: 'Polling',                sub: 'AI-estimated district opinion snapshots', badge: 'Beta' },
     { match: /^\/settings/,         title: 'Settings',               sub: 'Manage your profile, billing, and account security' },
-    { match: /^\/plans/,            title: 'Plans & Pricing',        sub: 'Choose the plan that fits your operation' },
+    // No /plans entry: Pricing renders standalone (outside Layout), so this
+    // header could never match.
     { match: /^\/admin/,            title: 'Admin Panel',            sub: 'Platform health, accounts, billing & controls' },
     { match: /^\/$/,                title: 'Intelligence Dashboard', sub: 'Wisconsin statewide political tracking' },
   ]

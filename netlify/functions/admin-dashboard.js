@@ -258,7 +258,7 @@ async function sendReset(email) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: 'Badger Board <noreply@badgerboardwi.com>',
+        from: 'Badger Board <noreply@noreply.badgerboardwi.com>',   // must match _email.js FROM (verified Resend domain)
         to: email,
         subject: emailTemplate.subject,
         html: emailTemplate.html,

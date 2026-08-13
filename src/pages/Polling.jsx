@@ -232,7 +232,9 @@ export default function Polling() {
         if (!alive()) return
         setPersonalized(!!got.personalized)
         const ageOk = snap?.status === 'ready' && snap.generated_at && (Date.now() - new Date(snap.generated_at).getTime()) < 7 * 86400000
-        if (snap && (ageOk || snap.status === 'ready')) {
+        // ageOk already requires status === 'ready'; the old `|| status==='ready'`
+        // kept week-old snapshots forever instead of regenerating them.
+        if (snap && ageOk) {
           setSnapshot(snap); setLoading(false)
           return
         }

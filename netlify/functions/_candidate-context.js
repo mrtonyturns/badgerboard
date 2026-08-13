@@ -56,18 +56,21 @@ async function getCandidateAiContext(candidateId) {
     let parsed = null
     try { parsed = typeof data.notes === 'string' ? JSON.parse(data.notes) : data.notes } catch { /* legacy plain text */ }
     if (!parsed || parsed.v !== 2) {
-      // Legacy plain-text notes field: treat as one AI-eligible note.
-      const legacy = typeof data.notes === 'string' ? data.notes.trim() : ''
-      return { allowed: true, notes: legacy ? [{ text: legacy.slice(0, 2000), ts: null }] : [], files: [] }
+      // Legacy plain-text notes field: no per-note AI switch was ever set on
+      // it, so it is NOT AI-eligible. Fail closed — the user opts a note in by
+      // flipping its AI switch in the v2 store, never by default.
+      return { allowed: true, notes: [], files: [] }
     }
 
+    // ai_access must be explicitly true. An entry written before the switch
+    // existed (or by an older client) has no flag and stays private.
     const notes = (parsed.notes || [])
-      .filter(n => n && n.ai_access !== false && typeof n.text === 'string' && n.text.trim())
+      .filter(n => n && n.ai_access === true && typeof n.text === 'string' && n.text.trim())
       .map(n => ({ text: n.text.slice(0, 2000), ts: n.ts || null }))
       .slice(0, 20)
 
     const files = (parsed.files || [])
-      .filter(f => f && f.ai_access !== false && f.name)
+      .filter(f => f && f.ai_access === true && f.name)
       .map(f => ({ name: String(f.name).slice(0, 200) }))
       .slice(0, 30)
 

@@ -1,5 +1,8 @@
 import Stripe from 'stripe';
 import { ADMIN_EMAILS } from './_config.js';
+// Price resolution is shared with self-serve checkout so an admin plan change
+// uses exactly the same env-var-or-baked-in-catalog lookup.
+import { resolvePriceId, billingPeriodFromPrice } from './create-checkout-session.js';
 
 // Returns: user object if admin, 'forbidden' if valid token but not admin, null if no/invalid token
 async function verifyAdmin(authHeader) {
@@ -199,12 +202,43 @@ function validatePlanBracket(plan, bracket) {
   }
 }
 
+const FREE_PLANS = ['scout', 'free'];
+
 async function updatePlan(stripe, userId, plan, bracket) {
   validatePlanBracket(plan, bracket);
   const email = await getUserEmail(userId);
   if (!email) throw new Error('User not found');
 
-  // ── 1. Update Supabase user_metadata (always, regardless of Stripe status) ──
+  const planKey = String(plan || '').toLowerCase();
+  const isFree  = FREE_PLANS.includes(planKey);
+
+  // ── 0. Resolve Stripe BEFORE touching app_metadata ────────────────────────
+  // The old order wrote the entitlement first and then discovered the price was
+  // missing, leaving the account on a paid plan with no matching subscription.
+  // Everything that can fail is resolved here; app_metadata is written only
+  // once we know the Stripe side can be carried out.
+  let stripeTarget = null;   // { subscription, itemId, priceId }
+  if (stripe && !isFree) {
+    const customer = await findCustomer(stripe, email);
+    if (customer) {
+      const subs = await stripe.subscriptions.list({ customer: customer.id, status: 'active', limit: 1 });
+      const subscription = subs.data[0];
+      if (subscription) {
+        const item = subscription.items.data[0];
+        // Respect what the subscriber is actually billed on — the old code
+        // always resolved the _M (monthly) price, silently moving annual and
+        // quarterly subscribers onto monthly billing.
+        const billing = billingPeriodFromPrice(item?.price);
+        const { key, priceId } = resolvePriceId(planKey, bracket || 'b1', billing);
+        if (!priceId) {
+          throw new Error(`Stripe price not configured for ${planKey}/${bracket || 'b1'}/${billing} (${key}) — plan not changed.`);
+        }
+        stripeTarget = { subscription, itemId: item.id, priceId, billing };
+      }
+    }
+  }
+
+  // ── 1. Update Supabase app_metadata ───────────────────────────────────────
   const userRes = await fetch(
     `${process.env.SUPABASE_URL}/auth/v1/admin/users/${userId}`,
     {
@@ -221,6 +255,9 @@ async function updatePlan(stripe, userId, plan, bracket) {
   const user = await userRes.json();
 
   const updatedMetadata = { ...user.app_metadata, plan, bracket };
+  // Keep the recorded billing period in step with the subscription we're about
+  // to move, so the Plans page's "current plan" check stays accurate.
+  if (stripeTarget?.billing) updatedMetadata.billing = stripeTarget.billing;
 
   const metaRes = await fetch(
     `${process.env.SUPABASE_URL}/auth/v1/admin/users/${userId}`,
@@ -242,8 +279,8 @@ async function updatePlan(stripe, userId, plan, bracket) {
   // ── 2. Also update Stripe subscription if one exists (paid plans) ──────────
   // Free/scout users have no Stripe sub — we still succeed after the metadata update above.
   if (!stripe) return { updated: true, stripe: 'not_configured' };
-  const FREE_PLANS = ['scout', 'free'];
-  if (FREE_PLANS.includes(plan?.toLowerCase())) {
+
+  if (isFree) {
     // Downgrading to free: cancel Stripe sub at period end if one exists
     const customer = await findCustomer(stripe, email);
     if (customer) {
@@ -257,41 +294,17 @@ async function updatePlan(stripe, userId, plan, bracket) {
     return { updated: true, stripe: 'no_subscription' };
   }
 
-  // Paid plan: look up price and update Stripe subscription
-  const customer = await findCustomer(stripe, email);
-  if (!customer) {
-    // No Stripe customer yet — metadata was still updated, just no Stripe to sync
-    return { updated: true, stripe: 'no_stripe_customer' };
-  }
+  // Paid plan with no Stripe subscription to move: metadata updated, nothing to sync.
+  // (stripeTarget is only set when a customer AND an active subscription exist,
+  // and in that case the price was already resolved above — it cannot be missing here.)
+  if (!stripeTarget) return { updated: true, stripe: 'no_active_subscription' };
 
-  const subs = await stripe.subscriptions.list({ customer: customer.id, status: 'active', limit: 1 });
-  const subscription = subs.data[0];
-  if (!subscription) {
-    // No active subscription — metadata updated, Stripe sync skipped
-    return { updated: true, stripe: 'no_active_subscription' };
-  }
-
-  // Candidate-plan price keys have no bracket segment (STRIPE_PRICE_C_ACTIVE_M);
-  // Action-plan keys do (STRIPE_PRICE_A_ACTIVE_B1_M). The old code always
-  // appended the bracket, producing keys like STRIPE_PRICE_C_ACTIVE_B1_M that
-  // don't exist — so candidate-plan changes silently never synced to Stripe.
-  const CANDIDATE_PLAN_KEYS = ['c_monitor', 'c_active', 'c_campaign'];
-  const priceKey = CANDIDATE_PLAN_KEYS.includes(plan.toLowerCase())
-    ? `STRIPE_PRICE_${plan.toUpperCase()}_M`
-    : `STRIPE_PRICE_${plan.toUpperCase()}_${(bracket || 'b1').toUpperCase()}_M`;
-  const priceId = process.env[priceKey];
-  if (!priceId) {
-    // Price not configured — metadata was updated but Stripe not synced
-    return { updated: true, stripe: `price_not_configured:${priceKey}` };
-  }
-
-  const item = subscription.items.data[0];
-  await stripe.subscriptions.update(subscription.id, {
-    items: [{ id: item.id, price: priceId }],
+  await stripe.subscriptions.update(stripeTarget.subscription.id, {
+    items: [{ id: stripeTarget.itemId, price: stripeTarget.priceId }],
     proration_behavior: 'create_prorations',
   });
 
-  return { updated: true, stripe: 'subscription_updated' };
+  return { updated: true, stripe: 'subscription_updated', billing: stripeTarget.billing };
 }
 
 async function grantTrial(stripe, userId, days) {

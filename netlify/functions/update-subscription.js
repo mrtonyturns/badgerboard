@@ -7,6 +7,7 @@
 // Returns: { success: true, message } or { error: string }
 
 import Stripe from 'stripe'
+import { normalizePlan } from './_entitlements.js'
 
 const SUPABASE_URL  = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
@@ -240,14 +241,21 @@ export const handler = async (event) => {
     return { statusCode: 401, body: JSON.stringify({ error: 'Could not resolve caller identity' }) }
   }
 
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
+  // Build the Stripe client inside the handler behind an explicit key check
+  // (same pattern as admin-billing.js) — a missing key is a deployment problem
+  // and should surface as a 503, not an opaque 500 from the first API call.
+  const stripeKey = process.env.STRIPE_SECRET_KEY
+  if (!stripeKey) {
+    return { statusCode: 503, body: JSON.stringify({ error: 'Stripe is not configured (STRIPE_SECRET_KEY missing)' }) }
+  }
+  const stripe = new Stripe(stripeKey)
 
   let body
   try { body = JSON.parse(event.body || '{}') } catch {
     return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
 
-  const plan    = sanitize(body.plan)
+  const rawPlan = sanitize(body.plan)
   const bracket = sanitize(body.bracket)
   const billing = sanitize(body.billing) || 'monthly'
   const userId  = sanitize(body.userId)
@@ -257,9 +265,17 @@ export const handler = async (event) => {
     return { statusCode: 403, body: JSON.stringify({ error: 'You can only update your own subscription' }) }
   }
 
-  if (!VALID_PLANS.includes(plan)) {
-    return { statusCode: 400, body: JSON.stringify({ error: `Invalid plan "${plan}"` }) }
+  if (!VALID_PLANS.includes(rawPlan)) {
+    return { statusCode: 400, body: JSON.stringify({ error: `Invalid plan "${rawPlan}"` }) }
   }
+
+  // Legacy keys are accepted at the door and collapsed immediately — see
+  // create-checkout-session.js for the full reasoning. Left un-normalized,
+  // getPriceKey('monitor', …) builds STRIPE_PRICE_MONITOR_B2_5_M (nonexistent —
+  // 'monitor' is the bracket-less candidate plan c_monitor) and planType()
+  // stamps plan_type:'action' onto the Stripe subscription metadata that the
+  // webhook writes into app_metadata.
+  const plan = normalizePlan(rawPlan)
   if (!VALID_BILLING.includes(billing)) {
     return { statusCode: 400, body: JSON.stringify({ error: `Invalid billing "${billing}"` }) }
   }

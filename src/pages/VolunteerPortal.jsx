@@ -14,6 +14,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { isNativeApp, API_ORIGIN } from '../lib/native'
 import {
   Home, DoorOpen, MessageCircle, User, Bell, Send,
   CheckCircle, XCircle, Clock, MapPin, Phone, Mail,
@@ -126,10 +127,20 @@ function LoginScreen({ onLogin }) {
     setLoading(true)
     setError('')
     try {
-      // We use Supabase's OTP flow for magic links
+      // We use Supabase's OTP flow for magic links.
+      // In the native shell window.location.origin is capacitor://localhost —
+      // a link no mail client can open — so send native users to the web origin.
+      const origin = isNativeApp ? API_ORIGIN : window.location.origin
       const { error: otpError } = await supabase.auth.signInWithOtp({
         email: email.trim().toLowerCase(),
-        options: { emailRedirectTo: `${window.location.origin}/v` },
+        options: {
+          emailRedirectTo: `${origin}/v`,
+          // The volunteer portal is invite-only: a volunteer row must already
+          // exist. Without this, signInWithOtp silently CREATES an auth user
+          // for any address typed here, so anyone could mint an account from a
+          // public URL and land on an empty portal.
+          shouldCreateUser: false,
+        },
       })
       if (otpError) throw otpError
       setSent(true)

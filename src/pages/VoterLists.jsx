@@ -74,6 +74,19 @@ import { parseCsvRows } from '../lib/csv'
 import { extractDistrictColumns, RECRUIT_VOTER_COLUMNS } from '../lib/recruit'
 import LoadingBar from '../components/LoadingBar'
 
+// ─── CSV upload limits ────────────────────────────────────────────────────────
+// Hard row cap. A statewide WisVote extract is ~3.5M rows; the browser parses
+// the whole file into memory, holds a second copy in csvPreview state and then
+// POSTs it chunk by chunk, so anything much past this simply hangs the tab and
+// then dies with an out-of-memory crash and no explanation. Refuse it up front
+// with an error the user can act on instead.
+const MAX_UPLOAD_ROWS   = 50000
+const UPLOAD_CHUNK_SIZE = 200
+// Inserts run 4 chunks at a time. Strictly serial, a 50k-row upload was 250
+// round trips end to end (several minutes of a modal the user must not close);
+// 4-way is a comfortable margin under PostgREST/Supabase per-connection limits.
+const UPLOAD_CONCURRENCY = 4
+
 // ─── CSV parser ───────────────────────────────────────────────────────────────
 function parseCSV(text) {
   // parseCsvRows handles quoted commas, escaped quotes, embedded newlines,
@@ -274,13 +287,32 @@ export default function VoterLists() {
 
   useEffect(() => { fetchAll() }, [])
 
+  // Promise.allSettled, not Promise.all: the two queries are independent, and a
+  // rejection in either one used to throw out of fetchAll — leaving BOTH panes
+  // empty (and, when called from handleUpload's try block, swallowing the
+  // failure into a generic "Upload failed" alert after the rows were inserted).
   const fetchAll = async () => {
-    const [{ data: vl }, { data: sl }] = await Promise.all([
+    const [vlRes, slRes] = await Promise.allSettled([
       getVoterLists(),
       getVoterSavedLists(),
     ])
-    setVoterLists(vl || [])
-    setSavedLists(sl || [])
+
+    if (vlRes.status === 'fulfilled' && !vlRes.value?.error) {
+      setVoterLists(vlRes.value?.data || [])
+    } else {
+      const err = vlRes.status === 'fulfilled' ? vlRes.value.error : vlRes.reason
+      console.error('[VoterLists] voter lists fetch failed:', err)
+      setError(err?.message || 'Voter lists could not be loaded.')
+    }
+
+    if (slRes.status === 'fulfilled' && !slRes.value?.error) {
+      setSavedLists(slRes.value?.data || [])
+    } else {
+      const err = slRes.status === 'fulfilled' ? slRes.value.error : slRes.reason
+      console.error('[VoterLists] saved lists fetch failed:', err)
+      // Saved lists are a secondary pane — don't blank the primary error.
+      setSavedLists([])
+    }
   }
 
   const VOTER_DISPLAY_LIMIT = 1000
@@ -303,10 +335,21 @@ export default function VoterLists() {
   const handleFileChange = (e) => {
     const file = e.target.files[0]
     if (!file) return
+    setError(null)
     setCsvFile(file)
     const reader = new FileReader()
     reader.onload = (ev) => {
       const rows = parseCSV(ev.target.result)
+      if (rows.length > MAX_UPLOAD_ROWS) {
+        setError(
+          `That file has ${rows.length.toLocaleString()} rows — the limit for a single upload is ` +
+          `${MAX_UPLOAD_ROWS.toLocaleString()}. Split it (for example one file per county or ward) and upload the parts separately.`
+        )
+        setCsvFile(null)
+        setCsvPreview([])
+        if (fileInputRef.current) fileInputRef.current.value = ''
+        return
+      }
       setCsvPreview(rows)
     }
     reader.readAsText(file)
@@ -314,6 +357,14 @@ export default function VoterLists() {
 
   const handleUpload = async () => {
     if (!csvFile || csvPreview.length === 0 || !uploadName.trim()) return
+    // Belt and braces: handleFileChange already rejects oversized files, but the
+    // list row is created before the first insert, so a slip here would leave an
+    // empty list behind.
+    if (csvPreview.length > MAX_UPLOAD_ROWS) {
+      setError(`This upload is limited to ${MAX_UPLOAD_ROWS.toLocaleString()} rows. Split the file and upload the parts separately.`)
+      return
+    }
+    setError(null)
     setUploading(true)
     try {
       // Create the voter list record
@@ -330,7 +381,10 @@ export default function VoterLists() {
       // created_by is REQUIRED by the voters RLS insert policy (migration
       // 20260422000004) — without it every chunk is rejected with 403.
       const rows = csvPreview.map(({ raw_data, ...r }) => ({ ...r, voter_list_id: newList.id, created_by: user?.id }))
-      const totalChunks = Math.ceil(rows.length / 200)
+      const chunks = []
+      for (let i = 0; i < rows.length; i += UPLOAD_CHUNK_SIZE) {
+        chunks.push(rows.slice(i, i + UPLOAD_CHUNK_SIZE))
+      }
       // The sub-municipal district columns arrive with migration
       // 20260812000011. If this environment hasn't run it yet, PostgREST
       // rejects the whole chunk for the unknown column — so drop those three
@@ -341,19 +395,46 @@ export default function VoterLists() {
         : chunk
       const missingColumn = (err) =>
         RECRUIT_VOTER_COLUMNS.some(c => String(err?.message || '').includes(c))
-      for (let i = 0; i < rows.length; i += 200) {
-        const chunk = rows.slice(i, i + 200)
-        let { error: insertErr } = await createVoters(shape(chunk))
-        if (insertErr && !dropRecruitCols && missingColumn(insertErr)) {
-          dropRecruitCols = true
-          ;({ error: insertErr } = await createVoters(shape(chunk)))
+
+      // UPLOAD_CONCURRENCY workers pulling from a shared cursor. Strictly serial
+      // inserts made a 50k-row file 250 sequential round trips; four in flight
+      // cuts the wall-clock time roughly fourfold without the "fire all 250 at
+      // once" behaviour that trips Supabase's connection limits.
+      // The first worker to hit a real error records it and every worker stops,
+      // so we still fail fast and report the offending chunk.
+      let cursor = 0
+      let completed = 0
+      let failure = null
+      const worker = async () => {
+        while (failure === null) {
+          const idx = cursor++
+          if (idx >= chunks.length) return
+          const chunk = chunks[idx]
+          let { error: insertErr } = await createVoters(shape(chunk))
+          // Retry on the missing-column error regardless of the current flag:
+          // with parallel workers a chunk can start before another has flipped
+          // `dropRecruitCols`, and skipping its retry would fail the upload.
+          if (insertErr && missingColumn(insertErr)) {
+            dropRecruitCols = true
+            ;({ error: insertErr } = await createVoters(shape(chunk)))
+          }
+          if (insertErr) {
+            if (failure === null) failure = { idx, error: insertErr }
+            return
+          }
+          completed++
+          setUploadProgress({ done: completed, total: chunks.length })
         }
-        if (insertErr) {
-          setError(`Upload failed at row ${i + 1}: ${insertErr.message}`)
-          setUploading(false)
-          return
-        }
-        setUploadProgress({ done: Math.floor(i / 200) + 1, total: totalChunks })
+      }
+      await Promise.all(
+        Array.from({ length: Math.min(UPLOAD_CONCURRENCY, chunks.length) }, worker)
+      )
+
+      if (failure) {
+        setError(`Upload failed at row ${failure.idx * UPLOAD_CHUNK_SIZE + 1}: ${failure.error.message}`)
+        setUploadProgress(null)
+        setUploading(false)
+        return
       }
 
       await fetchAll()
@@ -808,6 +889,20 @@ export default function VoterLists() {
                   />
                 </div>
               </div>
+
+              {/* The page-level error banner sits behind this modal's overlay,
+                  so upload errors (row cap, failed chunk) are repeated here
+                  where the user is actually looking. */}
+              {error && (
+                <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg px-3 py-2.5 leading-relaxed">
+                  {error}
+                </div>
+              )}
+
+              <p className="text-xs text-gray-400">
+                Up to {MAX_UPLOAD_ROWS.toLocaleString()} rows per upload. Larger files should be split
+                (for example one per county) and uploaded separately.
+              </p>
 
               {csvPreview.length > 0 && (
                 <div className="p-3 bg-gray-50 rounded-lg">

@@ -285,9 +285,14 @@ export function SwotView({ candidate, dossiers, canIntel, swotUpdated, onRefresh
   const hasContent = QUADRANTS.some(q => swot[q.key])
 
   const handleSave = async () => {
-    setSaving(true)
-    await updateCandidate(candidate.id, { swot_data: swot })
-    setSaving(false); setEditing(false); onRefresh()
+    setSaving(true); setAiError('')
+    const { error } = await updateCandidate(candidate.id, { swot_data: swot })
+    setSaving(false)
+    if (error) {
+      setAiError(error.message || 'Could not save the SWOT — your edits were not stored.')
+      return   // stay in edit mode so nothing typed is lost
+    }
+    setEditing(false); onRefresh()
   }
 
   const handleAiGenerate = async () => {
@@ -303,7 +308,8 @@ export function SwotView({ candidate, dossiers, canIntel, swotUpdated, onRefresh
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'SWOT analysis failed')
       setSwot(data.swot)
-      await updateCandidate(candidate.id, { swot_data: data.swot })
+      const { error: saveErr } = await updateCandidate(candidate.id, { swot_data: data.swot })
+      if (saveErr) throw new Error(saveErr.message || 'SWOT was generated but could not be saved.')
       onRefresh()
     } catch (err) { setAiError(err.message || 'Failed to generate SWOT') }
     setAiLoading(false)

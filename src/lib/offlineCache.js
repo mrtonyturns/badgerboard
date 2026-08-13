@@ -16,6 +16,10 @@ const PREFIX      = 'bb_cache:'
 const INDEX_KEY   = 'bb_cache_index'   // [{ k, at }] — LRU bookkeeping
 const MAX_ENTRIES = 40
 const MAX_ITEM_BYTES = 400 * 1024      // skip anything over ~400 KB
+// Entries older than this are treated as absent. Without a TTL an entry only
+// left the cache by LRU eviction, so a rarely-touched key could serve
+// months-old rows the first time the network hiccupped.
+export const CACHE_TTL_MS = 24 * 60 * 60 * 1000   // 24h
 
 function readIndex() {
   try { return JSON.parse(localStorage.getItem(INDEX_KEY)) || [] } catch { return [] }
@@ -58,14 +62,41 @@ export function cacheGet(key) {
     const raw = localStorage.getItem(PREFIX + key)
     if (!raw) return null
     const { at, data } = JSON.parse(raw)
+    // Stale entries are a miss: drop the row and let the caller surface the
+    // real error rather than silently showing old data as if it were current.
+    if (!Number.isFinite(at) || Date.now() - at > CACHE_TTL_MS) {
+      cacheDelete(key)
+      return null
+    }
     return { data, cachedAt: at }
   } catch {
     return null
   }
 }
 
-function isNetworkError(err) {
+export function cacheDelete(key) {
+  try { localStorage.removeItem(PREFIX + key) } catch { /* ignore */ }
+  writeIndex(readIndex().filter(e => e.k !== key))
+}
+
+// Wipe every cached read. Called on sign-out so the next account on this device
+// can never be served the previous account's rows (keys are user-scoped, but
+// the previous user's data has no business staying on the device either).
+export function cacheClearAll() {
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith(PREFIX)) localStorage.removeItem(k)
+    }
+    localStorage.removeItem(INDEX_KEY)
+  } catch { /* private mode / quota — non-fatal */ }
+}
+
+export function isNetworkError(err) {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return true
+  // sw.js answers an offline API request with a synthetic 503 whose JSON body
+  // carries code 'OFFLINE'; supabase-js surfaces that as a normal error object,
+  // not a fetch rejection, so the message match below never caught it.
+  if (err?.code === 'OFFLINE') return true
   const msg = String(err?.message || err || '').toLowerCase()
   return msg.includes('failed to fetch') ||
          msg.includes('networkerror') ||

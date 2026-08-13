@@ -115,7 +115,7 @@ async function sendAckEmail(email, acknowledgedAt) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: 'Badger Board <noreply@badgerboardwi.com>',
+      from: 'Badger Board <noreply@noreply.badgerboardwi.com>',   // must match _email.js FROM (verified Resend domain)
       to: [email],
       subject: 'Badger Board: Research Use Disclaimer Acknowledgment Recorded',
       html,

@@ -12,8 +12,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { format, differenceInCalendarDays, parseISO, isPast, isToday } from 'date-fns'
+import { format, differenceInCalendarDays, parseISO, isPast, isToday, startOfWeek } from 'date-fns'
 import { pointInGeometry } from '../../lib/geo'
+import { supabase } from '../../lib/supabase'
 import {
   PHASE_MAP, digestCategory, partyHex, partyInitial,
   ELECTION_TYPE_LABELS, ELECTION_TYPE_SHORT, ELECTION_TYPE_HEX,
@@ -172,6 +173,25 @@ export const monitoringSlots = (user, candidates = []) => {
 }
 
 export const isMonitored = (c) => c?.section_timestamps?.monitoring === true
+
+// ── Weekly digests ───────────────────────────────────────────────────────────
+// A digest is "this week's" when its dossier was generated inside the current
+// Monday-anchored week — the same cadence monitoring-digest.js writes on.
+// Panels titled "This week's digest" must use weekDigestOf; latestDigestOf is
+// for panels that say "latest". (Both dashboards previously titled the panel
+// "This week's digest" while rendering the newest digest of any age.)
+const MONDAY = { weekStartsOn: 1 }
+
+export const isThisWeek = (d) => {
+  const t = safeISO(d)
+  return !!t && +startOfWeek(t, MONDAY) === +startOfWeek(new Date(), MONDAY)
+}
+
+export const latestDigestOf = (dossiers = []) =>
+  dossiers.find(d => d.weekly_digest?.summary) || null
+
+export const weekDigestOf = (dossiers = []) =>
+  dossiers.find(d => d.weekly_digest?.summary && isThisWeek(d.generated_at)) || null
 
 // Next Monday — monitored profiles auto-refresh Monday mornings.
 export const nextMonday = (from = new Date()) => {
@@ -434,20 +454,37 @@ export function NextRaceBlock({ election, contextLine }) {
 export function StatStrip({ children }) {
   const cells = React.Children.toArray(children)
   return (
-    <div style={{
-      ...cardStyle,
-      display: 'grid',
-      gridTemplateColumns: `repeat(${cells.length}, minmax(0, 1fr))`,
-      marginBottom: 18,
-    }}>
-      {cells.map((cell, i) => (
-        <div key={i} style={{
-          padding: '18px 22px',
-          borderRight: i === cells.length - 1 ? 'none' : `1px solid ${T.divider}`,
-          minWidth: 0,
-        }}>{cell}</div>
-      ))}
-    </div>
+    <>
+      {/* Responsive collapse — same inline <style> trick the dashboards already
+          use for .bb-main. Below 760px an N-across strip crushed 26px numerals
+          into ~60px columns and wrapped every label onto three lines; it now
+          reflows to a 2-up grid. Cell borders moved out of the inline style so
+          the media query can re-draw them (which cell is "last in a row"
+          changes with the column count) without needing !important. */}
+      <style>{`
+        .bb-statstrip > .bb-statcell { border-right: 1px solid ${T.divider} }
+        .bb-statstrip > .bb-statcell:last-child { border-right: none }
+        @media (max-width: 760px) {
+          .bb-statstrip { grid-template-columns: repeat(2, minmax(0, 1fr)) !important }
+          .bb-statstrip > .bb-statcell { border-right: 1px solid ${T.divider} }
+          .bb-statstrip > .bb-statcell:nth-child(2n) { border-right: none }
+          .bb-statstrip > .bb-statcell:nth-child(n + 3) { border-top: 1px solid ${T.divider} }
+        }
+      `}</style>
+      <div className="bb-statstrip" style={{
+        ...cardStyle,
+        display: 'grid',
+        gridTemplateColumns: `repeat(${cells.length}, minmax(0, 1fr))`,
+        marginBottom: 18,
+      }}>
+        {cells.map((cell, i) => (
+          <div key={i} className="bb-statcell" style={{
+            padding: '18px 22px',
+            minWidth: 0,
+          }}>{cell}</div>
+        ))}
+      </div>
+    </>
   )
 }
 
@@ -592,6 +629,69 @@ export function ElectionRows({ elections, hotId }) {
       })}
     </div>
   )
+}
+
+// ── Registered voters inside a district ──────────────────────────────────────
+//
+// Both dashboards used to pull `voters` with `.limit(5000)` and count matches in
+// the browser. Two problems: any account past 5,000 geocoded rows silently got a
+// too-low "Registered voters" number, and 5,000 rows crossed the wire even when
+// the district contained a dozen of them.
+//
+// The row filter now runs on the server (bounding box of the district geometry)
+// and the read pages to completion, so the number is exact at any list size.
+// Point-in-polygon still runs client-side: there is no PostGIS geometry column
+// on `voters` and migrations are frozen, so a single COUNT(*) cannot express
+// "inside this district" — the bbox is the closest server-side narrowing there
+// is, and it is a superset, so the final count stays exact.
+
+export function geometryBBox(geometry) {
+  if (!geometry) return null
+  let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity
+  const visit = (coords) => {
+    if (typeof coords[0] === 'number') {
+      const [lng, lat] = coords
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        if (lat < minLat) minLat = lat
+        if (lat > maxLat) maxLat = lat
+        if (lng < minLng) minLng = lng
+        if (lng > maxLng) maxLng = lng
+      }
+      return
+    }
+    for (const c of coords) visit(c)
+  }
+  const geom = geometry.type === 'Feature' ? geometry.geometry : geometry
+  if (!geom?.coordinates) return null
+  visit(geom.coordinates)
+  if (!Number.isFinite(minLat) || !Number.isFinite(minLng)) return null
+  return { minLat, maxLat, minLng, maxLng }
+}
+
+export async function countVotersInDistrict(boundary) {
+  const box = geometryBBox(boundary)
+  if (!box) return 0
+  const PAGE = 1000
+  let offset = 0
+  let hits   = 0
+  // RLS scopes `voters` to the current user (policy: auth.uid() = created_by).
+  while (true) {
+    const { data, error } = await supabase
+      .from('voters')
+      .select('latitude, longitude')
+      .not('latitude', 'is', null)
+      .gte('latitude',  box.minLat).lte('latitude',  box.maxLat)
+      .gte('longitude', box.minLng).lte('longitude', box.maxLng)
+      .range(offset, offset + PAGE - 1)
+    if (error) return hits
+    if (!data?.length) break
+    for (const v of data) {
+      if (v.longitude != null && pointInGeometry(v.longitude, v.latitude, boundary)) hits++
+    }
+    if (data.length < PAGE) break
+    offset += PAGE
+  }
+  return hits
 }
 
 // ── District map ──────────────────────────────────────────────────────────────

@@ -891,11 +891,13 @@ export default function TaskBoard() {
   }
 
   const addSection = async (projectId) => {
+    if (!canEdit) return
     const name = newSectionName.trim()
     if (!name) { setAddingSection(false); return }
     const secs = sections.filter(s => s.project_id === projectId)
-    const { data } = await createTaskSection({ project_id: projectId, name, sort_order: secs.length }, ownerId)
-    if (data) setSections(prev => [...prev, data])
+    const { data, error } = await createTaskSection({ project_id: projectId, name, sort_order: secs.length }, ownerId)
+    if (error || !data) { failOp("Couldn't add the section — are you online?"); return }
+    setSections(prev => [...prev, data])
     setNewSectionName(''); setAddingSection(false)
   }
 

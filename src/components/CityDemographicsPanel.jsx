@@ -76,7 +76,7 @@ export default function CityDemographicsPanel({ place, loading, onClose, panelOf
 
   return (
     <div style={{
-      position: 'absolute', left: 0, top: 0, bottom: 0, width: 300,
+      position: 'absolute', left: 0, top: 0, bottom: 0, width: 'min(300px, 85vw)',
       zIndex: 2000, background: 'white',
       boxShadow: '4px 0 24px rgba(0,0,0,0.18)',
       display: 'flex', flexDirection: 'column',

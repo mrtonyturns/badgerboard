@@ -39,7 +39,14 @@ export const handler = async (event) => {
     return { statusCode: 401, body: JSON.stringify({ error: 'Could not resolve caller identity' }) }
   }
 
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
+  // Build the Stripe client inside the handler behind an explicit key check
+  // (same pattern as admin-billing.js) — a missing key is a deployment problem
+  // and should surface as a 503, not an opaque 500 from the first API call.
+  const stripeKey = process.env.STRIPE_SECRET_KEY
+  if (!stripeKey) {
+    return { statusCode: 503, body: JSON.stringify({ error: 'Stripe is not configured (STRIPE_SECRET_KEY missing)' }) }
+  }
+  const stripe = new Stripe(stripeKey)
 
   let body
   try { body = JSON.parse(event.body || '{}') } catch {

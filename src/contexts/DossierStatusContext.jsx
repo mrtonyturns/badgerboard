@@ -24,8 +24,9 @@ function loadFromStorage() {
     const raw = sessionStorage.getItem(STORAGE_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw)
-    // If we were generating but it's been more than 6 minutes, treat as idle
-    // (background function timed out or failed; user can try again)
+    // If we were generating but it's been longer than MAX_GENERATING_AGE_MS
+    // (15 min), treat as idle — the background function timed out or failed,
+    // and the user can try again.
     if (parsed.phase === 'generating' && parsed.startedAt) {
       const age = Date.now() - new Date(parsed.startedAt).getTime()
       if (age > MAX_GENERATING_AGE_MS) return null

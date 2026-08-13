@@ -16,6 +16,7 @@ import {
   effectiveMonthlyRate, periodTotal, annualSavings,
   actionEffectiveRate,
   getUserPlan, getUserBracket, getUserPlanType,
+  hasFeature,
 } from '../lib/tiers'
 
 // ─── Feature matrix component ─────────────────────────────────────────────────
@@ -219,7 +220,10 @@ const C_FEATURES = [
       { label: 'Game Plan',                   scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Compare tool',                scout: false,       c_monitor: false,  c_active: true,   c_campaign: true   },
       { label: 'CSV bulk import',             scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
-      { label: 'Social media links',          scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
+      // Social handles are plain fields on the candidate record (Candidates.jsx
+      // add/edit form) with no gate anywhere — every plan can enter and read
+      // them, so the table says so rather than selling an unlock that isn't one.
+      { label: 'Social media links',          scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Elections tracking',          scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
     ],
   },
@@ -227,7 +231,10 @@ const C_FEATURES = [
     rows: [
       { label: 'User seats',                  scout: '1',         c_monitor: '1',    c_active: '1',    c_campaign: '2'    },
       { label: 'Prospecting lists',           scout: false,       c_monitor: false,  c_active: false,  c_campaign: false  },
-      { label: 'Offices section',             scout: false,       c_monitor: false,  c_active: false,  c_campaign: false  },
+      // /offices is not gated by features.offices anywhere in the app — the page
+      // ships on every plan, including Scout. The row used to read false across
+      // the Candidate family, which was simply untrue.
+      { label: 'Offices section',             scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
     ],
   },
 ]
@@ -246,7 +253,10 @@ const A_FEATURES = [
   { section: 'Candidate Tools',
     rows: [
       { label: 'Active candidates (hard cap)', a_monitor: 'Up to bracket size', a_active: 'Up to bracket size', a_campaign: 'Up to bracket size' },
-      { label: 'Multi-Candidate Game Plan',   a_monitor: true,           a_active: true,             a_campaign: true           },
+      // features.multiGamePlan is defined in tiers.js but read nowhere: Game Plan
+      // lets any plan file a milestone under any candidate. Labelled plainly so
+      // the table stops implying an Action-only capability.
+      { label: 'Game Plan',                   a_monitor: true,           a_active: true,             a_campaign: true           },
       { label: 'Compare tool',                a_monitor: false,          a_active: true,             a_campaign: true           },
       { label: 'Prospecting lists',           a_monitor: true,           a_active: true,             a_campaign: true           },
       { label: 'CSV bulk import',             a_monitor: true,           a_active: true,             a_campaign: true           },
@@ -325,7 +335,7 @@ const C_CARD_FEATURES = {
   c_monitor: [
     '1 full AI profile per month',
     'Game Plan',
-    'CSV import & social links',
+    'CSV bulk import',
     'A la carte credit packs',
   ],
   c_active: [
@@ -346,7 +356,7 @@ const A_CARD_FEATURES = {
   a_monitor: [
     '1 profile per candidate / month',
     'Prospecting lists',
-    'Multi-Candidate Game Plan',
+    'Game Plan',
     'Offices — county view',
   ],
   a_active: [
@@ -392,6 +402,15 @@ export default function Pricing() {
   const userPlanType      = user ? getUserPlanType(user) : null
   const userBracket       = user ? getUserBracket(user)  : null
   const userBilling       = (user?.app_metadata?.billing) || 'monthly'
+
+  // Credit packs are a plan feature, not a universal add-on. Scout has
+  // features.creditPacks = false and every plan below Action Campaign has
+  // features.bulkCredits = false — the server rejects those purchases, so the
+  // UI must not offer them either. Signed-out visitors still see the pricing
+  // (they pick a plan first); only a signed-in user on a plan without the
+  // feature gets the locked state.
+  const canBuyCreditPacks = !user || hasFeature(userPlan, 'creditPacks')
+  const canBuyBulkCredits = !user || hasFeature(userPlan, 'bulkCredits')
 
   // Audit fix (#12): "current" must mean plan AND bracket AND billing period
   // all match. The old plan-key-only check disabled the CTA for bracket
@@ -727,14 +746,26 @@ export default function Pricing() {
             })}
           </div>
 
-          {/* A la carte credits */}
+          {/* A la carte credits — plans without features.creditPacks (Scout) can't buy them */}
           <section className="mb-10">
             <div className="mb-4">
               <h2 className="text-base font-semibold text-gray-900">A la carte profile credits</h2>
               <p className="text-sm text-gray-500 mt-1">
-                Need profiles beyond your monthly limit? Credits never expire and work on any plan.
+                Need profiles beyond your monthly limit? Credits never expire and work on any paid plan.
               </p>
             </div>
+            {!canBuyCreditPacks ? (
+              <div className="rounded-xl border border-gray-200 bg-gray-50 px-5 py-6 flex items-start gap-3">
+                <Lock className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
+                <div>
+                  <div className="text-sm font-semibold text-gray-900">Profile credits require a paid plan</div>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Free Scout accounts can't buy extra profile credits. Upgrade to Monitor or higher
+                    and credit packs unlock here and in Settings → Plan &amp; billing.
+                  </p>
+                </div>
+              </div>
+            ) : (
             <div className="rounded-xl border border-gray-200 overflow-hidden">
               <div className="grid sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-gray-200">
                 {CREDIT_PACKS.map(pack => (
@@ -782,6 +813,7 @@ export default function Pricing() {
                 ))}
               </div>
             </div>
+            )}
           </section>
 
           <FeatureMatrix
@@ -800,7 +832,7 @@ export default function Pricing() {
             }))}
           />
           <p className="text-xs text-gray-400 mt-3 text-center">
-            Prospecting lists and the Offices section are exclusive to the Action Plan.
+            Prospecting lists are exclusive to the Action Plan.
             Game Plan unlocks at Monitor. Active-candidate slots are a hard limit — deactivate a candidate or upgrade to add more.
           </p>
         </>
@@ -916,7 +948,8 @@ export default function Pricing() {
             </div>
           </section>
 
-          {/* Bulk credits */}
+          {/* Bulk credits — only Action Campaign has features.bulkCredits */}
+          {canBuyBulkCredits && (
           <section className="mb-10">
             <div className="mb-4">
               <h2 className="text-base font-semibold text-gray-900">Bulk profile credits</h2>
@@ -973,6 +1006,7 @@ export default function Pricing() {
               </div>
             </div>
           </section>
+          )}
 
           <FeatureMatrix
             groups={A_FEATURES}

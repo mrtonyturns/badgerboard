@@ -9,7 +9,7 @@ import {
   PLAN_CONFIG, MONTHLY_PRICES, BILLING_PERIODS,
   getUserPlan, getUserPlanType, getUserBracket, getBracketConfig, getPlanConfig,
   getUserBillingPeriod, effectiveMonthlyRate, periodTotal,
-  getEntitlementSource, getActiveTrial, hasFeature,
+  getEntitlementSource, getActiveTrial, hasFeature, SCOUT_CANDIDATE_LIMIT,
 } from '../../lib/tiers'
 import { isNativeApp } from '../../lib/native'
 import {
@@ -108,7 +108,10 @@ export default function PlanPane({
   // ── Usage meters ────────────────────────────────────────────────────────────
   const profilesLeft = profileLimit === Infinity ? Infinity : Math.max(0, profileLimit - usage.profilesUsed)
   const slotsOpen    = maxSlots === Infinity ? Infinity : Math.max(0, maxSlots - usage.monitored)
-  const scoutCandidateCap = plan === 'scout' ? 2 : null   // matches Candidates.jsx SCOUT_CANDIDATE_LIMIT
+  // Single source of truth in lib/tiers.js — this used to be a bare `2` here and
+  // another bare `2` in Candidates.jsx. (Enforcement is client-side only; see
+  // the SCOUT_CANDIDATE_LIMIT comment in tiers.js.)
+  const scoutCandidateCap = plan === 'scout' ? SCOUT_CANDIDATE_LIMIT : null
 
   const meters = [
     {

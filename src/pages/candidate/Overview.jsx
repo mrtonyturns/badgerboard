@@ -38,6 +38,15 @@ function StatusSuggestionCard({ candidate, dossiers, onAccept }) {
   const [done, setDone] = useState(false)
   const [busy, setBusy] = useState(false)
 
+  // This card stays mounted when the user moves between candidates, so a
+  // Confirm/Dismiss on one candidate used to permanently suppress the
+  // suggestion for every candidate opened afterwards. Reset per candidate id.
+  useEffect(() => {
+    setRec(null)
+    setDone(false)
+    setBusy(false)
+  }, [candidate?.id])
+
   useEffect(() => {
     if (!dossiers?.length || done) return
     const latest = dossiers[0]

@@ -28,6 +28,7 @@ import { CANDIDATE_STATUS_LABELS } from '../lib/campaignEnums'
 import LoadingBar from '../components/LoadingBar'
 import SearchableSelect from '../components/SearchableSelect'
 import DossierDisclaimerModal, { useDossierAck } from '../components/DossierDisclaimerModal'
+import { UpgradeLink, WebOnlyCta, NATIVE_PLAN_NOTE } from '../components/UpgradeCta'
 
 import {
   T, cardStyle, ProfilerShell, Btn, Pill, Avatar, StatStrip, StatCell, RatioBar,
@@ -888,7 +889,7 @@ export default function Dossiers() {
               <div style={{ fontSize: 12, color: T.ink4, lineHeight: 1.55, maxWidth: '74ch' }}>
                 Scout includes Biography, Political Record and the first two Affiliations. The other
                 eleven sections are written but not stored on this plan.{' '}
-                <Link to="/plans" style={{ color: T.red, fontWeight: 600 }}>Compare plans</Link>
+                <UpgradeLink style={{ color: T.red, fontWeight: 600 }}>Compare plans</UpgradeLink>
               </div>
             </div>
           ) : null}
@@ -939,10 +940,19 @@ export default function Dossiers() {
           {canBulk ? (
             <Btn onClick={() => setBulkOpen(true)}>Bulk generate</Btn>
           ) : (
-            <Btn
-              onClick={() => navigate('/plans')}
-              title="Bulk generate is part of the Action Campaign plan"
-            >Bulk generate</Btn>
+            <WebOnlyCta
+              native={(
+                <Btn
+                  disabled
+                  title={`Bulk generate is part of the Action Campaign plan. ${NATIVE_PLAN_NOTE}`}
+                >Bulk generate</Btn>
+              )}
+            >
+              <Btn
+                onClick={() => navigate('/plans')}
+                title="Bulk generate is part of the Action Campaign plan"
+              >Bulk generate</Btn>
+            </WebOnlyCta>
           )}
         </div>
       </div>
@@ -1079,12 +1089,16 @@ export default function Dossiers() {
             valueColor={left === 0 ? T.red : left <= 5 ? T.amber : T.ink}
             sub={left === 0 ? 'monthly allowance used' : resetLabel}
             right={(
-              <Btn
-                kind="primary"
-                tap={false}
-                onClick={() => navigate('/plans')}
-                style={{ padding: '5px 11px', fontSize: 11, minHeight: 28 }}
-              >Add more</Btn>
+              // Hidden in the native app — store rules don't allow an in-app
+              // link into an external purchase flow.
+              <WebOnlyCta>
+                <Btn
+                  kind="primary"
+                  tap={false}
+                  onClick={() => navigate('/plans')}
+                  style={{ padding: '5px 11px', fontSize: 11, minHeight: 28 }}
+                >Add more</Btn>
+              </WebOnlyCta>
             )}
           />
         )}
@@ -1109,10 +1123,19 @@ export default function Dossiers() {
               {bankedCredits > 0 && ` You have ${plural(bankedCredits, 'credit')} banked, already counted above.`}
             </div>
           </div>
-          <div style={{ marginLeft: 'auto', flex: 'none', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <Btn kind="warm" onClick={() => navigate('/plans')}>Compare plans</Btn>
-            <Btn kind="primary" onClick={() => navigate('/plans')}>Buy a credit pack</Btn>
-          </div>
+          {/* Purchase CTAs swap to neutral copy inside the native app. */}
+          <WebOnlyCta
+            native={(
+              <div style={{ marginLeft: 'auto', flex: 'none', fontSize: 12, color: T.ink4, maxWidth: '38ch' }}>
+                {NATIVE_PLAN_NOTE}
+              </div>
+            )}
+          >
+            <div style={{ marginLeft: 'auto', flex: 'none', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Btn kind="warm" onClick={() => navigate('/plans')}>Compare plans</Btn>
+              <Btn kind="primary" onClick={() => navigate('/plans')}>Buy a credit pack</Btn>
+            </div>
+          </WebOnlyCta>
         </div>
       )}
 

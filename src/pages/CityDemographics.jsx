@@ -179,12 +179,22 @@ export default function CityDemographics() {
     if (!place) { setOffices([]); return }
     const bareName = bareCityName(place)
     if (!bareName) { setOffices([]); return }
+    // Match the map's municipal matcher (Offices.jsx matchOffices): municipal
+    // offices are imported either with a `city` value OR with the geography in
+    // `district_name` ("City of Wausau", "Town of Grant"). Filtering on `city`
+    // alone reported "No offices tracked" for every district_name-style import,
+    // even though clicking the same municipality on the map listed them.
+    // Commas, parens and quotes would be read as PostgREST `or` syntax — strip
+    // them, then double-quote each value so names with spaces ("Eau Claire")
+    // parse as one literal.
+    const term = bareName.replace(/["'(),*]/g, ' ').replace(/\s+/g, ' ').trim()
+    if (!term) { setOffices([]); return }
     let cancelled = false
     setOfficesLoading(true)
     supabase
       .from('offices')
-      .select('id, name, level, office_type, city, county')
-      .ilike('city', `%${bareName}%`)
+      .select('id, name, level, office_type, city, county, district_name')
+      .or(`city.ilike."%${term}%",district_name.ilike."%${term}%"`)
       .limit(10)
       .then(({ data, error }) => {
         if (cancelled) return

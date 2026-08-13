@@ -10,6 +10,7 @@
 // Legacy aliases:  monitor | campaign | agency  (still accepted)
 
 const { ADMIN_EMAILS } = require('./_config')
+const { normalizePlan } = require('./_entitlements')
 
 const CANDIDATE_PLANS = ['scout', 'c_monitor', 'c_active', 'c_campaign']
 const ACTION_PLANS    = ['a_monitor', 'a_active', 'a_campaign']
@@ -64,13 +65,20 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
 
-  const { email, plan, bracket } = body
-  if (!email || !plan) {
+  const { email, plan: rawPlan, bracket } = body
+  if (!email || !rawPlan) {
     return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'email and plan required' }) }
   }
-  if (!VALID_PLANS.includes(plan)) {
+  if (!VALID_PLANS.includes(rawPlan)) {
     return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: `Invalid plan. Must be one of: ${VALID_PLANS.join(', ')}` }) }
   }
+
+  // Legacy keys stay accepted, but never get written. planType() below treats
+  // every legacy key as 'action', so setting a user to 'monitor' used to write
+  // { plan: 'monitor', plan_type: 'action' } — a candidate plan permanently
+  // tagged as an org plan, with a bracket that c_monitor does not even have.
+  // Same LEGACY_ALIASES mapping the resolver itself uses.
+  const plan = normalizePlan(rawPlan)
 
   const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
   const SB_URL      = process.env.SUPABASE_URL

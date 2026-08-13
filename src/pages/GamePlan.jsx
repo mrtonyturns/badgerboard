@@ -1,10 +1,10 @@
-// GamePlan.jsx — Campaign milestone & timeline tracker
-// Redesigned: Linear/Notion-style — tight rows, hover-reveal actions, clean phase sections
+// GamePlan.jsx — Campaign election calendar + results shell
+// The Tasks tab renders <TaskBoard />; Calendar and Results live here.
 
-import React, { useEffect, useState, useMemo, useRef } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
-  format, differenceInDays, differenceInCalendarDays,
+  format, differenceInDays,
   isPast, isFuture, parseISO, isToday,
 } from 'date-fns'
 
@@ -19,462 +19,20 @@ const safeISO = (d) => {
 const isTestElection = (e) => /^(zz)?test(?![a-z])/i.test(String(e?.name || '').trim())
 
 import {
-  Target, CalendarDays, Plus, Clock, CheckCircle, Edit2, Trash2, X,
-  BarChart2, AlertCircle, ChevronDown, ChevronRight, Users,
-  Flag, DollarSign, Megaphone, Scale, Check, SkipForward,
-  Loader2, AlertTriangle, List, ChevronUp,
+  CalendarDays, Plus, Clock, CheckCircle, Edit2, Trash2, X,
+  BarChart2, AlertCircle, AlertTriangle,
 } from 'lucide-react'
 import {
   supabase,
-  getMilestones, createMilestone, createMilestoneBatch,
-  updateMilestone, deleteMilestone, deleteTemplateMilestones,
   getElections, createElection, updateElection, deleteElection,
-  getCandidates,
 } from '../lib/supabase'
 import ElectionResultsBoard from './ElectionResultsBoard'
 import LoadingBar from '../components/LoadingBar'
-import SearchableSelect from '../components/SearchableSelect'
 import TaskBoard from '../components/TaskBoard'
 import UpgradePrompt from '../components/UpgradePrompt'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserPlan, hasFeature, PLAN_CONFIG } from '../lib/tiers'
-import {
-  PHASES as PHASE_BASE,
-  MILESTONE_CATEGORIES as CATEGORIES,
-  MILESTONE_STATUSES as STATUSES,
-  ELECTION_TYPE_LABELS, ELECTION_TYPE_COLORS,
-} from '../lib/campaignEnums'
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-// Phase data (keys, labels, colors) lives in lib/campaignEnums.js so the plan
-// dashboards use the same vocabulary. Icons are attached here — lucide
-// components don't belong in a shared data module.
-
-const PHASE_ICONS = {
-  planning:      Target,
-  filing:        Scale,
-  voter_contact: Megaphone,
-  fundraising:   DollarSign,
-  gotv:          Flag,
-  election_day:  CalendarDays,
-}
-
-const PHASES = PHASE_BASE.map(p => ({ ...p, icon: PHASE_ICONS[p.key] }))
-
-const PHASE_MAP = Object.fromEntries(PHASES.map(p => [p.key, p]))
-
-const STATUS_MAP = Object.fromEntries(STATUSES.map(s => [s.key, s]))
-
-// ── Standard Wisconsin campaign plan template ─────────────────────────────────
-// Day offsets are relative to election day (negative = days before).
-const PLAN_TEMPLATE = [
-  { off: -300, phase: 'planning',      category: 'legal',       title: 'Confirm eligibility & residency requirements' },
-  { off: -285, phase: 'planning',      category: 'recruitment', title: 'Recruit campaign leadership (manager, treasurer)' },
-  { off: -275, phase: 'planning',      category: 'admin',       title: 'Open dedicated campaign bank account' },
-  { off: -265, phase: 'planning',      category: 'general',     title: 'Draft campaign plan, message & budget' },
-  { off: -255, phase: 'filing',        category: 'legal',       title: 'Register campaign committee (CF-1) with the WEC / filing officer' },
-  { off: -240, phase: 'fundraising',   category: 'finance',     title: 'Launch initial fundraising push (early money)' },
-  { off: -210, phase: 'filing',        category: 'legal',       title: 'Begin circulating nomination papers' },
-  { off: -180, phase: 'voter_contact', category: 'outreach',    title: 'Build voter universe & targeting lists' },
-  { off: -155, phase: 'filing',        category: 'legal',       title: 'File nomination papers & declaration of candidacy' },
-  { off: -145, phase: 'filing',        category: 'legal',       title: 'Confirm ballot access with filing officer' },
-  { off: -120, phase: 'voter_contact', category: 'outreach',    title: 'Launch door-to-door canvassing program' },
-  { off: -90,  phase: 'fundraising',   category: 'finance',     title: 'File pre-primary campaign finance report' },
-  { off: -75,  phase: 'voter_contact', category: 'outreach',    title: 'Distribute yard signs & field materials' },
-  { off: -60,  phase: 'voter_contact', category: 'media',       title: 'Direct mail round 1 + digital ads live' },
-  { off: -21,  phase: 'gotv',          category: 'outreach',    title: 'Absentee & early-vote push begins' },
-  { off: -8,   phase: 'fundraising',   category: 'finance',     title: 'File pre-election campaign finance report' },
-  { off: -3,   phase: 'gotv',          category: 'outreach',    title: 'GOTV weekend canvass & phone blitz' },
-  { off: 0,    phase: 'election_day',  category: 'admin',       title: 'Election Day — turnout tracking & poll coverage' },
-  { off: 14,   phase: 'election_day',  category: 'admin',       title: 'Thank-you notes to volunteers & donors' },
-  { off: 30,   phase: 'election_day',  category: 'finance',     title: 'File post-election campaign finance report' },
-]
-
-const defaultMilestoneForm = {
-  title: '', notes: '', phase: 'planning', category: 'general',
-  due_date: '', status: 'upcoming', candidate_id: '', election_id: '',
-}
-
-function autoStatus(m) {
-  if (m.status === 'complete' || m.status === 'skipped') return m.status
-  if (m.due_date && isPast(safeISO(m.due_date)) && !isToday(safeISO(m.due_date))) return 'overdue'
-  return m.status
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MilestoneRow — scannable list item with clear column layout
-// ─────────────────────────────────────────────────────────────────────────────
-function MilestoneRow({ milestone, onEdit, onDelete, onStatusChange, candidates, elections, deleting, phaseLabel }) {
-  const computedStatus = autoStatus(milestone)
-  const isComplete     = computedStatus === 'complete'
-  const isOverdue      = computedStatus === 'overdue'
-  const isInProgress   = computedStatus === 'in_progress'
-  const isSkipped      = computedStatus === 'skipped'
-  const isDeleting     = deleting === milestone.id
-  const daysUntil = milestone.due_date
-    ? differenceInCalendarDays(safeISO(milestone.due_date), new Date())
-    : null
-  const cand = candidates?.find(c => c.id === milestone.candidate_id)
-
-  // Due date chip
-  const dueDateChip = (() => {
-    if (!milestone.due_date) return null
-    if (isComplete) return { label: format(safeISO(milestone.due_date), 'MMM d'), cls: 'text-gray-400 bg-gray-50' }
-    if (isToday(safeISO(milestone.due_date))) return { label: 'Today', cls: 'text-orange-700 bg-orange-50 font-semibold border border-orange-200' }
-    if (daysUntil < 0) return { label: `${Math.abs(daysUntil)}d overdue`, cls: 'text-red-700 bg-red-50 font-semibold border border-red-200' }
-    if (daysUntil <= 7)  return { label: `${daysUntil}d`, cls: 'text-orange-600 bg-orange-50 font-semibold border border-orange-200' }
-    if (daysUntil <= 30) return { label: `${daysUntil}d`, cls: 'text-amber-700 bg-amber-50 border border-amber-200' }
-    return { label: format(safeISO(milestone.due_date), 'MMM d'), cls: 'text-gray-500 bg-gray-50 border border-gray-200' }
-  })()
-
-  return (
-    <div className={`group flex items-center gap-3 px-4 py-3 transition-colors ${
-      isOverdue  ? 'bg-red-50/60 hover:bg-red-50' :
-      isComplete ? 'hover:bg-gray-50/60' :
-      'hover:bg-gray-50/70'
-    } ${isDeleting ? 'opacity-40 pointer-events-none' : ''}`}>
-
-      {/* Checkbox */}
-      <button
-        onClick={() => onStatusChange(milestone.id, isComplete ? 'upcoming' : 'complete')}
-        className={`flex-shrink-0 w-[18px] h-[18px] rounded-full border-2 flex items-center justify-center transition-all ${
-          isComplete   ? 'bg-green-500 border-green-500' :
-          isOverdue    ? 'border-red-400 hover:border-red-500' :
-          isInProgress ? 'border-yellow-400 hover:border-yellow-500' :
-          'border-gray-300 hover:border-gray-400'
-        }`}
-        title={isComplete ? 'Mark incomplete' : 'Mark complete'}
-      >
-        {isComplete   && <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />}
-        {isInProgress && <div className="w-1.5 h-1.5 rounded-full bg-yellow-400" />}
-        {isOverdue    && !isComplete && <div className="w-1.5 h-1.5 rounded-full bg-red-400" />}
-      </button>
-
-      {/* Title — takes remaining width */}
-      <span className={`flex-1 text-sm leading-snug min-w-0 truncate ${
-        isComplete ? 'line-through text-gray-400' :
-        isSkipped  ? 'text-gray-400 italic' :
-        isOverdue  ? 'text-gray-900 font-medium' :
-        'text-gray-800'
-      }`}>
-        {milestone.title}
-      </span>
-
-      {/* Right-side columns — fixed widths so they align */}
-      <div className="flex items-center gap-2 flex-shrink-0">
-
-        {/* Candidate tag */}
-        {cand && (
-          <span className="hidden lg:inline text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded truncate max-w-[100px]">
-            {cand.name}
-          </span>
-        )}
-
-        {/* Phase label (list view only) */}
-        {phaseLabel && (
-          <span className="hidden md:inline text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
-            {phaseLabel}
-          </span>
-        )}
-
-        {/* Status chip — only for non-default statuses */}
-        {isInProgress && (
-          <span className="text-xs font-medium text-yellow-700 bg-yellow-50 border border-yellow-200 px-2 py-0.5 rounded whitespace-nowrap">
-            In progress
-          </span>
-        )}
-        {isSkipped && (
-          <span className="text-xs text-gray-400 bg-gray-50 border border-gray-200 px-2 py-0.5 rounded">
-            Skipped
-          </span>
-        )}
-
-        {/* Due date chip — fixed width column */}
-        <div className="w-20 text-right">
-          {dueDateChip && (
-            <span className={`inline-block text-xs px-2 py-0.5 rounded whitespace-nowrap ${dueDateChip.cls}`}>
-              {dueDateChip.label}
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Hover actions */}
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 w-14 justify-end">
-        <button onClick={() => onEdit(milestone)} className="p-1 rounded hover:bg-white text-gray-400 hover:text-gray-700 transition-colors" title="Edit">
-          <Edit2 className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={() => { if (window.confirm('Delete this milestone?')) onDelete(milestone.id) }}
-          disabled={isDeleting}
-          className="p-1 rounded hover:bg-white text-gray-400 hover:text-red-500 transition-colors"
-          title="Delete"
-        >
-          {isDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PhaseSection — clear header with real visual weight + scannable rows
-// ─────────────────────────────────────────────────────────────────────────────
-function PhaseSection({ phase, milestones, onEdit, onDelete, onStatusChange, candidates, elections, deletingMilestone, onAddToPhase, defaultOpen = true }) {
-  const [open, setOpen]             = useState(defaultOpen)
-  const [quickTitle, setQuickTitle] = useState('')
-  const [quickDue,   setQuickDue]   = useState('')
-  const [showQuick,  setShowQuick]  = useState(false)
-  const [quickSaving, setQuickSaving] = useState(false)
-  const quickRef = useRef(null)
-  const PhaseIcon = phase.icon
-  const total   = milestones.length
-  const done    = milestones.filter(m => m.status === 'complete').length
-  const overdue = milestones.filter(m => autoStatus(m) === 'overdue').length
-  const pct     = total ? Math.round((done / total) * 100) : 0
-
-  useEffect(() => { if (showQuick) quickRef.current?.focus() }, [showQuick])
-
-  const handleQuickAdd = async (e) => {
-    e?.preventDefault()
-    if (!quickTitle.trim()) return
-    setQuickSaving(true)
-    await onAddToPhase({ title: quickTitle.trim(), phase: phase.key, due_date: quickDue || null, status: 'upcoming', category: 'general' })
-    setQuickTitle(''); setQuickDue(''); setQuickSaving(false); setShowQuick(false)
-  }
-
-  const orderedMilestones = [
-    ...milestones.filter(m => autoStatus(m) === 'overdue'),
-    ...milestones.filter(m => autoStatus(m) === 'in_progress'),
-    ...milestones.filter(m => autoStatus(m) === 'upcoming'),
-    ...milestones.filter(m => ['complete','skipped'].includes(autoStatus(m))),
-  ]
-
-  return (
-    <div className="border-b border-gray-100 last:border-b-0">
-      {/* ── Phase header — colored left stripe, subtle bg, clear label ── */}
-      <button
-        onClick={() => setOpen(o => !o)}
-        className={`w-full flex items-center gap-3 px-4 py-3 text-left border-l-4 ${phase.borderL} ${phase.headerBg} hover:brightness-95 transition-all`}
-      >
-        <PhaseIcon className={`w-4 h-4 flex-shrink-0 ${phase.text}`} />
-        <span className={`text-sm font-bold ${phase.text} flex-shrink-0`}>{phase.label}</span>
-
-        {overdue > 0 && (
-          <span className="flex items-center gap-1 text-xs font-bold bg-red-500 text-white px-2 py-0.5 rounded-full">
-            <AlertTriangle className="w-3 h-3" />{overdue} overdue
-          </span>
-        )}
-
-        {total > 0 && (
-          <div className="flex items-center gap-2 ml-1">
-            <span className="text-xs text-gray-500 font-medium tabular-nums">{done}/{total}</span>
-            <div className="w-16 h-1.5 bg-white/70 rounded-full overflow-hidden border border-white/50">
-              <div
-                className={`h-full rounded-full transition-all ${pct === 100 ? 'bg-green-500' : phase.progressBg}`}
-                style={{ width: `${pct}%` }}
-              />
-            </div>
-            <span className={`text-xs font-semibold ${pct === 100 ? 'text-green-700' : phase.text}`}>{pct}%</span>
-          </div>
-        )}
-
-        {total === 0 && <span className="text-xs text-gray-400 italic ml-1">No milestones</span>}
-
-        <div className="ml-auto">
-          {open
-            ? <ChevronDown className={`w-4 h-4 ${phase.text} opacity-60`} />
-            : <ChevronRight className={`w-4 h-4 ${phase.text} opacity-60`} />}
-        </div>
-      </button>
-
-      {/* ── Rows ── */}
-      {open && (
-        <div className="divide-y divide-gray-100/80">
-          {/* Column header — only when there are milestones */}
-          {total > 0 && (
-            <div className="flex items-center gap-3 px-4 py-1.5 bg-gray-50/50">
-              <div className="w-[18px] flex-shrink-0" />
-              <span className="flex-1 text-xs text-gray-400 font-medium uppercase tracking-wide">Milestone</span>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <div className="w-20 text-right">
-                  <span className="text-xs text-gray-400 font-medium uppercase tracking-wide">Due</span>
-                </div>
-                <div className="w-14" />
-              </div>
-            </div>
-          )}
-
-          {orderedMilestones.length === 0 && !showQuick ? (
-            <p className="text-xs text-gray-400 py-3 px-4 italic">Nothing added yet.</p>
-          ) : (
-            orderedMilestones.map(m => (
-              <MilestoneRow
-                key={m.id}
-                milestone={m}
-                onEdit={onEdit}
-                onDelete={onDelete}
-                onStatusChange={onStatusChange}
-                candidates={candidates}
-                elections={elections}
-                deleting={deletingMilestone}
-              />
-            ))
-          )}
-
-          {/* Quick-add */}
-          {showQuick ? (
-            <form onSubmit={handleQuickAdd} className="flex items-center gap-3 px-4 py-2.5 bg-gray-50/50">
-              <div className="w-[18px] h-[18px] rounded-full border-2 border-gray-300 flex-shrink-0" />
-              <input
-                ref={quickRef}
-                value={quickTitle}
-                onChange={e => setQuickTitle(e.target.value)}
-                placeholder="Milestone title…"
-                className="flex-1 text-sm outline-none bg-transparent text-gray-800 placeholder-gray-400"
-                onKeyDown={e => { if (e.key === 'Escape') { setShowQuick(false); setQuickTitle(''); setQuickDue('') } }}
-              />
-              <input
-                type="date"
-                value={quickDue}
-                onChange={e => setQuickDue(e.target.value)}
-                className="text-xs text-gray-500 outline-none bg-white border border-gray-200 rounded px-2 py-1 w-32"
-              />
-              <button type="submit" disabled={!quickTitle.trim() || quickSaving} className="text-xs text-white bg-brand-red rounded px-2.5 py-1.5 font-medium disabled:opacity-40 transition-opacity">
-                {quickSaving ? '…' : 'Add'}
-              </button>
-              <button type="button" onClick={() => { setShowQuick(false); setQuickTitle(''); setQuickDue('') }} className="p-1 text-gray-400 hover:text-gray-600">
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </form>
-          ) : (
-            <button
-              onClick={() => setShowQuick(true)}
-              className={`w-full flex items-center gap-2 px-4 py-2 text-xs text-gray-400 hover:text-gray-600 hover:${phase.headerBg} transition-colors`}
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Add to {phase.label}</span>
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MilestoneModal — full edit form
-// ─────────────────────────────────────────────────────────────────────────────
-function MilestoneModal({ open, onClose, onSave, editing, candidates, elections, saving, saveError }) {
-  const [form, setForm] = useState(defaultMilestoneForm)
-
-  useEffect(() => {
-    if (editing) {
-      setForm({
-        title:        editing.title || '',
-        notes:        editing.notes || '',
-        phase:        editing.phase || 'planning',
-        category:     editing.category || 'general',
-        due_date:     editing.due_date || '',
-        status:       editing.status || 'upcoming',
-        candidate_id: editing.candidate_id || '',
-        election_id:  editing.election_id  || '',
-      })
-    } else {
-      setForm(defaultMilestoneForm)
-    }
-  }, [editing, open])
-
-  if (!open) return null
-  const f = (k) => e => setForm(p => ({ ...p, [k]: e.target.value }))
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/40 backdrop-blur-[1px]" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg ring-1 ring-gray-200">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <h2 className="text-base font-semibold text-gray-900">{editing ? 'Edit milestone' : 'New milestone'}</h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        <form onSubmit={e => { e.preventDefault(); onSave(form) }} className="p-6 space-y-4">
-          <div>
-            <label className="label">Title *</label>
-            <input className="input" value={form.title} onChange={f('title')} placeholder="e.g. Nomination papers filed" required autoFocus />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">Phase *</label>
-              <select className="input" value={form.phase} onChange={f('phase')}>
-                {PHASES.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="label">Category</label>
-              <select className="input" value={form.category} onChange={f('category')}>
-                {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">Due Date</label>
-              <input className="input" type="date" value={form.due_date} onChange={f('due_date')} />
-            </div>
-            <div>
-              <label className="label">Status</label>
-              <select className="input" value={form.status} onChange={f('status')}>
-                {STATUSES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-              </select>
-            </div>
-          </div>
-
-          {candidates.length > 0 && (
-            <div>
-              <label className="label">Candidate <span className="text-gray-400 font-normal">(optional)</span></label>
-              <SearchableSelect value={form.candidate_id} onChange={v => f('candidate_id')({ target: { value: v } })}
-                options={[{ value: '', label: 'All candidates' }, ...candidates.map(c => ({ value: c.id, label: c.name }))]}
-                placeholder="All candidates"
-                searchPlaceholder="Search candidates..." />
-            </div>
-          )}
-
-          {elections && elections.length > 0 && (
-            <div>
-              <label className="label">Election <span className="text-gray-400 font-normal">(optional)</span></label>
-              <SearchableSelect value={form.election_id} onChange={v => f('election_id')({ target: { value: v } })}
-                options={[
-                  { value: '', label: 'Not tied to a specific election' },
-                  ...elections.map(e => ({ value: e.id, label: `${e.name}${e.election_date ? ` · ${format(parseISO(e.election_date), 'MMM d, yyyy')}` : ''}` })),
-                ]}
-                placeholder="Not tied to a specific election"
-                searchPlaceholder="Search elections..." />
-            </div>
-          )}
-
-          <div>
-            <label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
-            <textarea className="input" rows={2} value={form.notes} onChange={f('notes')} placeholder="Any additional context..." />
-          </div>
-
-          {saveError && (
-            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{saveError}</p>
-          )}
-
-          <div className="flex gap-3 pt-1">
-            <button type="button" onClick={saving ? undefined : onClose} disabled={saving} className="btn-secondary flex-1">Cancel</button>
-            <button type="submit" className="btn-primary flex-1" disabled={saving}>
-              {saving ? 'Saving…' : editing ? 'Save changes' : 'Add milestone'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
-}
+import { ELECTION_TYPE_LABELS, ELECTION_TYPE_COLORS } from '../lib/campaignEnums'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ElectionModal
@@ -482,71 +40,6 @@ function MilestoneModal({ open, onClose, onSave, editing, candidates, elections,
 const defaultElectionForm = {
   name: '', election_date: '', filing_deadline: '', type: 'general',
   year: new Date().getFullYear(), notes: '',
-}
-
-function GeneratePlanModal({ open, onClose, onGenerate, generating, elections, candidates }) {
-  const [electionId,  setElectionId]  = useState('')
-  const [candidateId, setCandidateId] = useState('')
-
-  useEffect(() => {
-    if (open) {
-      // default to the next upcoming election
-      const next = [...elections]
-        .filter(e => !isPast(parseISO(e.election_date)) || isToday(parseISO(e.election_date)))
-        .sort((a, b) => parseISO(a.election_date) - parseISO(b.election_date))[0]
-      setElectionId(next?.id || elections[0]?.id || '')
-      setCandidateId('')
-    }
-  }, [open, elections])
-
-  if (!open) return null
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md">
-        <div className="p-6 border-b border-gray-100">
-          <h2 className="text-lg font-bold text-gray-900">Generate standard campaign plan</h2>
-          <p className="text-sm text-gray-500 mt-1">
-            Creates {PLAN_TEMPLATE.length} standard Wisconsin campaign milestones with due dates
-            calculated from the election date. You can edit or delete any of them afterward.
-          </p>
-        </div>
-        <div className="p-6 space-y-4">
-          <div>
-            <label className="label">Election *</label>
-            <SearchableSelect value={electionId} onChange={setElectionId}
-              options={[...elections].sort((a, b) => parseISO(a.election_date) - parseISO(b.election_date))
-                .map(e => ({ value: e.id, label: `${e.name} — ${format(parseISO(e.election_date), 'MMM d, yyyy')}` }))}
-              placeholder={elections.length === 0 ? 'No elections — add one on Campaign \u2192 Calendar first' : 'Select election...'}
-              searchPlaceholder="Search elections..." />
-          </div>
-          <div>
-            <label className="label">Candidate (optional)</label>
-            <SearchableSelect value={candidateId} onChange={setCandidateId}
-              options={[{ value: '', label: 'All / campaign-wide' }, ...candidates.map(c => ({ value: c.id, label: c.name }))]}
-              placeholder="All / campaign-wide"
-              searchPlaceholder="Search candidates..." />
-          </div>
-          <p className="text-xs text-gray-400">
-            Dates are estimates based on a typical WI race calendar — filing windows and finance
-            report deadlines vary by office. Always confirm with the WEC or your filing officer.
-          </p>
-        </div>
-        <div className="p-6 pt-0 flex items-center justify-end gap-2">
-          <button type="button" onClick={onClose} className="btn-secondary text-sm">Cancel</button>
-          <button
-            type="button"
-            disabled={!electionId || generating}
-            onClick={() => onGenerate({ electionId, candidateId })}
-            className="btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
-          >
-            {generating && <Loader2 className="w-4 h-4 animate-spin" />}
-            Generate {PLAN_TEMPLATE.length} milestones
-          </button>
-        </div>
-      </div>
-    </div>
-  )
 }
 
 function ElectionModal({ open, onClose, editing, onSave, saving }) {
@@ -614,7 +107,7 @@ function ElectionModal({ open, onClose, editing, onSave, saving }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // ElectionRow
 // ─────────────────────────────────────────────────────────────────────────────
-function ElectionRow({ election, onEdit, onDelete, deleting, onViewResults, onViewMilestones, milestoneCount }) {
+function ElectionRow({ election, onEdit, onDelete, deleting, onViewResults }) {
   const daysUntil  = differenceInDays(parseISO(election.election_date), new Date())
   const isUpcoming = isFuture(parseISO(election.election_date))
   const isOngoing  = isToday(parseISO(election.election_date))
@@ -659,13 +152,6 @@ function ElectionRow({ election, onEdit, onDelete, deleting, onViewResults, onVi
               </div>
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
-              {milestoneCount > 0 && onViewMilestones && (
-                <button onClick={() => onViewMilestones(election.id)} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-purple-50 text-purple-700 hover:bg-purple-600 hover:text-white">
-                  <Target className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Milestones ({milestoneCount})</span>
-                  <span className="sm:hidden">{milestoneCount}</span>
-                </button>
-              )}
               <button onClick={() => onViewResults(election.id)} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-brand-red/10 text-brand-red hover:bg-brand-red hover:text-white">
                 <BarChart2 className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Results</span>
@@ -718,21 +204,10 @@ export default function GamePlan() {
   const selectedResultsId = (_rawElection && _rawElection !== 'null' && _rawElection !== 'undefined')
     ? _rawElection : null
 
-  // ── Milestone state ───────────────────────────────────────────────────────
-  const [milestones,        setMilestones]       = useState([])
-  const [candidates,        setCandidates]       = useState([])
-  const [loading,           setLoading]          = useState(true)
-  const [milestoneError,    setMilestoneError]   = useState(null)
-  const [showMilestone,     setShowMilestone]    = useState(false)
-  const [editing,           setEditing]          = useState(null)
-  const [saving,            setSaving]           = useState(false)
-  const [saveError,         setSaveError]        = useState(null)
-  const [deletingMilestone, setDeletingMilestone]= useState(null)
-  const [milestoneView,     setMilestoneView]    = useState('phase') // 'phase' | 'list'
-  const [filterCand,        setFilterCand]       = useState('')
-  const [filterStatus,      setFilterStatus]     = useState('')
-  const [filterElection,    setFilterElection]   = useState('')
-  const priorStatusRef = useRef({})
+  // The legacy game_plan_milestones UI (phase sections, milestone modal, plan
+  // generator) was replaced by <TaskBoard /> and has been removed — nothing in
+  // this page reads or writes that table any more.
+  const [loading, setLoading] = useState(true)
 
   // ── Elections state ───────────────────────────────────────────────────────
   const [elections,     setElections]    = useState([])
@@ -754,13 +229,7 @@ export default function GamePlan() {
   useEffect(() => { fetchAll() }, [])
 
   const fetchAll = async () => {
-    // allSettled, not all: a milestones failure must not also blank the
-    // elections list (and vice-versa).
-    const [mRes, cRes, eRes] = await Promise.allSettled([getMilestones(), getCandidates(), getElections()])
-    if (mRes.status === 'fulfilled') setMilestones(mRes.value?.data || [])
-    else console.error('fetchAll milestones error:', mRes.reason)
-    if (cRes.status === 'fulfilled') setCandidates(cRes.value?.data || [])
-    else console.error('fetchAll candidates error:', cRes.reason)
+    const [eRes] = await Promise.allSettled([getElections()])
 
     if (eRes.status === 'fulfilled' && !eRes.value?.error) {
       setElections(eRes.value?.data || [])
@@ -774,11 +243,6 @@ export default function GamePlan() {
 
     setLoading(false)
     setElectLoading(false)
-  }
-
-  const fetchMilestones = async () => {
-    const { data, error } = await getMilestones()
-    if (!error) setMilestones(data || [])
   }
 
   const fetchElections = async () => {
@@ -844,109 +308,6 @@ export default function GamePlan() {
     setSearchParams(params)
   }
 
-  // ── Milestone CRUD ────────────────────────────────────────────────────────
-  const [showGenerate, setShowGenerate] = useState(false)
-  const [generating,   setGenerating]   = useState(false)
-
-  const hasTemplateMilestones = milestones.some(m => m.is_template)
-
-  const handleGeneratePlan = async ({ electionId, candidateId }) => {
-    const election = elections.find(e => e.id === electionId)
-    if (!election?.election_date) return
-    setGenerating(true)
-    try {
-      const base = parseISO(election.election_date)
-      const rows = PLAN_TEMPLATE.map(t => {
-        const d = new Date(base)
-        d.setDate(d.getDate() + t.off)
-        return {
-          title: t.title,
-          phase: t.phase,
-          category: t.category,
-          due_date: d.toISOString().slice(0, 10),
-          status: 'upcoming',
-          election_id: electionId,
-          candidate_id: candidateId || null,
-          is_template: true,
-          notes: 'Generated from the standard WI campaign plan — adjust dates to your race. Filing deadlines vary by office; always confirm with your filing officer.',
-        }
-      })
-      const { error } = await createMilestoneBatch(rows)
-      if (error) throw error
-      await fetchMilestones()
-      setShowGenerate(false)
-    } catch (err) {
-      console.error('[GamePlan] generate plan failed:', err)
-      setSaveError(err.message || 'Failed to generate plan')
-    } finally {
-      setGenerating(false)
-    }
-  }
-
-  const handleRemoveGenerated = async () => {
-    if (!window.confirm('Remove all generated plan milestones? Milestones you added manually are kept.')) return
-    await deleteTemplateMilestones()
-    fetchMilestones()
-  }
-
-  const openAdd  = ()  => { setEditing(null); setSaveError(null); setShowMilestone(true) }
-  const openEdit = (m) => { setEditing(m); setSaveError(null); setShowMilestone(true) }
-
-  const handleSaveMilestone = async (form) => {
-    setSaving(true); setSaveError(null)
-    const payload = {
-      title: form.title, notes: form.notes || null, phase: form.phase,
-      category: form.category, due_date: form.due_date || null,
-      status: form.status, candidate_id: form.candidate_id || null,
-      election_id: form.election_id || null,
-    }
-    const { error } = editing
-      ? await updateMilestone(editing.id, payload)
-      : await createMilestone(payload)
-    setSaving(false)
-    if (error) { setSaveError('Failed to save milestone. Please try again.'); return }
-    setShowMilestone(false)
-    await fetchMilestones()
-  }
-
-  // Quick-add (from inline form in phase section)
-  const handleQuickAdd = async (partial) => {
-    const payload = {
-      title: partial.title, phase: partial.phase,
-      status: 'upcoming', category: partial.category || 'general',
-      due_date: partial.due_date || null,
-      notes: null, candidate_id: null, election_id: null,
-    }
-    await createMilestone(payload)
-    await fetchMilestones()
-  }
-
-  const handleDelete = async (id) => {
-    setDeletingMilestone(id)
-    const { error } = await deleteMilestone(id)
-    setDeletingMilestone(null)
-    if (!error) await fetchMilestones()
-  }
-
-  const handleStatusChange = async (id, newStatus) => {
-    if (newStatus === 'complete') {
-      const current = milestones.find(m => m.id === id)
-      if (current) priorStatusRef.current[id] = current.status
-    }
-    let resolvedStatus = newStatus
-    if (newStatus !== 'complete' && priorStatusRef.current[id]) {
-      resolvedStatus = priorStatusRef.current[id]
-      delete priorStatusRef.current[id]
-    }
-    setMilestones(prev => prev.map(m => m.id === id ? { ...m, status: resolvedStatus } : m))
-    const { error } = await updateMilestone(id, { status: resolvedStatus })
-    if (error) await fetchMilestones()
-  }
-
-  const goToMilestonesForElection = (electionId) => {
-    setFilterElection(electionId); setFilterCand(''); setFilterStatus(''); goToTab('milestones')
-  }
-
   // ── Elections CRUD ────────────────────────────────────────────────────────
   const handleSaveElection = async (form) => {
     setElectSaving(true); setElectError(null)
@@ -966,30 +327,6 @@ export default function GamePlan() {
     if (error) { console.error('Delete election error:', error); return }
     fetchElections()
   }
-
-  // ── Derived ───────────────────────────────────────────────────────────────
-  const filtered = useMemo(() => milestones.filter(m => {
-    if (filterCand     && m.candidate_id !== filterCand)     return false
-    if (filterStatus   && autoStatus(m)  !== filterStatus)   return false
-    if (filterElection && m.election_id  !== filterElection) return false
-    return true
-  }), [milestones, filterCand, filterStatus, filterElection])
-
-  const byPhase = useMemo(() =>
-    Object.fromEntries(PHASES.map(p => [p.key, filtered.filter(m => m.phase === p.key)]))
-  , [filtered])
-
-  const totalComplete = milestones.filter(m => m.status === 'complete').length
-  const totalOverdue  = milestones.filter(m => autoStatus(m) === 'overdue').length
-  const pctComplete   = milestones.length ? Math.round((totalComplete / milestones.length) * 100) : 0
-
-  // Next upcoming deadline
-  const nextDue = useMemo(() => {
-    const upcoming = milestones
-      .filter(m => m.due_date && autoStatus(m) !== 'complete' && autoStatus(m) !== 'skipped')
-      .sort((a, b) => a.due_date.localeCompare(b.due_date))
-    return upcoming[0] || null
-  }, [milestones])
 
   const hasTodayElection = elections.some(e => isToday(parseISO(e.election_date)))
   const years            = [...new Set(elections.map(e => e.year))].sort()
@@ -1049,8 +386,6 @@ export default function GamePlan() {
       setSearchParams({ tab: 'results', election: resolvedResultsId }, { replace: true })
     }
   }, [activeTab, selectedResultsId, elections.length, electionsWithContests, resolvedResultsId, setSearchParams])
-
-  const hasFilters = !!(filterCand || filterStatus || filterElection)
 
   // ─────────────────────────────────────────────────────────────────────────
   // Render
@@ -1158,7 +493,7 @@ export default function GamePlan() {
                     <span className="text-xs bg-brand-red text-white px-2 py-0.5 rounded-full">{upcoming.length}</span>
                   </div>
                   <div className="space-y-3">
-                    {upcoming.map(e => <ElectionRow key={e.id} election={e} onEdit={el => { setEditingElect(el); setShowElect(true) }} onDelete={handleDeleteElection} deleting={deleting} onViewResults={goToResults} onViewMilestones={goToMilestonesForElection} milestoneCount={milestones.filter(m => m.election_id === e.id).length} />)}
+                    {upcoming.map(e => <ElectionRow key={e.id} election={e} onEdit={el => { setEditingElect(el); setShowElect(true) }} onDelete={handleDeleteElection} deleting={deleting} onViewResults={goToResults} />)}
                   </div>
                 </div>
               )}
@@ -1170,7 +505,7 @@ export default function GamePlan() {
                     <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">{past.length}</span>
                   </div>
                   <div className="space-y-3">
-                    {past.map(e => <ElectionRow key={e.id} election={e} onEdit={el => { setEditingElect(el); setShowElect(true) }} onDelete={handleDeleteElection} deleting={deleting} onViewResults={goToResults} onViewMilestones={goToMilestonesForElection} milestoneCount={milestones.filter(m => m.election_id === e.id).length} />)}
+                    {past.map(e => <ElectionRow key={e.id} election={e} onEdit={el => { setEditingElect(el); setShowElect(true) }} onDelete={handleDeleteElection} deleting={deleting} onViewResults={goToResults} />)}
                   </div>
                 </div>
               )}

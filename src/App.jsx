@@ -242,14 +242,19 @@ const AppRoutes = () => {
         {/* <Route path="door-knocking" element={<AdminRoute><DoorKnocking /></AdminRoute>} /> */}
         <Route path="dossiers" element={<Dossiers />} />
         <Route path="profiler" element={<Dossiers />} />
-        <Route path="compare" element={<Compare />} />
+        {/* Compare is sold as a plan feature (tiers.js features.compare) and the
+            page has no in-page gate of its own — without this any Scout/Monitor
+            account could reach it by URL. */}
+        <Route path="compare" element={<FeatureRoute feature="compare"><Compare /></FeatureRoute>} />
         <Route path="events" element={<Events />} />
         <Route path="campaign-connect" element={<CampaignConnect />} />
         {/* Settings panes are deep-linkable: /settings/plan, /settings/security, …
             /settings alone renders the default pane (Your account). */}
         <Route path="settings" element={<Settings />} />
         <Route path="settings/:pane" element={<Settings />} />
-        <Route path="plans" element={<Pricing />} />
+        {/* /plans is a standalone route above (outside Layout) — the nested
+            duplicate rendered the pricing page a second time inside the app
+            chrome, which is not what any link to /plans expects. */}
         <Route path="broadside" element={<FeatureRoute feature="broadside"><Broadside /></FeatureRoute>} />
         <Route path="polling" element={<BetaRoute><Polling /></BetaRoute>} />
         <Route path="admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />

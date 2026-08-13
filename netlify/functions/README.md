@@ -15,7 +15,7 @@ Node 22). Files prefixed with `_` are **shared modules, not endpoints** — a re
 ## Function inventory (by domain)
 
 **Billing / Stripe** — `create-checkout-session`, `create-portal-session`, `update-subscription`,
-`cancel-at-period-end`, `downgrade-to-free`, `buy-dossier-credits`, `payment-webhook`,
+`cancel-at-period-end`, `downgrade-to-free`, `payment-webhook`,
 `stripe-webhook`, `manage-coupons`, `admin-stripe-setup`, `admin-billing`
 
 **AI research / dossiers** — `generate-dossier`, `generate-dossier-background`,
@@ -23,6 +23,11 @@ Node 22). Files prefixed with `_` are **shared modules, not endpoints** — a re
 `get-shared-dossier` (public), `generate-bio-summary`, `generate-campaign-intel`,
 `research-incumbent`, `research-swot`, `autofill-candidate`, `discover-candidates`,
 `classify-csv-prospects`, `generate-prospecting`, `fetch-candidate-x-feed`
+
+**Offices** — `admin-offices` (all office writes, admin-gated service-role with a column
+whitelist). Migration 20260704000004 dropped the offices insert/update/delete RLS policies,
+so the browser client can no longer write them; `createOffice`/`updateOffice`/`deleteOffice`
+in `src/lib/supabase.js` route here.
 
 **Elections** — `admin-elections` (all election/contest/result writes, admin-gated service-role;
 runs the determination engine in `_determination.js` after every vote or precinct change and

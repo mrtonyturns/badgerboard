@@ -40,7 +40,7 @@ import { useAuth } from '../contexts/AuthContext'
 import SearchableSelect from '../components/SearchableSelect'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { ADMIN_EMAILS } from '../lib/tiers'
+import { ADMIN_EMAILS, normalizePlan } from '../lib/tiers'
 import { sanitizeAnnouncementHtml } from '../lib/sanitize'
 import ElectionResultsAdmin from './ElectionResultsAdmin'
 
@@ -1601,13 +1601,12 @@ const BRACKET_OPTIONS = [
 ]
 
 const ChangePlanModal = ({ currentPlan, currentBracket, onSave, onClose }) => {
-  // Normalize legacy plan keys to new keys for display
-  const normalizePlan = (p) => {
-    if (!p) return 'scout'
-    const MAP = { monitor: 'c_monitor', campaign: 'c_campaign', agency: 'a_campaign' }
-    return MAP[p] || p
-  }
-
+  // Legacy plan keys are normalized for display by the shared mapping in
+  // lib/tiers.js. The local copy that used to live here mapped
+  // campaign → c_campaign, which disagreed with tiers.js / _entitlements.js
+  // (campaign → a_campaign): opening this modal for a legacy 'campaign' account
+  // preselected the wrong plan, and saving silently downgraded them from an
+  // Action plan to a Candidate plan.
   const [plan, setPlan]       = useState(normalizePlan(currentPlan))
   const [bracket, setBracket] = useState(currentBracket || 'b1')
   const [saving, setSaving]   = useState(false)

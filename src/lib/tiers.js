@@ -173,6 +173,19 @@ export const CANDIDATE_PLAN_CONFIG = {
   },
 }
 
+// How many candidate rows a free Scout account may create. This is the single
+// source of truth: it used to be a bare `2` written out in Candidates.jsx (as a
+// local const, three times over) and again in settings/PlanPane.jsx, so the cap
+// and the copy describing it could — and did — drift apart.
+//
+// SERVER ENFORCEMENT IS PENDING. There is no server write path for candidate
+// creation: clients INSERT into `candidates` directly and RLS only checks
+// ownership, not count. Every check against this constant is therefore advisory
+// UI, not a security boundary — a hand-crafted PostgREST insert still gets
+// through. Closing that needs an RLS policy / trigger migration, which is
+// deliberately out of scope here.
+export const SCOUT_CANDIDATE_LIMIT = 2
+
 // ─── Action Plan ──────────────────────────────────────────────────────────────
 
 export const ACTION_PLAN_ORDER = ['a_monitor', 'a_active', 'a_campaign']
@@ -205,6 +218,7 @@ export const ACTION_PLAN_CONFIG = {
       discoverCandidates: true,
       socialLinks:        true,
       weeklyProfile:      false,
+      creditPacks:        true,   // every paid plan can buy a la carte profile credits
       bulkCredits:        false,
       broadside:          true,   // v1.18.2: included in all paid plans
     },
@@ -249,6 +263,7 @@ export const ACTION_PLAN_CONFIG = {
       discoverCandidates: true,
       socialLinks:        true,
       weeklyProfile:      true,
+      creditPacks:        true,   // every paid plan can buy a la carte profile credits
       bulkCredits:        false,
       broadside:          true,   // v1.18.2: included in all paid plans
     },
@@ -293,6 +308,7 @@ export const ACTION_PLAN_CONFIG = {
       discoverCandidates: true,
       socialLinks:        true,
       weeklyProfile:      true,
+      creditPacks:        true,   // every paid plan can buy a la carte profile credits
       bulkCredits:        true,
       broadside:          true,   // v1.18.2: included in all paid plans
     },
@@ -318,6 +334,21 @@ export const PLAN_CONFIG = {
 }
 
 export const PLAN_ORDER = [...CANDIDATE_PLAN_ORDER, ...ACTION_PLAN_ORDER]
+
+// ─── Legacy plan keys ────────────────────────────────────────────────────────
+// PLAN_CONFIG accepts the pre-v1.10 keys so old accounts keep their features,
+// but PLAN_ORDER only holds canonical keys — so PLAN_ORDER.indexOf('monitor')
+// is -1 and every rank comparison built on it silently breaks (trial vs paid
+// comparison, isUpgrade, getNextPlan, the "current plan" card in PlanPane).
+// normalizePlan collapses legacy → canonical before any of that runs.
+// Mirror of netlify/functions/_entitlements.js LEGACY_ALIASES/normalizePlan.
+export const LEGACY_PLAN_ALIASES = { monitor: 'c_monitor', campaign: 'a_campaign', agency: 'a_campaign' }
+
+export function normalizePlan(planKey) {
+  if (!planKey) return 'scout'
+  const norm = LEGACY_PLAN_ALIASES[planKey] || planKey
+  return PLAN_ORDER.includes(norm) ? norm : 'scout'
+}
 
 // ─── Bracket definitions (Action Plan only) ───────────────────────────────────
 
@@ -397,15 +428,25 @@ export function effectiveMonthlyRate(baseMonthlyPrice, billingPeriod = 'monthly'
   return Math.round(baseMonthlyPrice * (1 - period.discount))
 }
 
-// Total amount charged per billing period
+// Total amount charged per billing period.
+//
+// MUST match stripe-setup.mjs periodAmountCents() to the cent — that script is
+// what actually mints the Stripe prices, so any other formula shows the user a
+// number Stripe will not charge. Stripe rounds ONCE, on the period total:
+//   monthly     base
+//   quarterly   round(base × 0.95 × 3)
+//   semiannual  round(base × 0.90 × 6)
+//   annual      base × 10           (2 months free)
+// The old version here rounded the per-month rate first and then multiplied,
+// which drifts by a dollar or two on ~half the bracket/period combos
+// (e.g. base 129 quarterly: round(122.55) × 3 = 369, Stripe charges 368).
 export function periodTotal(baseMonthlyPrice, billingPeriod = 'monthly') {
   if (billingPeriod === 'annual') {
-    // 2 months free = pay 10 months (no per-month rounding needed)
+    // 2 months free = pay 10 months (integer, no rounding needed)
     return baseMonthlyPrice * 10
   }
   const period = BILLING_PERIODS[billingPeriod] ?? BILLING_PERIODS.monthly
-  // Derive from the rounded per-month rate so periodTotal = displayedRate × months
-  return effectiveMonthlyRate(baseMonthlyPrice, billingPeriod) * period.months
+  return Math.round(baseMonthlyPrice * (1 - period.discount) * period.months)
 }
 
 // Annual savings vs monthly for a given billing period
@@ -514,7 +555,13 @@ export const BETA_BRACKET = 'ent'
 
 let _globalBetaEnabled = true  // optimistic default until AuthContext fetches the setting
 
-export function setGlobalBetaEnabled(v) { _globalBetaEnabled = v !== false }
+// Fail CLOSED. The old body was `v !== false`, so anything that was not a
+// literal `false` — including the `undefined` a failed/short-circuited
+// app_settings read hands back — turned the global beta switch ON and gave
+// every beta-flagged account a_campaign/ent across every gate. Only an explicit
+// `true` may enable it; every other value (undefined, null, an Error, 'off')
+// resolves to OFF.
+export function setGlobalBetaEnabled(v) { _globalBetaEnabled = v === true }
 export function getGlobalBetaEnabled()  { return _globalBetaEnabled }
 
 export function isBetaActive(user) {
@@ -537,7 +584,9 @@ export function getActiveTrial(user) {
   const endsAt = Date.parse(e.trial_ends_at)
   if (!Number.isFinite(endsAt) || endsAt <= Date.now()) return null
   return {
-    plan:     e.trial_plan,
+    // Canonical key only — a legacy trial_plan would rank -1 against the paid
+    // plan below and the trial would never win.
+    plan:     normalizePlan(e.trial_plan),
     bracket:  e.trial_bracket && BRACKET_CONFIG[e.trial_bracket] ? e.trial_bracket : 'b1',
     endsAt,
     daysLeft: Math.max(1, Math.ceil((endsAt - Date.now()) / 86400000)),
@@ -547,9 +596,12 @@ export function getActiveTrial(user) {
 // ─── Resolver ─────────────────────────────────────────────────────────────────
 // Priority: admin > beta > trial (if it outranks paid) > paid > scout
 
+// Raw app_metadata.plan is the ONLY place an un-normalized key enters the app,
+// so it is normalized here — every consumer downstream (rank comparisons,
+// getNextPlan, isUpgrade, PlanPane's current-plan card) sees a canonical key.
 function rawPaidPlan(user) {
   const p = ent(user).plan
-  return p && PLAN_CONFIG[p] ? p : 'scout'
+  return p && PLAN_CONFIG[p] ? normalizePlan(p) : 'scout'
 }
 
 export function getUserPlan(user) {
@@ -618,6 +670,38 @@ export function hasFeature(planKey, feature) {
   return false
 }
 
+// ─── "Where does this unlock?" copy ──────────────────────────────────────────
+// Upgrade badges and locked-feature blurbs used to hard-code plan names, and
+// those names drifted from the config: a "Pro" pill (no such plan has ever
+// existed) on the Discover and CSV buttons, and "Campaign & Agency plans" on
+// Active Monitoring — 'Agency' is a pre-v1.10 legacy alias, not a sellable
+// plan, and weeklyProfile actually unlocks at Active on the Action side.
+// Derive the names from PLAN_CONFIG instead so they can never go stale again.
+
+/** Lowest plan in each family that unlocks `feature` (null when none does). */
+export function lowestPlansWithFeature(feature) {
+  const find = (order) => order.find(k => hasFeature(k, feature)) ?? null
+  return { candidate: find(CANDIDATE_PLAN_ORDER), action: find(ACTION_PLAN_ORDER) }
+}
+
+/**
+ * Human label for where a feature unlocks.
+ *   featureUnlockLabel('weeklyProfile')             → 'Campaign (Candidate) and Active (Action)'
+ *   featureUnlockLabel('discoverCandidates', 'candidate') → 'Active'
+ * Pass the viewer's plan family to name only their own ladder; omit it for
+ * copy that has to speak to both.
+ */
+export function featureUnlockLabel(feature, planTypeHint) {
+  const { candidate, action } = lowestPlansWithFeature(feature)
+  const nameOf = (k) => (k ? (PLAN_CONFIG[k]?.name ?? k) : null)
+  if (planTypeHint === 'candidate' && candidate) return nameOf(candidate)
+  if (planTypeHint === 'action'    && action)    return nameOf(action)
+  const parts = []
+  if (candidate) parts.push(`${nameOf(candidate)} (Candidate)`)
+  if (action)    parts.push(`${nameOf(action)} (Action)`)
+  return parts.length ? parts.join(' and ') : null
+}
+
 export function getOfficesScope(planKey) {
   const cfg = PLAN_CONFIG[planKey]
   if (!cfg?.features?.offices) return null
@@ -684,16 +768,18 @@ export function isActionPlan(planKey) {
 }
 
 export function isUpgrade(fromPlan, toPlan) {
-  // Within same plan family, use order index
-  const fromIdx = PLAN_ORDER.indexOf(fromPlan)
-  const toIdx   = PLAN_ORDER.indexOf(toPlan)
+  // Within same plan family, use order index (legacy keys normalized first —
+  // PLAN_ORDER has no entry for them, so a raw 'monitor' would rank -1).
+  const fromIdx = PLAN_ORDER.indexOf(normalizePlan(fromPlan))
+  const toIdx   = PLAN_ORDER.indexOf(normalizePlan(toPlan))
   return toIdx > fromIdx
 }
 
 export function getNextPlan(planKey) {
-  const isCand = isCandidatePlan(planKey)
+  const key    = normalizePlan(planKey)
+  const isCand = isCandidatePlan(key)
   const order  = isCand ? CANDIDATE_PLAN_ORDER : ACTION_PLAN_ORDER
-  const idx    = order.indexOf(planKey)
+  const idx    = order.indexOf(key)
   return idx >= 0 && idx < order.length - 1 ? order[idx + 1] : null
 }
 

@@ -163,18 +163,38 @@ exports.handler = async (event) => {
   const siteUrl = process.env.URL || process.env.SITE_URL || 'https://www.badgerboardwi.com'
   const bgUrl = `${siteUrl}/.netlify/functions/generate-dossier-background`
 
-  // Fire-and-forget the background function (no await — returns 202 immediately)
-  fetch(bgUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      candidate,
-      candidate_id: candidate_id || null,
-      user_id: user?.id || null,
-      user_plan: userPlan,
-      auth_header: event.headers?.authorization || event.headers?.Authorization || null,
-    }),
-  }).catch(e => console.error('[generate-dossier] Failed to fire background fn:', e.message))
+  // Hand off to the background function. Netlify background functions answer
+  // 202 the instant the request is accepted, so awaiting costs nothing — but
+  // NOT awaiting risks the Lambda freezing before the socket is flushed, which
+  // silently drops the whole generation.
+  try {
+    const bgRes = await fetch(bgUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        candidate,
+        candidate_id: candidate_id || null,
+        user_id: user?.id || null,
+        user_plan: userPlan,
+        auth_header: event.headers?.authorization || event.headers?.Authorization || null,
+      }),
+    })
+    if (!bgRes.ok) {
+      console.error(`[generate-dossier] Background fn returned HTTP ${bgRes.status}`)
+      return {
+        statusCode: 503,
+        headers,
+        body: JSON.stringify({ error: 'Could not start profile generation — please try again in a moment.' }),
+      }
+    }
+  } catch (e) {
+    console.error('[generate-dossier] Failed to fire background fn:', e.message)
+    return {
+      statusCode: 503,
+      headers,
+      body: JSON.stringify({ error: 'Could not start profile generation — please try again in a moment.' }),
+    }
+  }
 
   // Return immediately — frontend will poll Supabase for the result
   return {

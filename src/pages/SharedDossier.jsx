@@ -15,6 +15,7 @@ import ReportReader from './profiler/ReportReader'
 import { ProfilerStyles, T, cardStyle } from './profiler/shared'
 import { parseSections, buildReport, buildPrintHtml } from './profiler/reportModel'
 import { filterSections } from '../lib/profileContent'
+import { WebOnlyCta } from '../components/UpgradeCta'
 
 export default function SharedDossier() {
   const { token } = useParams()
@@ -160,14 +161,18 @@ function Frame({ children, wide }) {
             Badger Board by The Bluejack Group · AI-generated political intelligence.
             Shared via a temporary link. All information requires independent verification.
           </div>
-          <Link
-            to="/plans"
-            style={{
-              marginLeft: 'auto', background: T.red, color: '#fff', borderRadius: 99,
-              padding: '9px 16px', fontSize: 12, fontWeight: 600, textDecoration: 'none',
-              whiteSpace: 'nowrap',
-            }}
-          >Run your own profiles</Link>
+          {/* Acquisition CTA — hidden inside the native app, where store rules
+              forbid steering users to an external purchase flow. */}
+          <WebOnlyCta>
+            <Link
+              to="/plans"
+              style={{
+                marginLeft: 'auto', background: T.red, color: '#fff', borderRadius: 99,
+                padding: '9px 16px', fontSize: 12, fontWeight: 600, textDecoration: 'none',
+                whiteSpace: 'nowrap',
+              }}
+            >Run your own profiles</Link>
+          </WebOnlyCta>
           <div style={{ fontSize: 11, color: '#8A93A6', width: '100%' }}>
             © {new Date().getFullYear()} The Bluejack Group ·{' '}
             <a href="/dossier-disclaimer" style={{ color: '#B7BECD' }}>Disclaimer</a> ·{' '}

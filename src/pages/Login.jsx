@@ -63,7 +63,13 @@ function formatPhone(val) {
 export default function Login() {
   const { signIn, signUp, resetPassword } = useAuth()
   const navigate = useNavigate()
-  const [mode, setMode] = useState('signin') // 'signin' | 'signup' | 'forgot'
+  // 'signin' | 'signup' | 'forgot'. /login?reset=1 opens the forgot-password
+  // form directly — that's where ResetPassword sends an expired-link visitor.
+  const [mode, setMode] = useState(() => (
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('reset')
+      ? 'forgot'
+      : 'signin'
+  ))
 
   const [email, setEmail]       = useState('')
   const [password, setPassword] = useState('')
@@ -123,13 +129,22 @@ export default function Login() {
       if (error) setError(error.message)
       else navigate('/')
     } else {
-      const { error } = await signUp(email, password, {
+      const { data, error } = await signUp(email, password, {
         first_name: firstName.trim(), last_name: lastName.trim(),
         display_name: `${firstName.trim()} ${lastName.trim()}`,
         business: business.trim(), phone, position,
       })
+      // Supabase's anti-enumeration behaviour: signing up with an address that
+      // already exists returns success with a DECOY user — obfuscated id and an
+      // empty `identities` array — and sends no confirmation email. Reporting
+      // "Account created!" there left the user waiting for an email that never
+      // arrives. We don't confirm the address exists in the error copy either;
+      // the message covers both branches.
+      const isDecoy = !error && data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0
       if (error) setError(error.message)
-      else { setSuccess('Account created! Check your email to confirm, then sign in.'); switchMode('signin') }
+      else if (isDecoy) {
+        setError('This email is already registered. Sign in instead, or reset your password if you’ve forgotten it.')
+      } else { setSuccess('Account created! Check your email to confirm, then sign in.'); switchMode('signin') }
     }
     setLoading(false)
   }

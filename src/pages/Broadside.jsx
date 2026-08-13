@@ -33,7 +33,8 @@ function dossierToStructured(title, content) {
  * JWT so AI + voice route through the server-side proxies, and (2) feeds the
  * module's Intel Intake panel the user's Profiler dossier list.
  *
- * ADMIN-ONLY BETA — route is wrapped in AdminRoute (see App.jsx).
+ * BETA — the route is wrapped in <FeatureRoute feature="broadside"> (see
+ * App.jsx), i.e. gated on the plan flag, not on admin email.
  */
 export default function Broadside() {
   const { user } = useAuth()

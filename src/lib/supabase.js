@@ -104,14 +104,36 @@ const fetchOffices = async (filters = {}) => {
 export const getOffice = async (id) =>
   supabase.from('offices').select('*').eq('id', id).single()
 
+// Migration 20260704000004 dropped the offices insert/update/delete RLS
+// policies, so browser writes are rejected. Office writes route through the
+// admin-verified service-role function, same as elections.
+export const adminOffices = async (action, params = {}) => {
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    const res = await fetch('/.netlify/functions/admin-offices', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify({ action, params }),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok) return { data: null, error: { message: json.error || `Request failed (${res.status})` } }
+    return { data: json.data ?? null, error: null }
+  } catch (e) {
+    return { data: null, error: { message: e.message || 'Network error' } }
+  }
+}
+
 export const createOffice = async (data) =>
-  supabase.from('offices').insert(data).select().single()
+  adminOffices('save_office', { data })
 
 export const updateOffice = async (id, data) =>
-  supabase.from('offices').update(data).eq('id', id).select().single()
+  adminOffices('save_office', { id, data })
 
 export const deleteOffice = async (id) =>
-  supabase.from('offices').delete().eq('id', id)
+  adminOffices('delete_office', { id })
 
 // ── Elections (shared reference data — no user scoping) ────────
 export const getElections = async () => withOffline(
@@ -208,17 +230,30 @@ export const deleteCandidate = async (id) => {
 }
 
 // ── Dossiers (USER-SCOPED via candidate ownership + generated_by) ─
-export const getDossiers = async (candidateId = null) => {
+//
+// Two selectors:
+//   full  (default) — `*`, i.e. every column including the multi-KB `content`
+//                     body. Readers that render a profile need this.
+//   list  ({ list: true }) — id/candidate_id/generated_at/generated_by plus the
+//                     weekly_digest JSONB. This is everything the dashboards
+//                     read; pulling `content` for every dossier just to draw a
+//                     digest card moved megabytes per page load and blew the
+//                     offline cache quota.
+const DOSSIER_LIST_COLUMNS = 'id, candidate_id, generated_at, generated_by, weekly_digest'
+
+export const getDossiers = async (candidateId = null, { list = false } = {}) => {
   const uid = await currentUserId()
+  const columns = list ? DOSSIER_LIST_COLUMNS : '*'
   let query = supabase
     .from('dossiers')
-    .select(`*, candidate:candidates(id, name, party, office:offices(name, district_name))`)
+    .select(`${columns}, candidate:candidates(id, name, party, office:offices(name, district_name))`)
     .order('generated_at', { ascending: false })
   if (candidateId) query = query.eq('candidate_id', candidateId)
   // Ownership (own dossiers + auto-regenerated ones for candidates you own) is
   // enforced by RLS on created_by / candidate ownership — no generated_by filter
   // (that would hide auto-regenerated dossiers, whose generated_by is null).
-  return withOffline(`dossiers:${uid}:${candidateId || 'all'}`, () => query)
+  // Separate cache namespace so a narrow read can never satisfy a full read.
+  return withOffline(`dossiers${list ? ':list' : ''}:${uid}:${candidateId || 'all'}`, () => query)
 }
 
 export const getDossier = async (id) => {

@@ -297,7 +297,6 @@ async function runMethodEnforcement() {
     'admin-set-tier',
     'create-checkout-session',
     'create-portal-session',
-    'buy-dossier-credits',
     'delete-account',
     'volunteer-auth',
     'error-log',
@@ -1075,13 +1074,16 @@ async function runBilling() {
     assertStatus(res.status, 401, 'portal session without auth')
   })
 
-  await test('buy-dossier-credits: no token → 401', async () => {
-    const res = await fnPost('buy-dossier-credits', { pack: 'c5' }, null)
+  // Credit packs are bought through create-checkout-session's `product: 'credits'`
+  // branch — the standalone buy-dossier-credits endpoint was deleted because it
+  // predated (and bypassed) the entitlement gates.
+  await test('credits checkout: no token → 401', async () => {
+    const res = await fnPost('create-checkout-session', { product: 'credits', pack: 'c5' }, null)
     assertStatus(res.status, 401, 'buy credits without auth')
   })
 
-  await test('buy-dossier-credits: invalid pack → 400', async () => {
-    const res = await fnPost('buy-dossier-credits', { pack: 'invalid' }, tokenA)
+  await test('credits checkout: invalid pack → 400', async () => {
+    const res = await fnPost('create-checkout-session', { product: 'credits', pack: 'invalid' }, tokenA)
     assertStatus(res.status, 400, 'invalid pack should be rejected')
   })
 

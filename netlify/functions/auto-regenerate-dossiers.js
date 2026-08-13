@@ -168,10 +168,13 @@ export const handler = async (event) => {
       results.push({ candidate: candidate.name, id: candidate.id, status: success ? 'queued' : `error_${triggerRes.status}`, ageDays: candidate.ageDays })
       console.log(`[auto-regen] ${candidate.name}: ${success ? 'queued ✓' : `failed (HTTP ${triggerRes.status})`}`)
 
-      // Brief pause between triggers to avoid hammering the API
-      if (batch.indexOf(candidate) < batch.length - 1) {
-        await new Promise(r => setTimeout(r, 3000))
-      }
+      // No pause between triggers. generate-dossier-background is a Netlify
+      // `-background` function — the POST above returns 202 as soon as it is
+      // accepted and the actual Opus work runs out-of-band, so there is nothing
+      // to pace here. The old 3s sleep spent up to MAX_REGEN_PER_RUN × 3s
+      // (~60s) of this scheduled function's own execution budget and could get
+      // the run killed part-way through the batch, leaving the tail of the
+      // monitored list silently un-regenerated for the week.
     } catch (e) {
       console.error(`[auto-regen] Failed to trigger regen for ${candidate.name}:`, e.message)
       results.push({ candidate: candidate.name, id: candidate.id, status: 'error', error: e.message })

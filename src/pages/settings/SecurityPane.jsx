@@ -2,7 +2,13 @@
 //
 // Password change keeps the existing re-authenticate-then-update flow: sign in
 // again with the current password (the only way to verify it through the client
-// SDK), then updateUser({ password }). Minimum length is 12 per the spec.
+// SDK), then updateUser({ password }).
+//
+// Minimum length is 8, matching Login.jsx (signup) and ResetPassword.jsx — both
+// of which enforce minLength={8} plus a "Fair or better" strength score. This
+// pane used to demand 12, so a password the user had just been allowed to
+// create at signup was rejected the first time they tried to change it here,
+// with no explanation of why the rules differed. One minimum, everywhere.
 
 import React, { useEffect, useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
@@ -11,7 +17,7 @@ import {
   Card, CardBody, Row, Field, Btn, Pill, Note, Msg, Spinner, StubPill, T,
 } from './shared'
 
-const MIN_PW = 12
+const MIN_PW = 8   // keep in sync with Login.jsx / ResetPassword.jsx minLength
 
 // Actions from the logActivity audit trail that belong on a security screen.
 // Everything else in activity_log is candidate/record bookkeeping.
@@ -108,7 +114,7 @@ export default function SecurityPane({ user }) {
     <>
       <Card
         title="Password"
-        desc="Your password is what stands between this account and the research inside it. Use at least 12 characters you don't use anywhere else."
+        desc={`Your password is what stands between this account and the research inside it. Use at least ${MIN_PW} characters you don't use anywhere else — longer is better.`}
       >
         <CardBody>
           <div className="st-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>

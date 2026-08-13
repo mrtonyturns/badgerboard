@@ -209,23 +209,37 @@ function RecordForm({ candidateId, userId, existing, onSave, onCancel }) {
   }
   const [form, setForm] = useState(existing ? { ...existing } : blank)
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const f = (key) => (e) => setForm(p => ({ ...p, [key]: e.target.value }))
 
   const handleSave = async () => {
     if (!form.title.trim()) return
     setSaving(true)
+    setSaveError('')
+    // An empty date must go in as NULL — '' is not a valid DATE and the insert
+    // is rejected outright.
+    const payload = { ...form, date: form.date || null }
+    let error = null
     if (existing?.id) {
-      await updateIncumbentRecord(existing.id, form)
-      logActivity('update', 'incumbent_record', existing.id, {
-        candidate_id: candidateId, record_title: form.title, record_type: form.record_type,
-      }).catch(() => {})
+      ({ error } = await updateIncumbentRecord(existing.id, payload))
+      if (!error) {
+        logActivity('update', 'incumbent_record', existing.id, {
+          candidate_id: candidateId, record_title: form.title, record_type: form.record_type,
+        }).catch(() => {})
+      }
     } else {
-      await createIncumbentRecord(form)
-      logActivity('create', 'incumbent_record', candidateId, {
-        candidate_id: candidateId, record_title: form.title, record_type: form.record_type, source: 'manual',
-      }).catch(() => {})
+      ({ error } = await createIncumbentRecord(payload))
+      if (!error) {
+        logActivity('create', 'incumbent_record', candidateId, {
+          candidate_id: candidateId, record_title: form.title, record_type: form.record_type, source: 'manual',
+        }).catch(() => {})
+      }
     }
     setSaving(false)
+    if (error) {
+      setSaveError(error.message || 'Could not save this record. Please try again.')
+      return
+    }
     onSave()
   }
 
@@ -280,6 +294,9 @@ function RecordForm({ candidateId, userId, existing, onSave, onCancel }) {
       <Field label="Notes">
         <input style={inputStyle} value={form.notes || ''} onChange={f('notes')} placeholder="Additional context…" />
       </Field>
+      {saveError && (
+        <div style={{ fontSize: 11.5, color: T.redHot }}>{saveError}</div>
+      )}
       <div style={{ display: 'flex', gap: 7, justifyContent: 'flex-end' }}>
         <Btn onClick={onCancel}>Cancel</Btn>
         <Btn kind="primary" onClick={handleSave} disabled={saving || !form.title.trim()}>

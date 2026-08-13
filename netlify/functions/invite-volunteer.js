@@ -142,7 +142,7 @@ async function sendInviteEmail({ name, email, token }) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: 'noreply@badgerboardwi.com',
+      from: 'Badger Board <noreply@noreply.badgerboardwi.com>',   // must match _email.js FROM (verified Resend domain)
       to: email,
       subject: "You've been invited to join a canvassing team on BadgerBoard",
       html,

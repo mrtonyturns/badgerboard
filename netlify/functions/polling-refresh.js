@@ -26,6 +26,18 @@ exports.handler = async (event) => {
     }
   }
 
+  // Without Supabase credentials the query below silently returns [] and the
+  // run reports "queued 0" as if there were simply nothing to refresh. A
+  // misconfigured deployment should be loud.
+  if (!SUPABASE_URL || !SERVICE_KEY) {
+    console.error('[polling-refresh] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not configured')
+    return { statusCode: 503, headers, body: JSON.stringify({ error: 'Supabase is not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing)' }) }
+  }
+  if (!process.env.ADMIN_TRIGGER_SECRET) {
+    console.error('[polling-refresh] ADMIN_TRIGGER_SECRET not configured — the background function would reject every trigger')
+    return { statusCode: 503, headers, body: JSON.stringify({ error: 'ADMIN_TRIGGER_SECRET is not configured' }) }
+  }
+
   const res = await fetch(`${SUPABASE_URL}/rest/v1/poll_snapshots?select=district,generated_at&user_id=eq.00000000-0000-0000-0000-000000000000&order=generated_at.asc&limit=${MAX_PER_RUN}`, {
     headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
   })
@@ -39,7 +51,12 @@ exports.handler = async (event) => {
         body: JSON.stringify({ district: row.district, internal_trigger: process.env.ADMIN_TRIGGER_SECRET }),
       })
       results.push({ district: row.district, status: 'queued' })
-      await new Promise(r => setTimeout(r, 4000))  // pace the pipeline
+      // No sleep between triggers. polling-snapshot-background is a Netlify
+      // `-background` function: the POST above returns 202 the moment it is
+      // accepted and the real work runs out-of-band, so pacing here bought
+      // nothing and spent up to MAX_PER_RUN × 4s of this function's own
+      // (much shorter) execution budget — long runs were being killed
+      // mid-loop, leaving the tail of the list unrefreshed.
     } catch (e) {
       results.push({ district: row.district, status: 'error', error: e.message })
     }

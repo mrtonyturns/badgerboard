@@ -51,6 +51,11 @@ export default function ResetPassword() {
   const [done, setDone]               = useState(false)
   // sessionReady gates the form — stays false until we have a confirmed recovery session
   const [sessionReady, setSessionReady] = useState(false)
+  // Supabase reports a dead/consumed reset link by redirecting back here with an
+  // ERROR in the hash (#error=access_denied&error_code=otp_expired&...). The page
+  // used to ignore that and bounce to /login after a 4s "Verifying your reset
+  // link…" spinner, so an expired link looked like the app was broken.
+  const [linkError, setLinkError] = useState(null)
 
   const pwStrength = useMemo(() => scorePassword(password), [password])
 
@@ -62,6 +67,21 @@ export default function ResetPassword() {
   useEffect(() => {
     const hash = window.location.hash
     const hasRecoveryToken = hash.includes('type=recovery') || hash.includes('access_token')
+
+    // Read the error the mail link came back with, if any. Supabase also uses
+    // the query string in some flows, so check both.
+    const hp = new URLSearchParams(hash.replace(/^#/, ''))
+    const qp = new URLSearchParams(window.location.search)
+    const errCode = hp.get('error_code') || qp.get('error_code')
+    const err     = hp.get('error')      || qp.get('error')
+    if (err || errCode) {
+      const expired = errCode === 'otp_expired' || /expired/i.test(hp.get('error_description') || qp.get('error_description') || '')
+      setLinkError({
+        expired,
+        message: (hp.get('error_description') || qp.get('error_description') || '').replace(/\+/g, ' '),
+      })
+      return
+    }
 
     if (user) {
       // Session already established — show the form immediately
@@ -138,6 +158,23 @@ export default function ResetPassword() {
                 </div>
                 <h2 className="text-xl font-bold text-gray-900 mb-2">Password updated!</h2>
                 <p className="text-sm text-gray-500">Your password has been changed. Redirecting you to the app…</p>
+              </div>
+            ) : linkError ? (
+              <div className="text-center py-4">
+                <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-4">
+                  <AlertCircle className="w-7 h-7 text-amber-600" />
+                </div>
+                <h2 className="text-xl font-bold text-gray-900 mb-2">
+                  {linkError.expired ? 'This reset link has expired' : 'This reset link is no longer valid'}
+                </h2>
+                <p className="text-sm text-gray-500 mb-5">
+                  {linkError.expired
+                    ? 'Password reset links are single-use and time-limited. Request a new one and use the newest email — older links stop working as soon as a new one is sent.'
+                    : (linkError.message || 'The link could not be verified. Request a new password reset email and try again.')}
+                </p>
+                <Link to="/login?reset=1" className="btn-primary inline-flex items-center justify-center">
+                  Request a new link
+                </Link>
               </div>
             ) : !sessionReady ? (
               /* Waiting for Supabase to parse the recovery token from the URL hash */

@@ -575,11 +575,22 @@ export function useDossierSection(dossiers, sectionNums) {
 
 // Haiku-generated snapshot paragraph from the newest dossier. Unchanged from the
 // previous page — same endpoint, same stripping, same auto-fire-once behavior.
-export function useBioSummary(dossiers, candidateName, session) {
+export function useBioSummary(dossiers, candidateName, session, candidateId) {
   const [summary, setSummary] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [triggered, setTriggered] = useState(false)
+
+  // /candidates/:id re-renders this hook in place when the user moves from one
+  // candidate to the next, so the auto-fire-once flag has to be scoped to the
+  // candidate. Without this reset the second candidate kept showing (or kept
+  // erroring with) the first candidate's snapshot and never regenerated.
+  useEffect(() => {
+    setSummary(null)
+    setError(null)
+    setLoading(false)
+    setTriggered(false)
+  }, [candidateId])
 
   const generate = useCallback(async () => {
     if (!dossiers || dossiers.length === 0) return
@@ -632,7 +643,10 @@ export function parseNotesData(raw) {
     } catch { /* fall through to legacy handling */ }
   }
   if (raw && String(raw).trim()) {
-    return { v: 2, notes: [{ id: 'legacy', text: String(raw), ts: null }], files: [] }
+    // ai_access is set explicitly so the UI switch and the server-side filter
+    // (_candidate-context.js, which requires ai_access === true) agree: a
+    // legacy note is private until the user turns AI on for it.
+    return { v: 2, notes: [{ id: 'legacy', text: String(raw), ts: null, ai_access: false }], files: [] }
   }
   return { v: 2, notes: [], files: [] }
 }

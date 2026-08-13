@@ -105,7 +105,15 @@ exports.handler = async (event) => {
   // Use the server-verified email for Stripe lookup — never trust client-supplied email
   const verifiedEmail = user?.email
 
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
+  // Build the Stripe client inside the handler behind an explicit key check
+  // (same pattern as admin-billing.js). Failing closed matters more here than
+  // anywhere else: without Stripe we cannot cancel the subscriptions below, and
+  // deleting the account anyway would leave the customer being billed forever.
+  const stripeKey = process.env.STRIPE_SECRET_KEY
+  if (!stripeKey) {
+    return { statusCode: 503, body: JSON.stringify({ error: 'Stripe is not configured (STRIPE_SECRET_KEY missing)' }) }
+  }
+  const stripe = new Stripe(stripeKey)
 
   try {
     // 1. Cancel EVERY cancellable Stripe subscription before deleting the account.

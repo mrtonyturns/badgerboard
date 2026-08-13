@@ -26,8 +26,9 @@ import { useAuth } from '../contexts/AuthContext'
 import LoadingBar from '../components/LoadingBar'
 import {
   getUserTier, hasFeature, getUserPlanType, getUserBracket,
-  getBracketConfig, getActiveCandidateLimit, ADMIN_EMAILS,
+  getBracketConfig, getActiveCandidateLimit, ADMIN_EMAILS, featureUnlockLabel,
 } from '../lib/tiers'
+import { WebOnlyCta, NATIVE_PLAN_NOTE } from '../components/UpgradeCta'
 import { partyHex, candidateStatusLabel, CANDIDATE_STATUS_HEX } from '../lib/campaignEnums'
 import {
   T, ProfileStyles, Btn, Spinner, TextLink,
@@ -86,7 +87,9 @@ export default function CandidateDetail() {
   const [lastViewed, setLastViewed] = useState(null)
   const viewMarkedRef = useRef(false)
 
-  const bioSummary = useBioSummary(dossiers, candidate?.name, session)
+  // `id` (not candidate?.id) so the auto-fire-once flag resets the instant the
+  // route changes, before the new candidate row has finished loading.
+  const bioSummary = useBioSummary(dossiers, candidate?.name, session, id)
 
   // Counties covered by this candidate's district, from the static places map.
   // Null (and nothing rendered) whenever the office doesn't resolve to an
@@ -434,8 +437,10 @@ export default function CandidateDetail() {
   ) : (
     <div style={{ fontSize: 11, color: T.muted, maxWidth: 260, lineHeight: 1.5 }}>
       <span style={{ fontWeight: 600 }}>Active Monitoring</span> refreshes {candidate.name}&rsquo;s profile every
-      week, free of charge. Available on the Campaign and Agency plans.{' '}
-      <TextLink onClick={() => nav('/plans')} style={{ color: T.red, fontWeight: 600 }}>Upgrade →</TextLink>
+      week, free of charge. Available on the {featureUnlockLabel('weeklyProfile')} plans.{' '}
+      <WebOnlyCta native={NATIVE_PLAN_NOTE}>
+        <TextLink onClick={() => nav('/plans')} style={{ color: T.red, fontWeight: 600 }}>Upgrade →</TextLink>
+      </WebOnlyCta>
     </div>
   )
 

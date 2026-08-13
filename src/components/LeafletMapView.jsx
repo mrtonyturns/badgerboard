@@ -99,13 +99,23 @@ function countBadgeIcon(color, count) {
 
 // Extract bbox centroid [lat, lng] from a GeoJSON geometry
 function bboxCentroid(geometry) {
+  // Null/degenerate geometry is a real possibility in the bundled GeoJSON — a
+  // feature with `"geometry": null` used to throw here and abort the caller's
+  // whole forEach, silently wiping every centroid instead of skipping one.
+  if (!geometry || !Array.isArray(geometry.coordinates)) return null
   let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity
-  const processRing = (ring) => ring.forEach(([lng, lat]) => {
-    if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat
-    if (lng < minLng) minLng = lng; if (lng > maxLng) maxLng = lng
-  })
+  const processRing = (ring) => {
+    if (!Array.isArray(ring)) return
+    ring.forEach((pt) => {
+      if (!Array.isArray(pt)) return
+      const [lng, lat] = pt
+      if (typeof lat !== 'number' || typeof lng !== 'number') return
+      if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat
+      if (lng < minLng) minLng = lng; if (lng > maxLng) maxLng = lng
+    })
+  }
   if (geometry.type === 'Polygon') geometry.coordinates.forEach(processRing)
-  else if (geometry.type === 'MultiPolygon') geometry.coordinates.forEach(p => p.forEach(processRing))
+  else if (geometry.type === 'MultiPolygon') geometry.coordinates.forEach(p => Array.isArray(p) && p.forEach(processRing))
   return isFinite(minLat) ? [(minLat + maxLat) / 2, (minLng + maxLng) / 2] : null
 }
 
@@ -280,12 +290,16 @@ export default function LeafletMapView({
       .then(data => {
         const centroids = {}
         ;(data.features || []).forEach(f => {
-          const rawName = (f.properties?.NAME || f.properties?.name || '')
-          if (!rawName) return
-          const c = bboxCentroid(f.geometry)
-          if (!c) return
-          const normName = rawName.replace(/ (city|village|town|township|borough|cdp)$/i, '').trim().toLowerCase()
-          centroids[normName] = c
+          // Per-feature guard: one malformed feature skips itself instead of
+          // throwing out of the forEach and losing every centroid to .catch().
+          try {
+            const rawName = (f?.properties?.NAME || f?.properties?.name || '')
+            if (!rawName) return
+            const c = bboxCentroid(f?.geometry)
+            if (!c) return
+            const normName = rawName.replace(/ (city|village|town|township|borough|cdp)$/i, '').trim().toLowerCase()
+            centroids[normName] = c
+          } catch (_) { /* skip this feature */ }
         })
         citycentroidsRef.current = centroids
       })
