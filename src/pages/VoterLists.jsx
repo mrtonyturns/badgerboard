@@ -86,7 +86,15 @@ function parseCSV(text) {
   return records.slice(1).filter(r => r.some(c => c && c.trim())).map(rawCols => {
     const cols = rawCols.map(c => c.trim())
     const row = {}
-    headers.forEach((h, i) => { row[h] = cols[i] || '' })
+    headers.forEach((h, i) => {
+      const v = cols[i] || ''
+      row[h] = v
+      // Space/underscore-insensitive alias: "First Name", "first_name" and
+      // "FirstName" all land on 'firstname' (live-QA fix: spaced headers
+      // previously lost every name field).
+      const compact = h.replace(/[^a-z0-9]/g, '')
+      if (!(compact in row)) row[compact] = v
+    })
 
     // Sub-municipal district columns the WEC "Badger Voters"/WisVote export
     // carries (County Supervisory District, Aldermanic District, School
