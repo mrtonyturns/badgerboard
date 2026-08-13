@@ -276,5 +276,19 @@ console.log('C1 — buildProspectCsv')
   t('filename is date-stamped and safe', /^badger_prospects_\d{4}-\d{2}-\d{2}\.csv$/.test(csvFilename('badger prospects', new Date('2026-08-12T00:00:00Z'))))
 }
 
+
+// ── Apollo-style confidence bands (owner decision #3) ────────────────────────
+{
+  const { confidenceBand, buildProspectCsv } = await import('../src/lib/prospectCsv.js')
+  t('band: >=85 is Verified', confidenceBand(85) === 'Verified' && confidenceBand(100) === 'Verified')
+  t('band: 60-84 is Likely', confidenceBand(60) === 'Likely' && confidenceBand(84) === 'Likely')
+  t('band: <60 is Unconfirmed', confidenceBand(59) === 'Unconfirmed' && confidenceBand(0) === 'Unconfirmed')
+  t('band: null/garbage is empty', confidenceBand(null) === '' && confidenceBand('x') === '')
+  const csv = buildProspectCsv([{ name: 'A', contact: { emails: [{ value: 'a@b.c', source: 's', confidence: 62 }], phones: [{ value: '555', source: 's', confidence: 90 }] } }])
+  t('CSV carries band columns and vocabulary round-trips',
+    csv.includes('Email confidence band') && csv.includes('Phone confidence band') &&
+    csv.includes('Likely') && csv.includes('Verified'))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

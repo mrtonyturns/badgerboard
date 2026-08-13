@@ -41,10 +41,17 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.29.0'
+const APP_VERSION = 'v1.29.1'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.29.1',
+    date: 'August 12, 2026',
+    changes: [
+      'Prospecting contacts became one-tap actions: Call and Email buttons with Verified / Likely / Unconfirmed confidence labels, a multiple-numbers popover with per-number provenance, tap-to-dial on mobile and copy-to-clipboard on desktop',
+    ],
+  },
   {
     version: 'v1.29.0',
     date: 'August 12, 2026',

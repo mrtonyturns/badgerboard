@@ -40,6 +40,20 @@ export function factorSummary(row) {
     .join(' · ')
 }
 
+
+/**
+ * Apollo-style qualitative confidence bands (owner decision #3). One source of
+ * truth for the UI pills AND the CSV, so the vocabulary round-trips:
+ *   >= 85  Verified · >= 60  Likely · otherwise  Unconfirmed
+ */
+export const confidenceBand = (c) => {
+  if (c == null || Number.isNaN(Number(c))) return ''
+  const n = Number(c)
+  if (n >= 85) return 'Verified'
+  if (n >= 60) return 'Likely'
+  return 'Unconfirmed'
+}
+
 const listContacts = (items) => (Array.isArray(items) ? items : [])
   .map(i => (i && typeof i === 'object' ? i.value : i))
   .filter(Boolean)
@@ -47,7 +61,7 @@ const listContacts = (items) => (Array.isArray(items) ? items : [])
 
 const listContactSources = (items) => (Array.isArray(items) ? items : [])
   .filter(i => i && typeof i === 'object' && i.value)
-  .map(i => `${i.value} (${i.source || 'unknown'}${i.confidence != null ? `, ${i.confidence}%` : ''})`)
+  .map(i => `${i.value} (${confidenceBand(i.confidence) || 'Unconfirmed'}${i.confidence != null ? ` ${i.confidence}%` : ''}, ${i.source || 'unknown'})`)
   .join('; ')
 
 /**
@@ -85,7 +99,15 @@ export const COLUMNS = [
   ['Agency evidence',     r => (Array.isArray(agencyOf(r).evidence) ? agencyOf(r).evidence : [])
     .map(e => `${e.type}: ${e.detail}${e.url ? ` (${e.url})` : ''}`).join(' | ')],
   ['Emails',              r => listContacts(contactOf(r).emails)],
+  ['Email confidence band', r => {
+    const best = (contactOf(r).emails || []).filter(Boolean).sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0]
+    return best ? confidenceBand(best.confidence) : ''
+  }],
   ['Email sources',       r => listContactSources(contactOf(r).emails)],
+  ['Phone confidence band', r => {
+    const best = (contactOf(r).phones || []).filter(Boolean).sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0]
+    return best ? confidenceBand(best.confidence) : ''
+  }],
   ['Phones',              r => listContacts(contactOf(r).phones)],
   ['Phone sources',       r => listContactSources(contactOf(r).phones)],
   ['Contact source',      r => contactOf(r).source],

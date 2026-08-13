@@ -30,7 +30,7 @@ import {
   Search, Plus, Download, X, AlertCircle, Upload, Globe,
   RefreshCw, ExternalLink, ShieldAlert, ShieldCheck, ListChecks, Trash2,
   Sparkles, Mail, Phone, UserPlus, ArrowUp, ArrowDown, Info, Facebook,
-  Instagram, Linkedin, Twitter, Music2,
+  Instagram, Linkedin, Twitter, Music2, Copy, ChevronDown,
 } from 'lucide-react'
 import {
   getCandidates, getElections, createCandidate, createProspectingList, supabase,
@@ -39,7 +39,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { getUserTier, hasFeature } from '../lib/tiers'
 import UpgradePrompt from '../components/UpgradePrompt'
 import { parseCsvRows } from '../lib/csv'
-import { buildProspectCsv, csvFilename, factorSummary } from '../lib/prospectCsv'
+import { buildProspectCsv, confidenceBand, csvFilename, factorSummary } from '../lib/prospectCsv'
 import { T, cardStyle, Btn, Pill, Spinner, EmptyNote } from './profiler/shared.jsx'
 
 // Must match MAX_PROSPECTS_PER_RUN in enrich-prospects-background.js. The server
@@ -294,27 +294,155 @@ function AgencyCell({ row }) {
   )
 }
 
+// ── Contact cell — Call / Email action pills (owner-approved spec) ───────────
+// Decisions applied: desktop Call is PLAIN COPY ONLY (no tel: attempt — owner
+// decision #2); confidence uses Apollo-style bands over the raw % (decision
+// #3): >=85 Verified, >=60 Likely, else Unconfirmed (thresholds live in
+// lib/prospectCsv.js so the CSV round-trips the same vocabulary).
+const IS_TOUCH_DEVICE = typeof navigator !== 'undefined' &&
+  /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '')
+
+// E.164 at RENDER time only — the stored raw value keeps its provenance.
+function telHref(raw) {
+  const d = String(raw || '').replace(/[^0-9+]/g, '')
+  if (d.startsWith('+')) return `tel:${d}`
+  const digits = d.replace(/\D/g, '')
+  if (digits.length === 10) return `tel:+1${digits}`
+  if (digits.length === 11 && digits.startsWith('1')) return `tel:+${digits}`
+  return null
+}
+const bestOf = (items) => [...items].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0]
+
+function BandPill({ confidence }) {
+  const band = confidenceBand(confidence)
+  if (!band) return null
+  return (
+    <span style={{
+      fontSize: 10, fontWeight: 700, color: T.ink4, background: T.chip,
+      borderRadius: 99, padding: '1px 7px', whiteSpace: 'nowrap',
+    }}>{band}{confidence != null ? ` · ${confidence}%` : ''}</span>
+  )
+}
+
+function useCopied() {
+  const [copied, setCopied] = useState(null)
+  const copy = async (value) => {
+    try { await navigator.clipboard.writeText(String(value)) } catch { /* best effort */ }
+    setCopied(String(value))
+    setTimeout(() => setCopied(null), 1500)
+  }
+  return [copied, copy]
+}
+
+const actionPillStyle = {
+  display: 'inline-flex', alignItems: 'center', gap: 5, border: `1px solid ${T.border}`,
+  background: '#fff', borderRadius: 99, padding: '4px 10px', fontSize: 11.5,
+  fontWeight: 600, color: T.ink2, textDecoration: 'none', cursor: 'pointer',
+  whiteSpace: 'nowrap', fontFamily: 'inherit',
+}
+
 function ContactCell({ row }) {
   const c = row.contact || {}
-  const emails = Array.isArray(c.emails) ? c.emails : []
-  const phones = Array.isArray(c.phones) ? c.phones : []
+  const emails = (Array.isArray(c.emails) ? c.emails : []).filter(e => e && e.value)
+  const phones = (Array.isArray(c.phones) ? c.phones : []).filter(p => p && p.value)
+  const [open, setOpen] = useState(null)      // 'phones' | 'emails' | null
+  const [copied, copy] = useCopied()
   if (!emails.length && !phones.length) return <span style={{ color: T.faint, fontSize: 12 }}>—</span>
+
+  const bestPhone = phones.length ? bestOf(phones) : null
+  const bestEmail = emails.length ? bestOf(emails) : null
+
+  const popRow = (item, kind) => {
+    const href = kind === 'phone' ? telHref(item.value) : `mailto:${item.value}`
+    const actAsLink = kind === 'email' || (IS_TOUCH_DEVICE && href)
+    return (
+      <div key={item.value} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 0', borderBottom: `1px solid ${T.border}` }}>
+        {actAsLink ? (
+          <a href={href} aria-label={`${kind === 'phone' ? 'Call' : 'Email'} ${row.name} at ${item.value}, ${confidenceBand(item.confidence)} ${item.confidence ?? 0}% confidence, source ${item.source || 'unknown'}`}
+            style={{ fontSize: 12, color: T.ink1, textDecoration: 'none', fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</a>
+        ) : (
+          <button onClick={() => copy(item.value)} aria-label={`Copy ${item.value}`}
+            style={{ background: 'none', border: 'none', padding: 0, fontSize: 12, color: T.ink1, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</button>
+        )}
+        <BandPill confidence={item.confidence} />
+        <span style={{ fontSize: 10, color: T.faint }}>{(item.source || '').replace(/_/g, ' ')}</span>
+        {item.source_url && (
+          <a href={item.source_url} target="_blank" rel="noreferrer" aria-label="Evidence source" style={{ color: T.faint, display: 'inline-flex' }}>
+            <ExternalLink style={{ width: 11, height: 11 }} />
+          </a>
+        )}
+        <button onClick={() => copy(item.value)} aria-label={`Copy ${item.value}`}
+          style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: copied === String(item.value) ? T.green : T.faint, display: 'inline-flex', marginLeft: 'auto' }}>
+          <Copy style={{ width: 12, height: 12 }} />
+        </button>
+      </div>
+    )
+  }
+
+  const callLabel = phones.length > 1 ? 'Call' : 'Call'
+  const callAria = bestPhone
+    ? `Call ${row.name} at ${bestPhone.value}, ${confidenceBand(bestPhone.confidence)} ${bestPhone.confidence ?? 0}% confidence, source ${bestPhone.source || 'unknown'}`
+    : ''
+
   return (
-    <div style={{ display: 'grid', gap: 3 }}>
-      {emails.slice(0, 2).map(e => (
-        <div key={e.value} style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
-          <Mail style={{ width: 11, height: 11, color: T.faint, flex: 'none' }} />
-          <a href={`mailto:${e.value}`} style={{ fontSize: 11.5, color: T.ink2, textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.value}</a>
-          <Pill c={T.ink4} bg={T.chip} style={{ fontSize: 10 }}>{(e.source || '').replace(/_/g, ' ')} {e.confidence ?? 0}%</Pill>
-        </div>
-      ))}
-      {phones.slice(0, 1).map(p => (
-        <div key={p.value} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <Phone style={{ width: 11, height: 11, color: T.faint, flex: 'none' }} />
-          <span style={{ fontSize: 11.5, color: T.ink2 }}>{p.value}</span>
-          <Pill c={T.ink4} bg={T.chip} style={{ fontSize: 10 }}>{(p.source || '').replace(/_/g, ' ')} {p.confidence ?? 0}%</Pill>
-        </div>
-      ))}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', position: 'relative' }}>
+      {bestPhone && (
+        phones.length > 1 ? (
+          <button
+            onClick={() => setOpen(open === 'phones' ? null : 'phones')}
+            aria-haspopup="true" aria-expanded={open === 'phones'} aria-label={`${callAria}; multiple numbers`}
+            style={actionPillStyle}
+          >
+            <Phone style={{ width: 12, height: 12, color: T.ink4 }} />
+            {callLabel}
+            <ChevronDown style={{ width: 11, height: 11, color: T.faint }} />
+            <span style={{ fontSize: 10, fontWeight: 700, color: T.amber }}>multiple numbers</span>
+          </button>
+        ) : IS_TOUCH_DEVICE && telHref(bestPhone.value) ? (
+          <a href={telHref(bestPhone.value)} aria-label={callAria} style={actionPillStyle}>
+            <Phone style={{ width: 12, height: 12, color: T.ink4 }} />
+            Call
+            <BandPill confidence={bestPhone.confidence} />
+          </a>
+        ) : (
+          // Desktop: PLAIN COPY ONLY (owner decision #2) — no tel: attempt.
+          <button onClick={() => copy(bestPhone.value)} aria-label={`Copy ${row.name}'s number ${bestPhone.value}`} style={actionPillStyle}>
+            <Phone style={{ width: 12, height: 12, color: T.ink4 }} />
+            {copied === String(bestPhone.value) ? `Copied ${bestPhone.value}` : 'Call'}
+            <BandPill confidence={bestPhone.confidence} />
+          </button>
+        )
+      )}
+      {bestEmail && (
+        emails.length > 1 ? (
+          <button
+            onClick={() => setOpen(open === 'emails' ? null : 'emails')}
+            aria-haspopup="true" aria-expanded={open === 'emails'} aria-label={`Email ${row.name}; multiple addresses`}
+            style={actionPillStyle}
+          >
+            <Mail style={{ width: 12, height: 12, color: T.ink4 }} />
+            Email
+            <ChevronDown style={{ width: 11, height: 11, color: T.faint }} />
+            <span style={{ fontSize: 10, fontWeight: 700, color: T.amber }}>multiple</span>
+          </button>
+        ) : (
+          <a href={`mailto:${bestEmail.value}`}
+            aria-label={`Email ${row.name} at ${bestEmail.value}, ${confidenceBand(bestEmail.confidence)} ${bestEmail.confidence ?? 0}% confidence, source ${bestEmail.source || 'unknown'}`}
+            style={actionPillStyle}>
+            <Mail style={{ width: 12, height: 12, color: T.ink4 }} />
+            Email
+            <BandPill confidence={bestEmail.confidence} />
+          </a>
+        )
+      )}
+      <Popover open={open === 'phones'} onClose={() => setOpen(null)} width={320}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: T.ink4, letterSpacing: .4, marginBottom: 6 }}>PHONE NUMBERS</div>
+        {phones.map(p => popRow(p, 'phone'))}
+      </Popover>
+      <Popover open={open === 'emails'} onClose={() => setOpen(null)} width={320}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: T.ink4, letterSpacing: .4, marginBottom: 6 }}>EMAIL ADDRESSES</div>
+        {emails.map(e => popRow(e, 'email'))}
+      </Popover>
     </div>
   )
 }
