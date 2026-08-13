@@ -17,17 +17,20 @@ import {
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import SearchableSelect from '../components/SearchableSelect'
+import { partyGroup } from '../lib/party'
 
 // ── Party colours ─────────────────────────────────────────────────────────────
+// Keyed by partyGroup() — election_results carries both 'Democrat' and
+// 'Democratic', and a raw string key silently dropped one of them to gray.
 const PARTY = {
-  Democrat:    { bar: 'bg-blue-600',   badge: 'bg-blue-100 text-blue-800',    text: 'text-blue-700'  },
-  Republican:  { bar: 'bg-red-600',    badge: 'bg-red-100 text-brand-red',     text: 'text-brand-red' },
-  Independent: { bar: 'bg-purple-600', badge: 'bg-purple-100 text-purple-800', text: 'text-purple-700'},
-  Libertarian: { bar: 'bg-amber-600',  badge: 'bg-amber-100 text-amber-800',   text: 'text-amber-700' },
-  Nonpartisan: { bar: 'bg-gray-500',   badge: 'bg-gray-100 text-gray-700',     text: 'text-gray-600'  },
-  Green:       { bar: 'bg-green-600',  badge: 'bg-green-100 text-green-800',   text: 'text-green-700' },
+  D: { bar: 'bg-blue-600',   badge: 'bg-blue-100 text-blue-800',    text: 'text-blue-700'  },
+  R: { bar: 'bg-red-600',    badge: 'bg-red-100 text-brand-red',     text: 'text-brand-red' },
+  I: { bar: 'bg-purple-600', badge: 'bg-purple-100 text-purple-800', text: 'text-purple-700'},
+  L: { bar: 'bg-amber-600',  badge: 'bg-amber-100 text-amber-800',   text: 'text-amber-700' },
+  N: { bar: 'bg-gray-500',   badge: 'bg-gray-100 text-gray-700',     text: 'text-gray-600'  },
+  G: { bar: 'bg-green-600',  badge: 'bg-green-100 text-green-800',   text: 'text-green-700' },
 }
-const partyStyle = (p) => PARTY[p] || PARTY.Nonpartisan
+const partyStyle = (p) => PARTY[partyGroup(p)] || PARTY.N
 
 // Full-ballot office types. The first five are the groups a Wisconsin partisan
 // ballot actually produces and they render in ballot order; the rest are legacy

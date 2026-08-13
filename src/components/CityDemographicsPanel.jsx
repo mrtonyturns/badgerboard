@@ -7,6 +7,7 @@ import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { X, Users, ChevronRight } from 'lucide-react'
 import { loadPlaceDemographics, placeKey, fmtNum, fmtMoney, fmtPct, displayName, placePath } from '../lib/placeDemographics'
+import { partyGroup } from '../lib/party'
 
 /**
  * usePlaceLookup(info) — resolves a clicked municipal-district info object
@@ -36,13 +37,14 @@ export function usePlaceLookup(info) {
   return state
 }
 
+// Keyed by partyGroup() so 'Democrat', 'Democratic' and 'DEM' share a dot color.
 const PARTY_COLOR = {
-  Republican:  '#dc2626',
-  Democrat:    '#2563eb',
-  Independent: '#7c3aed',
-  Libertarian: '#f97316',
-  Green:       '#16a34a',
-  Nonpartisan: '#6b7280',
+  R: '#dc2626',
+  D: '#2563eb',
+  I: '#7c3aed',
+  L: '#f97316',
+  G: '#16a34a',
+  N: '#6b7280',
 }
 
 const STAT_FIELDS = [
@@ -158,7 +160,7 @@ export default function CityDemographicsPanel({ place, loading, onClose, panelOf
                       padding: '6px 8px', display: 'flex', alignItems: 'center', gap: 8,
                       background: idx % 2 === 0 ? 'white' : '#fafafa', borderRadius: 8, cursor: 'pointer',
                     }}>
-                    <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: PARTY_COLOR[c.party] || '#6b7280' }} />
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: PARTY_COLOR[partyGroup(c.party)] || '#6b7280' }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 12.5, fontWeight: 600, color: '#111', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {c.name}

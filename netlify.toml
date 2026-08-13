@@ -63,6 +63,13 @@
 [functions."trial-expiry"]
   schedule = "0 14 * * *"
 
+# 12-month retention purge of Recruit research fields (affiliation_*, notoriety,
+# sentiment, evidence, research_summary) — Tuesday 08:00 UTC, deliberately on a
+# different day from the Monday AI/email crons so a slow purge never competes
+# with them. Promised by the footer of 20260812000011_recruitment.sql.
+[functions."recruit-retention-purge"]
+  schedule = "0 8 * * 2"
+
 # Live election results poller (Phases 2-3). The cron fires every 5 minutes,
 # every day; the function itself decides whether the invocation falls inside one
 # of the Central-time election-night windows and exits immediately (no DB call,

@@ -20,6 +20,7 @@
 //   update_precincts { contest_id, rptg, total }
 //   set_status       { contest_id, status, source }   admin override
 //   reset_status_auto{ contest_id }                   hand the contest back to the engine
+//   advance_unopposed{ election_id, dry_run? }        call every uncontested race at once
 //
 // ─── Determination engine wiring (Phase 1) ──────────────────────────────────
 // After any mutation that changes a contest's vote or precinct picture
@@ -44,7 +45,7 @@
 const { cors, json, serviceClient, requireAdmin } = require('./_shared')
 const { determineStatus, ALLOWED_STATUSES } = require('./_determination')
 const { notifyContestChanges, sendStatusUpdateNow } = require('./_result-notify')
-const { callEmbargoActive } = require('./election-results-poller')
+const { callEmbargoActive, ctParts } = require('./election-results-poller')
 
 // Column whitelists — never pass client objects straight to the DB
 const ELECTION_FIELDS = ['name', 'election_date', 'filing_deadline', 'type', 'year', 'notes']
@@ -261,6 +262,7 @@ const LOG_SHAPE = {
   update_precincts:  { contests: 1, results: 0 },
   set_status:        { contests: 1, results: 0 },
   reset_status_auto: { contests: 1, results: 0 },
+  advance_unopposed: { contests: 0, results: 0 },   // real counts filled in below
 }
 
 exports.handler = async (event) => {
@@ -293,7 +295,17 @@ exports.handler = async (event) => {
     if (res.statusCode !== 200) {
       try { err = JSON.parse(res.body).error } catch { err = `HTTP ${res.statusCode}` }
     }
-    await logAdminAction(sb, action, { ...LOG_SHAPE[action], startedAt, error: err })
+    const shape = { ...LOG_SHAPE[action] }
+    // advance_unopposed touches a variable number of rows — read the real
+    // counts off the response so the audit line means something.
+    if (action === 'advance_unopposed' && res.statusCode === 200) {
+      try {
+        const d = JSON.parse(res.body).data
+        shape.contests = d?.advanced ?? 0
+        shape.results  = d?.advanced ?? 0
+      } catch {}
+    }
+    await logAdminAction(sb, action, { ...shape, startedAt, error: err })
   }
 
   return res
@@ -464,6 +476,109 @@ async function route(sb, action, params, headers, event) {
       const determination = await runDetermination(sb, contest_id, { force: true })
       await notifyRace(sb, contest_id, 'reset_status_auto')
       return json(200, { data: { status_source: 'auto', determination } })
+    }
+
+    // ── Sweep the races nobody ran against ────────────────────────────────
+    // An unopposed contest never produces returns worth reporting, so the
+    // poller leaves it 'waiting' forever and the board shows a race that looks
+    // unresolved months after the fact (164 of them sat like that after the
+    // 11 Aug 2026 primary). Reality is that the sole candidate advanced the
+    // moment the polls closed. This is the one-shot cleanup: for every contest
+    // in an election that is still 'waiting' after election day AND has exactly
+    // one candidate row, mark that candidate a winner and call the contest.
+    //
+    //   winner   = true   — they did in fact advance
+    //   declared = false  — nobody DECLARED anything; there was no call to make
+    //
+    // status_source is pinned to 'admin' so the determination engine (which
+    // reads zero votes and correctly says 'waiting') does not undo it on the
+    // next pass.
+    //
+    // NOTE: notifyRace is deliberately NOT fired. Race subscribers signed up
+    // for election-night movement; nobody wants a "winner declared" email for
+    // an uncontested primary they already knew the answer to, least of all in a
+    // 164-message batch weeks later.
+    case 'advance_unopposed': {
+      const { election_id, dry_run } = params
+      if (!isUuid(election_id)) return json(400, { error: 'Invalid election_id' })
+
+      const { data: election, error: eErr } = await sb
+        .from('elections').select('id, name, election_date').eq('id', election_id).single()
+      if (eErr || !election) return json(404, { error: 'Election not found' })
+
+      // "Election day has passed" in Central time — the same clock the poller
+      // and the results board use. Strictly before today, so nothing advances
+      // while the polls are still open.
+      const todayCT = ctParts().date
+      if (!election.election_date || String(election.election_date) >= todayCT) {
+        return json(400, { error: 'Election day has not passed yet — nothing to advance' })
+      }
+
+      const { data: waiting, error: cErr } = await sb
+        .from('election_contests')
+        .select('id, office, district, county')
+        .eq('election_id', election_id)
+        .eq('status', 'waiting')
+      if (cErr) return json(500, { error: cErr.message })
+      if (!waiting?.length) return json(200, { data: { advanced: 0, contests: [] } })
+
+      const { data: results, error: rErr } = await sb
+        .from('election_results')
+        .select('id, contest_id, candidate_name')
+        .in('contest_id', waiting.map(c => c.id))
+      if (rErr) return json(500, { error: rErr.message })
+
+      // Exactly one candidate row = unopposed. Zero rows means we simply have
+      // no data yet, which is not the same thing and must not be called.
+      const byContest = new Map()
+      for (const r of results || []) {
+        if (!byContest.has(r.contest_id)) byContest.set(r.contest_id, [])
+        byContest.get(r.contest_id).push(r)
+      }
+      const unopposed = waiting
+        .map(c => ({ contest: c, rows: byContest.get(c.id) || [] }))
+        .filter(x => x.rows.length === 1)
+
+      if (!unopposed.length) return json(200, { data: { advanced: 0, contests: [] } })
+
+      const preview = unopposed.map(x => ({
+        contest_id: x.contest.id,
+        office: x.contest.office,
+        district: x.contest.district,
+        county: x.contest.county,
+        candidate_name: x.rows[0].candidate_name,
+      }))
+
+      if (dry_run === true) {
+        return json(200, { data: { advanced: 0, dry_run: true, would_advance: preview.length, contests: preview } })
+      }
+
+      const now = new Date().toISOString()
+      const resultIds  = unopposed.map(x => x.rows[0].id)
+      const contestIds = unopposed.map(x => x.contest.id)
+
+      const { error: wErr } = await sb.from('election_results')
+        .update({ winner: true, declared: false }).in('id', resultIds)
+      if (wErr) return json(500, { error: wErr.message })
+
+      const { data: updated, error: sErr } = await sb.from('election_contests')
+        .update({
+          status: 'called',
+          status_source: 'admin',
+          status_updated_at: now,
+          status_detail: {
+            reason: 'Unopposed — advanced automatically after election day.',
+            computed_at: now,
+            source: 'admin',
+          },
+        })
+        .in('id', contestIds)
+        .select('id')
+      if (sErr) return json(500, { error: sErr.message })
+
+      const advanced = updated?.length || 0
+      console.log(`[admin-elections] advance_unopposed: ${advanced} uncontested race(s) advanced for "${election.name}" (${election.election_date}); no subscriber emails sent`)
+      return json(200, { data: { advanced, contests: preview } })
     }
 
     // ── Manually trigger the scheduled poller (scheduled functions are not

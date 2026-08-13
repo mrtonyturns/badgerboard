@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react'
 import { format } from 'date-fns'
 import {
-  Users, Upload, Download, MapPin, Search, Trash2, Plus,
-  X, Check, ChevronDown, ChevronUp, List, Map as MapIcon,
-  FileText, Filter, FolderPlus, Tag, BarChart2, ChevronRight,
+  Users, Upload, Download, MapPin, Search, Trash2,
+  X, List, Map as MapIcon,
+  FileText, FolderPlus, BarChart2, ChevronRight,
   AlertTriangle,
 } from 'lucide-react'
+import { partyAbbrev, partyBadgeClasses, partyMapHex } from '../lib/party'
 
 // ─── Vote history dot trail ───────────────────────────────────────────────────
 // NOTE: This displays simulated/placeholder data. Integrate a real voter file
@@ -189,7 +190,7 @@ function VoterMapView({ voters, savedLists, onAddToList }) {
         className: '',
         html: `<div style="
           width:10px;height:10px;border-radius:50%;
-          background:${voter.party === 'Republican' ? '#dc2626' : voter.party === 'Democrat' ? '#2563eb' : '#6b7280'};
+          background:${partyMapHex(voter.party)};
           border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,.4);
           transition:all .15s;cursor:pointer;
         " class="voter-pin"></div>`,
@@ -802,11 +803,7 @@ export default function VoterLists() {
                           <td className="py-2 pr-3 text-gray-600 whitespace-nowrap">{v.city || '—'}</td>
                           <td className="py-2 pr-3">
                             {v.party ? (
-                              <span className={`px-1.5 py-0.5 rounded-full font-medium text-xs ${
-                                v.party.toLowerCase().startsWith('r') ? 'bg-red-100 text-red-700' :
-                                v.party.toLowerCase().startsWith('d') ? 'bg-blue-100 text-blue-700' :
-                                'bg-gray-100 text-gray-600'
-                              }`}>{v.party.charAt(0).toUpperCase()}</span>
+                              <span className={`px-1.5 py-0.5 rounded-full font-medium text-xs ${partyBadgeClasses(v.party)}`}>{partyAbbrev(v.party)}</span>
                             ) : '—'}
                           </td>
                           <td className="py-2 pr-3">

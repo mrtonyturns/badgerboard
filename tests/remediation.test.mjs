@@ -1706,6 +1706,51 @@ console.log('Phases 2-3 — election-results-poller window decision')
   t('a one-time price falls back to monthly', billingPeriodFromPrice({}) === 'monthly' && billingPeriodFromPrice(null) === 'monthly')
 }
 
+// ── Party vocabulary — one normalizer for every spelling ─────────────────────
+// The AD77 "+R" bug (Aug 12 2026): election_results carried BOTH 'Democrat' and
+// 'Democratic' while call sites compared strictly against 'Democrat', so
+// Democratic votes counted as zero and deep-blue districts painted red.
+// partyGroup() is now the single vocabulary — and the CJS copy used by the
+// Netlify functions must agree with the ESM one exactly.
+{
+  console.log('Party vocabulary — src/lib/party.js + netlify/functions/_party.js')
+  const {
+    partyGroup, isDem, isRep, partyAbbrev, partyColorHex, partyMapHex, partyBadgeClasses,
+  } = await import('../src/lib/party.js')
+  const cjs = require('../netlify/functions/_party.js')
+
+  t("'Democrat' and 'Democratic' are the same party",
+    partyGroup('Democrat') === 'D' && partyGroup('Democratic') === 'D')
+  t('DEM / dem / d normalize to D',
+    ['DEM', 'dem', 'd', 'D', 'Democratic Party', ' democrat '].every(v => partyGroup(v) === 'D'))
+  t('Republican / GOP / REP / rep normalize to R',
+    ['Republican', 'GOP', 'gop', 'REP', 'rep', 'R'].every(v => partyGroup(v) === 'R'))
+  t('Nonpartisan → N; null, undefined, empty and unknown → O',
+    partyGroup('Nonpartisan') === 'N' && partyGroup(null) === 'O' &&
+    partyGroup(undefined) === 'O' && partyGroup('') === 'O' && partyGroup('Pirate') === 'O')
+  t('isDem / isRep follow the family, never the spelling',
+    isDem('Democratic') && isDem('DEM') && !isDem('Republican') &&
+    isRep('GOP') && isRep('rep') && !isRep('Democrat') && !isDem(null) && !isRep(null))
+  t('both Democrat spellings share one color, map dot and badge',
+    partyColorHex('Democrat') === partyColorHex('Democratic') &&
+    partyMapHex('Democrat') === partyMapHex('Democratic') &&
+    partyBadgeClasses('Democrat') === partyBadgeClasses('Democratic'))
+  t('abbrev is the family letter, with ? for nothing at all',
+    partyAbbrev('Democratic') === 'D' && partyAbbrev('GOP') === 'R' &&
+    partyAbbrev('Nonpartisan') === 'N' && partyAbbrev(null) === '?')
+
+  const VOCAB = [
+    'Democrat', 'Democratic', 'DEM', 'dem', 'Republican', 'GOP', 'REP', 'rep',
+    'Nonpartisan', 'Independent', 'Libertarian', 'Green', 'Pirate', '', null, undefined,
+  ]
+  t('the CJS mirror agrees with the ESM helper on every spelling',
+    VOCAB.every(v =>
+      cjs.partyGroup(v) === partyGroup(v) &&
+      cjs.partyAbbrev(v) === partyAbbrev(v) &&
+      cjs.partyColorHex(v) === partyColorHex(v) &&
+      cjs.isDem(v) === isDem(v) && cjs.isRep(v) === isRep(v)))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
 

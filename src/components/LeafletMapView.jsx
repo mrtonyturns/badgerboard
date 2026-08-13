@@ -10,6 +10,7 @@ import {
   WI_ASSEMBLY_CENTROIDS,
 } from '../lib/wiDistricts'
 import { loadPlaceDemographics, placeKey, displayName, fmtNum, fmtMoney, fmtPct } from '../lib/placeDemographics'
+import { partyMapHex } from '../lib/party'
 
 // Alias to the centroid maps — all values computed from the real GeoJSON boundary files
 const WI_COUNTY_COORDS  = WI_COUNTY_CENTROIDS
@@ -63,12 +64,8 @@ function getOfficeFallbackCoords(office, index) {
   return null
 }
 
-const partyColor = (p) => {
-  if (p === 'Republican')  return '#dc2626'
-  if (p === 'Democrat')    return '#2563eb'
-  if (p === 'Independent') return '#7c3aed'
-  return '#6b7280'
-}
+// Dot colors come from lib/party.js — every party spelling maps to one hex.
+const partyColor = (p) => partyMapHex(p)
 
 const levelColor = (l) => {
   if (l === 'federal')   return '#1d4ed8'
@@ -659,7 +656,8 @@ export default function LeafletMapView({
   const isOfficeMode = !!(offices && offices.length > 0)
   const legend = isOfficeMode
     ? [['Federal','#1d4ed8'],['State','#dc2626'],['County','#7c3aed'],['Municipal','#16a34a']]
-    : [['Republican','#dc2626'],['Democrat','#2563eb'],['Independent','#7c3aed'],['Other','#6b7280']]
+    : [['Republican', partyMapHex('Republican')], ['Democrat', partyMapHex('Democrat')],
+       ['Independent', partyMapHex('Independent')], ['Other', partyMapHex(null)]]
 
   return (
     <div style={{ position: 'relative', height: '100%', width: '100%' }}>

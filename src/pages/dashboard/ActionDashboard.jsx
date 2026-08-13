@@ -22,6 +22,7 @@ import {
   getEffectiveProfileLimit, getBankedProfileCredits, hasFeature,
 } from '../../lib/tiers'
 import { PHASE_MAP } from '../../lib/campaignEnums'
+import { isRep, isDem } from '../../lib/party'
 import {
   T, Card, CardHead, DashboardShell, DashboardHeader, NextRaceBlock,
   StatStrip, StatCell, WeeklyChip, PartyPill, StatusPill, Pill, PhaseDot, DueChip,
@@ -386,8 +387,8 @@ export default function ActionDashboard() {
 
   // ── portfolio aggregates ──────────────────────────────────────────────────
   const partySplit = useMemo(() => {
-    const r = candidates.filter(c => c.party === 'Republican').length
-    const d = candidates.filter(c => c.party === 'Democrat').length
+    const r = candidates.filter(c => isRep(c.party)).length
+    const d = candidates.filter(c => isDem(c.party)).length
     const rest = candidates.length - r - d
     const bits = []
     if (r) bits.push(`${r} R`)

@@ -10,6 +10,7 @@
 // is used for text on white.
 
 import React from 'react'
+import { partyGroup } from '../../lib/party'
 
 export const T = {
   page:    '#FBFBFA',
@@ -145,7 +146,7 @@ export function Pill({ children, c = T.ink4, bg = T.chip, style }) {
 }
 
 export function Avatar({ name, party, size = 34, radius = 9 }) {
-  const p = PARTY_TINT[party] || PARTY_TINT.Other
+  const p = partyTint(party)
   const initials = String(name || '').trim().split(/\s+/).slice(0, 2)
     .map(w => w.charAt(0).toUpperCase()).join('') || '?'
   return (
@@ -169,6 +170,15 @@ export const PARTY_TINT = {
   Nonpartisan:  { c: '#52525B', bg: '#F1F1EF' },
   Other:        { c: '#52525B', bg: '#F1F1EF' },
 }
+
+// Same pairs reached from any spelling ('Democrat' / 'Democratic' / 'DEM').
+// Constitution has no partyGroup of its own, so by-name wins first.
+const PARTY_TINT_BY_GROUP = {
+  R: PARTY_TINT.Republican, D: PARTY_TINT.Democrat,   I: PARTY_TINT.Independent,
+  L: PARTY_TINT.Libertarian, G: PARTY_TINT.Green,     N: PARTY_TINT.Nonpartisan,
+  O: PARTY_TINT.Other,
+}
+export const partyTint = (p) => PARTY_TINT[p] || PARTY_TINT_BY_GROUP[partyGroup(p)] || PARTY_TINT.Other
 
 // ── Stat strip ────────────────────────────────────────────────────────────────
 

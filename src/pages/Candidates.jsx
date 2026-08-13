@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { Users, Plus, Search, Filter, ExternalLink, Edit2, Trash2, X, Phone, Mail, Globe, Telescope, Lock, Wand2, CheckCircle, AlertCircle, Map, LayoutList, Upload, Zap, FileText } from 'lucide-react'
+import { Users, Plus, Search, ExternalLink, Trash2, X, Phone, Mail, Globe, Telescope, Lock, Wand2, CheckCircle, AlertCircle, Map, LayoutList, Upload, Zap, FileText } from 'lucide-react'
 import { supabase, getCandidates, getOffices, getElections, createCandidate, deleteCandidate, updateCandidate } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserTier, getUserBracket, getBracketConfig, getUserPlanType, getActiveCandidateLimit, hasFeature, ADMIN_EMAILS, SCOUT_CANDIDATE_LIMIT, featureUnlockLabel } from '../lib/tiers'
@@ -11,6 +11,7 @@ import MapErrorBoundary from '../components/MapErrorBoundary'
 import LoadingBar from '../components/LoadingBar'
 import CityDemographicsPanel, { usePlaceLookup } from '../components/CityDemographicsPanel'
 import { placePath } from '../lib/placeDemographics'
+import { partyGroup, partyBadgeClasses } from '../lib/party'
 
 // ── Map view/selection persistence (sessionStorage) ───────────────────────────
 // Lets "Back" from a city-demographics page (or any navigation away and back)
@@ -53,9 +54,23 @@ function writeMapCtx(key, payload) {
 import {
   PARTIES,
   CANDIDATE_STATUSES as STATUSES,
-  CANDIDATE_STATUS_LABELS as STATUS_LABELS,
   candidateStatusLabel as statusLabel,
 } from '../lib/campaignEnums'
+
+// ─── Scout candidate cap — server error → friendly copy ──────────────────────
+// Migration 20260812000030 added the `scout_candidate_cap` BEFORE INSERT
+// trigger, which raises this exact sentence when a Scout account tries to
+// insert a third candidate. PostgREST hands it back as a 400 whose message is
+// the raw RAISE text (sometimes wrapped, sometimes with the "P0001" detail
+// attached), so we sniff for the stable prefix and print the clean sentence
+// instead of whatever shape the error arrived in.
+const SCOUT_CAP_MESSAGE = 'Scout plans track up to 2 candidates. Upgrade to add more.'
+
+function scoutCapMessage(error) {
+  if (!error) return null
+  const raw = [error.message, error.details, error.hint].filter(Boolean).join(' ')
+  return raw.includes('Scout plans track') ? SCOUT_CAP_MESSAGE : null
+}
 
 const WI_COUNTIES = [
   'Adams', 'Ashland', 'Barron', 'Bayfield', 'Brown', 'Buffalo', 'Burnett', 'Calumet', 'Chippewa', 'Clark',
@@ -95,12 +110,13 @@ const WI_COUNTY_COORDS = {
   'Waushara': [44.12, -89.24], 'Winnebago': [44.05, -88.64], 'Wood': [44.45, -90.02],
 }
 
+// Keyed by partyGroup() so 'Democrat', 'Democratic' and 'DEM' share a badge.
 const partyColor = (p) => ({
-  Republican:  'badge-republican',
-  Democrat:    'badge-democrat',
-  Independent: 'badge-independent',
-  Nonpartisan: 'badge-nonpartisan',
-}[p] || 'badge-independent')
+  R: 'badge-republican',
+  D: 'badge-democrat',
+  I: 'badge-independent',
+  N: 'badge-nonpartisan',
+}[partyGroup(p)] || 'badge-independent')
 
 const statusColor = (s) => ({
   exploring:      'bg-gray-100 text-gray-600',
@@ -339,9 +355,11 @@ export default function Candidates() {
   const handleSave = async (e) => {
     e.preventDefault()
     // Scout plan cap: check the real DB total (not the filtered view).
-    // Client-side only — see the SCOUT_CANDIDATE_LIMIT note above: there is no
-    // server write path for candidate creation, so server enforcement of this
-    // cap is still pending an RLS/trigger migration.
+    // This pre-check is the polite half only — the cap is genuinely enforced
+    // server-side by the `scout_candidate_cap` trigger (migration
+    // 20260812000030). Checking here just saves a doomed round trip; the
+    // insert below still handles the trigger's error if the counts disagree
+    // (another tab, another device, a stale count).
     if (getUserTier(user) === 'scout') {
       const { count } = await supabase
         .from('candidates')
@@ -368,7 +386,12 @@ export default function Candidates() {
       fetchData()
       refreshTotalCount()
     } else {
-      setModalError(error.message || 'Failed to save candidate. Please try again.')
+      // The cap trigger fires when the pre-check above passed but the row count
+      // moved underneath us. Show the plan sentence, not a raw 400, and resync
+      // the badge/banner counts so the UI stops offering the button.
+      const capped = scoutCapMessage(error)
+      setModalError(capped || error.message || 'Failed to save candidate. Please try again.')
+      if (capped) refreshTotalCount()
     }
     setSaving(false)
   }
@@ -895,11 +918,11 @@ export default function Candidates() {
                         </div>
                         <div style={{ padding:'6px 0' }}>
                           {cands.map((c, idx) => {
-                            const partyColors = { Republican:'#dc2626', Democrat:'#2563eb', Independent:'#7c3aed', Libertarian:'#f97316', Green:'#16a34a', Nonpartisan:'#6b7280' }
+                            const partyColors = { R:'#dc2626', D:'#2563eb', I:'#7c3aed', L:'#f97316', G:'#16a34a', N:'#6b7280' }
                             const statusCls = { elected:'bg-green-100 text-green-700', declared:'bg-blue-100 text-blue-700', primary_winner:'bg-purple-100 text-purple-700', general:'bg-amber-100 text-amber-700', exploring:'bg-gray-100 text-gray-500', lost:'bg-red-100 text-red-500', withdrawn:'bg-gray-100 text-gray-400' }
                             return (
                               <div key={c.id} style={{ padding:'6px 12px', display:'flex', alignItems:'center', gap:8, background: idx%2===0 ? 'white' : '#fafafa' }}>
-                                <div style={{ width:8, height:8, borderRadius:'50%', flexShrink:0, background: partyColors[c.party] || '#6b7280' }} />
+                                <div style={{ width:8, height:8, borderRadius:'50%', flexShrink:0, background: partyColors[partyGroup(c.party)] || '#6b7280' }} />
                                 <div style={{ flex:1, minWidth:0 }}>
                                   <div style={{ fontSize:13, fontWeight:600, color:'#111', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.name}</div>
                                   {c.party && <div style={{ fontSize:11, color:'#6b7280' }}>{c.party}</div>}
@@ -1192,11 +1215,7 @@ export default function Candidates() {
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-semibold text-gray-900">{cand.name}</span>
                               {cand.party && (
-                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                                  cand.party === 'Republican' ? 'bg-red-100 text-brand-red' :
-                                  cand.party === 'Democrat' ? 'bg-blue-100 text-blue-700' :
-                                  'bg-gray-100 text-gray-600'
-                                }`}>{cand.party}</span>
+                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${partyBadgeClasses(cand.party)}`}>{cand.party}</span>
                               )}
                             </div>
                             {cand.office && <p className="text-xs text-gray-600 mt-1">{cand.office}{cand.district ? ` · ${cand.district}` : ''}</p>}
@@ -1591,10 +1610,12 @@ export default function Candidates() {
                     setCsvError('')
                     let inserted = 0, skipped = 0, errors = 0
 
-                    // Scout plan cap on CSV import too. Client-side only — see
-                    // the SCOUT_CANDIDATE_LIMIT note near the top of this
-                    // component: server enforcement is still pending.
+                    // Scout plan cap on CSV import too. Same story as
+                    // handleSave: the `scout_candidate_cap` trigger (migration
+                    // 20260812000030) is the real enforcement, this pre-check
+                    // just stops us firing a row-per-error import at a wall.
                     let slotsRemaining = Infinity
+                    let capHit = false
                     if (getUserTier(user) === 'scout') {
                       const { count } = await supabase
                         .from('candidates')
@@ -1613,8 +1634,10 @@ export default function Candidates() {
                     // Build a set of existing candidate names for deduplication
                     const existingNames = new Set(candidates.map(c => c.name?.toLowerCase().trim()).filter(Boolean))
                     for (const row of csvRows) {
-                      // Stop importing once Scout slot limit is reached
-                      if (inserted >= slotsRemaining) { skipped++; continue }
+                      // Stop importing once the Scout slot limit is reached —
+                      // either by our own count, or because the server trigger
+                      // has already said no (capHit).
+                      if (capHit || inserted >= slotsRemaining) { skipped++; continue }
                       if (!row.name?.trim()) { skipped++; continue }
                       if (existingNames.has(row.name.trim().toLowerCase())) { skipped++; continue }
                       // Match office by name if column exists
@@ -1627,7 +1650,13 @@ export default function Candidates() {
                       const validParties = ['Republican','Democrat','Independent','Libertarian','Green','Constitution','Nonpartisan','Other']
                       const validStatuses = ['exploring','declared','primary_winner','general','elected','lost','withdrawn']
                       // null, not '' — the party CHECK constraint rejects an empty string
-                      const party = validParties.find(p => p.toLowerCase() === (row.party||'').toLowerCase()) || null
+                      // Exact name first, then by party family so 'Democratic',
+                      // 'DEM' or 'GOP' in a CSV still land on a valid value.
+                      const rowParty = (row.party || '').trim()
+                      const rowGroup = partyGroup(rowParty)
+                      const party = validParties.find(p => p.toLowerCase() === rowParty.toLowerCase())
+                        || (rowGroup !== 'O' ? validParties.find(p => partyGroup(p) === rowGroup) : null)
+                        || null
                       const status = validStatuses.find(s => s === (row.status||'').toLowerCase()) || 'exploring'
                       const { error } = await createCandidate({
                         name: row.name.trim(),
@@ -1642,14 +1671,23 @@ export default function Candidates() {
                         employer: row.employer || null,
                         campaign_city: row.campaign_city || row.city || null,
                       })
-                      if (error) errors++
+                      if (error) {
+                        // The cap trigger rejected this row. Every remaining
+                        // row would be rejected too, so stop counting them as
+                        // failures and show the plan sentence instead of 400s.
+                        if (scoutCapMessage(error)) { capHit = true; skipped++; continue }
+                        errors++
+                      }
                       else inserted++
                     }
                     setCsvResult({ inserted, skipped, errors })
                     setCsvImporting(false)
                     if (inserted > 0) { fetchData(); refreshTotalCount() }
                     // Surface limit-hit message for Scout users
-                    if (slotsRemaining !== Infinity && skipped > 0) {
+                    if (capHit) {
+                      refreshTotalCount()
+                      setCsvError(SCOUT_CAP_MESSAGE)
+                    } else if (slotsRemaining !== Infinity && skipped > 0) {
                       setCsvError(`Scout plan limit: ${inserted} candidate${inserted !== 1 ? 's' : ''} imported. Remaining rows were skipped — upgrade to add more.`)
                     }
                   }}

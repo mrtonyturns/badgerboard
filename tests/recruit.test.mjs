@@ -252,5 +252,66 @@ t('isUnknownProspect true for a never-researched row (all fields absent)', R.isU
 t('isUnknownProspect false as soon as one field is known',
   R.isUnknownProspect({ affiliation_value: 'unknown', notoriety: 'low', sentiment: 'unknown' }) === false)
 
+// ─── R4: 12-month retention purge ────────────────────────────────────────────
+// The scheduled function's pure half: which instant divides keep from purge,
+// which rows that predicate selects, and what a purged row looks like
+// afterwards. No network, no database — the PostgREST filter in the function
+// is written to mirror isPurgeable() exactly.
+console.log('R4 — recruit-retention-purge: cutoff, eligibility, blanked shape')
+{
+  const { createRequire } = await import('module')
+  const require = createRequire(import.meta.url)
+  const P = require('../netlify/functions/recruit-retention-purge.js')
+
+  t('default retention is 12 months', P.RETENTION_MONTHS === 12)
+  t('cutoff is exactly 12 months back, to the millisecond',
+    P.retentionCutoff(new Date('2026-08-13T12:34:56.000Z')) === '2025-08-13T12:34:56.000Z')
+  t('cutoff is computed in UTC, not the runner\'s local zone',
+    P.retentionCutoff(new Date('2026-01-01T00:00:00.000Z')) === '2025-01-01T00:00:00.000Z')
+  t('a run on Feb 29 clamps back to Feb 28 of a non-leap year, never Mar 1',
+    P.retentionCutoff(new Date('2024-02-29T00:00:00.000Z')) === '2023-02-28T00:00:00.000Z')
+  t('the 31st clamps back to the last real day of a shorter month (never forward)',
+    P.retentionCutoff(new Date('2026-03-31T00:00:00.000Z'), 13) === '2025-02-28T00:00:00.000Z')
+  t('an explicit months override is honoured',
+    P.retentionCutoff(new Date('2026-08-13T00:00:00.000Z'), 6) === '2026-02-13T00:00:00.000Z')
+  t('a nonsense months value falls back to the 12-month default',
+    P.retentionCutoff(new Date('2026-08-13T00:00:00.000Z'), 'soon') === P.retentionCutoff(new Date('2026-08-13T00:00:00.000Z')))
+  t('an invalid date throws rather than silently purging everything', (() => {
+    try { P.retentionCutoff(new Date('not a date')); return false } catch { return true }
+  })())
+
+  const cutoff = P.retentionCutoff(new Date('2026-08-13T00:00:00.000Z'))
+  t('a prospect researched 13 months ago is purged',
+    P.isPurgeable({ researched_at: '2025-07-01T00:00:00Z', research_status: 'done' }, cutoff) === true)
+  t('a prospect researched 11 months ago is kept',
+    P.isPurgeable({ researched_at: '2025-09-01T00:00:00Z', research_status: 'done' }, cutoff) === false)
+  t('the boundary is exclusive — exactly 12 months old is still kept',
+    P.isPurgeable({ researched_at: cutoff, research_status: 'done' }, cutoff) === false)
+  t('a never-researched prospect is left alone',
+    P.isPurgeable({ researched_at: null, research_status: 'pending' }, cutoff) === false)
+  t('an already-purged row is not purged twice',
+    P.isPurgeable({ researched_at: '2020-01-01T00:00:00Z', research_status: P.PURGED_STATUS }, cutoff) === false)
+  t('an unparseable researched_at is left alone, not purged',
+    P.isPurgeable({ researched_at: 'last tuesday', research_status: 'done' }, cutoff) === false)
+  t('garbage rows never throw', P.isPurgeable(null, cutoff) === false && P.isPurgeable({}, cutoff) === false)
+
+  const patch = P.PURGE_PATCH
+  t('the purge blanks exactly the fields the migration promised',
+    JSON.stringify(Object.keys(patch).sort()) === JSON.stringify([
+      'affiliation_basis', 'affiliation_confidence', 'affiliation_value',
+      'evidence', 'notoriety', 'research_status', 'research_summary', 'sentiment',
+    ]))
+  t('enum columns are blanked to \'unknown\', not NULL (they are CHECK-constrained)',
+    patch.affiliation_value === 'unknown' && patch.notoriety === 'unknown' && patch.sentiment === 'unknown')
+  t('free-text columns are blanked to NULL',
+    patch.affiliation_basis === null && patch.research_summary === null && patch.affiliation_confidence === null)
+  t('evidence is blanked to an empty array, matching the column default',
+    Array.isArray(patch.evidence) && patch.evidence.length === 0)
+  t('the row is left flagged as purged', patch.research_status === 'purged')
+  t('no identity column is touched by the purge',
+    !['full_name', 'address', 'city', 'zip', 'voter_id', 'search_id', 'created_by']
+      .some(k => k in patch))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

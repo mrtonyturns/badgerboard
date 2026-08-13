@@ -265,7 +265,11 @@ const A_FEATURES = [
   },
   { section: 'Offices',
     rows: [
-      { label: 'Office seat tracking',        a_monitor: 'County',       a_active: 'Cong. + Senate', a_campaign: 'Entire state' },
+      // The old row sold three scope tiers — County / Cong. + Senate / Entire
+      // state — off features.officesScope in tiers.js, which was read by
+      // nothing: /offices shows every tracked seat in the state on every plan,
+      // Scout included. The scope key is gone and so is the claim.
+      { label: 'Office & district maps',      a_monitor: true,           a_active: true,             a_campaign: true           },
       { label: 'Lean scores & officeholders', a_monitor: true,           a_active: true,             a_campaign: true           },
     ],
   },
@@ -352,24 +356,27 @@ const C_CARD_FEATURES = {
   ],
 }
 
+// No "Offices — county / congressional / entire state" bullets here either:
+// office and district coverage is statewide on every plan, so it is not an
+// Action-ladder step and the cards no longer pretend it is.
 const A_CARD_FEATURES = {
   a_monitor: [
     '1 profile per candidate / month',
     'Prospecting lists',
     'Game Plan',
-    'Offices — county view',
+    'Office & district maps',
   ],
   a_active: [
     '2 profiles per candidate / month',
-    'Offices — congressional & senate',
     'Compare tool',
     'Weekly auto-refresh',
+    '2 user seats',
   ],
   a_campaign: [
     '4 profiles per candidate / month',
-    'Offices — entire state',
     'Bulk Profiler (with credits)',
     'Unlimited user seats',
+    'Weekly auto-refresh',
   ],
 }
 

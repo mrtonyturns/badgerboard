@@ -4,6 +4,12 @@
 // via the toggle on the candidate profile (section_timestamps.monitoring = true).
 // These dossiers are generated with generated_by = null, so they do NOT consume
 // the user's monthly dossier quota.
+//
+// Module style: ESM throughout (`import` + `export const handler`). This file
+// used to mix a mid-file require('crypto') into an ESM export, which esbuild
+// tolerates but which makes the file lie about what it is.
+
+import nodeCrypto from 'crypto'
 
 const SUPABASE_URL         = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -19,7 +25,6 @@ const MAX_REGEN_PER_RUN = 20
 
 // Constant-time secret comparison (L2): hash both sides to equal length, then
 // crypto.timingSafeEqual — a plain !== comparison leaks timing information.
-const nodeCrypto = require('crypto')
 function safeEqual(a, b) {
   const A = nodeCrypto.createHash('sha256').update(String(a ?? '')).digest()
   const B = nodeCrypto.createHash('sha256').update(String(b ?? '')).digest()

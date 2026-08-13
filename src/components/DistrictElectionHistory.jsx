@@ -17,22 +17,23 @@
 //     intentionally never read here)
 
 import React from 'react'
+import { partyGroup, partyAbbrev, partyColorHex } from '../lib/party'
 
 const GENERAL_TYPES = new Set(['general', 'spring_general', 'special'])
 const PRIMARY_TYPES = new Set(['primary', 'spring_primary'])
 
 // Base party families — same party sharing a race gets a distinguishable shade.
+// Keyed by partyGroup() so 'Democrat', 'Democratic' and 'DEM' share one family.
 const PARTY_FAMILY = {
-  Republican:  ['#B91C1C', '#DC2626', '#EF4444', '#F87171'],
-  Democrat:    ['#1D4ED8', '#2563EB', '#3B82F6', '#60A5FA'],
-  Independent: ['#7C3AED', '#9333EA', '#A855F7', '#C084FC'],
-  Nonpartisan: ['#64748B', '#475569', '#334155', '#94A3B8'],
-  Other:       ['#64748B', '#94A3B8', '#475569', '#CBD5E1'],
+  R: ['#B91C1C', '#DC2626', '#EF4444', '#F87171'],
+  D: ['#1D4ED8', '#2563EB', '#3B82F6', '#60A5FA'],
+  I: ['#7C3AED', '#9333EA', '#A855F7', '#C084FC'],
+  N: ['#64748B', '#475569', '#334155', '#94A3B8'],
+  O: ['#64748B', '#94A3B8', '#475569', '#CBD5E1'],
 }
-const partyAbbrev = (p) => p === 'Republican' ? 'R' : p === 'Democrat' ? 'D' : p === 'Independent' ? 'I' : p === 'Nonpartisan' ? 'N' : p ? p[0] : '?'
 
 function colorForCandidate(party, idxInParty) {
-  const fam = PARTY_FAMILY[party] || PARTY_FAMILY.Other
+  const fam = PARTY_FAMILY[partyGroup(party)] || PARTY_FAMILY.O
   return fam[Math.min(idxInParty, fam.length - 1)]
 }
 
@@ -41,7 +42,7 @@ function colorForCandidate(party, idxInParty) {
 function colorizeResults(results) {
   const byParty = {}
   ;(results || []).forEach(r => {
-    const p = r.party || 'Other'
+    const p = partyGroup(r.party)
     byParty[p] = byParty[p] || []
     byParty[p].push(r)
   })
@@ -145,16 +146,18 @@ function CycleBlock({ cycle }) {
       {cycle.primaries.map(p => {
         // A single contest row can hold every party's primary ballot together
         // (WEC reports them jointly) — split by party so each gets its own bar.
+        // Grouped by party FAMILY so 'Democrat' and 'Democratic' rows stay on one
+        // ballot; the label keeps whatever spelling the rows actually carry.
         const byParty = {}
         ;(p.results || []).forEach(r => {
-          const key = r.party || 'Other'
-          byParty[key] = byParty[key] || []
-          byParty[key].push(r)
+          const key = partyGroup(r.party)
+          if (!byParty[key]) byParty[key] = { label: r.party || 'Other', results: [] }
+          byParty[key].results.push(r)
         })
-        return Object.entries(byParty).map(([party, results]) => (
-          <div key={p.id + party}>
-            <div style={S.raceLabel}>{party} Primary</div>
-            <SegmentedBar results={results} />
+        return Object.entries(byParty).map(([key, grp]) => (
+          <div key={p.id + key}>
+            <div style={S.raceLabel}>{grp.label} Primary</div>
+            <SegmentedBar results={grp.results} />
           </div>
         ))
       })}
@@ -163,11 +166,11 @@ function CycleBlock({ cycle }) {
 }
 
 // ── compact fallback row for AI-researched history not covered by real results ──
-function HistoryRow({ entry, PARTY_COLOR, onProfiler }) {
+function HistoryRow({ entry, onProfiler }) {
   return (
     <div onClick={() => onProfiler && onProfiler(entry.name)}
       style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 0', cursor: onProfiler ? 'pointer' : 'default' }}>
-      <div style={{ width: 8, height: 8, borderRadius: 3, background: PARTY_COLOR[entry.party] || '#64748B', flexShrink: 0 }} />
+      <div style={{ width: 8, height: 8, borderRadius: 3, background: partyColorHex(entry.party), flexShrink: 0 }} />
       <div style={{ fontSize: 12.5, fontWeight: 800, color: '#0F172A' }}>{entry.name}</div>
       <span style={{ fontSize: 10, fontWeight: 700, color: '#94A3B8' }}>{entry.party}</span>
       <span style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase' }}>
@@ -177,7 +180,7 @@ function HistoryRow({ entry, PARTY_COLOR, onProfiler }) {
   )
 }
 
-export default function DistrictElectionHistory({ contests, history, PARTY_COLOR, onProfiler }) {
+export default function DistrictElectionHistory({ contests, history, onProfiler }) {
   const cycles = buildCycles(contests)
   const coveredYears = new Set(cycles.map(c => c.year))
   const extraEntries = (history?.entries || []).filter(e => e.year && !coveredYears.has(e.year))
@@ -196,7 +199,7 @@ export default function DistrictElectionHistory({ contests, history, PARTY_COLOR
         <div>
           <div style={S.sectionLabel}>Earlier officeholders (AI-researched)</div>
           {extraEntries.map(e => (
-            <HistoryRow key={`${e.year}-${e.name}`} entry={e} PARTY_COLOR={PARTY_COLOR} onProfiler={onProfiler ? (name) => onProfiler(name, null) : null} />
+            <HistoryRow key={`${e.year}-${e.name}`} entry={e} onProfiler={onProfiler ? (name) => onProfiler(name, null) : null} />
           ))}
         </div>
       )}

@@ -12,17 +12,19 @@ import { getCandidates, getDossiers } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import LoadingBar from '../components/LoadingBar'
 import SearchableSelect from '../components/SearchableSelect'
+import { partyGroup, partyAbbrev, partyBadgeClasses } from '../lib/party'
 
 // ─── Theme: candidate A = red (left), candidate B = navy (right) ─────────────
 const LEFT  = { primary: '#dc2626', bg: 'bg-red-50',   text: 'text-red-700',   border: 'border-red-200',   dot: 'bg-red-500',   ring: 'ring-red-200',   badge: 'bg-red-100 text-red-700 border border-red-200'   }
 const RIGHT = { primary: '#1e3a5f', bg: 'bg-blue-50',  text: 'text-blue-800',  border: 'border-blue-200',  dot: 'bg-blue-700',  ring: 'ring-blue-200',  badge: 'bg-blue-100 text-blue-800 border border-blue-200' }
 
-const partyColor = (p, side) => {
-  if (p === 'Republican')  return 'bg-red-100 text-red-700 border border-red-200'
-  if (p === 'Democrat')    return 'bg-blue-100 text-blue-700 border border-blue-200'
-  if (p === 'Independent') return 'bg-gray-100 text-gray-700 border border-gray-200'
-  return 'bg-purple-100 text-purple-700 border border-purple-200'
+// Badge colors come from lib/party.js so every spelling ('Democrat' /
+// 'Democratic' / 'DEM') tints the same; the border tone stays matched here.
+const PARTY_BORDER = {
+  R: 'border-red-200', D: 'border-blue-200', I: 'border-purple-200',
+  L: 'border-amber-200', G: 'border-green-200', N: 'border-gray-200', O: 'border-gray-200',
 }
+const partyColor = (p, side) => `${partyBadgeClasses(p)} border ${PARTY_BORDER[partyGroup(p)]}`
 
 // ─── Section extraction helpers ───────────────────────────────────────────────
 function extractSection(content, num) {
@@ -64,7 +66,7 @@ function CandidatePicker({ candidates, value, onChange, exclude, side }) {
       onChange={v => onChange(v || null)}
       options={filtered.map(c => ({
         value: c.id,
-        label: `${c.name} ${c.party ? `(${c.party[0]})` : ''} ${c.office?.name ? `— ${c.office.name}` : ''}`.trim(),
+        label: `${c.name} ${c.party ? `(${partyAbbrev(c.party)})` : ''} ${c.office?.name ? `— ${c.office.name}` : ''}`.trim(),
       }))}
       placeholder="— Select a candidate —"
       searchPlaceholder="Search candidates..."

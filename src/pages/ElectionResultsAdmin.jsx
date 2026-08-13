@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { supabase, adminElections } from '../lib/supabase'
 import SearchableSelect from '../components/SearchableSelect'
+import { partyGroup } from '../lib/party'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 // Order and labels match the public board (ElectionResultsBoard.jsx). The three
@@ -66,13 +67,14 @@ const PARTIES = [
   'Libertarian', 'Green', 'Constitution', 'Other',
 ]
 
+// Keyed by partyGroup() — results rows carry both 'Democrat' and 'Democratic'.
 const PARTY_COLORS = {
-  Democrat:    'bg-blue-100 text-blue-800',
-  Republican:  'bg-red-100 text-red-700',
-  Independent: 'bg-purple-100 text-purple-800',
-  Nonpartisan: 'bg-gray-100 text-gray-700',
-  Libertarian: 'bg-amber-100 text-amber-800',
-  Green:       'bg-green-100 text-green-800',
+  D: 'bg-blue-100 text-blue-800',
+  R: 'bg-red-100 text-red-700',
+  I: 'bg-purple-100 text-purple-800',
+  N: 'bg-gray-100 text-gray-700',
+  L: 'bg-amber-100 text-amber-800',
+  G: 'bg-green-100 text-green-800',
 }
 
 // ── Determination-engine status (Phase 1) ─────────────────────────────────────
@@ -408,6 +410,39 @@ export default function ElectionResultsAdmin({ showToast }) {
     refreshContest(contestId)
   }
 
+  // ── Unopposed sweep ───────────────────────────────────────────────────────
+  // A race nobody ran against never produces returns, so the poller leaves it
+  // 'waiting' forever and the board shows an unresolved contest months later.
+  // One click marks every such race called with its sole candidate as winner
+  // (declared stays false — nobody declared anything). No subscriber emails.
+  const [advancing, setAdvancing] = useState(false)
+
+  const electionPassed = selectedElection?.election_date
+    ? String(selectedElection.election_date) < format(new Date(), 'yyyy-MM-dd')
+    : false
+
+  const unopposedWaiting = contests.filter(
+    c => c.status === 'waiting' && (resultsMap[c.id] || []).length === 1
+  ).length
+
+  const advanceUnopposed = async () => {
+    if (!selectedElection || !unopposedWaiting) return
+    if (!window.confirm(
+      `${unopposedWaiting} uncontested race${unopposedWaiting === 1 ? '' : 's'} will be marked called, `
+      + 'with the sole candidate flagged as the winner (not "declared"). '
+      + 'No subscriber emails are sent. Continue?'
+    )) return
+    setAdvancing(true)
+    const { data, error } = await adminElections('advance_unopposed', { election_id: selectedElection.id })
+    setAdvancing(false)
+    if (error) { showToast('Advance failed: ' + error.message, 'error'); return }
+    const n = data?.advanced || 0
+    showToast(n
+      ? `${n} unopposed race${n === 1 ? '' : 's'} advanced — no notifications sent`
+      : 'Nothing to advance')
+    loadContests(selectedElection.id)
+  }
+
   // ── Derived ───────────────────────────────────────────────────────────────
   const calledCount  = contests.filter(c => (resultsMap[c.id] || []).some(r => r.declared)).length
   const totalVotes   = contests.reduce(
@@ -470,6 +505,17 @@ export default function ElectionResultsAdmin({ showToast }) {
               className="btn-primary flex items-center gap-1.5 text-sm py-1.5"
             >
               <Plus className="w-4 h-4" /> Add Contest
+            </button>
+          )}
+          {selectedElection && electionPassed && unopposedWaiting > 0 && (
+            <button
+              onClick={advanceUnopposed}
+              disabled={advancing}
+              title="Mark every single-candidate race still awaiting results as called"
+              className="btn-secondary flex items-center gap-1.5 text-sm py-1.5"
+            >
+              <Trophy className="w-4 h-4" />
+              {advancing ? 'Advancing…' : `Advance ${unopposedWaiting} unopposed`}
             </button>
           )}
         </div>
@@ -766,7 +812,7 @@ export default function ElectionResultsAdmin({ showToast }) {
                                 <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">Inc.</span>
                               )}
                               {r.party && (
-                                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${PARTY_COLORS[r.party] || 'bg-gray-100 text-gray-700'}`}>
+                                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${PARTY_COLORS[partyGroup(r.party)] || 'bg-gray-100 text-gray-700'}`}>
                                   {r.party}
                                 </span>
                               )}

@@ -9,6 +9,7 @@ import { supabase } from '../lib/supabase'
 import { pointInGeometry } from '../lib/geo'
 import { loadPlaceDemographics, placeKey, placePath } from '../lib/placeDemographics'
 import DistrictElectionHistory from './DistrictElectionHistory'
+import { partyGroup, isRep, isDem, partyAbbrev, partyColorHex } from '../lib/party'
 
 // ── module-level data caches (fetched once per session) ──────────────────────
 let _demoCache = null, _presCache = null, _popCache = null
@@ -61,7 +62,9 @@ const CHAMBER_META = {
     elig: (n, name) => `Qualified elector of ${name} County (resident 28+ days before filing) · U.S. citizen, age 18+ · nomination papers: 500–1,000 county signatures (counties of 100,000+) or 200–400 (smaller counties) · CF-1 + declaration of candidacy by June 1 of the election year · some offices carry extra requirements (Sheriff: law-enforcement certification; District Attorney: WI bar license)` },
 }
 
-const PARTY_COLOR = { Republican: '#B91C1C', Democrat: '#1D4ED8', Independent: '#7C3AED', Nonpartisan: '#64748B', Other: '#64748B' }
+// Party colors live in lib/party.js so every spelling ('Democrat' /
+// 'Democratic' / 'DEM') resolves to the same hex. Pill tints stay local.
+const PARTY_TINT = { R: '#FEE2E2', D: '#DBEAFE' }
 const heatColor = (g) => g > 0.75 ? '#DC2626' : g > 0.55 ? '#F97316' : g > 0.35 ? '#EAB308' : '#22C55E'
 
 // ── lean computation ──────────────────────────────────────────────────────────
@@ -71,11 +74,13 @@ function computeLean({ contests, history, countyMix, pres }) {
   if (contests?.length) {
     let wsum = 0, sum = 0
     contests.forEach(c => {
+      // Primaries measure one party's turnout, not the district's lean — skip them.
+      if (c.election?.type === 'primary' || /primary/i.test(c.office || '')) return
       const results = c.results || []
       const tot = results.reduce((s, r) => s + (r.votes || 0), 0)
       if (!tot) return
-      const r = results.filter(x => x.party === 'Republican').reduce((s, x) => s + x.votes, 0) / tot
-      const d = results.filter(x => x.party === 'Democrat').reduce((s, x) => s + x.votes, 0) / tot
+      const r = results.filter(x => isRep(x.party)).reduce((s, x) => s + (x.votes || 0), 0) / tot
+      const d = results.filter(x => isDem(x.party)).reduce((s, x) => s + (x.votes || 0), 0) / tot
       if (r === 0 && d === 0) return
       const yr = new Date(c.election?.election_date || 0).getFullYear()
       const w = Math.max(0.3, 1 - (new Date().getFullYear() - yr) * 0.12)
@@ -87,7 +92,8 @@ function computeLean({ contests, history, countyMix, pres }) {
   if (history?.entries?.length) {
     let wsum = 0, sum = 0
     history.entries.forEach(e => {
-      const dir = e.party === 'Republican' ? 1 : e.party === 'Democrat' ? -1 : 0
+      const g = partyGroup(e.party)
+      const dir = g === 'R' ? 1 : g === 'D' ? -1 : 0
       if (!dir) return
       const margin = e.vote_pct ? (e.vote_pct - 50) * 2 : 10
       const w = Math.max(0.3, 1 - (new Date().getFullYear() - (e.year || 2010)) * 0.08)
@@ -436,7 +442,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
                       <div style={{ background: 'linear-gradient(135deg, #12203A, #0A1628)', borderRadius: 14, padding: 15, color: '#fff', marginBottom: 12 }}>
                         <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#FCA5A5' }}>Current officeholder</div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 8 }}>
-                          <div style={{ width: 44, height: 44, borderRadius: 13, background: PARTY_COLOR[current.party] || '#64748B', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 900, flexShrink: 0 }}>
+                          <div style={{ width: 44, height: 44, borderRadius: 13, background: partyColorHex(current.party), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 900, flexShrink: 0 }}>
                             {String(current?.name || '').split(' ').filter(Boolean).map(w => w[0]).slice(0, 2).join('')}
                           </div>
                           <div>
@@ -447,7 +453,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
                         {current.vote_pct != null && (
                           <>
                             <div style={{ height: 7, borderRadius: 99, background: 'rgba(255,255,255,0.15)', marginTop: 11, overflow: 'hidden' }}>
-                              <div style={{ height: '100%', borderRadius: 99, background: PARTY_COLOR[current.party] || '#94A3B8', width: `${current.vote_pct}%`, transition: 'width 1s ease' }} />
+                              <div style={{ height: '100%', borderRadius: 99, background: current.party ? partyColorHex(current.party) : '#94A3B8', width: `${current.vote_pct}%`, transition: 'width 1s ease' }} />
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, fontWeight: 700, color: 'rgba(255,255,255,0.65)', marginTop: 4 }}>
                               <span>{current.election}</span><span>{current.vote_pct}% of the vote</span>
@@ -460,7 +466,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
                       </div>
                     )}
 
-                    <DistrictElectionHistory contests={contests} history={history} PARTY_COLOR={PARTY_COLOR} onProfiler={goProfiler} />
+                    <DistrictElectionHistory contests={contests} history={history} onProfiler={goProfiler} />
 
                     {history?.note && <div style={{ fontSize: 11.5, color: '#94A3B8', fontWeight: 600, marginTop: 4 }}>{history.note}</div>}
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
@@ -491,11 +497,11 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
                       style={{ border: '1.5px solid #E9EDF3', borderRadius: 14, padding: 14, display: 'flex', gap: 12, alignItems: 'center', cursor: 'pointer' }}
                       onMouseEnter={ev => { ev.currentTarget.style.borderColor = '#8B0000' }}
                       onMouseLeave={ev => { ev.currentTarget.style.borderColor = '#E9EDF3' }}>
-                      <div style={{ width: 44, height: 44, borderRadius: 13, background: PARTY_COLOR[c.party] || '#0A1628', color: '#fff', fontWeight: 800, fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <div style={{ width: 44, height: 44, borderRadius: 13, background: c.party ? partyColorHex(c.party) : '#0A1628', color: '#fff', fontWeight: 800, fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                         {(c.name || '?').split(' ').map(w => w[0]).slice(0, 2).join('')}
                       </div>
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A' }}>{c.name} {c.party && <span style={S.pill(c.party === 'Republican' ? '#FEE2E2' : c.party === 'Democrat' ? '#DBEAFE' : '#F1F5F9', PARTY_COLOR[c.party] || '#64748B')}>{c.party[0]}</span>}</div>
+                        <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A' }}>{c.name} {c.party && <span style={S.pill(PARTY_TINT[partyGroup(c.party)] || '#F1F5F9', partyColorHex(c.party))}>{partyAbbrev(c.party)}</span>}</div>
                         <div style={{ fontSize: 12.5, color: '#64748B', marginTop: 2, fontWeight: 600, textTransform: 'capitalize' }}>{c.status || 'exploring'}</div>
                       </div>
                       <ChevronRight size={15} style={{ marginLeft: 'auto', color: '#CBD5E1' }} />

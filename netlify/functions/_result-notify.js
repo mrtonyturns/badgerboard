@@ -43,6 +43,7 @@
 // Called as `emailer.sendEmail(...)` rather than destructured, so the mailer can
 // be swapped out in tests without re-loading this module.
 const emailer = require('./_email')
+const { partyGroup } = require('./_party')
 
 // One running-update email per subscription per 30 minutes. The poller runs
 // every 5 minutes on election night, so without this a single subscriber to a
@@ -188,9 +189,11 @@ function winnersOf(results = [], seats = 1) {
   return ranked.filter(r => r.votes > 0).slice(0, n)
 }
 
+// Keyed by partyGroup() so every spelling ('Democrat' / 'Democratic' / 'DEM')
+// lands on one swatch instead of falling through to the neutral gray.
 const PARTY_COLOR = {
-  Democrat: '#1D4ED8', Democratic: '#1D4ED8', Republican: '#B91C1C',
-  Independent: '#7E22CE', Libertarian: '#B45309', Green: '#15803D', Nonpartisan: '#4B5563',
+  D: '#1D4ED8', R: '#B91C1C',
+  I: '#7E22CE', L: '#B45309', G: '#15803D', N: '#4B5563',
 }
 
 /**
@@ -212,7 +215,7 @@ function candidateTable(results = [], { highlight = null } = {}) {
     const nameColor = isHighlighted ? '#14532D' : '#111827'
     const pct = r.vote_pct != null ? r.vote_pct : (totalVotes > 0 ? (r.votes / totalVotes) * 100 : 0)
     const mark = isHighlighted ? '🏆 ' : (isLeader ? '▲ ' : '')
-    const partyColor = PARTY_COLOR[r.party] || '#6b7280'
+    const partyColor = PARTY_COLOR[partyGroup(r.party)] || '#6b7280'
     return `<tr style="background:${bg}">
       <td style="padding:9px 10px;border-bottom:1px solid #f3f4f6;color:${nameColor};font-weight:${bold ? 700 : 400}">${mark}${esc(r.candidate_name)}</td>
       <td style="padding:9px 10px;border-bottom:1px solid #f3f4f6;color:${partyColor};font-size:13px">${esc(r.party || '—')}</td>

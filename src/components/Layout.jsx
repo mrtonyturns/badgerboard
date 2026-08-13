@@ -41,10 +41,18 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.30.0'
+const APP_VERSION = 'v1.31.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.31.0',
+    date: 'August 12, 2026',
+    changes: [
+      'District data accuracy: a party-vocabulary mismatch was silently zeroing Democratic votes in the voter-lean math (Assembly District 77 showed R+ \u2014 it is strongly Democratic); one shared normalizer now backs every party color, badge and calculation, primaries no longer distort lean, and all 250 primary results were reconciled against final county numbers',
+      'Scout candidate limits are now enforced server-side; unopposed primaries can be advanced in one click; research data older than 12 months purges automatically',
+    ],
+  },
   {
     version: 'v1.30.0',
     date: 'August 12, 2026',

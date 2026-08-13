@@ -178,19 +178,23 @@ export const CANDIDATE_PLAN_CONFIG = {
 // local const, three times over) and again in settings/PlanPane.jsx, so the cap
 // and the copy describing it could — and did — drift apart.
 //
-// SERVER ENFORCEMENT IS PENDING. There is no server write path for candidate
-// creation: clients INSERT into `candidates` directly and RLS only checks
-// ownership, not count. Every check against this constant is therefore advisory
-// UI, not a security boundary — a hand-crafted PostgREST insert still gets
-// through. Closing that needs an RLS policy / trigger migration, which is
-// deliberately out of scope here.
+// SERVER ENFORCEMENT NOW EXISTS. Migration 20260812000030_scout_candidate_cap
+// installs the `scout_candidate_cap` BEFORE INSERT trigger on `candidates`,
+// which counts the caller's rows under the insert's row lock and raises
+// "Scout plans track up to 2 candidates. Upgrade to add more." past two.
+// Paid plans, active trials and admin emails are exempt; service-role writes
+// bypass it. A hand-crafted PostgREST insert no longer gets through.
+//
+// The checks against this constant in the UI are therefore the *friendly* half
+// of a real boundary, not the boundary itself: they stop a doomed round trip
+// and explain the cap before the user fills in a form. If this number and the
+// trigger's hardcoded 2 ever diverge, the trigger wins.
 export const SCOUT_CANDIDATE_LIMIT = 2
 
 // ─── Action Plan ──────────────────────────────────────────────────────────────
 
 export const ACTION_PLAN_ORDER = ['a_monitor', 'a_active', 'a_campaign']
 
-// officesScope: 'county' | 'district' | 'state'
 export const ACTION_PLAN_CONFIG = {
   a_monitor: {
     key:                   'a_monitor',
@@ -210,7 +214,6 @@ export const ACTION_PLAN_CONFIG = {
       prospecting:        true,
       recruit:            true,  // v1.29 Recruit-from-voter-list (Action-plan exclusive)
       offices:            true,
-      officesScope:       'county',
       compare:            false,
       bulkProfiler:       false,
       csvImport:          true,
@@ -226,13 +229,12 @@ export const ACTION_PLAN_CONFIG = {
       'Prospecting',
       'Recruit from voter list',
       'Multi-Candidate Game Plan',
-      'Offices — county view',
+      'Office & district maps',
       '1 profile per candidate / month',
     ],
     nextUnlocks: [
       '2 profiles per candidate / month',
       '2 user seats',
-      'Offices — congressional & senate districts',
       'Compare tool',
     ],
   },
@@ -255,7 +257,6 @@ export const ACTION_PLAN_CONFIG = {
       prospecting:        true,
       recruit:            true,  // v1.29 Recruit-from-voter-list (Action-plan exclusive)
       offices:            true,
-      officesScope:       'district',
       compare:            true,
       bulkProfiler:       false,
       csvImport:          true,
@@ -270,14 +271,12 @@ export const ACTION_PLAN_CONFIG = {
     unlocks: [
       '2 profiles per candidate / month',
       '2 user seats',
-      'Offices — congressional & senate districts',
       'Compare tool',
       'Weekly auto-refresh',
     ],
     nextUnlocks: [
       '4 profiles per candidate / month',
       'Unlimited user seats',
-      'Offices — entire state',
       'Bulk Profiler',
     ],
   },
@@ -300,7 +299,6 @@ export const ACTION_PLAN_CONFIG = {
       prospecting:        true,
       recruit:            true,  // v1.29 Recruit-from-voter-list (Action-plan exclusive)
       offices:            true,
-      officesScope:       'state',
       compare:            true,
       bulkProfiler:       true,
       csvImport:          true,
@@ -315,7 +313,6 @@ export const ACTION_PLAN_CONFIG = {
     unlocks: [
       '4 profiles per candidate / month',
       'Unlimited user seats',
-      'Offices — entire state',
       'Bulk Profiler',
     ],
     nextUnlocks: [],
@@ -700,12 +697,6 @@ export function featureUnlockLabel(feature, planTypeHint) {
   if (candidate) parts.push(`${nameOf(candidate)} (Candidate)`)
   if (action)    parts.push(`${nameOf(action)} (Action)`)
   return parts.length ? parts.join(' and ') : null
-}
-
-export function getOfficesScope(planKey) {
-  const cfg = PLAN_CONFIG[planKey]
-  if (!cfg?.features?.offices) return null
-  return cfg.features.officesScope ?? null
 }
 
 // Returns the effective monthly profile limit for a plan+bracket combination.

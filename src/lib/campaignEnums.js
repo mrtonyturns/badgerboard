@@ -6,11 +6,14 @@
 // classes, so each entry carries BOTH: the Tailwind class names the existing
 // pages already use, and the hex equivalents the dashboards need.
 //
-// Pure data. No imports, no JSX, no React — safe to pull into any module.
+// Pure data (the one import is lib/party.js, itself pure), no JSX, no React —
+// safe to pull into any module.
 
 // ── Game plan phases ──────────────────────────────────────────────────────────
 // `icon` is attached in GamePlan.jsx (lucide components don't belong in a data
 // module). `hex` is the inline-style equivalent of `dot`.
+import { partyGroup, partyAbbrev } from './party'
+
 export const PHASES = [
   { key: 'planning',     label: 'Planning',      hex: '#a855f7', dot: 'bg-purple-500',  text: 'text-purple-700',  headerBg: 'bg-purple-50',  borderL: 'border-l-purple-400',  progressBg: 'bg-purple-500'  },
   { key: 'filing',       label: 'Filing',        hex: '#f97316', dot: 'bg-orange-500',  text: 'text-orange-700',  headerBg: 'bg-orange-50',  borderL: 'border-l-orange-400',  progressBg: 'bg-orange-500'  },
@@ -122,10 +125,18 @@ export const PARTY_HEX = {
   Other:        { c: '#52525B', bg: '#F1F1EF' },
 }
 
-export const partyHex = (p) => PARTY_HEX[p] || PARTY_HEX.Other
+// Same pairs, reachable from any spelling ('Democrat' / 'Democratic' / 'DEM').
+// Constitution has no partyGroup of its own, so the by-name lookup runs first
+// and keeps its teal.
+const PARTY_HEX_BY_GROUP = {
+  R: PARTY_HEX.Republican, D: PARTY_HEX.Democrat,   I: PARTY_HEX.Independent,
+  L: PARTY_HEX.Libertarian, G: PARTY_HEX.Green,     N: PARTY_HEX.Nonpartisan,
+  O: PARTY_HEX.Other,
+}
+export const partyHex = (p) => PARTY_HEX[p] || PARTY_HEX_BY_GROUP[partyGroup(p)] || PARTY_HEX.Other
 
 // One-letter party abbreviation for pills and avatars.
-export const partyInitial = (p) => (p ? String(p).charAt(0).toUpperCase() : '?')
+export const partyInitial = (p) => partyAbbrev(p)
 
 // ── Weekly digest categories ──────────────────────────────────────────────────
 // MIRRORS `CATEGORY_META` in netlify/functions/monitoring-digest.js. That file

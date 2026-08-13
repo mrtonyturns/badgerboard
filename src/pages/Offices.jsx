@@ -11,6 +11,7 @@ import DistrictDashboard, { districtKeyFor } from '../components/DistrictDashboa
 import LoadingBar from '../components/LoadingBar'
 import CityDemographicsPanel, { usePlaceLookup } from '../components/CityDemographicsPanel'
 import { placePath } from '../lib/placeDemographics'
+import { partyGroup } from '../lib/party'
 
 // ── Map view/selection persistence (sessionStorage) ───────────────────────────
 // Lets "Back" from a city-demographics page (or any navigation away and back)
@@ -76,13 +77,14 @@ const typeIcons = {
   administrative: MapPin,
 }
 
+// Keyed by partyGroup() so 'Democrat', 'Democratic' and 'DEM' share a dot color.
 const PARTY_COLOR = {
-  Republican:  '#dc2626',
-  Democrat:    '#2563eb',
-  Independent: '#7c3aed',
-  Libertarian: '#f97316',
-  Green:       '#16a34a',
-  Nonpartisan: '#6b7280',
+  R: '#dc2626',
+  D: '#2563eb',
+  I: '#7c3aed',
+  L: '#f97316',
+  G: '#16a34a',
+  N: '#6b7280',
 }
 
 const STATUS_CLS = {
@@ -398,7 +400,7 @@ function DistrictPanel({ district, panelOffices, allCandidates, onClose, navigat
                         {/* Party dot */}
                         <div style={{
                           width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                          background: PARTY_COLOR[c.party] || '#6b7280',
+                          background: PARTY_COLOR[partyGroup(c.party)] || '#6b7280',
                         }} />
                         {/* Name + party */}
                         <div style={{ flex: 1, minWidth: 0 }}>

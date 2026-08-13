@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import { partyGroup } from '../lib/party'
 import LoadingBar from '../components/LoadingBar'
 import SearchableSelect from '../components/SearchableSelect'
 
@@ -22,6 +23,12 @@ const PARTY_COLOR = {
   Republican: '#B91C1C', Democrat: '#1D4ED8', Independent: '#B45309',
   Other: '#0D9488', None: '#94A3B8',
 }
+// Reachable from any spelling ('Democrat' / 'Democratic' / 'DEM'); the palette
+// above stays the source of truth for the hexes.
+const PARTY_COLOR_BY_GROUP = {
+  R: PARTY_COLOR.Republican, D: PARTY_COLOR.Democrat, I: PARTY_COLOR.Independent,
+}
+const partyChartHex = (p) => PARTY_COLOR[p] || PARTY_COLOR_BY_GROUP[partyGroup(p)] || PARTY_COLOR.Other
 
 // shade steps for same-party primary fields (rank order, dark → light)
 function shadeFor(hex, i, n) {
@@ -535,11 +542,11 @@ export default function Polling() {
               const named = rows.filter(r => !/undecided/i.test(r.candidate))
               return rows.map(r => /undecided/i.test(r.candidate)
                 ? { label: 'Undecided', pct: r.pct, color: PARTY_COLOR.None }
-                : { label: r.candidate, pct: r.pct, color: shadeFor(PARTY_COLOR[p.party] || PARTY_COLOR.Other, named.indexOf(r), named.length) })
+                : { label: r.candidate, pct: r.pct, color: shadeFor(partyChartHex(p.party), named.indexOf(r), named.length) })
             }
             const generalSlices = sortSlices(general).map(r => ({
               label: r.candidate, party: /undecided/i.test(r.candidate) ? null : r.party, pct: r.pct,
-              color: /undecided/i.test(r.candidate) ? PARTY_COLOR.None : (PARTY_COLOR[r.party] || PARTY_COLOR.Other),
+              color: /undecided/i.test(r.candidate) ? PARTY_COLOR.None : partyChartHex(r.party),
             }))
             const baseKey = `${district}-${snapshot.generated_at || ''}`
 
@@ -557,8 +564,8 @@ export default function Polling() {
                   // Republican primary first (left), Democrat second (right),
                   // others after; November general underneath. With a single
                   // contested primary, the general sits beside it instead.
-                  const ORDER = { Republican: 0, Democrat: 1 }
-                  const prims = isPrimary ? [...vs.primaries].sort((a, b) => (ORDER[a.party] ?? 9) - (ORDER[b.party] ?? 9)) : []
+                  const ORDER = { R: 0, D: 1 }
+                  const prims = isPrimary ? [...vs.primaries].sort((a, b) => (ORDER[partyGroup(a.party)] ?? 9) - (ORDER[partyGroup(b.party)] ?? 9)) : []
                   const GeneralCard = ({ framed }) => generalSlices.length === 0 ? null : (
                     <div className={framed
                       ? 'rounded-xl border border-gray-200 bg-gray-50/60 p-4 sm:p-5'
@@ -570,8 +577,8 @@ export default function Polling() {
                     </div>
                   )
                   const PrimaryCard = ({ p }) => (
-                    <div className="rounded-xl border p-4 sm:p-5" style={{ borderColor: `${PARTY_COLOR[p.party] || '#64748B'}40`, background: `${PARTY_COLOR[p.party] || '#64748B'}08` }}>
-                      <p className="text-xs font-extrabold uppercase tracking-wider mb-4" style={{ color: PARTY_COLOR[p.party] || '#334155' }}>
+                    <div className="rounded-xl border p-4 sm:p-5" style={{ borderColor: `${p.party ? partyChartHex(p.party) : '#64748B'}40`, background: `${p.party ? partyChartHex(p.party) : '#64748B'}08` }}>
+                      <p className="text-xs font-extrabold uppercase tracking-wider mb-4" style={{ color: p.party ? partyChartHex(p.party) : '#334155' }}>
                         {p.party} primary
                       </p>
                       <DonutGroup slices={primarySlices(p)} animKey={`${baseKey}-p-${p.party}`} />

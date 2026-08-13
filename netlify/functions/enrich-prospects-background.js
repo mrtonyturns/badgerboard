@@ -49,6 +49,7 @@ const { enforceRateLimit } = require('./_rate-limit')
 const { logAiUsage } = require('./_ai-usage')
 const { computeWinOdds, primaryMarginFromResults } = require('./_win-odds')
 const { ADMIN_EMAILS } = require('./_config')
+const { partyGroup } = require('./_party')
 
 const SUPABASE_URL         = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -407,10 +408,15 @@ async function verifyUser(authHeader) {
 // Win-odds inputs — gathered from OUR OWN data only
 // ─────────────────────────────────────────────────────────────────────────────
 
+// partyGroup() handles every party spelling ('Democrat' / 'Democratic' /
+// 'DEM'); the regex tail only covers the AI's ideology labels, which are not
+// party names at all.
 const PARTY_SIDE = (p) => {
+  const g = partyGroup(p)
+  if (g === 'R' || g === 'D') return g
   const s = String(p || '').toLowerCase()
-  if (/republican|conservative|gop/.test(s)) return 'R'
-  if (/democrat|liberal|progressive/.test(s)) return 'D'
+  if (/conservative|gop/.test(s)) return 'R'
+  if (/liberal|progressive/.test(s)) return 'D'
   return null
 }
 
