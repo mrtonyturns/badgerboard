@@ -194,7 +194,9 @@ function ElectionRow({ election, onEdit, onDelete, deleting, onViewResults }) {
 export default function GamePlan() {
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
-  const activeTab = searchParams.get('tab') || 'milestones'
+  // Unknown ?tab= values fall back to milestones instead of a blank page.
+  const rawTab = searchParams.get('tab')
+  const activeTab = ['milestones', 'calendar', 'results'].includes(rawTab) ? rawTab : 'milestones'
 
   // ── Plan gate — Game Plan unlocks at Monitor (locked on Scout) ────────────
   const userPlan = getUserPlan(user)
