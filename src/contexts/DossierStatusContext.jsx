@@ -14,7 +14,10 @@ import React, { createContext, useContext, useState, useCallback, useEffect } fr
 // refresh (showing the spinner) so the user knows a dossier is still in progress.
 
 const STORAGE_KEY = 'badgerboard_dossier_status'
-const MAX_GENERATING_AGE_MS = 6 * 60 * 1000 // 6 minutes — give up spinner after this
+// Matches GENERATION_MAX_WAIT_MS in Dossiers.jsx and the background function's
+// own 15-minute budget. At six minutes this context used to drop a perfectly
+// healthy run, which took the resume-after-refresh poll down with it.
+const MAX_GENERATING_AGE_MS = 15 * 60 * 1000
 
 function loadFromStorage() {
   try {

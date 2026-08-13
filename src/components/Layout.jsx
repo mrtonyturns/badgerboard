@@ -40,10 +40,21 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.27.4'
+const APP_VERSION = 'v1.28.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.28.0',
+    date: 'August 12, 2026',
+    changes: [
+      'Sidebar rebuilt: Candidates and Campaign Connect now stand on their own, the AI Tools tab is gone, and the Profiler lives inside Intelligence alongside Offices',
+      'Action tab now holds exactly what only Action plans get',
+      'Candidates: clicking a candidate always opens their record — a separate Profile button opens the AI-generated report',
+      'District Events now generates in the background with live progress you can navigate away from, real error messages instead of an endless spinner, and a search that sweeps every town, village, city, school and county board meeting in a local district while large districts get only the major or newsworthy ones',
+      'Profiler: freshly generated profiles appear in the library on their own — no refresh, even if you left the page or the run took longer than expected',
+    ],
+  },
   {
     version: 'v1.27.4',
     date: 'August 11, 2026',
@@ -379,34 +390,44 @@ const navItems = [
   // { to: '/door-knocking', icon: DoorOpen,      label: 'Door Knocking', badge: 'Beta', adminOnly: true },
 ]
 
-// ─── Consolidated navigation (v1.23) ─────────────────────────────────────────
+// ─── Consolidated navigation (v1.23, restructured v1.28) ─────────────────────
 // Sidebar main tabs; a section's pages are a horizontal tab strip at the top.
-// Todo (the Game Plan task board) stands alone; Calendar and Results — the old
-// Game Plan sub-tabs — live in Campaign's strip; Action holds the Action-plan
-// features and appears only for Action-plan accounts (and admins); Beta stays
-// gated to beta testers and admins.
+//
+// v1.28 restructure (owner-approved):
+//   a. Candidates is its own top-level sidebar item (direct link, like Todo).
+//   b. The AI Tools section is gone.
+//   c. Profiler moved into Intelligence's tab strip.
+//   d. Campaign Connect is its own top-level sidebar item — out of both the
+//      Campaign and Action strips — keeping its original gate (any paid plan;
+//      Action plans are always paid, so they keep it too, Scout does not).
+//   e. Action holds exactly the routes that are exclusive to Action plans.
+//      Audit of PLAN_CONFIG in lib/tiers.js: the only feature flags true on an
+//      Action plan and false on EVERY candidate plan are `prospecting`,
+//      `offices`, `multiGamePlan`, `bulkProfiler` and `bulkCredits`. Of those,
+//      `prospecting` is the only one that owns a route (/prospecting, gated by
+//      hasFeature(tier,'prospecting') in Prospecting.jsx). `offices` is a scope
+//      modifier — /offices ships to every plan and is not gated by it;
+//      `multiGamePlan` lives inside Todo, `bulkProfiler` is a button inside
+//      Profiler, `bulkCredits` is a billing option in Settings. Voter Lists has
+//      no plan flag at all (available on every plan) and Polling is beta-gated,
+//      not plan-gated — so neither belongs here.
 const NAV_SECTIONS = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, direct: { to: '/', end: true } },
   { key: 'todo',      label: 'Todo',      icon: Target, direct: { to: '/game-plan' } },
-  { key: 'intelligence', label: 'Intelligence', icon: Building2, extra: ['/places', '/elections'], items: [
-    { to: '/offices',    icon: Building2, label: 'Offices' },
-    { to: '/candidates', icon: Users,     label: 'Candidates' },
-  ] },
-  { key: 'ai', label: 'AI Tools', icon: Sparkles, extra: ['/dossiers'], items: [
-    { to: '/profiler', icon: FileText, label: 'Profiler' },
+  { key: 'candidates', label: 'Candidates', icon: Users, direct: { to: '/candidates' } },
+  { key: 'intelligence', label: 'Intelligence', icon: Building2, extra: ['/places', '/elections', '/dossiers'], items: [
+    { to: '/offices',  icon: Building2, label: 'Offices' },
+    { to: '/profiler', icon: FileText,  label: 'Profiler' },
   ] },
   { key: 'campaign', label: 'Campaign', icon: CalendarDays, items: [
     { to: '/game-plan?tab=calendar', icon: CalendarDays, label: 'Calendar', q: { path: '/game-plan', tab: 'calendar' } },
     { to: '/game-plan?tab=results',  icon: BarChart2,    label: 'Results',  q: { path: '/game-plan', tab: 'results' } },
     { to: '/events',      icon: CalendarDays, label: 'Events', badge: 'New' },
     { to: '/voter-lists', icon: UserCheck,    label: 'Voter Lists' },
-    // Candidate-side users get Campaign Connect on every paid plan; free
-    // (Scout) does not. Action-plan users find it under the Action tab instead.
-    { to: '/campaign-connect', icon: Users2, label: 'Campaign Connect', paidOnly: true, hideForActionPlan: true },
   ] },
+  { key: 'connect', label: 'Campaign Connect', icon: Users2, paidOnly: true, direct: { to: '/campaign-connect' } },
   { key: 'action', label: 'Action', icon: ListChecks, actionOnly: true, items: [
-    { to: '/prospecting',      icon: ListChecks, label: 'Prospecting' },
-    { to: '/campaign-connect', icon: Users2,     label: 'Campaign Connect' },
+    { to: '/prospecting', icon: ListChecks, label: 'Prospecting' },
   ] },
   { key: 'beta', label: 'Beta', icon: FlaskConical, betaOnly: true, items: [
     { to: '/polling',   icon: BarChart2, label: 'Polling', betaOnly: true },
@@ -429,6 +450,9 @@ function navItemVisible(item, { isAdmin, isBeta, isPaid, isActionPlan, tierConfi
 function sectionVisible(sec, gates) {
   if (sec.betaOnly && !(gates.isAdmin || gates.isBeta)) return false
   if (sec.actionOnly && !(gates.isAdmin || gates.isActionPlan)) return false
+  // Standalone (direct) sections carry their own plan gate — items inside a
+  // strip are filtered by navItemVisible instead.
+  if (sec.paidOnly && !(gates.isPaid || gates.isAdmin)) return false
   return true
 }
 
@@ -441,12 +465,11 @@ function itemBasePath(item) {
 }
 
 // Which section owns the current location. /game-plan splits on ?tab —
-// calendar/results belong to Campaign, the task board is Todo.
-function sectionForLocation(pathname, tab, isActionPlan = false) {
+// calendar/results belong to Campaign, the task board is Todo. Everything else
+// falls out of the section table: /candidates and /campaign-connect are their
+// own standalone sections, /dossiers and /profiler both belong to Intelligence.
+function sectionForLocation(pathname, tab) {
   if (pathname === '/') return NAV_SECTIONS[0]
-  if (pathname === '/campaign-connect' || pathname.startsWith('/campaign-connect/')) {
-    return NAV_SECTIONS.find(x => x.key === (isActionPlan ? 'action' : 'campaign'))
-  }
   if (pathname === '/game-plan' || pathname.startsWith('/game-plan/')) {
     return (tab === 'calendar' || tab === 'results')
       ? NAV_SECTIONS.find(x => x.key === 'campaign')
@@ -932,6 +955,8 @@ function SectionTabs({ items, pathname, tab }) {
     if (item.q) return (pathname === item.q.path || pathname.startsWith(item.q.path + '/')) && tab === item.q.tab
     const base = item.to.split('?')[0]
     if (base === '/game-plan') return pathname.startsWith('/game-plan') && tab !== 'calendar' && tab !== 'results'
+    // /dossiers and /profiler are the same page on two routes (see App.jsx).
+    if (base === '/profiler') return pathname.startsWith('/profiler') || pathname.startsWith('/dossiers')
     return pathname === base || pathname.startsWith(base + '/')
   }
   return (
@@ -978,7 +1003,7 @@ export default function Layout() {
   const gpTab = new URLSearchParams(search).get('tab')
   const isActionPlan = getUserPlanType(user) === 'action'
   const isPaid = getUserTier(user) !== 'scout'
-  const activeSection = sectionForLocation(pathname, gpTab, isActionPlan)
+  const activeSection = sectionForLocation(pathname, gpTab)
   const currentSectionKey = activeSection?.key || null
   useEffect(() => {
     if (!activeSection || activeSection.direct) return

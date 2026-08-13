@@ -49,6 +49,14 @@ import { filterSections } from '../lib/profileContent'
 const PAGE_SIZE = 25
 const PROGRESS_POLL_MS = 2500
 const PROGRESS_STALE_MS = 15 * 60 * 1000
+// generate-dossier-background has a 15-minute budget and a heavy run (7 research
+// passes + Opus with web search + digest + diff) regularly outlives six minutes.
+// The client used to stop watching at six, declare a timeout, and never look
+// again — so a profile that landed at 6:30 stayed invisible until a hard reload.
+const GENERATION_MAX_WAIT_MS = 15 * 60 * 1000
+// Independent of any in-page run: catches profiles that finish while this tab is
+// on another page, or after the watch above has given up.
+const LIBRARY_WATCH_MS = 20 * 1000
 const BULK_STAGGER_MS = 3000
 const ANNOTATION_PREFIX = 'dossier_annotation_'
 
@@ -218,6 +226,9 @@ export default function Dossiers() {
   }, [selected?.id, user?.id])
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
+  // Stamped on every successful library load; the completed-run watcher below
+  // uses it as the "what have I not seen yet" cutoff.
+  const lastFetchRef = useRef(Date.now())
   const fetchData = useCallback(async () => {
     const [{ data: c }, { data: d }, { data: monthly }] = await Promise.all([
       getCandidates({}),
@@ -231,6 +242,7 @@ export default function Dossiers() {
         : Promise.resolve({ data: [] }),
     ])
     if (!aliveRef.current) return
+    lastFetchRef.current = Date.now()
     setCandidates(c || [])
     setDossiers(d || [])
     setUsed((monthly || []).length)
@@ -243,6 +255,52 @@ export default function Dossiers() {
   }, [user?.id])
 
   useEffect(() => { fetchData() }, [fetchData])
+
+  // ── Completed-run watcher (bug fix) ───────────────────────────────────────
+  // The library only ever refreshed from the in-page generation loop in
+  // runGenerate(). If that loop wasn't running — the six-minute deadline had
+  // passed, the user had navigated away and the component unmounted, or the run
+  // was started from the candidate record — nothing refetched `dossiers`, so a
+  // finished profile never appeared until a hard reload. generate-dossier-
+  // background already stamps `dossier_generation_progress` with status='done'
+  // after the row is saved (reportStage(candidate_id, 4, 'done')), and RLS
+  // scopes that table to candidates this account owns, so one cheap polled
+  // query is enough to notice any run of ours finishing, whoever started it.
+  useEffect(() => {
+    if (!user?.id) return
+    let alive = true
+    const check = async () => {
+      if (!alive || document.visibilityState === 'hidden') return
+      try {
+        const { data } = await supabase
+          .from('dossier_generation_progress')
+          .select('candidate_id')
+          .eq('status', 'done')
+          .gt('updated_at', new Date(lastFetchRef.current - 5000).toISOString())
+          .limit(1)
+        if (alive && data?.length) fetchData()
+      } catch { /* transient — the next tick retries */ }
+    }
+    const iv = setInterval(check, LIBRARY_WATCH_MS)
+    return () => { alive = false; clearInterval(iv) }
+  }, [user?.id, fetchData])
+
+  // Coming back to the tab (or the page) re-reads the library — the cheapest
+  // possible catch-all for a run that finished while you were elsewhere.
+  useEffect(() => {
+    // focus and visibilitychange both fire on a tab return — one refetch is enough.
+    const onWake = () => {
+      if (document.visibilityState !== 'visible') return
+      if (Date.now() - lastFetchRef.current < 3000) return
+      fetchData()
+    }
+    window.addEventListener('focus', onWake)
+    document.addEventListener('visibilitychange', onWake)
+    return () => {
+      window.removeEventListener('focus', onWake)
+      document.removeEventListener('visibilitychange', onWake)
+    }
+  }, [fetchData])
 
   // Deep link from the District Dashboard: /profiler?newname=…&context=…
   useEffect(() => {
@@ -355,7 +413,7 @@ export default function Dossiers() {
     setGenerating(true)
     setGenCandidateId(pendingCandidateId)
 
-    const MAX_WAIT = 6 * 60 * 1000
+    const MAX_WAIT = GENERATION_MAX_WAIT_MS
     const pollStart = generationStartedAt ? new Date(generationStartedAt).getTime() : Date.now()
     const deadline = pollStart + MAX_WAIT
     const startISO = generationStartedAt || new Date(pollStart - 1000).toISOString()
@@ -433,7 +491,7 @@ export default function Dossiers() {
 
       // Belt-and-suspenders alongside the progress poll: the new dossier row
       // appearing is the only thing that proves the report actually landed.
-      const deadline = Date.now() + 6 * 60 * 1000
+      const deadline = Date.now() + GENERATION_MAX_WAIT_MS
       let fresh = null
       while (aliveRef.current && !genAbortRef.current && Date.now() < deadline) {
         await sleep(5000)
@@ -442,7 +500,9 @@ export default function Dossiers() {
         if (fresh) break
       }
       if (!aliveRef.current || genAbortRef.current) return
-      if (!fresh) throw new Error('This profile is taking longer than six minutes. It may still be saving — check back shortly.')
+      // Giving up watching is not the same as failing: the run keeps going on the
+      // server and the completed-run watcher above will pull it into the library.
+      if (!fresh) throw new Error('This profile is taking longer than usual. It is still running on the server — it will appear here on its own as soon as it saves.')
 
       await fetchData()
       await openDossier(fresh.id)

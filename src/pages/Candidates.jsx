@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { Users, Plus, Search, Filter, ExternalLink, Edit2, Trash2, X, Phone, Mail, Globe, Telescope, Lock, Wand2, CheckCircle, AlertCircle, Map, LayoutList, Upload, Zap } from 'lucide-react'
+import { Users, Plus, Search, Filter, ExternalLink, Edit2, Trash2, X, Phone, Mail, Globe, Telescope, Lock, Wand2, CheckCircle, AlertCircle, Map, LayoutList, Upload, Zap, FileText } from 'lucide-react'
 import { supabase, getCandidates, getOffices, getElections, createCandidate, deleteCandidate, updateCandidate } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserTier, getUserBracket, getBracketConfig, getUserPlanType, getActiveCandidateLimit, hasFeature, ADMIN_EMAILS } from '../lib/tiers'
@@ -921,7 +921,17 @@ export default function Candidates() {
                                   </button>
                                 )
                               })()}
-                              <Link to={`/candidates/${c.id}`} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors" title="View profile">
+                              {/* Primary click (the name) opens the candidate RECORD.
+                                  This is the separate, explicit affordance for the
+                                  AI-generated profile — never the row's default. */}
+                              <Link
+                                to={`/dossiers?candidate=${c.id}`}
+                                className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors"
+                                title={`Open ${c.name}'s AI-generated profile`}
+                              >
+                                <FileText className="w-4 h-4" />
+                              </Link>
+                              <Link to={`/candidates/${c.id}`} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors" title="Open candidate record">
                                 <ExternalLink className="w-4 h-4" />
                               </Link>
                               <button onClick={() => handleDelete(c.id, c.name)} className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-brand-red transition-colors">

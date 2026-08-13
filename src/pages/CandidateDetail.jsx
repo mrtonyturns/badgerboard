@@ -109,9 +109,28 @@ export default function CandidateDetail() {
     let cancelled = false
     setLoading(true)
     viewMarkedRef.current = false
+    // Same mounted-across-:id-changes trap as the view sync below: an edit
+    // session opened on the previous candidate must not carry over.
+    setEditing(false); setSaveError('')
     fetchAll().finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [id])
+
+  // ── Route → view sync (bug fix) ─────────────────────────────────────────────
+  // React Router keeps this component MOUNTED when only the :id param changes,
+  // so `group`/`sub` — which are seeded from the URL once, at mount — survived
+  // from one candidate to the next. Open candidate A, click Intel → News Feed
+  // or Record → Profile History (both render generated-profile content), go back
+  // to Candidates and click candidate B, and B opened straight into that
+  // generated view instead of B's record. A candidate URL with no ?group=
+  // always means "start on the record's Overview", so re-derive both from the
+  // URL whenever the candidate or the params change.
+  const routeGroup = searchParams.get('group')
+  const routeView  = searchParams.get('view')
+  useEffect(() => {
+    setGroup(routeGroup || 'overview')
+    setSub(routeView || null)
+  }, [id, routeGroup, routeView])
 
   // Refresh just the candidate row — used after the AI lock endpoint returns so
   // ai_access_notes / ai_access_locked_at are re-read from the server.

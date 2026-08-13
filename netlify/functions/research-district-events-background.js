@@ -2,13 +2,63 @@
 // Finds upcoming community events in a district using Perplexity (web research)
 // + Claude (structuring + political-lean classification), enriches with og:image
 // thumbnails, and caches per district for 24 hours.
+//
 // Runs as a Netlify BACKGROUND function (-background suffix → 15 min budget):
-// the client gets a 202 immediately and polls the district_events cache row.
+// Netlify answers the browser with 202 BEFORE this handler runs, which means
+// every statusCode returned below is thrown away. So the handler's real output
+// contract is the pair of rows it writes:
+//   district_events           — the result cache (shared, 24 h TTL)
+//   district_events_progress  — the phase/status row the client polls
+// Every phase boundary and every terminal outcome (done or error) writes the
+// progress row; without it a failure is invisible and the client spins forever.
 
 import COUNTY_SOURCES from './_county-sources.json'
 import { matchPartisanSignals } from './_partisan-signals.js'
 
 const CACHE_HOURS = 24
+
+// Progress stages, mirrored by PHASE_LABELS in src/pages/Events.jsx.
+const STAGE_SEARCH    = 1   // Perplexity sweep of public calendars & community sources
+const STAGE_NEWS      = 2   // local-news pass
+const STAGE_STRUCTURE = 3   // Claude structuring + lean classification
+const STAGE_ENRICH    = 4   // registry verification, images, addresses
+
+// ── District size ─────────────────────────────────────────────────────────────
+// A municipal or county district is small enough to enumerate exhaustively: the
+// campaign can plausibly attend every town, village, city, school and county
+// board meeting in it. A legislative or congressional district spans dozens of
+// municipalities and hundreds of boards, so an exhaustive sweep is both
+// impossible to research well and useless to the user — those districts get the
+// major bodies plus whatever is actually drawing attention.
+export function classifyDistrictSize(districtKey = '', districtName = '') {
+  const type = String(districtKey).split('-')[0].toLowerCase()
+  if (['city', 'county', 'municipal', 'town', 'village', 'school'].includes(type)) {
+    return { size: 'small', label: type === 'county' ? 'single county' : 'single municipality' }
+  }
+  if (['assembly', 'senate', 'congress', 'statewide', 'state'].includes(type)) {
+    return { size: 'large', label: 'multi-municipality legislative district' }
+  }
+  // Unknown key shape — fall back to the name, and default to LARGE so an
+  // unrecognised district never triggers an exhaustive board-by-board sweep.
+  if (/\b(county|city|village|town(ship)?|school district)\b/i.test(districtName)
+      && !/\b(assembly|senate|congress|congressional|statewide)\b/i.test(districtName)) {
+    return { size: 'small', label: 'local district' }
+  }
+  return { size: 'large', label: 'multi-municipality district' }
+}
+
+/** The government-meetings rule for the research + structuring prompts. */
+export function meetingsDirective(size, label) {
+  if (size === 'small') {
+    return `GOVERNMENT MEETINGS — EXHAUSTIVE (this is a ${label}, small enough to cover completely).
+List EVERY upcoming public meeting of EVERY local governing body whose jurisdiction covers these communities. No "major ones only" filter, no exceptions: common council / city council, town board, village board, county board of supervisors AND its standing committees, school board (every district serving these communities), plan commission, zoning board of appeals, police and fire commission, library board, park and recreation board, utility commission, sanitary and lake districts, and any other municipal board or commission that posts a public agenda. Check each municipality's own website and agenda portal plus the statutory public meeting-notice postings. Recurring bodies get ONE entry starting at their next occurrence, with the schedule stated (e.g. "2nd Tuesday, 6:00 PM"). Never omit a board for being small, routine or sparsely attended — in a district this size those rooms are the district.`
+  }
+  return `GOVERNMENT MEETINGS — MAJOR OR NEWSWORTHY ONLY (this is a ${label} covering many municipalities).
+Do NOT try to enumerate every town, village, school and county board in it — there are hundreds and the campaign cannot attend them. Include a government meeting ONLY if it clears one of these two bars:
+ (1) MAJOR BODY — a county board of supervisors of a county in the district, or the common council or school board of one of the district's largest communities.
+ (2) NOTABLE ATTENTION — the meeting is drawing real public attention or buzz: local news has previewed or covered it, its agenda carries a contested or high-stakes item (referendum, budget or levy vote, school closure or boundary change, major development, ordinance fight, controversial appointment), or organized turnout is being promoted for it.
+Routine, uncontested small-board meetings are noise at this district size — skip them entirely.`
+}
 
 /** Build a per-county source brief for the research prompts. */
 function countySourceBrief(counties = []) {
@@ -126,13 +176,36 @@ export const handler = async (event) => {
   const { ADMIN_EMAILS } = await import('./_config.js')
   const isAdmin = ADMIN_EMAILS.includes((authUser.email || '').toLowerCase())
 
-  // Audit fix (#18): this is the most expensive AI endpoint in the app (up to
-  // 4 Perplexity + 3 Opus calls + 30 page fetches per run) and had NO rate
-  // limit — any free signup could loop it with force:true for unbounded spend.
-  const { enforceRateLimit } = await import('./_rate-limit.js')
-  const limited = await enforceRateLimit(authUser.id, 'research-district-events', headers)
-  if (limited) return limited
+  const sb = (path, opts = {}) => fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    ...opts,
+    headers: {
+      apikey: SUPABASE_SERVICE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      'Content-Type': 'application/json',
+      ...(opts.headers || {}),
+    },
+  })
 
+  // The client's only window into this run. Best-effort: a failed progress write
+  // must never take down a run that is otherwise working.
+  const reportStage = async (key, stage, status = 'running', message = null) => {
+    if (!key) return
+    try {
+      await sb('district_events_progress', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify({
+          district_key: key, stage, status, message,
+          ...(stage === STAGE_SEARCH && status === 'running' ? { started_at: new Date().toISOString() } : {}),
+          updated_at: new Date().toISOString(),
+        }),
+      })
+    } catch (e) { console.warn('[district-events] reportStage failed:', e.message) }
+  }
+
+  // Body parse + key validation moved AHEAD of the rate limiter: without a
+  // district_key we cannot tell the client anything, and a 429 answered by
+  // Netlify's 202 used to leave the page spinning for two minutes with no clue.
   let body
   try { body = JSON.parse(event.body || '{}') } catch {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) }
@@ -148,32 +221,49 @@ export const handler = async (event) => {
   if (!/^[\w:.\-]{1,80}$/.test(district_key)) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid district_key' }) }
   }
+
+  // Audit fix (#18): this is the most expensive AI endpoint in the app (up to
+  // 4 Perplexity + 3 Opus calls + 30 page fetches per run) and had NO rate
+  // limit — any free signup could loop it with force:true for unbounded spend.
+  const { enforceRateLimit } = await import('./_rate-limit.js')
+  const limited = await enforceRateLimit(authUser.id, 'research-district-events', headers)
+  if (limited) {
+    await reportStage(district_key, STAGE_SEARCH, 'error',
+      'You have run a lot of event searches recently — give it a few minutes and try again.')
+    return limited
+  }
+
   const district_name    = String(rawName).slice(0, 120)
   const area_description = rawArea ? String(rawArea).slice(0, 600) : null
   const counties         = (Array.isArray(rawCounties) ? rawCounties : []).slice(0, 8).map(c => String(c).slice(0, 40))
-  const force            = Boolean(rawForce) && isAdmin
+  const wantsForce       = Boolean(rawForce)
+  const force            = wantsForce && isAdmin
   const sourceBrief = countySourceBrief(counties)
   // In-district community list (area_description = "Place1, Place2, ... (X, Y counties)").
   // Used to fence every research + structuring prompt to the district's actual footprint.
   const communities = (area_description || district_name).split('(')[0].trim().replace(/,\s*$/, '')
   const countyNames = counties.length ? counties.map(c => `${c} County`).join(', ') : null
 
-  const sb = (path, opts = {}) => fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    ...opts,
-    headers: {
-      apikey: SUPABASE_SERVICE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      'Content-Type': 'application/json',
-      ...(opts.headers || {}),
-    },
-  })
+  // District-size awareness drives how aggressively we sweep local government
+  // meetings — exhaustive for a municipality/county, major-or-newsworthy only
+  // for a legislative/congressional district.
+  const { size: districtSize, label: districtSizeLabel } = classifyDistrictSize(district_key, district_name)
+  const MEETINGS_RULE = meetingsDirective(districtSize, districtSizeLabel)
 
+  await reportStage(district_key, STAGE_SEARCH, 'running')
+
+  try {
   // ── Cache (24h TTL) ─────────────────────────────────────────────────────────
+  // Also the resolution path for a non-admin who pressed Refresh: their force is
+  // downgraded to false above, so without marking the run done here the client
+  // would poll for a fetched_at that is never going to move and time out on a
+  // district whose cache is perfectly good.
   if (!force) {
     const cacheRes = await sb(`district_events?district_key=eq.${encodeURIComponent(district_key)}&select=events,fetched_at`)
     const rows = await cacheRes.json()
     const row = rows?.[0]
     if (row?.events && row.fetched_at && (Date.now() - new Date(row.fetched_at).getTime()) < CACHE_HOURS * 3600 * 1000) {
+      await reportStage(district_key, STAGE_ENRICH, 'done')
       return { statusCode: 200, headers, body: JSON.stringify({ cached: true, events: row.events, fetched_at: row.fetched_at }) }
     }
   }
@@ -204,13 +294,15 @@ Run searches for EACH of the larger communities in that list (e.g. "<community> 
 - Chamber of commerce events, ribbon cuttings, business expos
 - Library programs and public talks
 - School events open to the public (sports, plays, fundraisers, craft shows)
-- Town/village/city board, county board, and school board meetings
+- Local government meetings — see the GOVERNMENT MEETINGS rule below
 - County Republican and Democratic party meetings and events; candidate town halls
 - Union and labor events
 - Charity 5Ks, runs, walks and benefit dinners
 - Car shows, tractor shows, gun and sportsmen's shows, fishing tournaments
 - Brewery/winery events, trivia and community nights
 - Senior center and community center events
+
+${MEETINGS_RULE}
 
 Aim for 25-40 events; if you find more, list more — do NOT stop at the big well-known ones. Include recurring weekly ones (one mention with its schedule) and annual ones whose usual dates fall in the window — mark approximate dates. ONLY include events open to the general public with no invitation, membership, or private registration required — skip private parties, members-only club events, and invite-only gatherings. For each: name, date(s), start time, venue with its STREET ADDRESS and city, organizer/host, a one-sentence description, and the event website URL if known.${sourceBrief ? ` Check these county-specific sources known to publish local events:\n${sourceBrief}` : ''}` }
           ],
@@ -252,6 +344,7 @@ Aim for 25-40 events; if you find more, list more — do NOT stop at the big wel
   }
 
   let newsResearch = null
+  await reportStage(district_key, STAGE_NEWS, 'running')
   if (PERPLEXITY_API_KEY) {
     try {
       const ctrlN = new AbortController()
@@ -263,7 +356,10 @@ Aim for 25-40 events; if you find more, list more — do NOT stop at the big wel
           model: 'sonar',
           messages: [
             { role: 'system', content: 'You research LOCAL NEWS coverage of upcoming community events in Wisconsin. Prefer local TV stations, local newspapers, and city/chamber announcement pages. Name the outlet for every item. Small announcements (club breakfasts, church suppers, library programs, board meetings) are just as important as big-festival coverage. Only report events held inside the exact communities given.' },
-            { role: 'user', content: `Check local news outlets and their community/event calendars covering ${placeList.join(', ')}, Wisconsin.${sourceBrief ? ` Prioritize these county-specific sources:\n${sourceBrief}` : ' Check local TV, local papers and city weeklies, chamber and city hall announcements.'}\nWhat upcoming public events in the next 60 days have they announced or covered? Include small items too — community briefs, club and church announcements, meeting notices — not just headline events. ONLY include events whose venue is inside one of these communities: ${communities}. For each: event name, date, time, venue with street address, city, host, one-sentence description, the OUTLET that reported it, and the article/calendar URL if available. List as many as you find (15+ is great).` }
+            { role: 'user', content: `Check local news outlets and their community/event calendars covering ${placeList.join(', ')}, Wisconsin.${sourceBrief ? ` Prioritize these county-specific sources:\n${sourceBrief}` : ' Check local TV, local papers and city weeklies, chamber and city hall announcements.'}\nWhat upcoming public events in the next 60 days have they announced or covered? Include small items too — community briefs, club and church announcements, meeting notices — not just headline events. ONLY include events whose venue is inside one of these communities: ${communities}.
+
+${MEETINGS_RULE}
+ For each: event name, date, time, venue with street address, city, host, one-sentence description, the OUTLET that reported it, and the article/calendar URL if available. List as many as you find (15+ is great).` }
           ],
           max_tokens: 2500,
         }),
@@ -283,10 +379,13 @@ Aim for 25-40 events; if you find more, list more — do NOT stop at the big wel
     // as a "valid" 24h cache while the client rejected it, bricking the
     // district behind 120-second spinners for a full day. Just fail; the next
     // request retries research.
+    await reportStage(district_key, STAGE_SEARCH, 'error',
+      'The event research service did not respond. Nothing was saved — try again in a few minutes.')
     return { statusCode: 502, headers, body: JSON.stringify({ error: 'Event research unavailable' }) }
   }
 
   // ── Step 2: Claude structures + classifies lean ─────────────────────────────
+  await reportStage(district_key, STAGE_STRUCTURE, 'running')
   const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
@@ -331,6 +430,7 @@ Lean rules — use this SIGNAL HIERARCHY (strongest evidence wins; cite the tier
 - "basis" must name the signal used, e.g. "T1: county party host", "T2: union host (AFSCME)", "T3: civic host, R+8 area crowd". Never guess a partisan label from the event NAME alone (a "Freedom Fest" is not conservative without a partisan host).
 DISTRICT BOUNDARY RULE (strict): this list is for ${district_name} ONLY. The in-district communities are: ${communities}. Include an event ONLY if its city/venue is in one of those communities. The single exception: county fairs and county-wide signature events of ${countyNames || "the district's counties"} may be included even if their venue city is not on the list. EXCLUDE everything else — an event in a neighboring town outside the list must be dropped no matter how close or how big it is. When research says an event is "near" or "in the area of" a community without naming an in-district city, drop it.
 Include EVERY in-district event from the research that is public and has a usable date in the next ~60 days — do not drop events merely because a date is approximate (keep them, using the best-estimate date), and NEVER drop an event for being small or routine (club breakfasts, fish fries, library talks, board meetings are as valuable to a campaign as festivals). There is no maximum — 25-40+ events is the expected output when the research supports it. Recurring weekly events get one entry starting at the next occurrence.
+${MEETINGS_RULE}
 PUBLIC-ONLY RULE: include only events open to the general public. EXCLUDE anything private, invite-only, members-only, or requiring approval to attend (private fundraisers with invitation lists, closed club meetings, school-family-only events). Free-and-open government meetings, fairs, markets, festivals, and ticketed-but-open events all count as public. Output ONLY the JSON object.
 
 Merge events found across ALL sources below and dedupe by name, keeping the fullest details for each event. SOURCE LABELING (strict): if an event appears in LOCAL NEWS RESEARCH, set source="news" and source_note to the outlet name (e.g. "Wausau Pilot & Review") — even if it also appears in web research. If an event appears only in the X posts, set source="x" and source_note to the handle (e.g. "@WausauChamber on X"). Otherwise source="web" with source_note null. Events found ONLY on X must clearly be real public events with a date — skip vague chatter, national politics, and anything that is not a local event announcement.
@@ -347,6 +447,8 @@ ${xPosts || '(none available)'}`,
     }),
   })
   if (!claudeRes.ok) {
+    await reportStage(district_key, STAGE_STRUCTURE, 'error',
+      'Events were found but could not be organised. Nothing was saved — try Refresh again.')
     return { statusCode: 502, headers, body: JSON.stringify({ error: 'Event structuring failed' }) }
   }
   const cData = await claudeRes.json()
@@ -356,6 +458,8 @@ ${xPosts || '(none available)'}`,
     const raw = (cData.content?.find(b => b.type === 'text')?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
     parsed = JSON.parse(raw)
   } catch {
+    await reportStage(district_key, STAGE_STRUCTURE, 'error',
+      'The event list came back unreadable. Nothing was saved — try Refresh again.')
     return { statusCode: 502, headers, body: JSON.stringify({ error: 'Could not parse event output' }) }
   }
   // ── Code-level guards: district boundary + past dates ─────────────────────
@@ -389,7 +493,11 @@ ${xPosts || '(none available)'}`,
           model: 'sonar-pro',
           messages: [
             { role: 'system', content: 'You are a Wisconsin community events researcher. Only public events. Include street addresses. Small events (fish fries, club breakfasts, library programs, board meetings) count as much as big ones. Only report events physically held inside the exact communities given.' },
-            { role: 'user', content: `List public community events in the next 60 days held INSIDE these Wisconsin communities and ONLY these communities: ${communities}. Cover the small stuff too: church fish fries and picnics, VFW/American Legion and Lions/Rotary/Kiwanis events, library programs, school events open to the public, town/village/school board meetings, county party (GOP/Dem) meetings, charity runs and benefit dinners, car/tractor/sportsmen shows, senior center events — plus fairs, markets, festivals, parades, concerts. Skip events already in this list: ${events.map(e => e.name).join('; ') || 'none'}. Find as many NEW ones as you can (15+). For each: name, date, time, venue with street address, city, host, one-sentence description, URL if known.` }
+            { role: 'user', content: `List public community events in the next 60 days held INSIDE these Wisconsin communities and ONLY these communities: ${communities}. Cover the small stuff too: church fish fries and picnics, VFW/American Legion and Lions/Rotary/Kiwanis events, library programs, school events open to the public, county party (GOP/Dem) meetings, charity runs and benefit dinners, car/tractor/sportsmen shows, senior center events — plus fairs, markets, festivals, parades, concerts.
+
+${MEETINGS_RULE}
+
+Skip events already in this list: ${events.map(e => e.name).join('; ') || 'none'}. Find as many NEW ones as you can (15+). For each: name, date, time, venue with street address, city, host, one-sentence description, URL if known.` }
           ],
           max_tokens: 2500,
         }),
@@ -422,6 +530,8 @@ ${extra}` }],
       }
     } catch (e) { console.warn('[district-events] supplemental pass skipped:', e.message) }
   }
+
+  await reportStage(district_key, STAGE_ENRICH, 'running')
 
   // ── Lean hardening pass 1: deterministic partisan-signal lexicon ───────────
   // (v1.18.1) The curated Wisconsin org lexicon (_partisan-signals.js) overrides
@@ -532,12 +642,37 @@ ${extra}` }],
     } catch (_) { /* no image — card uses category visual */ }
   }))
 
+  if (!events.length) {
+    // Nothing usable came back. Deliberately do NOT stamp an empty cache row
+    // (audit fix #18) — but the client must still be told, or it spins.
+    await reportStage(district_key, STAGE_ENRICH, 'error',
+      'No public events could be confirmed for this area right now — try Refresh later.')
+    return { statusCode: 200, headers, body: JSON.stringify({ cached: false, events: [], fetched_at: null }) }
+  }
+
   const fetched_at = new Date().toISOString()
-  await sb('district_events', {
+  const saveRes = await sb('district_events', {
     method: 'POST',
     headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
     body: JSON.stringify({ district_key, name: district_name, events, fetched_at, updated_at: fetched_at }),
   })
+  if (!saveRes.ok) {
+    const detail = await saveRes.text().catch(() => '')
+    console.error('[district-events] cache write failed:', saveRes.status, detail.slice(0, 300))
+    await reportStage(district_key, STAGE_ENRICH, 'error',
+      'The events were found but could not be saved. Try Refresh again.')
+    return { statusCode: 502, headers, body: JSON.stringify({ error: 'Could not save events' }) }
+  }
 
+  await reportStage(district_key, STAGE_ENRICH, 'done')
   return { statusCode: 200, headers, body: JSON.stringify({ cached: false, events, fetched_at }) }
+
+  } catch (err) {
+    // A background invocation swallows thrown errors entirely — without this the
+    // page would poll a status row that never leaves "running".
+    console.error('[district-events] unhandled error:', err?.stack || err?.message || err)
+    await reportStage(district_key, STAGE_SEARCH, 'error',
+      'Something went wrong while researching this area. Nothing was saved — try again.')
+    return { statusCode: 500, headers, body: JSON.stringify({ error: 'Event research failed' }) }
+  }
 }

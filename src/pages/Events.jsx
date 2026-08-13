@@ -92,6 +92,29 @@ const CAL_META = {
   outlook: { name: 'Outlook Calendar', color: '#0F6CBD', letter: 'O' },
 }
 
+// ── Background research progress ──────────────────────────────────────────────
+// research-district-events-background.js is a Netlify BACKGROUND function, so
+// the browser gets a 202 before the handler even runs and every status code it
+// returns is discarded. The real channel is `district_events_progress`, which
+// the function writes at each phase boundary and on every terminal outcome.
+// Because that row lives on the server, a run keeps going — and keeps being
+// visible — after you navigate away from this page and come back.
+// Stage numbers mirror STAGE_* in the function.
+const PHASE_LABELS = [
+  'Searching public calendars and community sources…',
+  'Checking local news coverage…',
+  'Organising events and reading each crowd…',
+  'Adding venues, addresses and photos…',
+]
+const POLL_MS            = 3000
+const MAX_WAIT_MS        = 8 * 60 * 1000    // the function's budget is 15 min; real runs are 1–5
+const HEARTBEAT_STALE_MS = 3 * 60 * 1000    // progress row untouched this long ⇒ the run died
+const phaseLabel = (stage) => PHASE_LABELS[Math.min(Math.max(Number(stage) || 1, 1), 4) - 1]
+const freshMs = (iso) => {
+  const t = Date.parse(iso || '')
+  return Number.isFinite(t) ? Date.now() - t : Infinity
+}
+
 function fmtDate(e) {
   const opts = { month: 'short', day: 'numeric' }
   const s = new Date(e.date_start + 'T12:00:00')
@@ -166,30 +189,102 @@ export default function Events() {
   }, [mode, index]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const CACHE_MS = 24 * 3600 * 1000
+
+  const readCache = useCallback(async (key) => {
+    const { data } = await supabase.from('district_events')
+      .select('events, fetched_at').eq('district_key', key).maybeSingle()
+    return data || null
+  }, [])
+
+  // Returns null when the row doesn't exist AND when the table isn't there yet
+  // (migration not applied) — callers then fall back to watching the cache row,
+  // so this is a pure upgrade, never a new failure mode.
+  const readProgress = useCallback(async (key) => {
+    const { data } = await supabase.from('district_events_progress')
+      .select('stage, status, message, started_at, updated_at')
+      .eq('district_key', key).maybeSingle()
+    return data || null
+  }, [])
+
+  /** Watch a run that is already in flight (ours or someone else's) to completion. */
+  const watchRun = useCallback(async (key, startedAt, alive) => {
+    const deadline = startedAt + MAX_WAIT_MS
+    let sawProgress = false
+    for (;;) {
+      await new Promise(r => setTimeout(r, POLL_MS))
+      if (!alive()) return
+      const [prog, row] = await Promise.all([readProgress(key), readCache(key)])
+      if (!alive()) return
+
+      // The cache row landing is proof the run finished, whatever the status row says.
+      if (row?.fetched_at && new Date(row.fetched_at).getTime() >= startedAt - 5000 && row.events?.length) {
+        setEvents(row.events); setFetchedAt(row.fetched_at); setPhase(''); setLoading(false)
+        return
+      }
+
+      if (prog && freshMs(prog.updated_at) < HEARTBEAT_STALE_MS) {
+        sawProgress = true
+        if (prog.status === 'error') {
+          throw new Error(prog.message || 'Event research failed — try Refresh again.')
+        }
+        if (prog.status === 'done') {
+          // Includes the "your cache is still good" case, where nothing new is written.
+          if (row?.events?.length) {
+            setEvents(row.events); setFetchedAt(row.fetched_at); setPhase(''); setLoading(false)
+            return
+          }
+          throw new Error('No public events found for this area right now — try Refresh later.')
+        }
+        setPhase(phaseLabel(prog.stage))
+      } else if (sawProgress) {
+        // We had a heartbeat and lost it: the function died mid-run. Say so now
+        // instead of sitting on a spinner until the deadline.
+        throw new Error('The event search stopped unexpectedly — try Refresh again.')
+      }
+
+      if (Date.now() > deadline) {
+        throw new Error('This area is taking longer than expected. The search is still running in the background — come back in a minute and press Refresh.')
+      }
+    }
+  }, [readCache, readProgress])
+
   const loadEvents = useCallback(async (force = false) => {
     if (!target) return
+    const key = target.key
     const gen = ++pollGenRef.current
     const alive = () => pollGenRef.current === gen
     setLoading(true); setError(null); setPhase('Checking for cached events…')
     try {
       // 1. Cache first — shared across all users, refreshed daily
       if (!force) {
-        const { data: row } = await supabase.from('district_events')
-          .select('events, fetched_at').eq('district_key', target.key).maybeSingle()
+        const row = await readCache(key)
         if (!alive()) return
         if (row?.events?.length && row.fetched_at && Date.now() - new Date(row.fetched_at).getTime() < CACHE_MS) {
-          setEvents(row.events); setFetchedAt(row.fetched_at); setLoading(false)
+          setEvents(row.events); setFetchedAt(row.fetched_at); setPhase(''); setLoading(false)
           return
         }
       }
-      // 2. Kick off the background research (202 returns immediately), then poll the cache
+
+      // 2. Is a run for this area already in flight? Then attach to it instead of
+      //    starting a second one — this is what makes progress survive leaving
+      //    the page (and stops two users burning double the research spend).
+      const existing = await readProgress(key)
+      if (!alive()) return
+      if (existing?.status === 'running' && freshMs(existing.updated_at) < HEARTBEAT_STALE_MS) {
+        setPhase(phaseLabel(existing.stage))
+        await watchRun(key, Date.parse(existing.started_at || existing.updated_at) || Date.now(), alive)
+        return
+      }
+
+      // 3. Kick off the background research (Netlify answers 202 immediately —
+      //    every real outcome comes back through the progress row).
       const startedAt = Date.now()
       const { data: { session } } = await supabase.auth.getSession()
       const res = await fetch('/.netlify/functions/research-district-events-background', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
         body: JSON.stringify({
-          district_key: target.key,
+          district_key: key,
           district_name: target.name,
           counties: target.counties || [],
           force,
@@ -198,24 +293,14 @@ export default function Events() {
       })
       if (!alive()) return
       if (res.status !== 202 && !res.ok) throw new Error('Could not start event research — try again')
-      setPhase('Searching for public events in your district…')
-      for (let i = 0; i < 40; i++) {
-        await new Promise(r => setTimeout(r, 3000))
-        if (!alive()) return
-        if (i === 8) setPhase('Classifying audiences and gathering addresses…')
-        const { data: row } = await supabase.from('district_events')
-          .select('events, fetched_at').eq('district_key', target.key).maybeSingle()
-        if (!alive()) return
-        if (row?.fetched_at && new Date(row.fetched_at).getTime() >= startedAt - 5000) {
-          if (!row.events?.length) throw new Error('No public events found for this district right now — try Refresh later')
-          setEvents(row.events); setFetchedAt(row.fetched_at); setLoading(false)
-          return
-        }
-      }
-      throw new Error('Research is taking longer than expected — try Refresh in a minute')
-    } catch (e) { if (alive()) setError(e.message) }
+      setPhase(PHASE_LABELS[0])
+      await watchRun(key, startedAt, alive)
+    } catch (e) {
+      if (alive()) { setError(e.message); setPhase(''); setLoading(false) }
+      return
+    }
     if (alive()) setLoading(false)
-  }, [target?.key]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [target?.key, readCache, readProgress, watchRun]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // auto-load when office changes (cache-first — cheap)
   useEffect(() => { if (target?.key) { setEvents(null); loadEvents(false) } }, [target?.key]) // eslint-disable-line
@@ -436,13 +521,31 @@ export default function Events() {
       )}
 
       {/* loading / error / empty */}
-      {loading && !events && (
-        <div className="card flex flex-col items-center justify-center py-16">
-          <Loader2 className="w-8 h-8 text-brand-red animate-spin mb-3" />
-          <p className="text-sm font-bold text-gray-700">{phase}</p>
-          <p className="text-xs text-gray-400 font-semibold mt-1">First search for a district takes ~30 seconds, then it's cached for everyone</p>
-        </div>
-      )}
+      {loading && !events && (() => {
+        const activeStage = PHASE_LABELS.indexOf(phase)   // -1 while checking the cache
+        return (
+          <div className="card flex flex-col items-center justify-center py-16">
+            <Loader2 className="w-8 h-8 text-brand-red animate-spin mb-3" />
+            <p className="text-sm font-bold text-gray-700">{phase || 'Checking for cached events…'}</p>
+            {activeStage >= 0 && (
+              <>
+                <div className="flex gap-1.5 mt-4 w-full max-w-sm px-6">
+                  {PHASE_LABELS.map((_, i) => (
+                    <span key={i} className={`h-1.5 flex-1 rounded-full ${
+                      i < activeStage ? 'bg-brand-red'
+                      : i === activeStage ? 'bg-brand-red/40 animate-pulse'
+                      : 'bg-gray-200'}`} />
+                  ))}
+                </div>
+                <p className="text-xs text-gray-400 font-semibold mt-2">Step {activeStage + 1} of {PHASE_LABELS.length}</p>
+              </>
+            )}
+            <p className="text-xs text-gray-400 font-semibold mt-2 text-center max-w-md">
+              This runs on the server — you can leave this page and come back. A first search takes a couple of minutes, then it&rsquo;s cached for everyone.
+            </p>
+          </div>
+        )
+      })()}
       {error && (
         <div className="card py-6 text-center">
           <p className="text-sm font-bold text-red-600">{error}</p>
