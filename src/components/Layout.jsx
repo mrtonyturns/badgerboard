@@ -41,10 +41,17 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.31.0'
+const APP_VERSION = 'v1.31.1'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.31.1',
+    date: 'August 12, 2026',
+    changes: [
+      'Monitoring slots are now enforced server-side, and election results move to Certified automatically once the county canvass completes \u2014 with a one-click admin certify for each election',
+    ],
+  },
   {
     version: 'v1.31.0',
     date: 'August 12, 2026',

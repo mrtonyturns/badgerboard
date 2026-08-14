@@ -21,6 +21,7 @@
 //   set_status       { contest_id, status, source }   admin override
 //   reset_status_auto{ contest_id }                   hand the contest back to the engine
 //   advance_unopposed{ election_id, dry_run? }        call every uncontested race at once
+//   certify_election { election_id, dry_run? }        'called' → 'certified' after the canvass
 //
 // ─── Determination engine wiring (Phase 1) ──────────────────────────────────
 // After any mutation that changes a contest's vote or precinct picture
@@ -46,6 +47,7 @@ const { cors, json, serviceClient, requireAdmin } = require('./_shared')
 const { determineStatus, ALLOWED_STATUSES } = require('./_determination')
 const { notifyContestChanges, sendStatusUpdateNow } = require('./_result-notify')
 const { callEmbargoActive, ctParts } = require('./election-results-poller')
+const { certifyElectionContests } = require('./_certify')
 
 // Column whitelists — never pass client objects straight to the DB
 const ELECTION_FIELDS = ['name', 'election_date', 'filing_deadline', 'type', 'year', 'notes']
@@ -263,6 +265,7 @@ const LOG_SHAPE = {
   set_status:        { contests: 1, results: 0 },
   reset_status_auto: { contests: 1, results: 0 },
   advance_unopposed: { contests: 0, results: 0 },   // real counts filled in below
+  certify_election:  { contests: 0, results: 0 },   // real counts filled in below
 }
 
 exports.handler = async (event) => {
@@ -304,6 +307,11 @@ exports.handler = async (event) => {
         shape.contests = d?.advanced ?? 0
         shape.results  = d?.advanced ?? 0
       } catch {}
+    }
+    // certify_election likewise — the audit line should say how many contests
+    // this press actually moved to 'certified'.
+    if (action === 'certify_election' && res.statusCode === 200) {
+      try { shape.contests = JSON.parse(res.body).data?.certified ?? 0 } catch {}
     }
     await logAdminAction(sb, action, { ...shape, startedAt, error: err })
   }
@@ -579,6 +587,59 @@ async function route(sb, action, params, headers, event) {
       const advanced = updated?.length || 0
       console.log(`[admin-elections] advance_unopposed: ${advanced} uncontested race(s) advanced for "${election.name}" (${election.election_date}); no subscriber emails sent`)
       return json(200, { data: { advanced, contests: preview } })
+    }
+
+    // ── Close the books on a past election ────────────────────────────────
+    // Wisconsin county boards of canvass certify about two weeks after an
+    // election; WEC posts the certified canvass after that. Until somebody
+    // says so, every contest stays 'called' and a months-old election still
+    // reads as if it were mid-count. This is the human's version of that
+    // announcement — the weekly certification-watch sweep is the automatic
+    // one, and both go through the same writer in ./_certify.js.
+    //
+    // 'recount_possible' contests are NOT certified: the engine refused to
+    // call those races, so they come back in needs_resolution and the admin
+    // settles each one (call_race / set_status) before certifying again.
+    //
+    // NOTE: notifyRace is deliberately NOT fired. Subscribers already got the
+    // winner email when the race was called; 'certified' changes nothing about
+    // who won, it is administrative bookkeeping, and a second round of
+    // "results update" emails weeks later would only confuse them.
+    case 'certify_election': {
+      const { election_id, dry_run } = params
+      if (!isUuid(election_id)) return json(400, { error: 'Invalid election_id' })
+
+      const { data: election, error: eErr } = await sb
+        .from('elections').select('id, name, election_date').eq('id', election_id).single()
+      if (eErr || !election) return json(404, { error: 'Election not found' })
+
+      // Same Central-time clock as advance_unopposed and the poller: strictly
+      // before today, so nothing certifies while the polls are still open.
+      const todayCT = ctParts().date
+      if (!election.election_date || String(election.election_date) >= todayCT) {
+        return json(400, { error: 'Election day has not passed yet — nothing to certify' })
+      }
+
+      const out = await certifyElectionContests(sb, election_id, { dryRun: dry_run === true })
+      if (out.error) return json(500, { error: out.error })
+
+      if (out.dry_run) {
+        return json(200, { data: {
+          certified: 0,
+          dry_run: true,
+          would_certify: out.would_certify,
+          contests: out.contests,
+          needs_resolution: out.needs_resolution,
+        } })
+      }
+
+      console.log(`[admin-elections] certify_election: ${out.certified} contest(s) certified for "${election.name}" (${election.election_date}); ${out.needs_resolution.length} left at recount_possible; no subscriber emails sent`)
+      return json(200, { data: {
+        certified: out.certified,
+        contests: out.contests,
+        needs_resolution: out.needs_resolution,
+        failed: out.failed,
+      } })
     }
 
     // ── Manually trigger the scheduled poller (scheduled functions are not

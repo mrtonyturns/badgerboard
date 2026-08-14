@@ -1751,6 +1751,106 @@ console.log('Phases 2-3 — election-results-poller window decision')
       cjs.isDem(v) === isDem(v) && cjs.isRep(v) === isRep(v)))
 }
 
+// ── Certification watch — eligibility window + cited-verdict parsing ─────────
+// After election night contests sat at 'called' forever. The weekly sweep asks
+// ONE question per election and may only write on a CITED "CERTIFIED": an
+// answer with no source URL is exactly as worthless as no answer, and
+// certifying an election that has not been canvassed is unrecoverable.
+{
+  console.log('Certification watch — netlify/functions/certification-watch.js + _certify.js')
+  const cw = require('../netlify/functions/certification-watch.js')
+  const { appendCertifyReason, CERTIFY_REASON } = require('../netlify/functions/_certify.js')
+
+  // ── window date math (pure string/UTC, no time zone) ──
+  t('shiftDays walks backwards across a month boundary',
+    cw.shiftDays('2026-08-14', -14) === '2026-07-31')
+  t('shiftDays walks across a leap day',
+    cw.shiftDays('2028-03-01', -1) === '2028-02-29')
+  t('shiftDays rejects garbage instead of guessing a date',
+    cw.shiftDays('not-a-date', -14) === null && cw.shiftDays(null, -14) === null)
+
+  const win = cw.certificationWindow('2026-08-14')
+  t('the window is today-60 … today-14 inclusive',
+    win.from === '2026-06-15' && win.to === '2026-07-31')
+
+  t('an election 14 days back is eligible (earliest a canvass could be done)',
+    cw.inCertificationWindow('2026-07-31', '2026-08-14'))
+  t('13 days back is too early — the canvass is still running',
+    !cw.inCertificationWindow('2026-08-01', '2026-08-14'))
+  t('60 days back is still chased; 61 is not',
+    cw.inCertificationWindow('2026-06-15', '2026-08-14') &&
+    !cw.inCertificationWindow('2026-06-14', '2026-08-14'))
+  t('a future election is never in the window',
+    !cw.inCertificationWindow('2026-11-03', '2026-08-14'))
+  t('a timestamp-shaped election_date still resolves by its date part',
+    cw.inCertificationWindow('2026-07-31T00:00:00Z', '2026-08-14'))
+  t('a missing or malformed election_date is not eligible',
+    !cw.inCertificationWindow(null, '2026-08-14') &&
+    !cw.inCertificationWindow('', '2026-08-14') &&
+    !cw.inCertificationWindow('July 31 2026', '2026-08-14'))
+
+  // ── verdict parsing: citations are mandatory ──
+  const cited = cw.parseCertificationVerdict(
+    '{"status":"CERTIFIED","source_url":"https://elections.wi.gov/canvass","as_of":"2026-08-12"}')
+  t('a cited CERTIFIED is the only thing that authorizes a write',
+    cited.verdict === 'CERTIFIED' && cited.cited === true && cited.certify === true &&
+    cited.sourceUrl === 'https://elections.wi.gov/canvass')
+
+  const uncited = cw.parseCertificationVerdict('{"status":"CERTIFIED"}')
+  t('CERTIFIED with no source URL never certifies anything',
+    uncited.verdict === 'CERTIFIED' && uncited.cited === false && uncited.certify === false)
+
+  const bareSource = cw.parseCertificationVerdict(
+    '{"status":"CERTIFIED","source_url":"the county clerk\'s website"}')
+  t('a prose "source" is not a citation',
+    bareSource.certify === false && bareSource.sourceUrl === null)
+
+  const notYet = cw.parseCertificationVerdict(
+    '{"status":"NOT_YET","source_url":"https://county.example.gov/canvass"}')
+  t('NOT_YET never certifies, even with a perfectly good URL',
+    notYet.verdict === 'NOT_YET' && notYet.certify === false)
+
+  t('NOT YET / not-yet normalize to NOT_YET',
+    cw.parseCertificationVerdict('{"status":"NOT YET"}').verdict === 'NOT_YET' &&
+    cw.parseCertificationVerdict('{"status":"not-yet"}').verdict === 'NOT_YET')
+
+  t('UNCLEAR, an unknown verdict, an empty reply and non-strings all land on UNCLEAR',
+    ['{"status":"UNCLEAR"}', '{"status":"probably?"}', '', '   ', null, undefined, 42]
+      .every(v => {
+        const r = cw.parseCertificationVerdict(v)
+        return r.verdict === 'UNCLEAR' && r.certify === false
+      }))
+
+  const fenced = cw.parseCertificationVerdict(
+    '```json\n{"status":"CERTIFIED","source_url":"https://elections.wi.gov/x"}\n```')
+  t('markdown fences are stripped before parsing',
+    fenced.certify === true && fenced.sourceUrl === 'https://elections.wi.gov/x')
+
+  const prose = cw.parseCertificationVerdict(
+    'CERTIFIED — the Dane County board of canvass finished on Aug 12. Source: https://danecounty.gov/canvass.')
+  t('a reply that ignored the JSON format is still read, URL trimmed of punctuation',
+    prose.verdict === 'CERTIFIED' && prose.sourceUrl === 'https://danecounty.gov/canvass' && prose.certify === true)
+
+  t('the prompt asks only the canvass question and demands a URL for CERTIFIED', (() => {
+    const p = cw.certificationPrompt({ name: 'Spring Election', election_date: '2026-04-07' })
+    return p.includes('CERTIFIED') && p.includes('NOT_YET') && p.includes('UNCLEAR') &&
+      /source URL/i.test(p) && /Spring Election/.test(p) && /2026-04-07/.test(p) &&
+      /Do not report vote totals/i.test(p) && /Never estimate/i.test(p)
+  })())
+
+  // ── reason appending: the audit trail is never overwritten ──
+  t('the certification sentence is appended to whatever the reason already said',
+    appendCertifyReason({ reason: 'Called by hand for Jane Doe.' }) ===
+      'Called by hand for Jane Doe. Certified — county canvass complete.')
+  t('the watcher records the source URL it certified from',
+    appendCertifyReason({ reason: 'Called by hand for Jane Doe.' }, 'Source: https://elections.wi.gov/x') ===
+      'Called by hand for Jane Doe. Certified — county canvass complete. Source: https://elections.wi.gov/x')
+  t('a missing / malformed status_detail still produces the sentence',
+    appendCertifyReason(null) === CERTIFY_REASON &&
+    appendCertifyReason({}) === CERTIFY_REASON &&
+    appendCertifyReason({ reason: 42 }) === CERTIFY_REASON)
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
 

@@ -8,7 +8,7 @@ import { format, parseISO } from 'date-fns'
 import {
   BarChart2, Plus, Edit2, Trash2, Trophy, ChevronDown, ChevronUp,
   CheckCircle2, X, MapPin, Users, Radio, ExternalLink, AlertTriangle,
-  Search, Filter,
+  Search, Filter, ShieldCheck,
 } from 'lucide-react'
 import { supabase, adminElections } from '../lib/supabase'
 import SearchableSelect from '../components/SearchableSelect'
@@ -158,7 +158,8 @@ export default function ElectionResultsAdmin({ showToast }) {
   }, [selectedElection])
 
   // Switching elections should not carry the previous ballot's filters over.
-  useEffect(() => { setSearch(''); setTypeFilter('all'); setExpanded({}) }, [selectedElection?.id])
+  // (nor the last certification sweep's leftovers)
+  useEffect(() => { setSearch(''); setTypeFilter('all'); setExpanded({}); setNeedsResolution([]) }, [selectedElection?.id])
 
   const loadContests = useCallback(async (electionId) => {
     setLoading(true)
@@ -443,6 +444,38 @@ export default function ElectionResultsAdmin({ showToast }) {
     loadContests(selectedElection.id)
   }
 
+  // ── Certification ─────────────────────────────────────────────────────────
+  // Wisconsin county boards of canvass certify about two weeks after an
+  // election; until somebody says so every contest stays 'called' and a
+  // months-old election still reads like unofficial returns. This is the
+  // manual version of the weekly certification-watch sweep — same writer.
+  // Races at 'recount_possible' are never certified automatically: they come
+  // back as needs_resolution for the admin to settle first.
+  const [certifying,      setCertifying]      = useState(false)
+  const [needsResolution, setNeedsResolution] = useState([])
+
+  const calledNotCertified = contests.filter(c => c.status === 'called').length
+
+  const certifyElection = async () => {
+    if (!selectedElection || !calledNotCertified) return
+    if (!window.confirm(
+      `${calledNotCertified} called race${calledNotCertified === 1 ? '' : 's'} will be marked certified `
+      + '(verified timestamp stamped, engine locked out). Races at "Recount possible" are NOT '
+      + 'certified — resolve those by hand first. No subscriber emails are sent. Continue?'
+    )) return
+    setCertifying(true)
+    const { data, error } = await adminElections('certify_election', { election_id: selectedElection.id })
+    setCertifying(false)
+    if (error) { showToast('Certification failed: ' + error.message, 'error'); return }
+    const n = data?.certified || 0
+    const pending = data?.needs_resolution || []
+    setNeedsResolution(pending)
+    showToast(n
+      ? `${n} race${n === 1 ? '' : 's'} certified${pending.length ? ` — ${pending.length} still need${pending.length === 1 ? 's' : ''} a decision` : ''}`
+      : 'Nothing to certify')
+    loadContests(selectedElection.id)
+  }
+
   // ── Derived ───────────────────────────────────────────────────────────────
   const calledCount  = contests.filter(c => (resultsMap[c.id] || []).some(r => r.declared)).length
   const totalVotes   = contests.reduce(
@@ -518,7 +551,38 @@ export default function ElectionResultsAdmin({ showToast }) {
               {advancing ? 'Advancing…' : `Advance ${unopposedWaiting} unopposed`}
             </button>
           )}
+          {selectedElection && electionPassed && calledNotCertified > 0 && (
+            <button
+              onClick={certifyElection}
+              disabled={certifying}
+              title="Mark every called race certified — for after the county boards of canvass have finished"
+              className="btn-secondary flex items-center gap-1.5 text-sm py-1.5"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              {certifying ? 'Certifying…' : `Certify election (${calledNotCertified} called)`}
+            </button>
+          )}
         </div>
+
+        {/* Races the certification sweep deliberately did not touch. */}
+        {needsResolution.length > 0 && (
+          <div className="mt-3 rounded-lg border border-orange-200 bg-orange-50 p-3">
+            <p className="text-xs font-semibold text-orange-800 flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4" />
+              {needsResolution.length} race{needsResolution.length === 1 ? '' : 's'} not certified — recount possible
+            </p>
+            <p className="text-xs text-orange-700 mt-1">
+              Certification never resolves these. Call the race or set its status by hand, then certify again.
+            </p>
+            <ul className="mt-2 space-y-0.5 text-xs text-orange-900 max-h-40 overflow-y-auto">
+              {needsResolution.map(c => (
+                <li key={c.contest_id}>
+                  {[c.office, c.district, c.county && `${c.county} County`].filter(Boolean).join(' · ')}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       {/* Stats bar */}

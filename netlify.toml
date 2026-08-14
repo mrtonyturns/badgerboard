@@ -84,6 +84,17 @@
   schedule = "*/5 * * * *"
   timeout  = 30
 
+# Certification watch — Thursday 15:00 UTC (~9-10am CT), once a week.
+# Wisconsin county boards of canvass certify roughly two weeks after an
+# election and WEC posts the certified canvass after that, so nothing here is
+# time-critical: the function looks at elections 14-60 days past that still
+# have 'called' contests, asks ONE cited question per election, and flips them
+# to 'certified' only on a confirmed answer. Thursday keeps it off the Monday
+# AI/email crons and the Tuesday purge.
+[functions."certification-watch"]
+  schedule = "0 15 * * 4"
+  timeout  = 30
+
 [[headers]]
   for = "/*"
   [headers.values]

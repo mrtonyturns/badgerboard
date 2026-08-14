@@ -31,7 +31,12 @@ in `src/lib/supabase.js` route here.
 
 **Elections** — `admin-elections` (all election/contest/result writes, admin-gated service-role;
 runs the determination engine in `_determination.js` after every vote or precinct change and
-logs each mutation to `election_poller_log`), `election-results-poller` (scheduled; see below).
+logs each mutation to `election_poller_log`), `election-results-poller` (scheduled; see below),
+`certification-watch` (scheduled Thu 15:00 UTC — finds elections 14–60 days past that still have
+'called' contests, asks Perplexity ONE cited question per election, and on a CITED "CERTIFIED"
+flips them to 'certified' through `_certify.js`, the same writer the admin's `certify_election`
+action uses; `recount_possible` contests are never auto-certified, they come back as
+`needs_resolution` for the admin. Manual HTTP trigger needs `x-admin-trigger: ADMIN_TRIGGER_SECRET`).
 Results flow realtime to the board. `election-night-update` was deleted in Phase 1 of the
 live-results build — it was never scheduled, never called, wrote to a JSON blob nothing read,
 and carried two crash bugs.
