@@ -36,6 +36,7 @@
 import { logAiUsage } from './_ai-usage.js'
 import {
   coerceResearchOutput, researchOutputToRow, researchCacheKey,
+  RETRYABLE_RESEARCH_STATUSES, cachedModelVersion,
 } from '../../src/lib/recruit.js'
 import { PLAN_CONFIG, RECRUIT_BATCH_CAP, getRecruitLookupLimit } from '../../src/lib/tiers.js'
 
@@ -314,8 +315,14 @@ export const handler = async (event) => {
     // ── Monthly quota ───────────────────────────────────────────────────────
     const monthStart = new Date()
     monthStart.setUTCDate(1); monthStart.setUTCHours(0, 0, 0, 0)
+    // Cache hits are excluded: a result served from the 90-day cache costs no
+    // API call, so it must not spend a lookup. Cache-served rows are stamped
+    // '… (cached)' in model_version below; `or=(is.null, not.like)` keeps rows
+    // written before that stamp existed (model_version NULL) counted, because a
+    // bare `not.like` is NULL — and therefore false — for a NULL column.
     const usedRes = await sb(
-      `recruitment_prospects?created_by=eq.${authUser.id}&research_status=eq.done&researched_at=gte.${monthStart.toISOString()}&select=id`,
+      `recruitment_prospects?created_by=eq.${authUser.id}&research_status=eq.done&researched_at=gte.${monthStart.toISOString()}` +
+      `&or=(model_version.is.null,model_version.not.like.*cached*)&select=id`,
       { headers: { Prefer: 'count=exact', Range: '0-0' } }
     )
     const used = Number(String(usedRes.headers.get('content-range') || '').split('/')[1]) || 0
@@ -326,8 +333,11 @@ export const handler = async (event) => {
     }
 
     // ── Pending prospects, capped per run ───────────────────────────────────
+    // RETRYABLE_RESEARCH_STATUSES includes `skipped_quota`: those people were
+    // parked when a previous run ran out of allowance and were never actually
+    // researched, so a re-run with quota available has to pick them back up.
     const pendingRes = await sb(
-      `recruitment_prospects?search_id=eq.${searchId}&research_status=in.(pending,error)&excluded=is.false&select=id,full_name,city,county,zip&order=last_name&limit=${BATCH_CAP}`
+      `recruitment_prospects?search_id=eq.${searchId}&research_status=in.(${RETRYABLE_RESEARCH_STATUSES.join(',')})&excluded=is.false&select=id,full_name,city,county,zip&order=last_name&limit=${BATCH_CAP}`
     )
     const pending = await pendingRes.json()
     if (!Array.isArray(pending) || pending.length === 0) {
@@ -388,7 +398,10 @@ export const handler = async (event) => {
             affiliation_value: cached.affiliation_value, affiliation_confidence: cached.affiliation_confidence,
             affiliation_basis: cached.affiliation_basis, notoriety: cached.notoriety, sentiment: cached.sentiment,
             evidence: cached.evidence || [], research_summary: cached.research_summary,
-            model_version: cached.model_version || MODEL_VERSION, research_status: 'done',
+            // Stamped as cache-served so the monthly usage count above skips it:
+            // this row cost no API call and must not spend a lookup.
+            model_version: cachedModelVersion(cached.model_version || MODEL_VERSION),
+            research_status: 'done',
           })
         } else if (spent >= remaining) {
           // Quota ran out mid-run: mark the rest honestly instead of silently

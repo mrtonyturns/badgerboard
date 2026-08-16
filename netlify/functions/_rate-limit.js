@@ -52,6 +52,15 @@ const RATE_LIMITS = {
   // Modelled on polling-snapshot's tight budget — the monthly lookup allowance
   // in tiers.js is the real spend ceiling, this only stops loops/abuse.
   'recruit-research-background': { perMinute: 2,  perDay: 20  },
+  // CSV prospect classification: up to 500 rows per request, fanned out to
+  // Haiku in batches of 20 (so one call can be 25 model requests). Budgeted
+  // alongside enrich-prospects — the CSV import itself is the natural ceiling.
+  'classify-csv-prospects':      { perMinute: 3,  perDay: 30  },
+  // Was hitting DEFAULT_LIMITS with an unregistered key. Registered explicitly
+  // at those same numbers so the budget is visible and tunable here; unlock
+  // attempts are cheap but password-verifying, so the per-minute cap doubles as
+  // brute-force friction.
+  'candidate-ai-lock':           { perMinute: 10, perDay: 100 },
 }
 
 const DEFAULT_LIMITS = { perMinute: 10, perDay: 100 }

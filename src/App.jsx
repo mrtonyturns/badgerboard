@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom'
 
 // ─── Stale-deploy chunk recovery ─────────────────────────────────────────────
 // A phone that kept the app open across a deploy holds an old bundle whose
@@ -186,10 +186,31 @@ const FeatureRoute = ({ feature, children }) => {
   return children
 }
 
+// Routes that must paint without waiting for the auth session to restore.
+// Restoring a session can take up to 10 seconds (AuthContext races getSession()
+// against a 10s timeout), and holding the whole router behind that spinner blanked
+// the volunteer portal, shared profile links and the login screen for visitors who
+// have no session to restore in the first place. Each of these either brings its
+// own auth (the volunteer portal) or needs none at all.
+const PUBLIC_PATHS = [
+  /^\/v(\/|$)/,
+  /^\/volunteer(\/|$)/,
+  /^\/temporary-dossier(\/|$)/,
+  /^\/login(\/|$)/,
+  /^\/reset-password(\/|$)/,
+  /^\/terms(\/|$)/,
+  /^\/plans(\/|$)/,
+  /^\/dossier-disclaimer(\/|$)/,
+]
+const isPublicPath = (pathname) => PUBLIC_PATHS.some(re => re.test(pathname))
+
 const AppRoutes = () => {
   const { user, loading } = useAuth()
+  const { pathname } = useLocation()
 
-  if (loading) {
+  // Protected routes still wait — ProtectedRoute/AdminRoute would otherwise
+  // bounce a signed-in user to /login before the session lands.
+  if (loading && !isPublicPath(pathname)) {
     return (
       <div className="min-h-screen bg-brand-navy flex items-center justify-center">
         <div className="w-12 h-12 border-4 border-brand-red border-t-transparent rounded-full animate-spin" />
@@ -211,6 +232,8 @@ const AppRoutes = () => {
       {/* Temporary shared dossier — public, no auth */}
       <Route path="/temporary-dossier/:token" element={<SharedDossier />} />
 
+      {/* Renders straight away; once the session restores (if there is one) the
+          redirect to the app fires. */}
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/terms" element={<Terms />} />

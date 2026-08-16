@@ -14,6 +14,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../contexts/AuthContext'
 import { isNativeApp, API_ORIGIN } from '../lib/native'
 import {
   Home, DoorOpen, MessageCircle, User, Bell, Send,
@@ -1021,6 +1022,7 @@ function Users(props) {
 
 // ─── Main Portal Component ────────────────────────────────────────────────────
 export default function VolunteerPortal() {
+  const { signOut }                           = useAuth()
   const [searchParams]                        = useSearchParams()
   const [volunteer, setVolunteer]             = useState(null)
   const [loading, setLoading]                 = useState(true)
@@ -1093,16 +1095,24 @@ export default function VolunteerPortal() {
 
     initAuth()
 
-    // Also listen for Supabase auth changes (magic link click)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (session?.user?.email && !volunteer) {
-        const res = await callApi('get_volunteer', { email: session.user.email }, session.access_token)
+    // Also listen for Supabase auth changes (magic link click).
+    // The callback MUST stay synchronous: supabase-js holds its auth lock for the
+    // duration of the callback, so awaiting a network round-trip in here stalled
+    // every other auth call (getSession, refresh, signOut) until this finished.
+    // Capture what we need, then defer the async work with setTimeout(…, 0) —
+    // the pattern Supabase documents for exactly this.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const email = session?.user?.email
+      const accessToken = session?.access_token
+      if (!email || volunteer) return
+      setTimeout(async () => {
+        const res = await callApi('get_volunteer', { email }, accessToken)
         if (res.volunteer) {
           saveSession({ volunteer: res.volunteer })
           setVolunteer(res.volunteer)
           setLoading(false)
         }
-      }
+      }, 0)
     })
 
     return () => subscription.unsubscribe()
@@ -1219,9 +1229,14 @@ export default function VolunteerPortal() {
   }, [volunteer])
 
   // ── Logout ────────────────────────────────────────────────────────────────
+  // Goes through AuthContext's signOut, not supabase.auth.signOut directly: the
+  // shared path flushes the offline door-knock queue while the session is still
+  // valid, clears the on-device caches (turf blocks, assignments, offline reads)
+  // and tears the auth context down. Calling the SDK straight left unsynced
+  // knocks stranded in IndexedDB and the context holding a dead session.
   const handleLogout = async () => {
     clearSession()
-    await supabase.auth.signOut()
+    await signOut()
     setVolunteer(null)
   }
 

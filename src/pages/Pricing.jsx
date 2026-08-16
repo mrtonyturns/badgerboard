@@ -16,7 +16,9 @@ import {
   effectiveMonthlyRate, periodTotal, annualSavings,
   actionEffectiveRate,
   getUserPlan, getUserBracket, getUserPlanType,
-  hasFeature,
+  canBuyCreditPacks as planCanBuyCreditPacks,
+  canBuyBulkCredits as planCanBuyBulkCredits,
+  getRecruitLookupLimit,
 } from '../lib/tiers'
 
 // ─── Feature matrix component ─────────────────────────────────────────────────
@@ -201,6 +203,19 @@ function FAQItem({ q, a }) {
 
 // ─── Feature data ─────────────────────────────────────────────────────────────
 
+// Recruit (v1.29, recruit-from-voter-list) shipped with real gating —
+// features.recruit is true on all three Action tiers and false everywhere on
+// the Candidate ladder, with a monthly lookup allowance per tier — but the
+// pricing page never mentioned it at all, so the one Action-exclusive tool
+// with a metered allowance was invisible to anyone comparing plans. The cell
+// is DERIVED from tiers.js (feature flag + RECRUIT_MONTHLY_LOOKUPS via
+// getRecruitLookupLimit) rather than transcribed, so the table cannot drift
+// from the gate the way the old hand-written rows did.
+const recruitCell = (planKey) => {
+  const lookups = getRecruitLookupLimit(planKey)
+  return lookups ? `${lookups.toLocaleString()} lookups / mo` : false
+}
+
 const C_FEATURES = [
   { section: 'AI Profiles',
     rows: [
@@ -231,6 +246,10 @@ const C_FEATURES = [
     rows: [
       { label: 'User seats',                  scout: '1',         c_monitor: '1',    c_active: '1',    c_campaign: '2'    },
       { label: 'Prospecting lists',           scout: false,       c_monitor: false,  c_active: false,  c_campaign: false  },
+      // Action-plan exclusive (features.recruit) — stated here so the Candidate
+      // matrix does not silently omit a tool the other ladder sells.
+      { label: 'Recruit from voter list',     scout: recruitCell('scout'), c_monitor: recruitCell('c_monitor'),
+        c_active: recruitCell('c_active'), c_campaign: recruitCell('c_campaign') },
       // /offices is not gated by features.offices anywhere in the app — the page
       // ships on every plan, including Scout. The row used to read false across
       // the Candidate family, which was simply untrue.
@@ -259,6 +278,10 @@ const A_FEATURES = [
       { label: 'Game Plan',                   a_monitor: true,           a_active: true,             a_campaign: true           },
       { label: 'Compare tool',                a_monitor: false,          a_active: true,             a_campaign: true           },
       { label: 'Prospecting lists',           a_monitor: true,           a_active: true,             a_campaign: true           },
+      // Reputation lookups are a monthly allowance, not a metered SKU — the
+      // numbers come straight from RECRUIT_MONTHLY_LOOKUPS in tiers.js.
+      { label: 'Recruit from voter list',     a_monitor: recruitCell('a_monitor'), a_active: recruitCell('a_active'),
+        a_campaign: recruitCell('a_campaign') },
       { label: 'CSV bulk import',             a_monitor: true,           a_active: true,             a_campaign: true           },
       { label: 'Elections tracking',          a_monitor: true,           a_active: true,             a_campaign: true           },
     ],
@@ -416,8 +439,14 @@ export default function Pricing() {
   // UI must not offer them either. Signed-out visitors still see the pricing
   // (they pick a plan first); only a signed-in user on a plan without the
   // feature gets the locked state.
-  const canBuyCreditPacks = !user || hasFeature(userPlan, 'creditPacks')
-  const canBuyBulkCredits = !user || hasFeature(userPlan, 'bulkCredits')
+  //
+  // The gate is the ENTITLEMENT, never the plan family: every paid plan — the
+  // three Action tiers included — has features.creditPacks = true. The pack
+  // grid used to live inside the Candidate tab only, so an Action subscriber
+  // had no route to a purchase the server would have accepted. It now renders
+  // on both tabs off this one flag.
+  const canBuyCreditPacks = !user || planCanBuyCreditPacks(userPlan)
+  const canBuyBulkCredits = !user || planCanBuyBulkCredits(userPlan)
 
   // Audit fix (#12): "current" must mean plan AND bracket AND billing period
   // all match. The old plan-key-only check disabled the CTA for bracket
@@ -641,6 +670,82 @@ export default function Pricing() {
 
   const bracketList = BRACKET_ORDER.map(k => BRACKET_CONFIG[k])
 
+  // ── A la carte credits ────────────────────────────────────────────────────
+  // Rendered on BOTH plan tabs: features.creditPacks is true on every paid
+  // plan, Action tiers included, so hiding the grid behind the Candidate tab
+  // withheld a purchase the buyer is entitled to make. Plain JSX (not a nested
+  // component) so the buttons keep their identity across re-renders.
+  const creditPacksSection = (
+    <section className="mb-10">
+      <div className="mb-4">
+        <h2 className="text-base font-semibold text-gray-900">A la carte profile credits</h2>
+        <p className="text-sm text-gray-500 mt-1">
+          Need profiles beyond your monthly limit? Credits never expire and work on any paid plan.
+        </p>
+      </div>
+      {!canBuyCreditPacks ? (
+        <div className="rounded-xl border border-gray-200 bg-gray-50 px-5 py-6 flex items-start gap-3">
+          <Lock className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
+          <div>
+            <div className="text-sm font-semibold text-gray-900">Profile credits require a paid plan</div>
+            <p className="text-sm text-gray-500 mt-1">
+              Free Scout accounts can't buy extra profile credits. Upgrade to any paid plan
+              and credit packs unlock here and in Settings → Plan &amp; billing.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-gray-200 overflow-hidden">
+          <div className="grid sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-gray-200">
+            {CREDIT_PACKS.map(pack => (
+              <div key={pack.key} className="px-5 py-5">
+                <div className="text-lg font-semibold text-gray-900 mb-1">
+                  {pack.qty === 1 ? '1 profile' : `${pack.qty} profiles`}
+                </div>
+                <div className="flex items-baseline gap-1 mb-1">
+                  <span className="text-2xl font-bold text-gray-900">${pack.price}</span>
+                </div>
+                <div className="text-xs text-gray-400 mb-4">
+                  ${pack.perCredit.toFixed(2)} per profile
+                  {pack.savingsPct ? ` · ${pack.savingsPct}% off` : ''}
+                </div>
+                <button
+                  onClick={() => {
+                    if (!user) { navigate('/login'); return }
+                    const lk    = `credits-${pack.key}`
+                    const token = session?.access_token
+                    setCheckoutLoading(lk)
+                    setCheckoutError(null)
+                    fetch('/.netlify/functions/create-checkout-session', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                      },
+                      body: JSON.stringify({ product: 'credits', pack: pack.key, userId: user.id, email: user.email }),
+                    })
+                      .then(r => r.json())
+                      .then(j => { if (j.url) window.location.href = j.url; else setCheckoutError(j.error || 'Checkout failed.') })
+                      .catch(() => setCheckoutError('Could not reach the server.'))
+                      .finally(() => setCheckoutLoading(null))
+                  }}
+                  disabled={!!checkoutLoading}
+                  className={`w-full text-sm font-medium py-2 rounded-lg border transition-colors ${
+                    pack.key === 'c10'
+                      ? 'bg-gray-900 text-white border-gray-900 hover:bg-gray-700'
+                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                  } ${checkoutLoading === `credits-${pack.key}` ? 'opacity-50' : ''}`}
+                >
+                  {checkoutLoading === `credits-${pack.key}` ? 'Redirecting…' : 'Purchase'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  )
+
   return (
     <div className="max-w-5xl mx-auto pb-24">
 
@@ -754,74 +859,7 @@ export default function Pricing() {
           </div>
 
           {/* A la carte credits — plans without features.creditPacks (Scout) can't buy them */}
-          <section className="mb-10">
-            <div className="mb-4">
-              <h2 className="text-base font-semibold text-gray-900">A la carte profile credits</h2>
-              <p className="text-sm text-gray-500 mt-1">
-                Need profiles beyond your monthly limit? Credits never expire and work on any paid plan.
-              </p>
-            </div>
-            {!canBuyCreditPacks ? (
-              <div className="rounded-xl border border-gray-200 bg-gray-50 px-5 py-6 flex items-start gap-3">
-                <Lock className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
-                <div>
-                  <div className="text-sm font-semibold text-gray-900">Profile credits require a paid plan</div>
-                  <p className="text-sm text-gray-500 mt-1">
-                    Free Scout accounts can't buy extra profile credits. Upgrade to Monitor or higher
-                    and credit packs unlock here and in Settings → Plan &amp; billing.
-                  </p>
-                </div>
-              </div>
-            ) : (
-            <div className="rounded-xl border border-gray-200 overflow-hidden">
-              <div className="grid sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-gray-200">
-                {CREDIT_PACKS.map(pack => (
-                  <div key={pack.key} className="px-5 py-5">
-                    <div className="text-lg font-semibold text-gray-900 mb-1">
-                      {pack.qty === 1 ? '1 profile' : `${pack.qty} profiles`}
-                    </div>
-                    <div className="flex items-baseline gap-1 mb-1">
-                      <span className="text-2xl font-bold text-gray-900">${pack.price}</span>
-                    </div>
-                    <div className="text-xs text-gray-400 mb-4">
-                      ${pack.perCredit.toFixed(2)} per profile
-                      {pack.savingsPct ? ` · ${pack.savingsPct}% off` : ''}
-                    </div>
-                    <button
-                      onClick={() => {
-                        if (!user) { navigate('/login'); return }
-                        const lk    = `credits-${pack.key}`
-                        const token = session?.access_token
-                        setCheckoutLoading(lk)
-                        setCheckoutError(null)
-                        fetch('/.netlify/functions/create-checkout-session', {
-                          method: 'POST',
-                          headers: {
-                            'Content-Type': 'application/json',
-                            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-                          },
-                          body: JSON.stringify({ product: 'credits', pack: pack.key, userId: user.id, email: user.email }),
-                        })
-                          .then(r => r.json())
-                          .then(j => { if (j.url) window.location.href = j.url; else setCheckoutError(j.error || 'Checkout failed.') })
-                          .catch(() => setCheckoutError('Could not reach the server.'))
-                          .finally(() => setCheckoutLoading(null))
-                      }}
-                      disabled={!!checkoutLoading}
-                      className={`w-full text-sm font-medium py-2 rounded-lg border transition-colors ${
-                        pack.key === 'c10'
-                          ? 'bg-gray-900 text-white border-gray-900 hover:bg-gray-700'
-                          : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                      } ${checkoutLoading === `credits-${pack.key}` ? 'opacity-50' : ''}`}
-                    >
-                      {checkoutLoading === `credits-${pack.key}` ? 'Redirecting…' : 'Purchase'}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-            )}
-          </section>
+          {creditPacksSection}
 
           <FeatureMatrix
             groups={C_FEATURES}
@@ -839,7 +877,7 @@ export default function Pricing() {
             }))}
           />
           <p className="text-xs text-gray-400 mt-3 text-center">
-            Prospecting lists are exclusive to the Action Plan.
+            Prospecting lists and Recruit from voter list are exclusive to the Action Plan.
             Game Plan unlocks at Monitor. Active-candidate slots are a hard limit — deactivate a candidate or upgrade to add more.
           </p>
         </>
@@ -954,6 +992,9 @@ export default function Pricing() {
               </div>
             </div>
           </section>
+
+          {/* A la carte credits — features.creditPacks is true on every Action tier */}
+          {creditPacksSection}
 
           {/* Bulk credits — only Action Campaign has features.bulkCredits */}
           {canBuyBulkCredits && (

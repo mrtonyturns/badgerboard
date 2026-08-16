@@ -27,7 +27,7 @@ exports.handler = async (event) => {
     switch (action) {
       // ── Action account invites a candidate (by email) ──────────────────────
       case 'invite': {
-        if (!H.isActionUser(user)) return reply({ error: 'Only Action-plan accounts can invite candidates.' }, 403)
+        if (!(await H.isActionUser(user))) return reply({ error: 'Only Action-plan accounts can invite candidates.' }, 403)
         const email = String(body.email || '').trim().toLowerCase()
         const relationship_type = body.relationship_type === 'outside' ? 'outside' : 'team'
         if (!email || !/^[^@]+@[^@]+\.[^@]+$/.test(email)) return reply({ error: 'Valid candidate email required.' }, 400)
@@ -75,7 +75,7 @@ exports.handler = async (event) => {
 
       // ── Candidate accepts an invite ─────────────────────────────────────────
       case 'accept': {
-        if (!H.isPaidCandidate(user)) return reply({ error: 'Campaign Connect for candidates requires a paid plan. Upgrade from Scout to accept a manager.' , upgrade: true }, 402)
+        if (!(await H.isPaidCandidate(user))) return reply({ error: 'Campaign Connect for candidates requires a paid plan. Upgrade from Scout to accept a manager.' , upgrade: true }, 402)
         const { link_id } = body
         const { data: rows } = await H.sb(`account_links?id=eq.${enc(link_id)}&select=*`)
         const link = rows?.[0]
@@ -90,7 +90,7 @@ exports.handler = async (event) => {
 
       // ── Candidate redeems a connect code → instant link ─────────────────────
       case 'redeem': {
-        if (!H.isPaidCandidate(user)) return reply({ error: 'Campaign Connect for candidates requires a paid plan. Upgrade from Scout to connect.', upgrade: true }, 402)
+        if (!(await H.isPaidCandidate(user))) return reply({ error: 'Campaign Connect for candidates requires a paid plan. Upgrade from Scout to connect.', upgrade: true }, 402)
         const raw = String(body.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
         if (raw.length !== 8) return reply({ error: 'Enter a valid 8-character connect code.' }, 400)
         const code = raw.slice(0, 4) + '-' + raw.slice(4)

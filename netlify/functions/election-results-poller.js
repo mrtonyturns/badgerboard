@@ -98,6 +98,7 @@
 //   countyChunk, countyDiscoveryPrompt, shapeCountyContests, WI_COUNTIES
 
 const { cors, json, serviceClient, requireAdmin } = require('./_shared')
+const { normalizePartyForDb } = require('./_party')
 const { determineStatus } = require('./_determination')
 const { notifyContestChanges } = require('./_result-notify')
 const COUNTY_SOURCES = require('./_county-sources.json')
@@ -1137,16 +1138,19 @@ function matchContest(office, contests) {
   return loose.length === 1 ? loose[0] : null
 }
 
+// Canonicalize through the shared vocabulary (netlify/functions/_party.js).
+// The old fallthrough `String(raw).slice(0, 40)` let unrecognized extractor
+// text ('D', 'Dem.', 'Democratic Party of WI') straight into
+// election_results.party — a column with NO CHECK — which is exactly how the
+// dual-spelling AD77 lean bug got seeded. Now: canonical spelling for any
+// recognized family; a real minor-party name survives (trimmed, capped) only
+// when it doesn't resolve to a family; junk single letters resolve via
+// partyGroup ('d' → 'Democrat').
 const PARTY_LABEL = (raw) => {
-  const p = normName(raw)
-  if (!p) return null
-  if (p.startsWith('dem')) return 'Democrat'
-  if (p.startsWith('rep') || p.startsWith('gop')) return 'Republican'
-  if (p.startsWith('ind')) return 'Independent'
-  if (p.startsWith('lib')) return 'Libertarian'
-  if (p.startsWith('gre')) return 'Green'
-  if (p.startsWith('non') || p === 'np') return 'Nonpartisan'
-  return String(raw).slice(0, 40)
+  const s = String(raw ?? '').trim()
+  if (!s) return null
+  if (s.toLowerCase() === 'np') return 'Nonpartisan' // WEC shorthand, pre-existing
+  return normalizePartyForDb(s) ?? s.slice(0, 40)
 }
 
 const votePct = (votes, total) =>

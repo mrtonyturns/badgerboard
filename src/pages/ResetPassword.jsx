@@ -2,7 +2,28 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { Eye, EyeOff, CheckCircle, AlertCircle, KeyRound } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { supabase } from '../lib/supabase'
 import BadgerBoardLogo from '../components/BadgerBoardLogo'
+
+// ── Friendly error copy ───────────────────────────────────────────────────────
+// Supabase's raw messages ("New password should be different from the old
+// password.", "AuthApiError: invalid claim: missing sub claim") are not written
+// for end users, and some of them leak internals. Map to plain English.
+const ERROR_COPY = [
+  [/different from the old password|same.*password/i, 'That is already your password. Choose a different one.'],
+  [/(at least|minimum).*(character|length)|too short|weak/i, 'That password is too short. Use at least 8 characters.'],
+  [/pwned|breach|compromis/i,                               'That password has appeared in a known data breach. Choose another one.'],
+  [/expired|otp_expired/i,                                  'This reset link has expired. Request a new one and try again.'],
+  [/rate limit|too many/i,                                  'Too many attempts. Wait a minute, then try again.'],
+  [/session|jwt|token|claim|unauthorized|not authenticated/i,
+    'This reset link is no longer valid. Request a new one and try again.'],
+  [/network|fetch|timeout/i,                                'We could not reach the server. Check your connection and try again.'],
+]
+function friendlyError(err) {
+  const raw = String(err?.message || '')
+  for (const [re, copy] of ERROR_COPY) if (re.test(raw)) return copy
+  return 'We could not update your password. Request a new reset link and try again.'
+}
 
 // ── Password strength (same as Login.jsx) ─────────────────────────────────────
 function scorePassword(pw) {
@@ -57,6 +78,28 @@ export default function ResetPassword() {
   // link…" spinner, so an expired link looked like the app was broken.
   const [linkError, setLinkError] = useState(null)
 
+  // ── Recovery gate ───────────────────────────────────────────────────────────
+  // The form used to open for ANY session, so a signed-in user who wandered to
+  // /reset-password (or was sent there) could change the password without ever
+  // proving control of the mailbox. It now needs a genuine recovery landing:
+  // either the reset link's `type=recovery` marker in the URL, or the
+  // PASSWORD_RECOVERY event the Supabase client emits when it parses that link.
+  const [recoveryEvent, setRecoveryEvent] = useState(false)
+  // Read once on mount — the client strips the hash as soon as it parses it.
+  const [recoveryInUrl] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return /type=recovery/.test(window.location.hash || '') ||
+           /type=recovery/.test(window.location.search || '')
+  })
+  const isRecovery = recoveryEvent || recoveryInUrl
+
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') setRecoveryEvent(true)
+    })
+    return () => subscription.unsubscribe()
+  }, [])
+
   const pwStrength = useMemo(() => scorePassword(password), [password])
 
   // Supabase puts the recovery token in the URL hash as #access_token=...&type=recovery
@@ -83,14 +126,15 @@ export default function ResetPassword() {
       return
     }
 
-    if (user) {
-      // Session already established — show the form immediately
+    if (user && isRecovery) {
+      // Confirmed recovery session — show the form
       setSessionReady(true)
       return
     }
 
-    if (!hasRecoveryToken) {
-      // No token and no user — this is a direct URL visit with no reset link
+    if (!hasRecoveryToken && !isRecovery) {
+      // No recovery token and no recovery event — a direct URL visit, whether or
+      // not the visitor happens to be signed in. Send them to the app/login.
       navigate('/login', { replace: true })
       return
     }
@@ -98,15 +142,15 @@ export default function ResetPassword() {
     // Has a recovery token but Supabase hasn't parsed it yet — show spinner and wait.
     // Give up after 4 seconds (generous for slow connections) and send to login.
     const timer = setTimeout(() => {
-      if (!user && !done) navigate('/login', { replace: true })
+      if (!(user && isRecovery) && !done) navigate('/login', { replace: true })
     }, 4000)
     return () => clearTimeout(timer)
-  }, [user, navigate, done])
+  }, [user, navigate, done, isRecovery])
 
-  // Mark form as ready once user session is confirmed
+  // Mark form as ready once a recovery session is confirmed
   useEffect(() => {
-    if (user && !sessionReady) setSessionReady(true)
-  }, [user, sessionReady])
+    if (user && isRecovery && !sessionReady) setSessionReady(true)
+  }, [user, isRecovery, sessionReady])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -126,7 +170,8 @@ export default function ResetPassword() {
     setLoading(false)
 
     if (error) {
-      setError(error.message)
+      console.warn('[ResetPassword] updateUser failed:', error.message)
+      setError(friendlyError(error))
     } else {
       setDone(true)
       setTimeout(() => navigate('/'), 3000)
@@ -168,9 +213,11 @@ export default function ResetPassword() {
                   {linkError.expired ? 'This reset link has expired' : 'This reset link is no longer valid'}
                 </h2>
                 <p className="text-sm text-gray-500 mb-5">
+                  {/* Deliberately does NOT echo error_description from the URL —
+                      it is caller-controlled text written for developers. */}
                   {linkError.expired
                     ? 'Password reset links are single-use and time-limited. Request a new one and use the newest email — older links stop working as soon as a new one is sent.'
-                    : (linkError.message || 'The link could not be verified. Request a new password reset email and try again.')}
+                    : 'The link could not be verified. Request a new password reset email and try again.'}
                 </p>
                 <Link to="/login?reset=1" className="btn-primary inline-flex items-center justify-center">
                   Request a new link

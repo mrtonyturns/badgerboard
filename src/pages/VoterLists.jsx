@@ -6,7 +6,7 @@ import {
   FileText, FolderPlus, BarChart2, ChevronRight,
   AlertTriangle,
 } from 'lucide-react'
-import { partyAbbrev, partyBadgeClasses, partyMapHex } from '../lib/party'
+import { partyAbbrev, partyBadgeClasses, partyMapHex, partyGroup, partyVanCode } from '../lib/party'
 
 // ─── Vote history dot trail ───────────────────────────────────────────────────
 // NOTE: This displays simulated/placeholder data. Integrate a real voter file
@@ -65,7 +65,7 @@ function SimulatedDataBanner() {
   )
 }
 import {
-  getVoterLists, createVoterList, deleteVoterList,
+  getVoterLists, createVoterList, updateVoterList, deleteVoterList,
   getVoters, getAllVoters, createVoters, deleteVotersByList, updateVoter,
   getVoterSavedLists, createVoterSavedList, updateVoterSavedList, deleteVoterSavedList,
 } from '../lib/supabase'
@@ -415,6 +415,7 @@ export default function VoterLists() {
       // so we still fail fast and report the offending chunk.
       let cursor = 0
       let completed = 0
+      let insertedRows = 0   // actual rows in the DB — chunks are not all the same size
       let failure = null
       const worker = async () => {
         while (failure === null) {
@@ -434,6 +435,7 @@ export default function VoterLists() {
             return
           }
           completed++
+          insertedRows += chunk.length
           setUploadProgress({ done: completed, total: chunks.length })
         }
       }
@@ -442,9 +444,33 @@ export default function VoterLists() {
       )
 
       if (failure) {
-        setError(`Upload failed at row ${failure.idx * UPLOAD_CHUNK_SIZE + 1}: ${failure.error.message}`)
+        // The list row was created up front with total_count = the whole file,
+        // so a failed chunk used to leave a list claiming N rows that only holds
+        // some of them — every count, banner and "x of y loaded" line downstream
+        // then reported a number that was never true. Reconcile instead:
+        //   • nothing inserted → delete the empty list (a clean rollback, no data
+        //     to lose), so no phantom list is left in the sidebar;
+        //   • some inserted    → keep the rows but correct total_count to what
+        //     actually landed, and say exactly how many that was.
+        const failedAtRow = failure.idx * UPLOAD_CHUNK_SIZE + 1
+        let tail
+        if (insertedRows === 0) {
+          await deleteVotersByList(newList.id).catch(() => {})
+          await deleteVoterList(newList.id).catch(() => {})
+          tail = 'No rows were saved and the empty list was removed — fix the file and upload it again.'
+        } else {
+          // Never let the reconcile itself throw us into the generic
+          // "Upload failed" alert — the message below is the useful one.
+          const { error: reconcileErr } = await updateVoterList(newList.id, { total_count: insertedRows })
+            .catch(e => ({ error: e }))
+          tail = reconcileErr
+            ? `${insertedRows.toLocaleString()} of ${rows.length.toLocaleString()} rows were saved to "${newList.name}", but its stored count could not be corrected — delete the list and upload the file again.`
+            : `${insertedRows.toLocaleString()} of ${rows.length.toLocaleString()} rows were saved to "${newList.name}" and its count was corrected to match. The list is incomplete: delete it and upload the file again to get all of it.`
+        }
+        setError(`Upload failed at row ${failedAtRow}: ${failure.error.message}. ${tail}`)
         setUploadProgress(null)
         setUploading(false)
+        await fetchAll()   // sidebar must show the corrected count, not the claim
         return
       }
 
@@ -519,7 +545,10 @@ export default function VoterLists() {
       f => f?.toLowerCase().includes(searchVoter.toLowerCase())
     )
     const matchDistrict = !districtFilter.value || v[districtFilter.type] === districtFilter.value
-    const matchParty = !partyFilter || (v.party || '').toLowerCase().startsWith(partyFilter.toLowerCase())
+    // partyGroup(), never a prefix compare: startsWith('r') missed every 'GOP'
+    // row (and 'DEM'/'D'/'Dem.' variants for the other options), so filtering to
+    // Republicans silently hid the Republicans a WisVote export spells 'GOP'.
+    const matchParty = !partyFilter || partyGroup(v.party) === partyFilter
     return matchSearch && matchDistrict && matchParty
   }
 
@@ -577,7 +606,10 @@ export default function VoterLists() {
       v.city || '',
       v.zip || '',
       v.ward || v.county || '',
-      (v.party || '').toUpperCase().charAt(0) || 'U',
+      // PartyCode via partyVanCode(), not the first letter of the raw text: a
+      // 'GOP' voter used to be written as 'G', which is GREEN in a VAN file.
+      // Blank party still emits 'U', exactly as before.
+      partyVanCode(v.party),
     ].map(c => `"${String(c).replace(/"/g,'""')}"`).join('\t'))
     downloadBlob(
       [header, ...rows].join('\n'),
@@ -766,10 +798,11 @@ export default function VoterLists() {
                   />
                 </div>
                 <select className="input text-xs py-1.5 w-28" value={partyFilter} onChange={e => setPartyFilter(e.target.value)}>
+                  {/* Values are partyGroup() families, not text prefixes. */}
                   <option value="">All Parties</option>
-                  <option value="r">Republican</option>
-                  <option value="d">Democrat</option>
-                  <option value="i">Independent</option>
+                  <option value="R">Republican</option>
+                  <option value="D">Democrat</option>
+                  <option value="I">Independent</option>
                 </select>
                 <select
                   className="input text-xs py-1.5 w-40"

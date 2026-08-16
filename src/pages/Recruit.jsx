@@ -21,7 +21,7 @@ import {
   ChevronRight, ExternalLink, RefreshCw, Check, MapPin, Info,
 } from 'lucide-react'
 import {
-  getVoterLists, getVoters, getOffices, supabase,
+  getVoterLists, getOffices, supabase,
   getRecruitmentSearches, createRecruitmentSearch, updateRecruitmentSearch,
   getRecruitmentProspects, createRecruitmentProspects, getRecruitmentProgress,
 } from '../lib/supabase'
@@ -30,7 +30,7 @@ import { getUserTier, hasFeature, getRecruitLookupLimit, RECRUIT_BATCH_CAP } fro
 import {
   availableOfficeTypes, recruitOfficeType, districtColumnForOfficeType,
   districtOptionsFromVoters, matchVotersToDistrict, listSupportsOfficeType,
-  isUnknownProspect,
+  isUnknownProspect, isRetryableProspect,
 } from '../lib/recruit'
 import UpgradePrompt from '../components/UpgradePrompt'
 import { T, cardStyle, Btn, Pill, Spinner, EmptyNote, ProfilerShell } from './profiler/shared'
@@ -46,7 +46,49 @@ const POLL_MS = 3000
 const HEARTBEAT_STALE_MS = 3 * 60 * 1000
 const FIRST_BEAT_MS = 45 * 1000              // no progress row at all ⇒ never started
 const MAX_WAIT_MS   = 15 * 60 * 1000         // Netlify's background budget
-const VOTER_LOAD_CAP = 5000
+
+// ── Voter loading ────────────────────────────────────────────────────────────
+// This used to be a single getVoters(listId, 5000) call. PostgREST orders by
+// last_name, so on any list bigger than 5,000 rows Recruit matched seats
+// against the alphabetical first 5,000 people ONLY — every resident from
+// roughly the letter M on was invisible to the district picker and to the
+// confirmed-resident list, with nothing on screen saying so. The list is now
+// paged in full, the same way lib/supabase.getAllVoters() pages exports.
+//
+// The ceiling stays, because the whole list is held in browser memory and fed
+// to the matchers on every keystroke — but it is now the same 50,000 rows
+// VoterLists caps a single upload at (MAX_UPLOAD_ROWS), i.e. a complete list as
+// this app can produce one, and hitting it renders an explicit warning that
+// says how many rows were considered out of how many exist.
+const VOTER_PAGE     = 1000                  // PostgREST's max_rows ceiling
+const VOTER_LOAD_CAP = 50000
+
+/**
+ * Every voter in the list, paged, up to VOTER_LOAD_CAP.
+ * `id` is the sort tiebreaker: last_name alone is not unique, and a non-total
+ * order makes .range() pages overlap and silently drop rows.
+ */
+async function loadListVoters(listId, { onProgress, cancelled } = {}) {
+  let all = []
+  for (let offset = 0; offset < VOTER_LOAD_CAP; offset += VOTER_PAGE) {
+    if (cancelled?.()) return { data: all, error: null, truncated: false }
+    const size = Math.min(VOTER_PAGE, VOTER_LOAD_CAP - offset)
+    const { data, error } = await supabase
+      .from('voters')
+      .select('*')
+      .eq('voter_list_id', listId)
+      .order('last_name')
+      .order('id')
+      .range(offset, offset + size - 1)
+    if (error) return { data: all, error, truncated: false }
+    if (!data?.length) return { data: all, error: null, truncated: false }
+    all = all.concat(data)
+    onProgress?.(all.length)
+    if (data.length < size) return { data: all, error: null, truncated: false }
+  }
+  // Filled the cap exactly — there may be more rows we deliberately did not read.
+  return { data: all, error: null, truncated: true }
+}
 
 const DISCLAIMER =
   'AI-assisted research from public sources. May be incomplete or inaccurate. Not a background check. ' +
@@ -120,6 +162,8 @@ export default function Recruit() {
   const [lists, setLists]         = useState([])
   const [listId, setListId]       = useState('')
   const [voters, setVoters]       = useState([])
+  const [votersTruncated, setVotersTruncated] = useState(false)
+  const [votersLoaded, setVotersLoaded]       = useState(0)   // paging progress
   const [loadingVoters, setLoadingVoters] = useState(false)
   const [offices, setOffices]     = useState([])
   const [typeKey, setTypeKey]     = useState('')
@@ -161,20 +205,27 @@ export default function Recruit() {
 
   // ── Load the voters of the chosen list ─────────────────────────────────────
   useEffect(() => {
-    if (!listId) { setVoters([]); return }
+    if (!listId) { setVoters([]); setVotersTruncated(false); setVotersLoaded(0); return }
     let cancelled = false
     setLoadingVoters(true)
+    setVotersTruncated(false)
+    setVotersLoaded(0)
     ;(async () => {
-      const { data, error: e } = await getVoters(listId, VOTER_LOAD_CAP)
+      const { data, error: e, truncated } = await loadListVoters(listId, {
+        cancelled: () => cancelled,
+        onProgress: (n) => { if (!cancelled) setVotersLoaded(n) },
+      })
       if (cancelled) return
       if (e) setError(e.message)
       setVoters(data || [])
+      setVotersTruncated(Boolean(truncated))
       setLoadingVoters(false)
     })()
     return () => { cancelled = true }
   }, [listId])
 
   // ── Derived: office types, districts, matched residents ────────────────────
+  const selectedList = useMemo(() => lists.find(l => l.id === listId) || null, [lists, listId])
   const officeTypes = useMemo(() => availableOfficeTypes(offices), [offices])
   const typeMeta    = useMemo(() => recruitOfficeType(typeKey), [typeKey])
   const districtOptions = useMemo(
@@ -237,7 +288,7 @@ export default function Recruit() {
     if (!residents.length || !typeMeta) return
     setBusy(true); setError(null)
     try {
-      const list = lists.find(l => l.id === listId)
+      const list = selectedList
       const name = `${typeMeta.label} — ${typeMeta.districtLabel} ${districtValue} (${format(new Date(), 'MMM yyyy')})`
       const { data: search, error: sErr } = await createRecruitmentSearch({
         name,
@@ -373,10 +424,16 @@ export default function Recruit() {
     await loadProspects(s.id)
   }
 
+  // `pending` drives both the "still to research" line and whether the Research
+  // button is enabled, so it has to use the same retryable set the background
+  // function selects on — otherwise a search whose remaining rows are all
+  // `skipped_quota` reads "0 still to research" and the button stays disabled,
+  // stranding those people permanently even after the monthly allowance resets.
   const counts = useMemo(() => ({
     total:   prospects.length,
     done:    prospects.filter(p => p.research_status === 'done').length,
-    pending: prospects.filter(p => p.research_status === 'pending' || p.research_status === 'error').length,
+    pending: prospects.filter(p => !p.excluded && isRetryableProspect(p)).length,
+    skipped: prospects.filter(p => p.research_status === 'skipped_quota').length,
   }), [prospects])
 
   // ── Feature gate (same shape as Prospecting.jsx) ───────────────────────────
@@ -434,10 +491,33 @@ export default function Recruit() {
               <option key={l.id} value={l.id}>{l.name} · {l.total_count || 0} rows</option>
             ))}
           </select>
-          {loadingVoters && <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: T.muted }}><Spinner size={13} /> Loading residents…</div>}
-          {!loadingVoters && listId && (
+          {loadingVoters && (
+            <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: T.muted }}>
+              <Spinner size={13} /> Loading residents…{votersLoaded ? ` ${votersLoaded.toLocaleString()} so far` : ''}
+            </div>
+          )}
+          {!loadingVoters && listId && !votersTruncated && (
             <div style={{ marginTop: 10, fontSize: 11, color: T.muted }}>
-              {voters.length.toLocaleString()} residents loaded{voters.length >= VOTER_LOAD_CAP ? ` (first ${VOTER_LOAD_CAP.toLocaleString()})` : ''}.
+              {voters.length.toLocaleString()} residents loaded — the whole list.
+            </div>
+          )}
+          {/* Truncation is never silent: it changes which people Recruit can
+              find, so it gets a warning that states both numbers. */}
+          {!loadingVoters && listId && votersTruncated && (
+            <div style={{
+              marginTop: 10, display: 'flex', alignItems: 'flex-start', gap: 8,
+              background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 10,
+              padding: '9px 12px', fontSize: 11.5, color: '#92400E',
+            }}>
+              <AlertTriangle style={{ width: 15, height: 15, flexShrink: 0, marginTop: 1 }} />
+              <span>
+                <strong>Only part of this list was read.</strong> Recruit considered{' '}
+                {voters.length.toLocaleString()} rows
+                {selectedList?.total_count ? ` of the ${selectedList.total_count.toLocaleString()} in the list` : ''}
+                {' '}(the per-page ceiling is {VOTER_LOAD_CAP.toLocaleString()}, in last-name order). Districts and
+                residents below cover those rows only — split the file into smaller lists (for example one per
+                municipality) to search the rest.
+              </span>
             </div>
           )}
         </StepCard>
@@ -529,6 +609,12 @@ export default function Recruit() {
               {!residents.length && <EmptyNote style={{ padding: 14 }}>No residents carry that district value.</EmptyNote>}
             </div>
             {residents.length > 200 && <div style={{ fontSize: 10.5, color: T.faint, marginTop: 6 }}>Showing the first 200 of {residents.length.toLocaleString()}.</div>}
+            {votersTruncated && (
+              <div style={{ fontSize: 10.5, color: '#92400E', marginTop: 6 }}>
+                Matched against the {voters.length.toLocaleString()} rows Recruit read
+                {selectedList?.total_count ? ` of ${selectedList.total_count.toLocaleString()} in the list` : ''} — see the warning in step 1.
+              </div>
+            )}
             <div style={{ marginTop: 12 }}>
               <Btn kind="primary" onClick={createSearch} disabled={busy || !residents.length || schemaMissing}>
                 <UserPlus style={{ width: 13, height: 13 }} /> Create recruitment search
@@ -542,7 +628,7 @@ export default function Recruit() {
           <StepCard
             n={5}
             title="Research prospects"
-            sub={`${counts.pending} of ${counts.total} still to research · up to ${RECRUIT_BATCH_CAP} per run${monthlyLimit ? ` · ${monthlyLimit.toLocaleString()} lookups/month on your plan` : ''}.`}
+            sub={`${counts.pending} of ${counts.total} still to research${counts.skipped ? ` (including ${counts.skipped} parked when the allowance ran out — eligible again)` : ''} · up to ${RECRUIT_BATCH_CAP} per run${monthlyLimit ? ` · ${monthlyLimit.toLocaleString()} lookups/month on your plan` : ''}.`}
             done={counts.total > 0 && counts.pending === 0}
           >
             <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 11.5, color: T.ink4, cursor: 'pointer' }}>

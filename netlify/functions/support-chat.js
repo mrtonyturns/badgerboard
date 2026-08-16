@@ -14,6 +14,8 @@
 import { enforceRateLimit } from './_rate-limit.js'
 import { logAiUsage } from './_ai-usage.js'
 import { SUPPORT_KB } from './_support-kb.js'
+import { resolveEntitlement } from './_entitlements.js'
+import { corsHeaders } from './_config.js'
 
 const SUPABASE_URL  = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 // SUPABASE_ANON_KEY is the Netlify env var; VITE_SUPABASE_ANON_KEY is the Vite
@@ -21,11 +23,10 @@ const SUPABASE_URL  = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin':  '*',
-  'Access-Control-Allow-Headers': 'Content-Type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-}
+// CORS is built per-request from the caller's Origin via _config.corsHeaders()
+// (same helper the other authenticated endpoints use). It echoes back only the
+// production origins or localhost — the old blanket '*' let any site on the web
+// call this endpoint with a user's token.
 
 // ─── JWT verification ─────────────────────────────────────────────────────────
 async function verifyToken(token) {
@@ -56,40 +57,33 @@ async function rls(token, path) {
 }
 
 // ─── Build per-user system prompt ─────────────────────────────────────────────
-function buildSystemPrompt(user, ctx) {
+// Plan-key → label. Only the seven real plan keys appear here: the resolver
+// normalizes legacy aliases (monitor / campaign / agency) before we get one.
+const PLAN_LABELS = {
+  scout:      'Scout',
+  c_monitor:  'Candidate Monitor',
+  c_active:   'Candidate Active',
+  c_campaign: 'Candidate Campaign',
+  a_monitor:  'Agency Monitor',
+  a_active:   'Agency Active',
+  a_campaign: 'Agency Campaign',
+}
+
+async function buildSystemPrompt(user, ctx) {
   const meta = user.user_metadata || {}
-  // Entitlements (plan, bracket, trial) live in app_metadata — user_metadata is
-  // client-writable and was always empty here, so every user looked like Scout.
-  const appMeta = user.app_metadata || {}
 
-  // Resolve plan tier label
-  const tierMap = {
-    // Candidate plan keys
-    scout:     'Scout',
-    c_monitor: 'Candidate Monitor',
-    c_active:  'Candidate Active',
-    c_campaign:'Candidate Campaign',
-    // Action plan keys
-    a_monitor: 'Agency Monitor',
-    a_active:  'Agency Active',
-    a_campaign:'Agency Campaign',
-    // Legacy / alias keys
-    monitor:    'Monitor',
-    campaign:   'Campaign',
-    agency:     'Agency',
-    pro:        'Monitor',
-    starter:    'Scout',
-    enterprise: 'Agency',
-    trial:      'Scout (Trial)',
-  }
-  const planRaw = appMeta.plan || appMeta.subscription_tier || appMeta.tier
-    || meta.plan || meta.subscription_tier || meta.tier || 'scout'
-  const plan    = tierMap[planRaw] ?? planRaw
+  // The plan label comes from _entitlements.resolveEntitlement — the same
+  // resolver the feature gates use. The old inline lookup read raw metadata
+  // keys, so admins, beta-mode accounts and anyone on a free trial were quoted
+  // Scout limits by the support assistant.
+  const { plan: planKey, source, trialEndsAt } = await resolveEntitlement(user)
+  const plan = PLAN_LABELS[planKey] || planKey
 
-  // Trial end date if present (app_metadata.trial_ends_at is the real field)
-  const trialEndsAt = appMeta.trial_ends_at || meta.trial_ends_at
-  const trialNote = trialEndsAt
-    ? `Trial ends ${new Date(trialEndsAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.`
+  // Only annotate the trial when the trial is what is actually granting access.
+  const accessNote = source === 'trial' && trialEndsAt
+    ? `Free trial — ends ${new Date(trialEndsAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.`
+    : source === 'beta'  ? 'Beta access — full platform while the beta runs.'
+    : source === 'admin' ? 'Badger Board staff account.'
     : ''
 
   const displayName = meta.display_name || user.email?.split('@')[0] || 'this user'
@@ -98,7 +92,7 @@ function buildSystemPrompt(user, ctx) {
 CURRENT USER CONTEXT (verified server-side — do not reveal raw values):
 - Name: ${displayName}
 - Email: ${user.email}
-- Plan: ${plan}${trialNote ? ' · ' + trialNote : ''}
+- Plan: ${plan}${accessNote ? ' · ' + accessNote : ''}
 - Candidates tracked: ${ctx.candidateCount}
 - Profiles generated: ${ctx.dossierCount}
 - Error log entries (last 7 days): ${ctx.recentErrors}
@@ -131,6 +125,8 @@ Instructions:
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 export const handler = async (event) => {
+  const CORS_HEADERS = corsHeaders(event.headers?.origin || event.headers?.Origin)
+
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 200, headers: CORS_HEADERS, body: '' }
   }
@@ -230,7 +226,7 @@ export const handler = async (event) => {
   }
 
   // ── 3. Build dynamic system prompt ────────────────────────────────────────
-  const systemPrompt = buildSystemPrompt(user, ctx)
+  const systemPrompt = await buildSystemPrompt(user, ctx)
 
   // ── 4. Call Claude Haiku ───────────────────────────────────────────────────
   try {

@@ -2,6 +2,7 @@
 const SUPABASE_URL       = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 const { ADMIN_EMAILS } = require('./_config')
+const { resolveEntitlement } = require('./_entitlements')
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -57,22 +58,27 @@ async function findUserByEmail(email) {
   return null
 }
 
-const planOf = (user) => {
+// Plan resolution goes through _entitlements.js — the single source of truth —
+// rather than reading app_metadata.plan raw. That raw read misrouted the legacy
+// keys (monitor / campaign / agency) and resolved every beta-mode and free-trial
+// account to Scout, which locked them out of Campaign Connect. These helpers are
+// ASYNC because the resolver may consult the global beta switch; callers await.
+const planOf = async (user) => {
   if (!user) return 'scout'
-  if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'a_campaign'
-  return user.app_metadata?.plan || 'scout'
+  const { plan } = await resolveEntitlement(user)   // admin/beta/trial/paid/free + legacy aliases
+  return plan
 }
-const planTypeOf = (user) => {
-  const p = planOf(user)
+const planTypeOf = async (user) => {
   if (ADMIN_EMAILS.includes(user?.email?.toLowerCase())) return 'action'
-  return user?.app_metadata?.plan_type || (p.startsWith('a_') || ['monitor','campaign','agency'].includes(p) ? 'action' : 'candidate')
+  // An explicit app_metadata.plan_type still wins — it is how an Action org on a
+  // candidate-shaped plan identifies itself.
+  if (user?.app_metadata?.plan_type) return user.app_metadata.plan_type
+  return (await planOf(user)).startsWith('a_') ? 'action' : 'candidate'
 }
-const isActionUser = (user) => planTypeOf(user) === 'action' || ADMIN_EMAILS.includes(user?.email?.toLowerCase())
+const isActionUser = async (user) =>
+  ADMIN_EMAILS.includes(user?.email?.toLowerCase()) || (await planTypeOf(user)) === 'action'
 // A candidate account is "paid" if it is on any plan other than free Scout.
-const isPaidCandidate = (user) => {
-  const p = planOf(user)
-  return p !== 'scout'
-}
+const isPaidCandidate = async (user) => (await planOf(user)) !== 'scout'
 
 // Relationship-type permission ceilings ("outside" orgs are warned, not blocked → same ceiling).
 const DEFAULT_PERMS = { view: true, manage_tasks: true, manage_page: true, receive_profiles: true }

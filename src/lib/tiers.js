@@ -472,7 +472,15 @@ export function actionPeriodTotal(plan, bracket, billingPeriod = 'monthly') {
   return base ? periodTotal(base, billingPeriod) : null
 }
 
-// ─── A la carte profile credit packs (Candidate Plan only) ───────────────────
+// ─── A la carte profile credit packs (every PAID plan) ───────────────────────
+// The header used to read "Candidate Plan only", which has not been true since
+// features.creditPacks was switched on for a_monitor / a_active / a_campaign
+// ("every paid plan can buy a la carte profile credits"). The Pricing page had
+// inherited that stale premise and rendered the pack grid inside the Candidate
+// tab only, so an Action subscriber could not reach packs their entitlement
+// already grants — and create-checkout-session, which gates on the same
+// features.creditPacks flag via entitlementFeature('creditPacks'), would have
+// happily sold them. Scout is the only plan that cannot buy.
 
 export const CREDIT_PACKS = [
   { key: 'c1',  qty: 1,  price: 49,  perCredit: 49.00, savingsPct: null },
@@ -480,6 +488,20 @@ export const CREDIT_PACKS = [
   { key: 'c10', qty: 10, price: 349, perCredit: 34.90, savingsPct: 29   },
   { key: 'c25', qty: 25, price: 749, perCredit: 29.96, savingsPct: 39   },
 ]
+
+/**
+ * May this plan buy a la carte profile credit packs?
+ * Single source of truth for the purchase UI, mirroring the server's
+ * entitlementFeature('creditPacks') check in create-checkout-session.js.
+ */
+export function canBuyCreditPacks(planKey) {
+  return hasFeature(normalizePlan(planKey), 'creditPacks')
+}
+
+/** May this plan buy BULK profile credits (Bulk Profiler fuel)? */
+export function canBuyBulkCredits(planKey) {
+  return hasFeature(normalizePlan(planKey), 'bulkCredits')
+}
 
 // ─── Recruit lookups (Action Plan only) ──────────────────────────────────────
 // Reputation lookups are a much cheaper unit than a full AI dossier

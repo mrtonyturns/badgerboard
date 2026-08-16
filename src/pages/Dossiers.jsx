@@ -421,8 +421,15 @@ export default function Dossiers() {
     let stopped = false
 
     ;(async () => {
+      // LIST MODE (id / candidate_id / generated_at / generated_by /
+      // weekly_digest + the candidate join). These watchers only ever ask
+      // "has a new row landed?" — they never read `content` — but they used
+      // the default `*` selector, so every 5s tick re-downloaded the full
+      // multi-KB report body of every profile for this candidate for up to
+      // fifteen minutes. The body is fetched exactly once, by openDossier()
+      // below, when the finished profile is actually opened.
       const findNew = (list) => (list || []).find(d => (d.generated_at || d.created_at || '') > startISO)
-      const { data: immediate } = await getDossiers(pendingCandidateId)
+      const { data: immediate } = await getDossiers(pendingCandidateId, { list: true })
       const already = findNew(immediate)
       if (already && !stopped) {
         await fetchData(); await openDossier(already.id)
@@ -432,7 +439,7 @@ export default function Dossiers() {
       }
       while (!stopped && Date.now() < deadline) {
         await sleep(5000)
-        const { data: current } = await getDossiers(pendingCandidateId)
+        const { data: current } = await getDossiers(pendingCandidateId, { list: true })
         const fresh = findNew(current)
         if (fresh) {
           await fetchData(); await openDossier(fresh.id)
@@ -470,7 +477,10 @@ export default function Dossiers() {
 
     try {
       const token = await getToken()
-      const { data: before } = await getDossiers(cid)
+      // List mode: the before/after diff is on ids alone — see the note on the
+      // resume watcher above. Pulling `content` here (and again on every 5s
+      // tick below) moved megabytes for a set-difference on UUIDs.
+      const { data: before } = await getDossiers(cid, { list: true })
       const beforeIds = new Set((before || []).map(d => d.id))
 
       const payload = researchContext?.trim()
@@ -496,7 +506,7 @@ export default function Dossiers() {
       let fresh = null
       while (aliveRef.current && !genAbortRef.current && Date.now() < deadline) {
         await sleep(5000)
-        const { data: current } = await getDossiers(cid)
+        const { data: current } = await getDossiers(cid, { list: true })
         fresh = (current || []).find(d => !beforeIds.has(d.id))
         if (fresh) break
       }

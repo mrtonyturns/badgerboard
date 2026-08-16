@@ -17,6 +17,7 @@ const MODEL             = 'claude-haiku-4-5-20251001'
 // Action-plan entitlement (tiers.js features.prospecting — single source of truth).
 const { PLAN_CONFIG } = require('../../src/lib/tiers.js')
 const { logAiUsage } = require('./_ai-usage')
+const { enforceRateLimit } = require('./_rate-limit')
 const { ADMIN_EMAILS } = require('./_config')
 const PROSPECTING_PLANS = Object.keys(PLAN_CONFIG).filter(k => PLAN_CONFIG[k]?.features?.prospecting)
 
@@ -166,6 +167,13 @@ exports.handler = async (event) => {
   if (!PROSPECTING_PLANS.includes(plan)) {
     return { statusCode: 403, headers: HEADERS, body: JSON.stringify({ error: 'Action plan required for AI prospect classification.' }) }
   }
+
+  // ── Durable per-user rate limit ───────────────────────────────────────────────
+  // One request fans out to up to 25 Haiku calls (500 rows / batches of 20), so
+  // this endpoint spends like the other prospecting jobs and was the last AI
+  // endpoint without a budget.
+  const limited = await enforceRateLimit(user.id, 'classify-csv-prospects', HEADERS)
+  if (limited) return limited
 
   let body
   try { body = JSON.parse(event.body || '{}') } catch {

@@ -73,6 +73,9 @@ export function ProfilerStyles() {
       @media (max-width: 900px) {
         .pf-strip     { grid-template-columns: 1fr 1fr !important }
         .pf-strip > div { border-right: none !important; border-bottom: 1px solid ${T.divider} }
+        /* …but not on the last cell, or the collapsed strip draws a stray
+           hairline right above the card's own rounded bottom edge. */
+        .pf-strip > div:last-child { border-bottom: none }
         .pf-head      { flex-direction: column !important; align-items: flex-start !important }
         .pf-headright { margin-left: 0 !important; width: 100% }
         .pf-doc       { padding-left: 20px !important; padding-right: 20px !important }

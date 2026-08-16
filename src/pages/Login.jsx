@@ -129,22 +129,25 @@ export default function Login() {
       if (error) setError(error.message)
       else navigate('/')
     } else {
-      const { data, error } = await signUp(email, password, {
+      const { error } = await signUp(email, password, {
         first_name: firstName.trim(), last_name: lastName.trim(),
         display_name: `${firstName.trim()} ${lastName.trim()}`,
         business: business.trim(), phone, position,
       })
-      // Supabase's anti-enumeration behaviour: signing up with an address that
-      // already exists returns success with a DECOY user — obfuscated id and an
-      // empty `identities` array — and sends no confirmation email. Reporting
-      // "Account created!" there left the user waiting for an email that never
-      // arrives. We don't confirm the address exists in the error copy either;
-      // the message covers both branches.
-      const isDecoy = !error && data?.user && Array.isArray(data.user.identities) && data.user.identities.length === 0
-      if (error) setError(error.message)
-      else if (isDecoy) {
-        setError('This email is already registered. Sign in instead, or reset your password if you’ve forgotten it.')
-      } else { setSuccess('Account created! Check your email to confirm, then sign in.'); switchMode('signin') }
+      // Supabase deliberately hides whether an address is already registered:
+      // signing up with an existing email returns SUCCESS with a decoy user
+      // (obfuscated id, empty `identities`) and sends no confirmation mail.
+      // Telling the user "this email is already registered" handed that fact
+      // straight back to whoever typed the address — a working account-
+      // enumeration oracle on a public form. Every non-error outcome now gets
+      // the SAME copy, and the one error message that also leaks it is folded
+      // into that same branch.
+      const leaksExistence = error && /already\s*(registered|exists|in use)|user already/i.test(error.message || '')
+      if (error && !leaksExistence) setError(error.message)
+      else {
+        setSuccess('Check your email. If we could create an account for that address, a confirmation link is on its way — follow it, then sign in. Already have an account? Sign in below or reset your password.')
+        switchMode('signin')
+      }
     }
     setLoading(false)
   }

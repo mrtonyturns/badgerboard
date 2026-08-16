@@ -31,6 +31,7 @@ import {
 import { monitoringToggleError } from '../lib/capErrors'
 import { WebOnlyCta, NATIVE_PLAN_NOTE } from '../components/UpgradeCta'
 import { partyHex, candidateStatusLabel, CANDIDATE_STATUS_HEX } from '../lib/campaignEnums'
+import { normalizePartyForDb } from '../lib/party'
 import {
   T, ProfileStyles, Btn, Spinner, TextLink,
   fmtDate, safeISO, categoryTarget, sectionTarget, useBioSummary,
@@ -270,7 +271,14 @@ export default function CandidateDetail() {
       }
       const changedFields = Object.keys(form).filter(k => String(candidate[k] ?? '') !== String(form[k] ?? ''))
       const { error } = await updateCandidate(id, {
-        name: form.name, party: form.party, status: form.status,
+        name: form.name,
+        // "No party" is the empty option in the Party picker, and the
+        // candidates.party CHECK accepts DB_PARTIES or NULL — never ''. Writing
+        // '' returned a raw Postgres check-constraint error and the user lost
+        // the whole edit. normalizePartyForDb() turns blank (and any unknown
+        // free text) into null and canonicalises 'GOP'/'Democratic'/'R'.
+        party: normalizePartyForDb(form.party),
+        status: form.status,
         email: cleanEmail, phone: form.phone, website: form.website,
         campaign_address: form.campaign_address, campaign_city: form.campaign_city,
         campaign_zip: form.campaign_zip, campaign_committee: form.campaign_committee,
@@ -296,7 +304,16 @@ export default function CandidateDetail() {
       setEditing(false)
       await fetchAll()
     } catch (err) {
-      setSaveError(err.message || 'Save failed')
+      // The form stays open and populated on failure (setEditing(false) only
+      // runs after a successful write), so nothing the user typed is lost — but
+      // a bare Postgres string is not an error message. Translate the one the
+      // party column can still throw into something actionable.
+      const msg = String(err?.message || '')
+      setSaveError(
+        /check constraint/i.test(msg) && /party/i.test(msg)
+          ? 'That party isn’t one this database accepts. Pick a party from the list (or “No party”) and save again — your other changes are still here.'
+          : msg || 'Save failed'
+      )
     } finally {
       setSaving(false)
     }

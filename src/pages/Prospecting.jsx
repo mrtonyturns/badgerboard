@@ -23,7 +23,8 @@
 // Design language: the redesign shell tokens (Geist) shared with the Profiler
 // and the dashboards — src/pages/profiler/shared.jsx.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { format } from 'date-fns'
 import {
@@ -110,20 +111,85 @@ function Chip({ active, children, onClick, title }) {
   )
 }
 
-/** Click-away popover anchored under its trigger. */
-function Popover({ open, onClose, children, width = 340 }) {
+/**
+ * Click-away popover anchored under its trigger.
+ *
+ * Two modes:
+ *   default        — absolutely positioned inside the trigger's own stacking
+ *                    context (what ScoreCell / AgencyCell have always used)
+ *   `anchorRef`    — PORTALLED to <body> and positioned from the trigger's
+ *                    getBoundingClientRect(), flipping above the trigger when
+ *                    there is more room up than down.
+ *
+ * The portal exists because the results table lives inside `.pp-scroll`, which
+ * sets `overflow-x: auto`. Per CSS, a non-`visible` overflow on one axis
+ * computes the other axis to `auto` too — so the container clips VERTICALLY as
+ * well, and an absolutely positioned panel opened on a bottom row was cut off
+ * (or scrolled out of reach) with no way to read the rest of it. A fixed-
+ * position portal is outside that clip entirely.
+ */
+function Popover({ open, onClose, children, width = 340, anchorRef }) {
+  const [pos, setPos] = useState(null)
+
+  useLayoutEffect(() => {
+    if (!open || !anchorRef) return undefined
+    const place = () => {
+      const el = anchorRef.current
+      if (!el) return
+      const r  = el.getBoundingClientRect()
+      const vw = window.innerWidth
+      const vh = window.innerHeight
+      const GAP = 6, EDGE = 8
+      const below = vh - r.bottom - GAP - EDGE
+      const above = r.top - GAP - EDGE
+      // Flip up only when the panel genuinely fits better there — a bottom-row
+      // trigger on a phone otherwise opens into 20px of viewport.
+      const flip  = below < 200 && above > below
+      setPos({
+        left: Math.max(EDGE, Math.min(r.left, vw - width - EDGE)),
+        ...(flip ? { bottom: vh - r.top + GAP } : { top: r.bottom + GAP }),
+        maxHeight: Math.max(140, flip ? above : below),
+      })
+    }
+    place()
+    window.addEventListener('resize', place)
+    // capture: catches the .pp-scroll container scrolling, not just the window
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [open, anchorRef, width])
+
   if (!open) return null
+
+  const panel = (extra) => (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        width, ...cardStyle, borderRadius: 12, padding: 14,
+        boxShadow: '0 10px 30px rgba(0,0,0,.12)',
+        textAlign: 'left', whiteSpace: 'normal', cursor: 'default',
+        ...extra,
+      }}
+    >{children}</div>
+  )
+
+  if (anchorRef) {
+    if (typeof document === 'undefined' || !pos) return null
+    return createPortal(
+      <>
+        <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 9998 }} />
+        {panel({ position: 'fixed', zIndex: 9999, overflowY: 'auto', ...pos })}
+      </>,
+      document.body,
+    )
+  }
+
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          position: 'absolute', zIndex: 41, top: 'calc(100% + 6px)', left: 0, width,
-          ...cardStyle, borderRadius: 12, padding: 14, boxShadow: '0 10px 30px rgba(0,0,0,.12)',
-          textAlign: 'left', whiteSpace: 'normal', cursor: 'default',
-        }}
-      >{children}</div>
+      {panel({ position: 'absolute', zIndex: 41, top: 'calc(100% + 6px)', left: 0 })}
     </>
   )
 }
@@ -347,6 +413,10 @@ function ContactCell({ row }) {
   const phones = (Array.isArray(c.phones) ? c.phones : []).filter(p => p && p.value)
   const [open, setOpen] = useState(null)      // 'phones' | 'emails' | null
   const [copied, copy] = useCopied()
+  // Anchors for the portalled panels — the cell sits inside `.pp-scroll`, which
+  // clips an absolutely positioned popover on the lower rows of the table.
+  const phoneBtnRef = useRef(null)
+  const emailBtnRef = useRef(null)
   if (!emails.length && !phones.length) return <span style={{ color: T.faint, fontSize: 12 }}>—</span>
 
   const bestPhone = phones.length ? bestOf(phones) : null
@@ -359,10 +429,10 @@ function ContactCell({ row }) {
       <div key={item.value} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 0', borderBottom: `1px solid ${T.border}` }}>
         {actAsLink ? (
           <a href={href} aria-label={`${kind === 'phone' ? 'Call' : 'Email'} ${row.name} at ${item.value}, ${confidenceBand(item.confidence)} ${item.confidence ?? 0}% confidence, source ${item.source || 'unknown'}`}
-            style={{ fontSize: 12, color: T.ink1, textDecoration: 'none', fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</a>
+            style={{ fontSize: 12, color: T.ink, textDecoration: 'none', fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</a>
         ) : (
           <button onClick={() => copy(item.value)} aria-label={`Copy ${item.value}`}
-            style={{ background: 'none', border: 'none', padding: 0, fontSize: 12, color: T.ink1, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</button>
+            style={{ background: 'none', border: 'none', padding: 0, fontSize: 12, color: T.ink, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</button>
         )}
         <BandPill confidence={item.confidence} />
         <span style={{ fontSize: 10, color: T.faint }}>{(item.source || '').replace(/_/g, ' ')}</span>
@@ -389,6 +459,7 @@ function ContactCell({ row }) {
       {bestPhone && (
         phones.length > 1 ? (
           <button
+            ref={phoneBtnRef}
             onClick={() => setOpen(open === 'phones' ? null : 'phones')}
             aria-haspopup="true" aria-expanded={open === 'phones'} aria-label={`${callAria}; multiple numbers`}
             style={actionPillStyle}
@@ -416,6 +487,7 @@ function ContactCell({ row }) {
       {bestEmail && (
         emails.length > 1 ? (
           <button
+            ref={emailBtnRef}
             onClick={() => setOpen(open === 'emails' ? null : 'emails')}
             aria-haspopup="true" aria-expanded={open === 'emails'} aria-label={`Email ${row.name}; multiple addresses`}
             style={actionPillStyle}
@@ -435,11 +507,11 @@ function ContactCell({ row }) {
           </a>
         )
       )}
-      <Popover open={open === 'phones'} onClose={() => setOpen(null)} width={320}>
+      <Popover open={open === 'phones'} onClose={() => setOpen(null)} width={320} anchorRef={phoneBtnRef}>
         <div style={{ fontSize: 11, fontWeight: 700, color: T.ink4, letterSpacing: .4, marginBottom: 6 }}>PHONE NUMBERS</div>
         {phones.map(p => popRow(p, 'phone'))}
       </Popover>
-      <Popover open={open === 'emails'} onClose={() => setOpen(null)} width={320}>
+      <Popover open={open === 'emails'} onClose={() => setOpen(null)} width={320} anchorRef={emailBtnRef}>
         <div style={{ fontSize: 11, fontWeight: 700, color: T.ink4, letterSpacing: .4, marginBottom: 6 }}>EMAIL ADDRESSES</div>
         {emails.map(e => popRow(e, 'email'))}
       </Popover>

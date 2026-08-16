@@ -68,6 +68,15 @@ const PARTY_TINT = { R: '#FEE2E2', D: '#DBEAFE' }
 const heatColor = (g) => g > 0.75 ? '#DC2626' : g > 0.55 ? '#F97316' : g > 0.35 ? '#EAB308' : '#22C55E'
 
 // ── lean computation ──────────────────────────────────────────────────────────
+// elections.type is a CHECK-constrained enum with FIVE values —
+// 'primary','general','special','spring_primary','spring_general' — so an
+// exact `type === 'primary'` test let every spring_primary contest through and
+// counted a one-party turnout race as if it measured the district's lean.
+// Match the word, not the enumerated spelling (a future 'partisan_primary' or
+// 'presidential_primary' is then covered by construction).
+const isPrimaryContest = (c) =>
+  /primary/i.test(String(c?.election?.type || '')) || /primary/i.test(String(c?.office || ''))
+
 function computeLean({ contests, history, countyMix, pres }) {
   const factors = []
   // Factor 1 — district election results (R share − D share, recency-weighted)
@@ -75,7 +84,7 @@ function computeLean({ contests, history, countyMix, pres }) {
     let wsum = 0, sum = 0
     contests.forEach(c => {
       // Primaries measure one party's turnout, not the district's lean — skip them.
-      if (c.election?.type === 'primary' || /primary/i.test(c.office || '')) return
+      if (isPrimaryContest(c)) return
       const results = c.results || []
       const tot = results.reduce((s, r) => s + (r.votes || 0), 0)
       if (!tot) return

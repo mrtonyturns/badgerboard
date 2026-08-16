@@ -19,6 +19,43 @@ import {
 
 const MIN_PW = 8   // keep in sync with Login.jsx / ResetPassword.jsx minLength
 
+// ── Password strength (identical scorer to Login.jsx / ResetPassword.jsx) ─────
+// Both of those forms refuse anything below "Fair". This one only checked
+// length, so the one place an existing account changes its password was the one
+// place a weak password was accepted. Same gate, same threshold, everywhere.
+const MIN_SCORE = 3   // "Fair" — matches Login.jsx and ResetPassword.jsx
+function scorePassword(pw) {
+  if (!pw) return { score: 0, label: '', color: '', pct: 0 }
+  let score = 0
+  if (pw.length >= 8)          score++
+  if (pw.length >= 12)         score++
+  if (/[A-Z]/.test(pw))        score++
+  if (/[a-z]/.test(pw))        score++
+  if (/[0-9]/.test(pw))        score++
+  if (/[^A-Za-z0-9]/.test(pw)) score++
+  if (score <= 2) return { score, label: 'Weak',   color: '#ef4444', pct: 25  }
+  if (score <= 3) return { score, label: 'Fair',   color: '#f97316', pct: 50  }
+  if (score <= 4) return { score, label: 'Good',   color: '#eab308', pct: 75  }
+  return             { score, label: 'Strong', color: '#22c55e', pct: 100 }
+}
+
+function StrengthBar({ password }) {
+  const { label, color, pct } = scorePassword(password)
+  if (!password) return null
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ height: 5, background: T.chip, borderRadius: 999, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 999, transition: 'width .3s' }} />
+      </div>
+      <p style={{ margin: '4px 0 0', fontSize: 11.5, fontWeight: 500, color }}>
+        {label} password
+        {label === 'Weak' && ' — add length, uppercase, numbers or symbols'}
+        {label === 'Fair' && ' — almost there, add more variety'}
+      </p>
+    </div>
+  )
+}
+
 // Actions from the logActivity audit trail that belong on a security screen.
 // Everything else in activity_log is candidate/record bookkeeping.
 const SECURITY_ACTIONS = new Set([
@@ -73,6 +110,9 @@ export default function SecurityPane({ user }) {
     setMsg(null)
     if (!newPw || newPw.length < MIN_PW) {
       setMsg({ type: 'error', text: `Your new password must be at least ${MIN_PW} characters.` }); return
+    }
+    if (scorePassword(newPw).score < MIN_SCORE) {
+      setMsg({ type: 'error', text: 'Please choose a stronger password (Fair or better) — mix in uppercase letters, numbers or symbols.' }); return
     }
     if (newPw !== confirmPw) {
       setMsg({ type: 'error', text: 'The two new passwords do not match.' }); return
@@ -141,6 +181,7 @@ export default function SecurityPane({ user }) {
                 inputStyle={{ paddingRight: 46 }}
               />
               {eyeBtn(showNew, setShowNew)}
+              <StrengthBar password={newPw} />
             </div>
           </div>
           <div className="st-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>

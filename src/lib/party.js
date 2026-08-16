@@ -63,6 +63,26 @@ export const partyAbbrev = (p) => {
   return g === 'O' ? (String(p || '?')[0] || '?').toUpperCase() : g
 }
 
+/**
+ * VAN / VoteBuilder PartyCode — the single letter that vendor file expects.
+ *
+ * NOT the same thing as partyAbbrev(): the VAN export used to write
+ * `party.toUpperCase().charAt(0)`, so a 'GOP' voter went out as **G**, which is
+ * Green's code in a VAN file. That is an externally visible corruption of a
+ * vendor file — the Republicans in the export silently become Greens once
+ * VoteBuilder ingests it. Route the family through partyGroup() instead.
+ *
+ * Codes: R Republican · D Democrat · G Green · L Libertarian · I Independent ·
+ * N Nonpartisan · O other/unrecognised · U blank (unknown, what the export
+ * already emitted for a voter with no party on file).
+ */
+const VAN_CODE = { R: 'R', D: 'D', G: 'G', L: 'L', I: 'I', N: 'N', O: 'O' }
+export function partyVanCode(p) {
+  const s = String(p ?? '').trim()
+  if (!s) return 'U'                       // unchanged behaviour for no-party rows
+  return VAN_CODE[partyGroup(s)] || 'O'    // 'Constitution', 'Pirate', … → O, never their initial
+}
+
 /** Hex colors (match the existing dashboard palette). */
 const HEX = { R: '#B91C1C', D: '#1D4ED8', I: '#7C3AED', L: '#B45309', G: '#15803D', N: '#64748B', O: '#64748B' }
 export const partyColorHex = (p) => HEX[partyGroup(p)]

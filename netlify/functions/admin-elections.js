@@ -251,6 +251,15 @@ async function logAdminAction(sb, action, { contests = 0, results = 0, startedAt
   }
 }
 
+// PostgREST `.in()` puts every id in the URL query string; ~400 UUIDs is a
+// ~15 KB URL, past the point where proxies start truncating. Chunk to 100.
+const IN_BATCH = 100
+const chunkIds = (ids) => {
+  const out = []
+  for (let i = 0; i < ids.length; i += IN_BATCH) out.push(ids.slice(i, i + IN_BATCH))
+  return out
+}
+
 // How many contests/results each action touched, for the audit row.
 const LOG_SHAPE = {
   save_election:     { contests: 0, results: 0 },
@@ -266,6 +275,10 @@ const LOG_SHAPE = {
   reset_status_auto: { contests: 1, results: 0 },
   advance_unopposed: { contests: 0, results: 0 },   // real counts filled in below
   certify_election:  { contests: 0, results: 0 },   // real counts filled in below
+  // Owner-triggered runs must leave a trail too — a manual poll or a mass
+  // status email is at least as audit-worthy as a single save_result.
+  run_poller:         { contests: 0, results: 0 },  // real counts filled in below
+  send_status_update: { contests: 0, results: 0 },  // results = emails sent
 }
 
 exports.handler = async (event) => {
@@ -312,6 +325,19 @@ exports.handler = async (event) => {
     // this press actually moved to 'certified'.
     if (action === 'certify_election' && res.statusCode === 200) {
       try { shape.contests = JSON.parse(res.body).data?.certified ?? 0 } catch {}
+    }
+    // run_poller relays the poller's own summary; send_status_update reports
+    // emails pushed. (The poller also writes its own poller:* row — this one
+    // additionally records that an ADMIN pressed the button.)
+    if (action === 'run_poller' && res.statusCode === 200) {
+      try {
+        const b = JSON.parse(res.body)
+        shape.contests = b?.contests_synced ?? 0
+        shape.results  = b?.results_upserted ?? 0
+      } catch {}
+    }
+    if (action === 'send_status_update' && res.statusCode === 200) {
+      try { shape.results = JSON.parse(res.body).data?.sent ?? 0 } catch {}
     }
     await logAdminAction(sb, action, { ...shape, startedAt, error: err })
   }
@@ -530,11 +556,17 @@ async function route(sb, action, params, headers, event) {
       if (cErr) return json(500, { error: cErr.message })
       if (!waiting?.length) return json(200, { data: { advanced: 0, contests: [] } })
 
-      const { data: results, error: rErr } = await sb
-        .from('election_results')
-        .select('id, contest_id, candidate_name')
-        .in('contest_id', waiting.map(c => c.id))
-      if (rErr) return json(500, { error: rErr.message })
+      // Batched: an August primary left ~400 waiting contests here, and one
+      // .in() with 400 UUIDs is a URL long enough to get truncated upstream.
+      const results = []
+      for (const ids of chunkIds(waiting.map(c => c.id))) {
+        const { data: part, error: rErr } = await sb
+          .from('election_results')
+          .select('id, contest_id, candidate_name')
+          .in('contest_id', ids)
+        if (rErr) return json(500, { error: rErr.message })
+        results.push(...(part || []))
+      }
 
       // Exactly one candidate row = unopposed. Zero rows means we simply have
       // no data yet, which is not the same thing and must not be called.
@@ -565,26 +597,33 @@ async function route(sb, action, params, headers, event) {
       const resultIds  = unopposed.map(x => x.rows[0].id)
       const contestIds = unopposed.map(x => x.contest.id)
 
-      const { error: wErr } = await sb.from('election_results')
-        .update({ winner: true, declared: false }).in('id', resultIds)
-      if (wErr) return json(500, { error: wErr.message })
+      // Same batching on the writes. A mid-loop failure leaves earlier chunks
+      // advanced — safe: the action is idempotent, re-running picks up the
+      // remaining 'waiting' contests and touches nothing already called.
+      for (const ids of chunkIds(resultIds)) {
+        const { error: wErr } = await sb.from('election_results')
+          .update({ winner: true, declared: false }).in('id', ids)
+        if (wErr) return json(500, { error: wErr.message })
+      }
 
-      const { data: updated, error: sErr } = await sb.from('election_contests')
-        .update({
-          status: 'called',
-          status_source: 'admin',
-          status_updated_at: now,
-          status_detail: {
-            reason: 'Unopposed — advanced automatically after election day.',
-            computed_at: now,
-            source: 'admin',
-          },
-        })
-        .in('id', contestIds)
-        .select('id')
-      if (sErr) return json(500, { error: sErr.message })
-
-      const advanced = updated?.length || 0
+      let advanced = 0
+      for (const ids of chunkIds(contestIds)) {
+        const { data: updated, error: sErr } = await sb.from('election_contests')
+          .update({
+            status: 'called',
+            status_source: 'admin',
+            status_updated_at: now,
+            status_detail: {
+              reason: 'Unopposed — advanced automatically after election day.',
+              computed_at: now,
+              source: 'admin',
+            },
+          })
+          .in('id', ids)
+          .select('id')
+        if (sErr) return json(500, { error: sErr.message })
+        advanced += updated?.length || 0
+      }
       console.log(`[admin-elections] advance_unopposed: ${advanced} uncontested race(s) advanced for "${election.name}" (${election.election_date}); no subscriber emails sent`)
       return json(200, { data: { advanced, contests: preview } })
     }

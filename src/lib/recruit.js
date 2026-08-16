@@ -305,6 +305,42 @@ export const NOTORIETY_VALUES   = ['high', 'medium', 'low', 'unknown']
 export const SENTIMENT_VALUES   = ['positive', 'mixed', 'negative', 'unknown']
 export const RESEARCH_STATUSES  = ['pending', 'researching', 'done', 'error', 'skipped_quota']
 
+/**
+ * Statuses a re-run picks up again — the "still to research" set.
+ *
+ * `skipped_quota` belongs here: those rows were never researched at all, they
+ * were parked because the month's allowance ran out mid-run. Leaving them out
+ * (the background function asked for `in.(pending,error)`) made the skip
+ * permanent — the allowance reset on the 1st and the rows stayed parked
+ * forever, with the page's "still to research" count reading 0 so the Research
+ * button was disabled. One list, shared by the page and the function.
+ */
+export const RETRYABLE_RESEARCH_STATUSES = ['pending', 'error', 'skipped_quota']
+
+/** True when a prospect row is still waiting to be researched. */
+export function isRetryableProspect(p) {
+  return RETRYABLE_RESEARCH_STATUSES.includes(p?.research_status || 'pending')
+}
+
+// ─── Cache-served results (they must not spend the monthly allowance) ─────────
+// A cache hit costs no Perplexity/Claude call, so it must not count against the
+// plan's monthly lookup allowance. The monthly usage query counts `done` rows
+// by researched_at, and a cache hit writes both — so cache-served rows are
+// stamped in `model_version` and the usage query excludes that marker. No new
+// column (and therefore no migration) is needed.
+
+export const CACHE_MODEL_SUFFIX = ' (cached)'
+
+/** Stamp a model_version as cache-served, without stacking suffixes. */
+export function cachedModelVersion(v) {
+  return `${String(v || '').replace(/\s*\(cached\)\s*$/i, '').trim()}${CACHE_MODEL_SUFFIX}`
+}
+
+/** True when this row's result was served from the research cache. */
+export function isCachedModelVersion(v) {
+  return /\(cached\)\s*$/i.test(String(v || ''))
+}
+
 /** Thin evidence ⇒ Unknown. Fewer than this many INDEPENDENT sources = unknown. */
 export const MIN_INDEPENDENT_SOURCES = 2
 

@@ -41,10 +41,19 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.32.0'
+const APP_VERSION = 'v1.33.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.33.0',
+    date: 'August 16, 2026',
+    changes: [
+      'Recruit now matches against your entire voter list (not just the first 5,000 rows), retries prospects that were skipped for quota, and cache hits no longer count against your monthly research allowance',
+      'Contact popovers in Prospecting stay fully visible on every row, credit packs are reachable on Action plans, and Recruit has a pricing row',
+      'Fixes across the board: GOP voters get the right VAN code on export, party filters match every spelling, password reset only accepts real reset links, volunteer sign-out syncs offline door-knocks first, and public pages load instantly',
+    ],
+  },
   {
     version: 'v1.32.0',
     date: 'August 12, 2026',
