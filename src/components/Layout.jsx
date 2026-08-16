@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation, Link } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, CalendarDays, Target, Users, ListChecks,
@@ -41,10 +41,57 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.34.0'
+const APP_VERSION = 'v1.35.0'
+
+// ─── z-index scale (v1.34.1 — audit fix B1) ──────────────────────────────────
+// One ladder for everything that floats, lowest to highest:
+//
+//   CHROME  10   in-page chrome: overlays that belong to the page itself
+//   STICKY  20   sticky bars, sticky table headers, section rails
+//   POPOVER 25   popovers/dropdowns anchored to chrome (the changelog panel)
+//   CHAT    30   the floating support chat — FAB *and* panel
+//   DRAWER  35   the mobile nav drawer (must beat the chat it covers)
+//   MODAL   40   FLOOR of the modal band — blocking dialogs live at 40 and up
+//   TOAST 9999   transient toasts + the global route LoadingBar
+//
+// Why the chat moved from 9998/9999 down to 30: it painted over every modal in
+// the app and over the mobile nav drawer. It is a passive helper, so it now
+// sits below the whole modal band and below the drawer. Audited modal band as
+// of this change: 40 / 41 (Dossiers + Prospecting menu backdrops), 50 (most
+// dialogs), 60 (Prospecting confirm, ClaimReviewer), 70 (ShareModal,
+// BulkModal, Dossiers viewer), 80 (ReportReader). The lowest is 40, so
+// CHAT=30 and DRAWER=35 clear everything without renumbering a single modal —
+// renumbering the app's dialogs is explicitly out of scope here.
+//
+// Deliberately left alone (they are not part of this ladder):
+//   • Prospecting's portal contact popover (9998/9999) — it escapes an
+//     overflow-clipped table and competes with no modal.
+//   • Offices' map modal (z-[10000]) and the map overlays at 1000–3000 — they
+//     have to clear Leaflet's own panes.
+// Map panes are the one thing that used to out-paint this scale from below;
+// src/index.css now gives map containers their own stacking context so 400–700
+// pane values stay inside the map instead of leaking into the page.
+export const Z = {
+  CHROME:  10,
+  STICKY:  20,
+  POPOVER: 25,
+  CHAT:    30,
+  DRAWER:  35,
+  MODAL:   40,
+  TOAST:   9999,
+}
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.35.0',
+    date: 'August 16, 2026',
+    changes: [
+      'UI repair round 1: the chat bubble no longer covers dialogs, every mobile nav item is tappable, and this changelog panel is finally readable',
+      'Offices search now shows the matching offices, Broadside scrolls to the bottom, and candidate Intel renders clean bullet lists instead of raw AI text',
+      'Results stats reconciled (called / reporting / avg precincts in), the plans page fits phone screens, and a dozen smaller broken states fixed across the app',
+    ],
+  },
   {
     version: 'v1.34.0',
     date: 'August 16, 2026',
@@ -579,37 +626,112 @@ const NavItem = React.memo(function NavItem({ item, onNavigate }) {
 })
 
 // ─── Changelog Popover ────────────────────────────────────────────────────────
-function ChangelogPopover({ onClose }) {
+// B16: this used to be an `absolute inset` panel inside the sidebar rail, so it
+// rendered ~165px wide, clipped by the rail, sliced its last line off, covered
+// the nav items underneath it and could only be closed with its own X.
+//
+// It is now a FIXED panel measured against the version button: readable width
+// (360px, or the viewport minus gutters on a phone), clamped on both axes so it
+// can never render off-screen, a max-height computed from the room actually
+// available above the button, and an internal scroller that ends on a whole
+// line. Dismissal: X, outside click, or Escape — the outside-click listener
+// follows the NotificationCenter.jsx:99-104 pattern.
+const CHANGELOG_WIDTH   = 360  // px — readable line length for the entry text
+const CHANGELOG_GAP     = 10   // px — breathing room between button and panel
+const CHANGELOG_MARGIN  = 12   // px — minimum distance from any viewport edge
+const CHANGELOG_MAX_H   = 520  // px — tallest the panel gets; the list scrolls
+
+function ChangelogPopover({ anchorRef, onClose }) {
+  const panelRef = useRef(null)
+  const [pos, setPos] = useState(null)
+
+  // Position against the anchor, clamped into the viewport. Runs before paint
+  // (and on resize) so the panel never flashes in the wrong place.
+  useLayoutEffect(() => {
+    const place = () => {
+      const vw = window.innerWidth
+      const vh = window.innerHeight
+      const width = Math.min(CHANGELOG_WIDTH, vw - CHANGELOG_MARGIN * 2)
+      const r = anchorRef?.current?.getBoundingClientRect()
+      const left = r
+        ? Math.min(
+            Math.max(CHANGELOG_MARGIN, r.left - 8),
+            Math.max(CHANGELOG_MARGIN, vw - width - CHANGELOG_MARGIN)
+          )
+        : CHANGELOG_MARGIN
+      // `bottom` is measured from the viewport bottom up to just above the
+      // button; clamped so the panel always keeps ≥160px of usable height.
+      const rawBottom = r ? vh - r.top + CHANGELOG_GAP : CHANGELOG_MARGIN
+      const bottom = Math.min(
+        Math.max(CHANGELOG_MARGIN, rawBottom),
+        Math.max(CHANGELOG_MARGIN, vh - 180)
+      )
+      // Never taller than the room above the button, and never a full-height
+      // wall of text on a tall monitor — the list scrolls inside either way.
+      const maxHeight = Math.max(160, Math.min(CHANGELOG_MAX_H, vh - bottom - CHANGELOG_MARGIN))
+      setPos({ left, bottom, width, maxHeight })
+    }
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
+  }, [anchorRef])
+
+  // Dismiss on outside click / Escape
+  useEffect(() => {
+    const onDown = (e) => {
+      if (panelRef.current?.contains(e.target)) return
+      if (anchorRef?.current?.contains(e.target)) return // the button toggles itself
+      onClose()
+    }
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [anchorRef, onClose])
+
+  if (!pos) return null
   return (
-    <div className="absolute bottom-full left-0 right-0 mb-2 mx-3 z-50">
-      <div className="bg-gray-900 border border-white/10 rounded-xl shadow-2xl overflow-hidden">
-        {/* Header */}
-        <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-white/10">
-          <span className="text-xs font-bold text-white/80 uppercase tracking-wider">What's New</span>
-          <button onClick={onClose} className="text-white/40 hover:text-white/80 transition-colors">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-        {/* Entries */}
-        <div className="max-h-72 overflow-y-auto divide-y divide-white/5">
-          {CHANGELOG.map((entry) => (
-            <div key={entry.version} className="px-3.5 py-2.5">
-              <div className="flex items-center gap-2 mb-1.5">
-                <span className="text-xs font-bold text-brand-red">{entry.version}</span>
-                <span className="text-white/30 text-xs">·</span>
-                <span className="text-white/40 text-xs">{entry.date}</span>
-              </div>
-              <ul className="space-y-0.5">
-                {entry.changes.map((c, i) => (
-                  <li key={i} className="text-xs text-white/60 flex items-start gap-1.5">
-                    <span className="text-white/25 mt-0.5 flex-shrink-0">·</span>
-                    <span>{c}</span>
-                  </li>
-                ))}
-              </ul>
+    <div
+      ref={panelRef}
+      role="dialog"
+      aria-label="What's new"
+      className="fixed z-popover flex flex-col bg-gray-900 border border-white/10 rounded-xl shadow-2xl overflow-hidden"
+      style={{ left: pos.left, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxHeight }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/10 flex-shrink-0">
+        <span className="text-xs font-bold text-white/80 uppercase tracking-wider">What&apos;s New</span>
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="text-white/40 hover:text-white/80 transition-colors"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      {/* Entries — the only scroller; `min-h-0` lets it shrink inside the
+          flex column so the panel's max-height can't slice the last line. */}
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain divide-y divide-white/5 pb-1">
+        {CHANGELOG.map((entry) => (
+          <div key={entry.version} className="px-4 py-3">
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="text-xs font-bold text-brand-red">{entry.version}</span>
+              <span className="text-white/30 text-xs">·</span>
+              <span className="text-white/40 text-xs">{entry.date}</span>
             </div>
-          ))}
-        </div>
+            <ul className="space-y-1">
+              {entry.changes.map((c, i) => (
+                <li key={i} className="text-xs leading-relaxed text-white/60 flex items-start gap-1.5">
+                  <span className="text-white/25 mt-0.5 flex-shrink-0">·</span>
+                  <span>{c}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -617,12 +739,18 @@ function ChangelogPopover({ onClose }) {
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 // Also module-level. Receives everything it needs via props.
-const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, isActionPlan, isPaid, onNavigate, onSignOut, tierConfig, currentSectionKey, onGoSection }) {
+//
+// `singleColumn` (B2): the mobile drawer renders the sidebar as ONE normal-flow
+// scrollable column — the root is the only scroller and every group is a plain
+// block sibling. The desktop rail keeps its inner-scrolling nav (it always has
+// the full viewport height, so nothing is ever clipped there).
+const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, isActionPlan, isPaid, onNavigate, onSignOut, tierConfig, currentSectionKey, onGoSection, singleColumn = false }) {
   const [showChangelog, setShowChangelog] = useState(false)
+  const versionBtnRef = useRef(null)
   return (
-    <div className="flex flex-col h-full bg-brand-navy">
+    <div className={`flex flex-col h-full bg-brand-navy ${singleColumn ? 'overflow-y-auto overscroll-contain' : ''}`}>
       {/* Badger Board logo */}
-      <div className="px-4 pt-4 pb-3 border-b border-white/10">
+      <div className="px-4 pt-4 pb-3 border-b border-white/10 flex-shrink-0">
         <div className="flex justify-center">
           <BadgerBoardLogo width={180} />
         </div>
@@ -632,7 +760,11 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, isActionPlan, isP
       </div>
 
       {/* Navigation — main tabs; pages live in the top tab strip (v1.23) */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+      {/* B2: in `singleColumn` mode the nav is NOT its own scroller — it is a
+          plain block that grows with its items, so an item can never be
+          clipped out of the nav's viewport while its box still overlaps the
+          admin group below it. */}
+      <nav className={`px-3 py-4 space-y-1 ${singleColumn ? 'flex-none' : 'flex-1 overflow-y-auto'}`}>
         {NAV_SECTIONS.map(sec => {
           const gates = { isAdmin, isBeta, isActionPlan, isPaid, tierConfig }
           if (!sectionVisible(sec, gates)) return null
@@ -671,8 +803,11 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, isActionPlan, isP
         })}
       </nav>
 
-      {/* Bottom section */}
-      <div className="p-3 border-t border-white/10 space-y-1">
+      {/* Bottom section — admin / plans / settings / sign-out.
+          `mt-auto` in singleColumn mode keeps it pinned to the bottom when the
+          nav is short and collapses to 0 when the column overflows, so it is
+          always BELOW the nav in normal flow, never on top of it. */}
+      <div className={`p-3 border-t border-white/10 space-y-1 flex-none ${singleColumn ? 'mt-auto' : ''}`}>
         {isAdmin && (
           <NavLink
             to="/admin"
@@ -725,7 +860,12 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, isActionPlan, isP
 
         {/* Powered by Bluejack Group + version changelog */}
         <div className="px-4 py-3 mt-1 flex flex-col items-center gap-1.5 relative">
-          {showChangelog && <ChangelogPopover onClose={() => setShowChangelog(false)} />}
+          {showChangelog && (
+            <ChangelogPopover
+              anchorRef={versionBtnRef}
+              onClose={() => setShowChangelog(false)}
+            />
+          )}
           <div className="flex items-center gap-2">
             <span className="text-white/30 text-xs">Powered by</span>
             <a href="https://www.thebluejackgroup.com" target="_blank" rel="noopener noreferrer">
@@ -740,7 +880,9 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, isActionPlan, isP
             </Link>
             <span className="text-white/15 text-xs">·</span>
             <button
+              ref={versionBtnRef}
               onClick={() => setShowChangelog(v => !v)}
+              aria-expanded={showChangelog}
               className="text-white/25 hover:text-white/60 text-xs transition-colors underline decoration-dotted underline-offset-2 cursor-pointer"
               title="What's new in this version"
             >
@@ -890,7 +1032,9 @@ function SupportChatWidget() {
             width: 'min(340px, calc(100vw - 32px))',
             maxHeight: 'min(480px, calc(100dvh - 120px))',
             background: '#fff', borderRadius: '16px',
-            boxShadow: '0 20px 60px rgba(0,0,0,0.18)', zIndex: 9999,
+            // B1: chat sits BELOW the modal band (lowest modal is 40) and
+            // below the mobile drawer — see the Z scale at the top of the file.
+            boxShadow: '0 20px 60px rgba(0,0,0,0.18)', zIndex: Z.CHAT,
             display: 'flex', flexDirection: 'column', overflow: 'hidden',
             border: '1px solid #e5e7eb',
           }}
@@ -992,7 +1136,7 @@ function SupportChatWidget() {
           borderRadius: '50%', background: '#1e3a5f',
           boxShadow: '0 4px 20px rgba(30,58,95,0.4)', border: '2px solid rgba(255,255,255,0.15)',
           cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 9998, transition: 'transform .15s, box-shadow .15s',
+          zIndex: Z.CHAT, transition: 'transform .15s, box-shadow .15s',
         }}
         onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.08)'; e.currentTarget.style.boxShadow = '0 6px 24px rgba(30,58,95,0.5)' }}
         onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 4px 20px rgba(30,58,95,0.4)' }}
@@ -1165,12 +1309,19 @@ export default function Layout() {
         />
       </aside>
 
-      {/* Mobile sidebar overlay — phones only (< md) */}
+      {/* Mobile sidebar overlay — phones only (< md).
+          B1: z-drawer (35) — above the support chat (30), below every modal
+          (40+), instead of the old z-[9990] which beat the whole app.
+          B2: the panel is a single normal-flow column that owns the only
+          scroller (max-height + overflow-y on the Sidebar root), so the nav
+          group and the admin group are plain block siblings — they cannot
+          overlap however many items either one has. */}
       {sidebarOpen && (
-        <div className="md:hidden fixed inset-0 z-[9990] flex">
+        <div className="md:hidden fixed inset-0 z-drawer flex">
           <div className="fixed inset-0 bg-black/60" onClick={() => setSidebarOpen(false)} />
-          <div className="relative flex flex-col w-72 max-w-xs">
+          <div className="relative flex flex-col w-72 max-w-xs h-full max-h-[100dvh]">
             <Sidebar
+              singleColumn
               currentSectionKey={currentSectionKey}
               onGoSection={onGoSection}
               isActionPlan={isActionPlan}

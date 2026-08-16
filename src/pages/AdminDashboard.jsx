@@ -169,10 +169,11 @@ const AdminDashboard = () => {
         </div>
       )}
 
-      {/* Version */}
-      <div className="text-center py-6 text-xs text-gray-500">
-        v1.10.28
-      </div>
+      {/* No version string here on purpose. This footer carried a hardcoded
+          "v1.10.28" that drifted 24 releases behind the real app version and
+          told every admin the wrong thing on every tab. The version has exactly
+          one owner — APP_VERSION in components/Layout.jsx, already printed in
+          the sidebar — so the duplicate is removed rather than re-hardcoded. */}
     </div>
   )
 }
@@ -604,8 +605,10 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
       )}
 
       {/* Users Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <table className="w-full text-sm">
+      {/* overflow-x-auto (not overflow-hidden): on a phone the last five of the
+          seven columns had no scrollable ancestor and were simply unreachable. */}
+      <div className="bg-white rounded-lg shadow overflow-x-auto">
+        <table className="w-full min-w-[860px] text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
               <th className="px-4 py-3 text-left w-8">
@@ -1768,11 +1771,25 @@ const AICostsTab = ({ apiCall, showToast }) => {
     label: PROVIDER_META[p.key]?.label || p.key, cost: p.cost,
   }))
 
+  // The 30d and 90d tiles read as the same figure printed twice. They aren't:
+  // getAICosts() pulls 90 days of ai_usage rows (last_90d / tracked_rows) and
+  // sums the 30-day subset separately (last_30d / calls_30d) — verified in
+  // netlify/functions/admin-dashboard.js. They match because nothing older than
+  // 30 days has been logged yet, so the 90d tile says that out loud instead of
+  // leaving an admin to wonder which number is broken.
+  const calls90 = data.tracked_rows || 0
+  const calls30 = t.calls_30d || 0
+  const sameWindow = calls90 === calls30 && Math.abs((t.last_90d || 0) - (t.last_30d || 0)) < 0.00005
+
   const tiles = [
-    { label: 'Last 30 days',  value: fmtUsd(t.last_30d || 0),  sub: `${(t.calls_30d || 0).toLocaleString()} AI calls`, grad: 'from-red-600 to-rose-800' },
+    { label: 'Last 30 days',  value: fmtUsd(t.last_30d || 0),  sub: `${calls30.toLocaleString()} AI calls`, grad: 'from-red-600 to-rose-800' },
     { label: 'Month to date', value: fmtUsd(t.month_to_date || 0), sub: 'resets on the 1st', grad: 'from-slate-800 to-slate-950' },
     { label: 'Tokens (30d)',  value: fmtTok(t.tokens_30d || 0), sub: 'input + output', grad: 'from-sky-600 to-indigo-800' },
-    { label: 'Last 90 days',  value: fmtUsd(t.last_90d || 0),  sub: `${(data.tracked_rows || 0).toLocaleString()} logged calls`, grad: 'from-emerald-600 to-teal-800' },
+    { label: 'Last 90 days',  value: fmtUsd(t.last_90d || 0),
+      sub: sameWindow
+        ? `${calls90.toLocaleString()} calls — all logged in the last 30 days`
+        : `${calls90.toLocaleString()} logged calls`,
+      grad: 'from-emerald-600 to-teal-800' },
   ]
 
   return (
@@ -1797,16 +1814,32 @@ const AICostsTab = ({ apiCall, showToast }) => {
         {(data.daily || []).length === 0 ? (
           <p className="text-sm text-gray-400 text-center py-8">No AI calls logged yet — costs appear here as the app is used.</p>
         ) : (
-          <div className="flex items-end gap-[3px] h-36">
-            {data.daily.map(d => (
-              <div key={d.date} className="flex-1 group relative flex flex-col justify-end h-full">
-                <div className="bg-gradient-to-t from-red-700 to-rose-400 rounded-t-md min-h-[3px] transition-all group-hover:from-red-800 group-hover:to-rose-500"
-                  style={{ height: `${Math.max(3, (d.cost / maxDaily) * 100)}%` }} />
-                <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:block bg-gray-900 text-white text-[10px] font-bold px-2 py-1 rounded-md whitespace-nowrap z-10">
-                  {new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {fmtUsd(d.cost)}
-                </div>
+          /* The plot area is its own box with headroom at the top and a
+             baseline at the bottom. Previously the bar row was the card's last
+             child, so the tallest bars ran straight into the card edge with no
+             axis to sit on and read as clipped-off blocks. */
+          <div>
+            <div className="flex items-baseline justify-between text-[10px] font-bold uppercase tracking-wide text-gray-400 mb-1">
+              <span className="tabular-nums">{fmtUsd(maxDaily)}</span>
+              <span>peak day</span>
+            </div>
+            <div className="h-40 pt-2">
+              <div className="flex items-end gap-[3px] h-full border-b-2 border-gray-200">
+                {data.daily.map(d => (
+                  <div key={d.date} className="flex-1 group relative flex flex-col justify-end h-full">
+                    <div className="bg-gradient-to-t from-red-700 to-rose-400 rounded-t-md min-h-[3px] transition-all group-hover:from-red-800 group-hover:to-rose-500"
+                      style={{ height: `${Math.min(100, Math.max(2, (d.cost / maxDaily) * 100))}%` }} />
+                    <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:block bg-gray-900 text-white text-[10px] font-bold px-2 py-1 rounded-md whitespace-nowrap z-10">
+                      {new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {fmtUsd(d.cost)}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
+            <div className="flex justify-between text-[10px] font-semibold text-gray-400 mt-1.5 tabular-nums">
+              <span>{new Date(data.daily[0].date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+              <span>{new Date(data.daily[data.daily.length - 1].date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+            </div>
           </div>
         )}
       </div>
@@ -2141,8 +2174,10 @@ const ErrorLogsTab = ({ apiCall, showToast }) => {
       </div>
 
       {/* Errors Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <table className="w-full text-sm">
+      {/* overflow-x-auto (not overflow-hidden) — same unreachable-columns bug
+          as the Users table: the six columns squashed with nowhere to scroll. */}
+      <div className="bg-white rounded-lg shadow overflow-x-auto">
+        <table className="w-full min-w-[820px] text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
               <th className="px-4 py-3 text-left font-semibold text-gray-700 w-36">Timestamp</th>

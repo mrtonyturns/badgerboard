@@ -47,6 +47,13 @@ function writeMapCtx(key, payload) {
   }
 }
 
+// The filters used to move the count chips and nothing else — no list, no
+// markers, and the map (whose dots are drawn from county/municipal centroids,
+// not from per-office coordinates, which the offices table doesn't carry) never
+// moved. A capped results list is the honest answer: it shows WHICH offices
+// matched. RESULTS_LIST_CAP keeps a 3,000-row match from freezing the page.
+const RESULTS_LIST_CAP = 100
+
 const LEVELS     = ['', 'federal', 'state', 'county', 'municipal']
 const TYPES      = ['', 'executive', 'legislative', 'judicial', 'administrative']
 const LEVEL_LABELS = { federal:'Federal', state:'State', county:'County', municipal:'Municipal' }
@@ -424,6 +431,14 @@ export default function Offices() {
     )
   }, [allOfficesUnfiltered, debouncedSearch, levelFilter, typeFilter])
 
+  // Is the user actually narrowing the set? Only then does the results list
+  // appear — with no filters the list would just be all 3,200 offices.
+  const isFiltered = !!(levelFilter || typeFilter || debouncedSearch.trim())
+  const listedOffices = useMemo(
+    () => (isFiltered ? offices.slice(0, RESULTS_LIST_CAP) : []),
+    [isFiltered, offices]
+  )
+
   // Offices matching the currently-selected district polygon
   const panelOffices = useMemo(
     () => matchOffices(selectedDistrict, offices),
@@ -521,16 +536,80 @@ export default function Offices() {
           </select>
         </div>
         <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-100">
-          <span className="text-sm text-gray-500"><span className="font-semibold text-gray-900">{offices.length}</span> offices</span>
-          <div className="flex gap-2 flex-wrap">
-            {Object.entries(grouped).map(([level, items]) => (
-              <span key={level} className={`text-xs px-2 py-0.5 rounded-full font-medium ${levelColors[level]}`}>
-                {LEVEL_LABELS[level]}: {items.length}
-              </span>
-            ))}
-          </div>
+          {/* The first load pages through ~3,200 rows (8 requests). Showing the
+              honest count of a still-empty array read as "0 offices" for 4–5
+              seconds, which looks like an empty database, not a loading page. */}
+          {loading ? (
+            <span className="text-sm text-gray-500 flex items-center gap-2">
+              <span className="w-3.5 h-3.5 border-2 border-gray-300 border-t-brand-red rounded-full animate-spin" />
+              Loading offices…
+            </span>
+          ) : (
+            <>
+              <span className="text-sm text-gray-500"><span className="font-semibold text-gray-900">{offices.length}</span> offices</span>
+              <div className="flex gap-2 flex-wrap">
+                {Object.entries(grouped).map(([level, items]) => (
+                  <span key={level} className={`text-xs px-2 py-0.5 rounded-full font-medium ${levelColors[level]}`}>
+                    {LEVEL_LABELS[level]}: {items.length}
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
+
+      {/* ── Matching offices ──
+          The filters narrow `offices`, which feeds the count, the map layer and
+          the district panel — but nothing ever listed the matches themselves. */}
+      {!loading && isFiltered && (
+        <div className="card py-4">
+          <div className="flex items-baseline justify-between gap-3 flex-wrap mb-2">
+            <h2 className="text-sm font-semibold text-gray-900">Matching offices</h2>
+            <span className="text-xs text-gray-500">
+              {offices.length === 0
+                ? 'No matches'
+                : listedOffices.length < offices.length
+                  ? `Showing ${listedOffices.length} of ${offices.length} — narrow the search to see the rest`
+                  : `${offices.length} match${offices.length === 1 ? '' : 'es'}`}
+            </span>
+          </div>
+          {offices.length === 0 ? (
+            <p className="text-sm text-gray-500 py-3">
+              No offices match these filters. Clear the search or pick a different level or type.
+            </p>
+          ) : (
+            <ul className="divide-y divide-gray-100 max-h-80 overflow-y-auto -mx-1">
+              {listedOffices.map(o => {
+                const TypeIcon = typeIcons[o.office_type] || Building2
+                const where = o.city
+                  || o.district_name
+                  || (o.county ? `${o.county} County` : null)
+                  || (o.district_number ? `District ${o.district_number}` : null)
+                return (
+                  <li key={o.id}>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/candidates?officeId=${o.id}`)}
+                      title="See candidates tracked for this office"
+                      className="w-full text-left flex items-center gap-3 px-1 py-2 hover:bg-gray-50 rounded-lg transition-colors"
+                    >
+                      <TypeIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium text-gray-900 truncate">{o.name}</span>
+                        <span className="block text-xs text-gray-500 truncate">
+                          {[LEVEL_LABELS[o.level], TYPE_LABELS[o.office_type], where].filter(Boolean).join(' · ')}
+                        </span>
+                      </span>
+                      <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0" />
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* ── Map district toggles ── */}
       <div className="flex flex-wrap items-center gap-2">

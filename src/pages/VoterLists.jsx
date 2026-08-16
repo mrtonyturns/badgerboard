@@ -532,6 +532,17 @@ export default function VoterLists() {
     fetchAll()
   }
 
+  // "Add to List" used to be permanently enabled while the handler above just
+  // returned when no list was picked / no name typed — a dead click with no
+  // feedback. One reason string drives both the disabled state and the hint.
+  const addToListBlockReason = !addToListModal
+    ? null
+    : addToListModal.mode === 'new'
+      ? (newListName.trim() ? null : 'Name the new list to continue.')
+      : savedLists.length === 0
+        ? 'You have no saved lists yet — switch to “New List” to create one.'
+        : (addToExistingId ? null : 'Pick a list above to add this voter to.')
+
   // Get unique district values for filtering
   const districtValues = [...new Set(
     voters.map(v => v[districtFilter.type]).filter(Boolean)
@@ -1139,9 +1150,18 @@ export default function VoterLists() {
               </div>
             )}
 
+            {addToListBlockReason && (
+              <p className="text-xs text-gray-400 mb-2">{addToListBlockReason}</p>
+            )}
             <div className="flex gap-3">
               <button onClick={() => setAddToListModal(null)} className="btn-secondary flex-1 text-sm">Cancel</button>
-              <button onClick={handleAddToListFromModal} className="btn-primary flex-1 text-sm">Add to List</button>
+              <button
+                onClick={handleAddToListFromModal}
+                disabled={!!addToListBlockReason}
+                className="btn-primary flex-1 text-sm"
+              >
+                Add to List
+              </button>
             </div>
           </div>
         </div>

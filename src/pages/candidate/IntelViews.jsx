@@ -13,8 +13,103 @@ import {
   T, Card, EmptyState, CtaButton, TextLink, Btn, ViewHead, NewBadge,
   LockedView, Spinner, CategoryPill, useDossierSection, SectionContent,
   parseNewsItems, parseSocialItems, parseSection, detectPlatform, initialsOf, fmtDate,
-  headlineFrom, fetchDossierContent,
+  headlineFrom, fetchDossierContent, Chip,
 } from './shared'
+
+// ═══ Raw-AI-output display guards ═════════════════════════════════════════════
+// DISPLAY LAYER ONLY. None of this rewrites a dossier or anything stored — it
+// decides what the Intel tab is willing to put in front of a user, because the
+// model's raw output leaks list delimiters, unfilled placeholders and the
+// schema template row it was handed.
+// ─── R1C PURE HELPERS BEGIN ───
+/**
+ * A SWOT quadrant arrives as a newline-delimited string, as an array of
+ * points, or as ONE string with the model's '•' separators still in it. The
+ * old renderer split on '\n' only, so an array became a single <li> reading
+ * "…rural Wisconsin,• Established organizational credentials…". Split on both,
+ * flatten arrays, strip bullet glyphs, drop empties.
+ */
+export function splitSwotPoints(value) {
+  const entries = Array.isArray(value) ? value : [value]
+  const out = []
+  for (const entry of entries) {
+    if (entry === null || entry === undefined) continue
+    if (Array.isArray(entry)) { out.push(...splitSwotPoints(entry)); continue }
+    for (const part of String(entry).split(/\r?\n|•/)) {
+      const point = part.replace(/^\s*[-*]\s*/, '').replace(/^[\s,;]+|[\s,;]+$/g, '').trim()
+      if (point) out.push(point)
+    }
+  }
+  return out
+}
+
+/**
+ * True when a string carries no information a user can read — empty, or made
+ * up entirely of unfilled bracket tokens like '[RESEARCH REQUIRED]',
+ * '[TBD]', '[KNOWN] · [X/Live]' plus punctuation.
+ */
+export function isPlaceholderOnly(text) {
+  const s = String(text ?? '').replace(/\*\*/g, '').trim()
+  if (!s) return true
+  return s.replace(/\[[^\]]*\]/g, ' ').replace(/[\s\-–—:;,.|·•]+/g, '') === ''
+}
+
+// Field names the profile schema hands the model as a header row. When a whole
+// ally row is nothing but these, it's the template, not an ally.
+const ALLY_TEMPLATE_NAMES  = new Set(['org', 'organization', 'organisation', 'name', 'entity', 'ally', 'person', 'group'])
+const ALLY_TEMPLATE_FIELDS = new Set(['role', 'type', 'years', 'source', 'status', 'since', 'tier', 'notes', 'relationship', 'strength'])
+
+/** The 'Org' / 'Role · Type · Years · Source' schema row that leaked into the list. */
+export function isAllyTemplateRow(row) {
+  const name = String(row?.name ?? '').replace(/\*\*/g, '').trim()
+  const role = String(row?.role ?? '').replace(/\*\*/g, '').trim()
+  if (!name || isPlaceholderOnly(name)) return true
+  if (ALLY_TEMPLATE_NAMES.has(name.toLowerCase())) return true
+  const fields = role.split(/[·|•]/).map(s => s.trim().toLowerCase()).filter(Boolean)
+  return fields.length >= 2 && fields.every(f => ALLY_TEMPLATE_FIELDS.has(f))
+}
+
+/**
+ * Split a string into plain-text runs and bracket tokens so the tokens can be
+ * rendered as the same chips the section markdown uses. Markdown links
+ * (`[label](url)`) are left as text — they are not status tokens.
+ */
+export function splitBracketTokens(text) {
+  const s = String(text ?? '')
+  const out = []
+  const push = (type, value) => {
+    if (type === 'text') {
+      const v = value.replace(/\s+/g, ' ').trim()
+      if (v) out.push({ type, value: v })
+      return
+    }
+    out.push({ type, value })
+  }
+  const re = /\[([^\]]+)\]/g
+  let last = 0, m
+  while ((m = re.exec(s)) !== null) {
+    if (s[m.index + m[0].length] === '(') continue   // markdown link, not a token
+    push('text', s.slice(last, m.index))
+    push('badge', m[1].trim())
+    last = m.index + m[0].length
+  }
+  push('text', s.slice(last))
+  return out
+}
+// ─── R1C PURE HELPERS END ───
+
+/** Renders text with any [BRACKET] tokens promoted to chips. */
+function TokenText({ text, style }) {
+  const parts = splitBracketTokens(text)
+  if (!parts.some(p => p.type === 'badge')) return <span style={style}>{String(text ?? '')}</span>
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', ...style }}>
+      {parts.map((p, i) => p.type === 'badge'
+        ? <Chip key={i} label={p.value} />
+        : <span key={i}>{p.value}</span>)}
+    </span>
+  )
+}
 
 // ── NEW badge rule ────────────────────────────────────────────────────────────
 // An item is "new" when its own published date is after the last time this user
@@ -282,7 +377,7 @@ export function SwotView({ candidate, dossiers, canIntel, swotUpdated, onRefresh
 
   if (!canIntel) return <LockedView title="SWOT" onSeePlans={() => nav('/plans')} />
 
-  const hasContent = QUADRANTS.some(q => swot[q.key])
+  const hasContent = QUADRANTS.some(q => splitSwotPoints(swot[q.key]).length > 0)
 
   const handleSave = async () => {
     setSaving(true); setAiError('')
@@ -363,7 +458,11 @@ export function SwotView({ candidate, dossiers, canIntel, swotUpdated, onRefresh
               </div>
               {editing ? (
                 <textarea
-                  value={swot[q.key] || ''}
+                  /* Strings edit verbatim; an array would render as "a,b,c" in
+                     a textarea, so only arrays get flattened to one per line. */
+                  value={typeof swot[q.key] === 'string'
+                    ? swot[q.key]
+                    : splitSwotPoints(swot[q.key]).join('\n')}
                   onChange={e => setSwot(p => ({ ...p, [q.key]: e.target.value }))}
                   placeholder={`Enter ${q.label.toLowerCase()}…`}
                   style={{
@@ -372,12 +471,12 @@ export function SwotView({ candidate, dossiers, canIntel, swotUpdated, onRefresh
                     fontFamily: 'inherit', resize: 'vertical', outline: 'none',
                   }}
                 />
-              ) : swot[q.key] ? (
+              ) : splitSwotPoints(swot[q.key]).length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-                  {String(swot[q.key]).split('\n').map(s => s.trim()).filter(Boolean).map((point, i) => (
+                  {splitSwotPoints(swot[q.key]).map((point, i) => (
                     <div key={i} style={{ display: 'flex', gap: 9 }}>
                       <span style={{ flexShrink: 0, width: 5, height: 5, borderRadius: '50%', background: q.color, marginTop: 6 }} />
-                      <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>{point.replace(/^[-*]\s*/, '')}</div>
+                      <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>{point}</div>
                     </div>
                   ))}
                 </div>
@@ -409,7 +508,11 @@ export function OppositionView({ candidate, dossiers, canIntel, weaknesses, oppo
 
   const newest = dossiers?.[0] || null
   const hasDossier = !!newest
-  const list = weaknesses || []
+  // Unfilled model output ('[RESEARCH REQUIRED]' with an empty body) used to
+  // render as a card whose entire title was the placeholder. Drop those before
+  // anything counts them — including the panel's own "(N)" badge — so the tab
+  // falls through to its empty state rather than showing hollow cards.
+  const list = (weaknesses || []).filter(w => !isPlaceholderOnly(typeof w === 'string' ? w : w?.text))
 
   const panels = [
     { id: 'weaknesses',    label: 'Key weaknesses', count: list.length },
@@ -619,7 +722,10 @@ export function AlliesView({ candidate, dossiers, canIntel, alliesUpdated, nav }
   const s8 = content?.[8] || ''
   const s9 = content?.[9] || ''
   const newestDate = dossiers[0]?.generated_at ? fmtDate(dossiers[0].generated_at, 'MMM d') : null
-  const allies = [...parseAllies(s8), ...parseAllies(s9)]
+  // The schema template row ('Org' / 'Role · Type · Years · Source') parses
+  // exactly like a real ally, so it was rendered as one. Drop it — and any row
+  // that is only unfilled bracket tokens — before de-duplicating.
+  const allies = [...parseAllies(s8), ...parseAllies(s9)].filter(a => !isAllyTemplateRow(a))
   const seen = new Set()
   const rows = allies.filter(a => {
     const k = a.name.toLowerCase()
@@ -662,10 +768,18 @@ export function AlliesView({ candidate, dossiers, canIntel, alliesUpdated, nav }
                   flexShrink: 0, width: 32, height: 32, borderRadius: '50%', background: T.chip,
                   color: T.ink3, fontSize: 10.5, fontWeight: 700,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>{initialsOf(a.name)}</span>
+                }}>{initialsOf(String(a.name).replace(/\[[^\]]*\]/g, '').trim() || a.name)}</span>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 600 }}>{a.name}</div>
-                  {a.role && <div style={{ fontSize: 11, color: T.faint, marginTop: 1 }}>{a.role}</div>}
+                  {/* [KNOWN] / [X/Live] used to sit here as literal text. Same
+                      chip renderer the Section 8 markdown table uses. */}
+                  <div style={{ fontSize: 12.5, fontWeight: 600 }}>
+                    <TokenText text={a.name} />
+                  </div>
+                  {a.role && !isPlaceholderOnly(a.role) && (
+                    <div style={{ fontSize: 11, color: T.faint, marginTop: 1 }}>
+                      <TokenText text={a.role} />
+                    </div>
+                  )}
                 </div>
                 {isNewAlly && newestDate && (
                   <span style={{ marginLeft: 'auto', flexShrink: 0 }}>

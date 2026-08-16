@@ -170,6 +170,21 @@
   height: 100% !important;
 }
 
+/* ── z-scale containment (v1.34.1, audit fix B1) ──────────────────────────────
+   Leaflet/MapLibre number their internal panes 400–700 and their controls up to
+   1000. Those values are only "internal" if the map element is a stacking
+   context — otherwise they leak into the page's root stacking context and paint
+   over app chrome that legitimately sits lower on our scale (see the `Z` block
+   in src/components/Layout.jsx: chrome 10 < sticky 20 < popover 25 < chat 30 <
+   drawer 35 < modal 40+ < toast 9999). `isolation: isolate` keeps the pane
+   numbers inside the map, where they belong, without changing any layout or the
+   order of anything drawn within the map itself.
+   ─────────────────────────────────────────────────────────────────────────── */
+.leaflet-container,
+.maplibregl-map {
+  isolation: isolate;
+}
+
 /* ── Mobile & tablet responsive improvements ─────────────────────────────────
    Touch-action, safe-area insets for iOS home indicator, and scroll helpers.
    ─────────────────────────────────────────────────────────────────────────── */

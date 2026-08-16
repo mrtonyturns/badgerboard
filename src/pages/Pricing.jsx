@@ -43,7 +43,9 @@ function FeatureMatrix({ groups, colConfigs, navigate, user }) {
 
       <div className="rounded-2xl border border-gray-200 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
+          {/* min-w makes the wrapper's overflow-x actually engage on phones —
+              a plain w-full table just squashes its columns instead. */}
+          <table className="w-full min-w-[640px] text-sm" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
 
             {/* ── Column headers ─────────────────────────────────────────── */}
             <thead>
@@ -747,7 +749,9 @@ export default function Pricing() {
   )
 
   return (
-    <div className="max-w-5xl mx-auto pb-24">
+    // /plans renders OUTSIDE <Layout>, so this root supplies its own gutters —
+    // without them the page sits flush against the phone bezel.
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 pb-24">
 
       {/* Back */}
       <div className="pt-6 pb-8">
@@ -795,8 +799,9 @@ export default function Pricing() {
           </button>
         </div>
 
-        {/* Billing toggle */}
-        <div className="flex items-center rounded-lg border border-gray-200 p-0.5 bg-gray-50 text-sm">
+        {/* Billing toggle — four options total ~470px wide, which overflowed the
+            page on a 390px phone. Wrapping keeps "Annual" reachable. */}
+        <div className="flex flex-wrap items-center gap-0.5 w-full sm:w-auto rounded-lg border border-gray-200 p-0.5 bg-gray-50 text-sm">
           {Object.values(BILLING_PERIODS).map(b => (
             <button
               key={b.key}
@@ -944,7 +949,9 @@ export default function Pricing() {
             </h2>
             <div className="rounded-xl border border-gray-200 overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                {/* see note on the feature matrix — min-w is what makes the
+                    wrapper scroll rather than crush the price columns */}
+                <table className="w-full min-w-[520px] text-sm">
                   <thead>
                     <tr className="border-b border-gray-200 bg-gray-50">
                       <th className="text-left py-3 px-5 font-medium text-gray-500">Candidates</th>

@@ -303,6 +303,16 @@ export default function Candidates() {
 
   useEffect(() => { fetchData() }, [search, partyFilter, statusFilter, officeFilter])
 
+  // Used by the empty state to tell "this account has nothing yet" apart from
+  // "the current search/filters matched nothing".
+  const hasActiveFilters = !!(search || partyFilter || statusFilter || officeFilter)
+  const clearFilters = () => {
+    setSearch('')
+    setPartyFilter('')
+    setStatusFilter('')
+    setOfficeFilter('')
+  }
+
   const fetchOfficesAndElections = async () => {
     try {
       const [{ data: o, error: oErr }, { data: e, error: eErr }] = await Promise.all([getOffices(), getElections()])
@@ -837,12 +847,30 @@ export default function Candidates() {
           <div className="w-8 h-8 border-4 border-brand-red border-t-transparent rounded-full animate-spin" />
         </div>
       ) : candidates.length === 0 ? (
-        <div className="text-center py-20">
-          <Users className="w-16 h-16 text-gray-200 mx-auto mb-4" />
-          <p className="text-gray-500 font-semibold text-lg">No candidates yet</p>
-          <p className="text-gray-400 text-sm mt-1">Add candidates to start building your prospecting database</p>
-          <button onClick={() => setShowModal(true)} className="btn-primary mt-6">Add First Candidate</button>
-        </div>
+        // Two DIFFERENT empty states. `candidates` is the FILTERED view, so a
+        // search that matches nothing used to render the first-run onboarding
+        // ("No candidates yet / Add First Candidate") on accounts that have
+        // plenty of candidates. `totalCandidateCount` is the unfiltered server
+        // count; the filter check covers the case where it has not refreshed.
+        (totalCandidateCount === 0 && !hasActiveFilters) ? (
+          <div className="text-center py-20">
+            <Users className="w-16 h-16 text-gray-200 mx-auto mb-4" />
+            <p className="text-gray-500 font-semibold text-lg">No candidates yet</p>
+            <p className="text-gray-400 text-sm mt-1">Add candidates to start building your prospecting database</p>
+            <button onClick={() => setShowModal(true)} className="btn-primary mt-6">Add First Candidate</button>
+          </div>
+        ) : (
+          <div className="text-center py-20">
+            <Search className="w-16 h-16 text-gray-200 mx-auto mb-4" />
+            <p className="text-gray-500 font-semibold text-lg">No candidates match your search</p>
+            <p className="text-gray-400 text-sm mt-1">
+              {totalCandidateCount > 0
+                ? `None of your ${totalCandidateCount} candidate${totalCandidateCount === 1 ? '' : 's'} match the current search and filters.`
+                : 'Nothing matches the current search and filters.'}
+            </p>
+            <button onClick={clearFilters} className="btn-secondary mt-6">Clear search &amp; filters</button>
+          </div>
+        )
       ) : (
         <>
           {/* District layer toggles */}

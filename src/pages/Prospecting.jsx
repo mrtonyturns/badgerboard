@@ -227,6 +227,7 @@ function Banner({ kind = 'error', children, onClose }) {
 
 function ScoreCell({ row }) {
   const [open, setOpen] = useState(false)
+  const btnRef = useRef(null)
   const score = row.win_odds_score
   const band = row.win_odds_band || 'unknown'
   const tint = BAND_TINT[band] || BAND_TINT.unknown
@@ -236,6 +237,7 @@ function ScoreCell({ row }) {
   return (
     <div style={{ position: 'relative' }}>
       <button
+        ref={btnRef}
         type="button" onClick={() => setOpen(o => !o)}
         title="Why this score"
         style={{
@@ -250,7 +252,7 @@ function ScoreCell({ row }) {
         {factors.length > 0 && <Info style={{ width: 12, height: 12, color: T.faint }} />}
       </button>
 
-      <Popover open={open} onClose={() => setOpen(false)} width={380}>
+      <Popover open={open} onClose={() => setOpen(false)} width={380} anchorRef={btnRef}>
         <div style={{ fontSize: 12.5, fontWeight: 800, color: T.ink, marginBottom: 2 }}>Why this score</div>
         <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>
           {meta.confidence != null
@@ -319,6 +321,7 @@ function SocialLinks({ socials }) {
 
 function AgencyCell({ row }) {
   const [open, setOpen] = useState(false)
+  const btnRef = useRef(null)
   const sig = row.agency_signals || {}
   const evidence = Array.isArray(sig.evidence) ? sig.evidence : []
   const detected = sig.detected === true
@@ -326,6 +329,7 @@ function AgencyCell({ row }) {
   return (
     <div style={{ position: 'relative' }}>
       <button
+        ref={btnRef}
         type="button" onClick={() => setOpen(o => !o)}
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', padding: '3px 8px',
@@ -340,7 +344,7 @@ function AgencyCell({ row }) {
         {detected ? `Has help (${sig.confidence ?? 0}%)` : 'No agency found'}
       </button>
 
-      <Popover open={open} onClose={() => setOpen(false)} width={380}>
+      <Popover open={open} onClose={() => setOpen(false)} width={380} anchorRef={btnRef}>
         <div style={{ fontSize: 12.5, fontWeight: 800, color: T.ink, marginBottom: 8 }}>Agency signals</div>
         {evidence.length === 0 ? (
           <EmptyNote>

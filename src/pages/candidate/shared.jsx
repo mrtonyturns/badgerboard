@@ -291,23 +291,47 @@ export function parseSection(content, sectionNum) {
   return null
 }
 
-const BADGE_STYLES = {
-  'KNOWN':             'background:#dcfce7;color:#166534;border:1px solid #bbf7d0;',
-  'RESEARCH REQUIRED': 'background:#fef3c7;color:#92400e;border:1px solid #fde68a;',
-  'CONFIRMED':         'background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;',
-  'LIKELY':            'background:#f3e8ff;color:#6b21a8;border:1px solid #e9d5ff;',
-  'VERIFY':            'background:#fefce8;color:#854d0e;border:1px solid #fef08a;',
-  'HIGH':              'background:#fee2e2;color:#991b1b;border:1px solid #fecaca;',
-  'MEDIUM':            'background:#ffedd5;color:#9a3412;border:1px solid #fed7aa;',
-  'LOW':               'background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;',
+// Bracket-token chips. ONE source of truth for how [KNOWN] / [RESEARCH REQUIRED]
+// / [X/Live] are coloured: mdToHtml() uses it for the section markdown (the
+// "Affiliations & endorsements" table) and <Chip> uses it for the React lists
+// (the Allies rows), so a token looks identical wherever it surfaces.
+const BADGE_THEMES = {
+  'KNOWN':             { bg: '#dcfce7', fg: '#166534', br: '#bbf7d0' },
+  'RESEARCH REQUIRED': { bg: '#fef3c7', fg: '#92400e', br: '#fde68a' },
+  'CONFIRMED':         { bg: '#dbeafe', fg: '#1e40af', br: '#bfdbfe' },
+  'LIKELY':            { bg: '#f3e8ff', fg: '#6b21a8', br: '#e9d5ff' },
+  'VERIFY':            { bg: '#fefce8', fg: '#854d0e', br: '#fef08a' },
+  'HIGH':              { bg: '#fee2e2', fg: '#991b1b', br: '#fecaca' },
+  'MEDIUM':            { bg: '#ffedd5', fg: '#9a3412', br: '#fed7aa' },
+  'LOW':               { bg: '#f0fdf4', fg: '#166534', br: '#bbf7d0' },
+}
+const DEFAULT_BADGE_THEME = { bg: '#f3f4f6', fg: '#374151', br: '#d1d5db' }
+
+export function badgeTheme(label) {
+  return BADGE_THEMES[String(label || '').trim().toUpperCase()] || DEFAULT_BADGE_THEME
+}
+
+const badgeCss = (label) => {
+  const th = badgeTheme(label)
+  return `background:${th.bg};color:${th.fg};border:1px solid ${th.br};`
+}
+
+/** React twin of the markdown badge — same palette, same shape. */
+export function Chip({ label }) {
+  const th = badgeTheme(label)
+  return (
+    <span style={{
+      display: 'inline-block', fontSize: '0.7rem', fontWeight: 700,
+      padding: '1px 6px', borderRadius: 4, whiteSpace: 'nowrap',
+      background: th.bg, color: th.fg, border: `1px solid ${th.br}`,
+    }}>{label}</span>
+  )
 }
 
 function applyInline(text) {
   return text
-    .replace(/\*\*\[([A-Z ]+)\]\*\*/g, (_, b) => {
-      const s = BADGE_STYLES[b.toUpperCase()] || 'background:#f3f4f6;color:#374151;border:1px solid #d1d5db;'
-      return `<span style="display:inline-block;font-size:0.7rem;font-weight:700;padding:1px 6px;border-radius:4px;${s}">${b}</span>`
-    })
+    .replace(/\*\*\[([A-Z ]+)\]\*\*/g, (_, b) =>
+      `<span style="display:inline-block;font-size:0.7rem;font-weight:700;padding:1px 6px;border-radius:4px;${badgeCss(b)}">${b}</span>`)
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color:#1d4ed8;text-decoration:underline;">$1</a>')

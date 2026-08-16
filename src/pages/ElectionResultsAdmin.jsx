@@ -13,6 +13,8 @@ import {
 import { supabase, adminElections } from '../lib/supabase'
 import SearchableSelect from '../components/SearchableSelect'
 import { partyGroup, DB_PARTIES } from '../lib/party'
+// One definition of "called", shared with the public board.
+import { countCalled } from './ElectionResultsBoard'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 // Order and labels match the public board (ElectionResultsBoard.jsx). The three
@@ -477,7 +479,12 @@ export default function ElectionResultsAdmin({ showToast }) {
   }
 
   // ── Derived ───────────────────────────────────────────────────────────────
-  const calledCount  = contests.filter(c => (resultsMap[c.id] || []).some(r => r.declared)).length
+  // "Races Called" used to count contests with a `declared` RESULT ROW — 10 on
+  // an election where the certify button, three inches away, read "225 called".
+  // Declaring a winner row and the contest's status are different writes, and
+  // the engine calls races without ever setting `declared`. One definition now:
+  // status IN ('called','certified'), shared with the public board.
+  const calledCount  = countCalled(contests)
   const totalVotes   = contests.reduce(
     (s, c) => s + (resultsMap[c.id] || []).reduce((x, r) => x + (r.votes || 0), 0), 0)
 
@@ -595,6 +602,7 @@ export default function ElectionResultsAdmin({ showToast }) {
           <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
             <p className="text-2xl font-bold text-green-600">{calledCount}</p>
             <p className="text-xs text-gray-500 mt-0.5">Races Called</p>
+            <p className="text-[10px] text-gray-400 leading-tight">called or certified</p>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
             <p className="text-xl font-bold text-gray-900 tabular-nums">{totalVotes.toLocaleString()}</p>

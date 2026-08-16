@@ -42,7 +42,9 @@ export default function Broadside() {
   const deepLinkId = searchParams.get('dossier')
   const deepLinkFired = useRef(false)
   const iframeRef = useRef(null)
+  const resizeObsRef = useRef(null)
   const [frameReady, setFrameReady] = useState(false)
+  const [frameHeight, setFrameHeight] = useState(null)
   const [dossiers, setDossiers] = useState([])
   const [error, setError] = useState(null)
 
@@ -98,8 +100,58 @@ export default function Broadside() {
     }
   }, [])
 
+  // ── Keep the frame as tall as the module's own document (B5) ────────────────
+  // The module is ~1000px tall (scene + the SESSION CONSOLE strip at its base)
+  // and the app gives it a ~800px slot, inside a full-bleed <main> that is
+  // overflow:hidden — so the bottom strip used to be unreachable. We measure the
+  // module's root `.layout` (NOT body/scrollHeight: body carries
+  // `min-height:100vh`, and 100vh inside the frame is whatever height we just
+  // set — measuring that would ratchet the frame taller on every pass) and let
+  // this page's own wrapper scroll. Full-bleed survives: the iframe still spans
+  // the full width and never renders shorter than the slot.
+  const measureFrame = useCallback(() => {
+    const doc = iframeRef.current?.contentDocument
+    if (!doc) return
+    const root = doc.querySelector('.layout') || doc.body
+    if (!root) return
+    const view = doc.defaultView
+    const bodyStyle = view ? view.getComputedStyle(doc.body) : null
+    const pad = bodyStyle
+      ? (parseFloat(bodyStyle.paddingTop) || 0) + (parseFloat(bodyStyle.paddingBottom) || 0)
+      : 0
+    const h = Math.ceil(root.getBoundingClientRect().height + pad)
+    if (h > 0) setFrameHeight(prev => (prev !== null && Math.abs(prev - h) < 2 ? prev : h))
+  }, [])
+
+  // Re-measure whenever the module's content changes size (dossier dock opens,
+  // console fills, theme switch, window resize).
+  useEffect(() => {
+    const onResize = () => measureFrame()
+    window.addEventListener('resize', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      resizeObsRef.current?.disconnect()
+      resizeObsRef.current = null
+    }
+  }, [measureFrame])
+
   // ── Wire the module once the iframe loads ────────────────────────────────────
   const handleFrameLoad = useCallback(async () => {
+    // Height first — it must work even if the proxy handshake below fails.
+    measureFrame()
+    try {
+      const doc = iframeRef.current?.contentDocument
+      if (doc?.body && typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => measureFrame())
+        ro.observe(doc.body)
+        const layout = doc.querySelector('.layout')
+        if (layout) ro.observe(layout)
+        resizeObsRef.current?.disconnect()
+        resizeObsRef.current = ro
+      }
+    } catch (e) {
+      console.warn('[Broadside] frame height observer failed:', e)
+    }
     try {
       const { data: { session } } = await supabase.auth.getSession()
       const token = session?.access_token
@@ -114,7 +166,7 @@ export default function Broadside() {
       console.error('[Broadside] init failed:', e)
       setError('Broadside module failed to initialize — try refreshing the page.')
     }
-  }, [])
+  }, [measureFrame])
 
   // ── Feed the module's Intel Intake picker ────────────────────────────────────
   useEffect(() => {
@@ -139,7 +191,11 @@ export default function Broadside() {
   }, [frameReady, deepLinkId, loadDossier])
 
   return (
-    <div className="flex flex-col h-full">
+    // B5: this wrapper is the scroller. Layout renders /broadside full-bleed
+    // with `overflow-hidden` on <main>, so nothing above us can scroll; owning
+    // the scroll here keeps the edge-to-edge look and makes every part of the
+    // module — including the SESSION CONSOLE strip at its base — reachable.
+    <div className="flex flex-col h-full overflow-y-auto overscroll-contain">
       {error && (
         <div className="bg-red-700 text-white text-xs font-semibold px-4 py-1.5 flex-shrink-0">
           {error}
@@ -151,8 +207,14 @@ export default function Broadside() {
         title="Broadside — controversy sparring"
         onLoad={handleFrameLoad}
         allow="microphone; autoplay"
-        className="flex-1 min-h-0 w-full border-0"
-        style={{ background: '#F4F5F7' }}
+        className="w-full border-0 flex-shrink-0"
+        style={{
+          background: '#F4F5F7',
+          // Tall enough for the module's whole document, never shorter than the
+          // slot it sits in (so short content still fills the page).
+          height: frameHeight ? `${frameHeight}px` : '100%',
+          minHeight: '100%',
+        }}
       />
     </div>
   )

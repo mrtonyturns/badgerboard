@@ -960,7 +960,9 @@ export default function TaskBoard() {
   // ── View data ───────────────────────────────────────────────────────────────
   const activeProject = view.type === 'project' ? projects.find(p => p.id === view.id) : null
 
-  if (loading) return <LoadingBar />
+  // LoadingBar is opacity-driven off its `loading` prop — without it the bar
+  // renders invisible and the whole page is blank white while tasks fetch.
+  if (loading) return <LoadingBar loading />
 
   if (setupNeeded) {
     return (

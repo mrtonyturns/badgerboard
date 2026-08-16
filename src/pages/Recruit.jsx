@@ -726,7 +726,15 @@ export default function Recruit() {
                 <ListFilter style={{ width: 13, height: 13 }} /> Exclude unknowns
               </label>
               <Btn onClick={() => loadProspects(activeSearch.id)} tap={false}><RefreshCw style={{ width: 12, height: 12 }} /> Refresh</Btn>
-              <Btn onClick={exportCsv} tap={false}><Download style={{ width: 12, height: 12 }} /> Export CSV</Btn>
+              {/* exportCsv() bails on an empty view, so an always-enabled
+                  button was a dead click. Disable it and say why in visible
+                  text — a title= on a disabled button never renders. */}
+              <Btn onClick={exportCsv} tap={false} disabled={view.length === 0}><Download style={{ width: 12, height: 12 }} /> Export CSV</Btn>
+              {view.length === 0 && (
+                <span style={{ flexBasis: '100%', textAlign: 'right', fontSize: 11, color: T.faint }}>
+                  Nothing to export — the current filters hide every row.
+                </span>
+              )}
             </div>
 
             <div style={{ overflowX: 'auto' }}>

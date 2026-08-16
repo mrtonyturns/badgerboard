@@ -97,6 +97,91 @@ function matchesQuery(contest, results, terms) {
 // Whether an election type is a primary (affects "Called" display and winner framing)
 const isPrimaryType = (type) => type === 'primary' || type === 'spring_primary'
 
+// ══ Public-facing note filter + KPI derivations ══════════════════════════════
+// Exported, pure, and shared with ElectionResultsAdmin.jsx so "called" means
+// the same thing on both screens. Tested in tests/r1c.test.mjs.
+// ─── R1C PURE HELPERS BEGIN ───
+// Fragments the results team writes for itself. status_detail.reason is one
+// field doing two jobs — engine explanation AND internal QA note — and the
+// public board was printing both ("Needs a manual look; NOT stamped verified.",
+// "recomputed from stored published figures 2026-08-12 late pass").
+export const INTERNAL_NOTE_MARKERS = [
+  'not stamped verified',
+  'needs a manual look',
+  'editor override',
+  'late pass',
+  'recomputed from stored',
+]
+
+/** Sentence/clause splitter that keeps its delimiters out of the way. */
+function noteFragments(text) {
+  const parts = []
+  let buf = ''
+  for (const ch of String(text)) {
+    if (ch === ';' || ch === '·' || ch === '|') { parts.push(buf); buf = ''; continue }
+    buf += ch
+    if (ch === '.' || ch === '!' || ch === '?') { parts.push(buf); buf = '' }
+  }
+  parts.push(buf)
+  return parts.map(s => s.trim()).filter(Boolean)
+}
+
+export function isInternalNoteFragment(fragment) {
+  const s = String(fragment || '').toLowerCase()
+  return INTERNAL_NOTE_MARKERS.some(m => s.includes(m))
+}
+
+/**
+ * Strip internal QA fragments from a stored note. Returns null when nothing
+ * presentable is left, so the caller renders no note at all rather than an
+ * empty line. ADMIN SURFACES MUST NOT USE THIS — they show the raw field.
+ */
+export function publicNote(note) {
+  if (typeof note !== 'string') return null
+  const kept = noteFragments(note).filter(f => !isInternalNoteFragment(f))
+  const out = kept.join(' ').replace(/\s+/g, ' ').replace(/^[\s,;:·|\-–—]+/, '').trim()
+  return out || null
+}
+
+// ── Stat derivations ─────────────────────────────────────────────────────────
+// Three numbers on two screens disagreed because each was computed inline with
+// its own definition: the admin stat row counted contests with a `declared`
+// result row (10) while the certify button counted status==='called' (225).
+export const CALLED_STATUSES = ['called', 'certified']
+
+/** 'Called' = a winner stands, whether or not the canvass has certified it. */
+export function isCalledStatus(status) {
+  return CALLED_STATUSES.includes(String(status || '').toLowerCase())
+}
+
+export function countCalled(contests, statusOf = (c) => c?.status) {
+  return (contests || []).filter(c => isCalledStatus(statusOf(c))).length
+}
+
+/** 'Reporting' = the contest has returns in — precincts counted or votes recorded. */
+export function hasReportedData(contest, results) {
+  if ((contest?.precincts_rptg || 0) > 0) return true
+  return (results || []).some(r => (r?.votes || 0) > 0)
+}
+
+export function countReporting(contests, resultsOf = () => []) {
+  return (contests || []).filter(c => hasReportedData(c, resultsOf(c))).length
+}
+
+/**
+ * Mean precinct-% across the contests that HAVE precinct data. This is not a
+ * share of races — 87 of 251 races reporting at 99% of their own precincts is
+ * both true at once, which is why the tile is labelled "Avg precincts in".
+ */
+export function avgPrecinctsIn(contests) {
+  const withData = (contests || []).filter(c => (c?.precincts_total || 0) > 0)
+  if (!withData.length) return { pct: 0, contests: 0 }
+  const sum = withData.reduce(
+    (s, c) => s + Math.min(100, ((c.precincts_rptg || 0) / c.precincts_total) * 100), 0)
+  return { pct: Math.round(sum / withData.length), contests: withData.length }
+}
+// ─── R1C PURE HELPERS END ───
+
 const ELECTION_TYPE_LABEL = {
   primary:        { label: 'Primary', cls: 'bg-amber-100 text-amber-800' },
   spring_primary: { label: 'Spring Primary', cls: 'bg-amber-100 text-amber-800' },
@@ -360,7 +445,10 @@ const RaceCard = React.memo(function RaceCard({ contest, results, notifyMode, on
   const status  = contestStatus(contest, results)
   const ui      = STATUS_UI[status] || STATUS_UI.waiting
   const detail  = contest.status_detail && typeof contest.status_detail === 'object' ? contest.status_detail : null
-  const reason  = typeof detail?.reason === 'string' ? detail.reason : null
+  // status_detail.reason carries internal QA notes as well as the engine's
+  // explanation. This is the USER-facing board, so the internal fragments are
+  // stripped here (the admin console still shows the raw field).
+  const reason  = publicNote(detail?.reason)
   const feeFree = status === 'recount_possible' && detail?.fee_free === true
   const updated = lastUpdatedAt(contest, results)
   const seats   = contest.seats || 1
@@ -405,7 +493,9 @@ const RaceCard = React.memo(function RaceCard({ contest, results, notifyMode, on
             <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
               <Clock className="w-3 h-3" />
               Last updated {fmtStamp(updated)}
-              {contest.status_source === 'admin' && <span className="text-gray-300">· editor override</span>}
+              {/* "· editor override" was newsroom shorthand shown to readers.
+                  The StatusBadge tooltip already says a Badger Board editor set
+                  this status, in words a reader can act on. */}
             </p>
           )}
           {contest.precincts_total > 0 && (
@@ -799,6 +889,9 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
   const isLive    = election ? isElectionNightCT(election.election_date) && contests.length > 0 : false
   const isPrimary = election ? isPrimaryType(election.type) : false
 
+  // Mean precinct-% over the contests that have precinct data (see avgPrecinctsIn).
+  const precinctsIn = useMemo(() => avgPrecinctsIn(contests), [contests])
+
   // Past elections with results (for the election picker tabs)
   const electionsWithPast = elections
     .filter(e => isPast(parseISO(e.election_date)) || isToday(parseISO(e.election_date)))
@@ -985,26 +1078,28 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
             {isPrimary ? (
               <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
                 <p className="text-2xl font-bold text-amber-600">
-                  {contests.filter(c => c.precincts_rptg > 0 || (resultsMap[c.id] || []).some(r => r.votes > 0)).length}
+                  {countReporting(contests, c => resultsMap[c.id] || EMPTY)}
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">Races Reporting</p>
               </div>
             ) : (
               <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
                 <p className="text-2xl font-bold text-green-600">
-                  {contests.filter(c => ['called', 'certified'].includes(contestStatus(c, resultsMap[c.id] || []))).length}
+                  {countCalled(contests, c => contestStatus(c, resultsMap[c.id] || EMPTY))}
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">Called</p>
               </div>
             )}
+            {/* "Avg Reporting" next to "87 Races Reporting" read as a share of
+                races (87/251 = 35%, not 99%). It is the mean share of each
+                race's OWN precincts, across races that have precinct data —
+                so the label now says precincts and names its denominator. */}
             <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
-              <p className="text-2xl font-bold text-gray-900">
-                {Math.round(
-                  contests.reduce((s, c) => c.precincts_total ? s + (c.precincts_rptg / c.precincts_total) * 100 : s, 0) /
-                  Math.max(1, contests.filter(c => c.precincts_total > 0).length)
-                )}%
+              <p className="text-2xl font-bold text-gray-900">{precinctsIn.pct}%</p>
+              <p className="text-xs text-gray-500 mt-0.5">Avg precincts in</p>
+              <p className="text-[10px] text-gray-400 leading-tight">
+                across {precinctsIn.contests} race{precinctsIn.contests === 1 ? '' : 's'} with returns
               </p>
-              <p className="text-xs text-gray-500 mt-0.5">Avg Reporting</p>
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
               {/* Summed over THIS election's contests only — realtime is
