@@ -16,6 +16,7 @@
 // No React in here on purpose: it is unit-testable in plain node.
 
 import { escapeHtml, sanitizeHtml } from '../../lib/sanitize'
+import { plural } from '../../lib/text'
 
 // ─── Section metadata: Overview + the 14 master-prompt sections ──────────────
 // Moved here from Dossiers.jsx (single definition — Dossiers.jsx, SharedDossier
@@ -887,7 +888,6 @@ function countItems(blocks) {
   return n
 }
 
-const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + 's'}`
 
 /** Walk every claim-carrying element in a block list and count team verdicts. */
 function verdictTally(blocks) {

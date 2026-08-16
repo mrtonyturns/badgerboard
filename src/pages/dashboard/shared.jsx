@@ -12,7 +12,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { format, differenceInCalendarDays, parseISO, isPast, isToday, startOfWeek } from 'date-fns'
+import { format, differenceInCalendarDays, isPast, isToday, startOfWeek } from 'date-fns'
+import { safeISO } from '../../lib/date'
+import { officeLine } from '../../lib/office'
 import { pointInGeometry } from '../../lib/geo'
 import { supabase } from '../../lib/supabase'
 import {
@@ -73,11 +75,12 @@ export function DashboardStyles() {
 
 // ── Small helpers ─────────────────────────────────────────────────────────────
 
-// Crash-proof parseISO (same contract as GamePlan.jsx / Elections.jsx).
-export const safeISO = (d) => {
-  const t = parseISO(String(d ?? ''))
-  return Number.isNaN(+t) ? null : t
-}
+// Crash-proof parseISO. Lives in lib/date.js now; re-exported here because the
+// candidate views import it (and everything else in this module) from ./shared.
+// NOTE the contract: null on a missing/unparseable date, NOT an epoch Date —
+// fmtDate/isUpcoming below branch on that null. Elections.jsx and GamePlan.jsx
+// need the opposite and import safeISOOrEpoch instead.
+export { safeISO }
 
 export const fmtInt = (n) =>
   Number.isFinite(n) ? n.toLocaleString() : '—'
@@ -132,14 +135,11 @@ export const firstNameOf = (user) => {
   return local.charAt(0).toUpperCase() + local.slice(1).replace(/[._-].*$/, '')
 }
 
-// Office line: "State Representative, Assembly District 1" style.
-export const officeLine = (office) => {
-  if (!office) return null
-  const bits = [office.name]
-  if (office.district_name) bits.push(office.district_name)
-  else if (office.district_number) bits.push(`District ${office.district_number}`)
-  return bits.filter(Boolean).join(' — ')
-}
+// Office line: "State Representative — Assembly District 1" style. Lives in
+// lib/office.js now (ActionDashboard.jsx and the profiler's ReportReader.jsx
+// each had their own copy); re-exported here because the candidate views import
+// it from ./shared. Defaults are this page's contract: ' — ', null when unset.
+export { officeLine }
 
 export const electionTypeLabel = (t) => ELECTION_TYPE_LABELS[t] || 'Election'
 export const electionTypeShort = (t) => ELECTION_TYPE_SHORT[t] || 'Election'

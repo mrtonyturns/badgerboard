@@ -17,15 +17,17 @@ const toClientTask = (r) => (r ? {
 } : null)
 
 exports.handler = async (event) => {
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: H.CORS, body: '' }
-  if (event.httpMethod !== 'POST')  return { statusCode: 405, headers: H.CORS, body: JSON.stringify({ error: 'POST only' }) }
+  // Per-request CORS (H.cors → _config.corsHeaders). Was a shared '*' constant.
+  const CORS = H.cors(event)
+  if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: CORS, body: '' }
+  if (event.httpMethod !== 'POST')  return { statusCode: 405, headers: CORS, body: JSON.stringify({ error: 'POST only' }) }
 
   const user = await H.verifyUser(event.headers?.authorization || event.headers?.Authorization)
-  if (!user) return { statusCode: 401, headers: H.CORS, body: JSON.stringify({ error: 'Not authenticated' }) }
+  if (!user) return { statusCode: 401, headers: CORS, body: JSON.stringify({ error: 'Not authenticated' }) }
 
-  let body; try { body = JSON.parse(event.body || '{}') } catch { return { statusCode: 400, headers: H.CORS, body: JSON.stringify({ error: 'Invalid JSON' }) } }
+  let body; try { body = JSON.parse(event.body || '{}') } catch { return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'Invalid JSON' }) } }
   const { action, candidate_user_id } = body
-  const reply = (obj, code = 200) => ({ statusCode: code, headers: H.CORS, body: JSON.stringify(obj) })
+  const reply = (obj, code = 200) => ({ statusCode: code, headers: CORS, body: JSON.stringify(obj) })
 
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
   if (!candidate_user_id || !UUID.test(candidate_user_id)) return reply({ error: 'valid candidate_user_id required' }, 400)

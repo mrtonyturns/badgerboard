@@ -818,12 +818,64 @@ export function isActionPlan(planKey) {
   return PLAN_CONFIG[planKey]?.planType === 'action'
 }
 
+/**
+ * Is `toPlan` a strict upgrade from `fromPlan`?
+ *
+ * "Upgrade" is only meaningful WITHIN a plan family. The two ladders are
+ * different products priced on different axes (Candidate = flat monthly seat,
+ * Action = per-bracket), so there is no rank that spans them. The old body
+ * ranked both families on the single concatenated PLAN_ORDER
+ * ['scout','c_monitor','c_active','c_campaign','a_monitor','a_active','a_campaign'],
+ * which made every Candidate→Action move an "upgrade" (a_monitor, $89, scored
+ * above c_campaign, $189) and every Action→Candidate move a "downgrade" — both
+ * nonsense. Cross-family is a plan CHANGE: neither upgrade nor downgrade.
+ *
+ * scout is the one exception. It is the shared free floor of both ladders
+ * (planType 'candidate' only because it has to say something), so leaving it
+ * for any paid plan counts as an upgrade and arriving at it never does.
+ *
+ * Same-family results are byte-for-byte what they were before: PLAN_ORDER's
+ * relative order inside each family matches CANDIDATE_PLAN_ORDER /
+ * ACTION_PLAN_ORDER exactly.
+ *
+ * UI note: nothing in the app currently branches on this (Pricing.jsx derives
+ * its CTA copy from plan+bracket+billing equality and already falls through to
+ * "Switch plan" for any cross-family card), so a cross-family `false` does not
+ * strand the user on an unlabelled button.
+ */
 export function isUpgrade(fromPlan, toPlan) {
-  // Within same plan family, use order index (legacy keys normalized first —
-  // PLAN_ORDER has no entry for them, so a raw 'monitor' would rank -1).
-  const fromIdx = PLAN_ORDER.indexOf(normalizePlan(fromPlan))
-  const toIdx   = PLAN_ORDER.indexOf(normalizePlan(toPlan))
-  return toIdx > fromIdx
+  // Legacy keys normalized first — PLAN_ORDER has no entry for them, so a raw
+  // 'monitor' would rank -1 and every comparison against it would be wrong.
+  const from = normalizePlan(fromPlan)
+  const to   = normalizePlan(toPlan)
+  if (from === to)   return false
+  if (to === 'scout') return false   // nothing is an upgrade to free
+  if (from === 'scout') return true  // free floor → any paid plan, either family
+
+  const fromType = PLAN_CONFIG[from]?.planType
+  const toType   = PLAN_CONFIG[to]?.planType
+  if (!fromType || !toType) return false
+  if (fromType !== toType) return false  // cross-family = a plan change, not a rank move
+
+  const order = toType === 'action' ? ACTION_PLAN_ORDER : CANDIDATE_PLAN_ORDER
+  return order.indexOf(to) > order.indexOf(from)
+}
+
+/**
+ * Classify a plan move for UI copy. Complements isUpgrade so callers that need
+ * a label (rather than a boolean) don't re-derive the family rule themselves.
+ *   'same' | 'upgrade' | 'downgrade' | 'change'  ('change' = cross-family)
+ */
+export function planChangeKind(fromPlan, toPlan) {
+  const from = normalizePlan(fromPlan)
+  const to   = normalizePlan(toPlan)
+  if (from === to) return 'same'
+  if (from === 'scout') return 'upgrade'
+  if (to === 'scout')   return 'downgrade'
+  const fromType = PLAN_CONFIG[from]?.planType
+  const toType   = PLAN_CONFIG[to]?.planType
+  if (!fromType || !toType || fromType !== toType) return 'change'
+  return isUpgrade(from, to) ? 'upgrade' : 'downgrade'
 }
 
 export function getNextPlan(planKey) {

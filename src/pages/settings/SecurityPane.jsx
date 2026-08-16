@@ -13,31 +13,20 @@
 import React, { useEffect, useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { supabase, getRecentActivity, logActivity } from '../../lib/supabase'
+import { scorePassword, PASSWORD_MIN_LENGTH, PASSWORD_MIN_SCORE } from '../../lib/password'
 import {
   Card, CardBody, Row, Field, Btn, Pill, Note, Msg, Spinner, StubPill, T,
 } from './shared'
 
-const MIN_PW = 8   // keep in sync with Login.jsx / ResetPassword.jsx minLength
+// The minimum length and the scorer both come from lib/password.js now — this
+// pane used to carry a third copy of the scorer, which is how it drifted to a
+// 12-character minimum while signup allowed 8.
+const MIN_PW = PASSWORD_MIN_LENGTH
 
-// ── Password strength (identical scorer to Login.jsx / ResetPassword.jsx) ─────
-// Both of those forms refuse anything below "Fair". This one only checked
+// Both of the other forms refuse anything below "Fair". This one only checked
 // length, so the one place an existing account changes its password was the one
 // place a weak password was accepted. Same gate, same threshold, everywhere.
-const MIN_SCORE = 3   // "Fair" — matches Login.jsx and ResetPassword.jsx
-function scorePassword(pw) {
-  if (!pw) return { score: 0, label: '', color: '', pct: 0 }
-  let score = 0
-  if (pw.length >= 8)          score++
-  if (pw.length >= 12)         score++
-  if (/[A-Z]/.test(pw))        score++
-  if (/[a-z]/.test(pw))        score++
-  if (/[0-9]/.test(pw))        score++
-  if (/[^A-Za-z0-9]/.test(pw)) score++
-  if (score <= 2) return { score, label: 'Weak',   color: '#ef4444', pct: 25  }
-  if (score <= 3) return { score, label: 'Fair',   color: '#f97316', pct: 50  }
-  if (score <= 4) return { score, label: 'Good',   color: '#eab308', pct: 75  }
-  return             { score, label: 'Strong', color: '#22c55e', pct: 100 }
-}
+const MIN_SCORE = PASSWORD_MIN_SCORE   // "Fair"
 
 function StrengthBar({ password }) {
   const { label, color, pct } = scorePassword(password)

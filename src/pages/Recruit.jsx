@@ -166,6 +166,11 @@ export default function Recruit() {
   const [votersLoaded, setVotersLoaded]       = useState(0)   // paging progress
   const [loadingVoters, setLoadingVoters] = useState(false)
   const [offices, setOffices]     = useState([])
+  // Distinguishes "offices haven't arrived yet" from "there genuinely are none".
+  // Without it, `offices === []` during the initial fetch renders the step-2
+  // empty state, which tells the user no offices are seeded when the query is
+  // simply still in flight.
+  const [officesLoaded, setOfficesLoaded] = useState(false)
   const [typeKey, setTypeKey]     = useState('')
   const [districtValue, setDistrictValue] = useState('')
   const [searches, setSearches]   = useState([])
@@ -193,6 +198,7 @@ export default function Recruit() {
       if (cancelled) return
       setLists(l || [])
       setOffices(o || [])
+      setOfficesLoaded(true)
       const { data: s, error: sErr } = await getRecruitmentSearches()
       if (cancelled) return
       // The tables ship with migration 20260812000011 — until it is applied the
@@ -226,6 +232,21 @@ export default function Recruit() {
 
   // ── Derived: office types, districts, matched residents ────────────────────
   const selectedList = useMemo(() => lists.find(l => l.id === listId) || null, [lists, listId])
+  // The office-type menu is ENUMERATED FROM THE offices TABLE, never hard-coded:
+  // availableOfficeTypes() classifies every seeded row and returns only the
+  // types that actually matched something, with their seat counts. That is what
+  // keeps Recruit from selling an office type with nothing behind it — the WI
+  // seed carries no `Town of …` board seats, so "Town Board" simply never
+  // appears in the menu (and would appear the moment such rows are seeded or
+  // added through Offices/admin-offices). getOffices() pages through the whole
+  // table in 1000-row batches, so the count is over every office, not a page.
+  //
+  // NOTE (known limitation, deliberately not changed here): the menu is scoped
+  // to the offices table as a whole, not to the geography of the chosen voter
+  // list. A type can therefore be offered when the seeded seats of that type
+  // are in a different county than the list. That is not a silent empty — the
+  // district step below already tells the user when their list lacks the column
+  // the type needs, and the resident count is shown before anything is created.
   const officeTypes = useMemo(() => availableOfficeTypes(offices), [offices])
   const typeMeta    = useMemo(() => recruitOfficeType(typeKey), [typeKey])
   const districtOptions = useMemo(
@@ -290,12 +311,33 @@ export default function Recruit() {
     try {
       const list = selectedList
       const name = `${typeMeta.label} — ${typeMeta.districtLabel} ${districtValue} (${format(new Date(), 'MMM yyyy')})`
+      // ── `office_type` MEANS THREE DIFFERENT THINGS IN THIS SCHEMA ──────────
+      // Nothing enforces that, and the columns share a name, so read every use
+      // against its own table before assuming a value is portable:
+      //
+      //   recruitment_searches.office_type  ← WHAT IS WRITTEN HERE.
+      //       A Recruit office-type KEY from lib/recruit.js RECRUIT_OFFICE_TYPES:
+      //       'county_board' | 'city_council' | 'village_board' | 'town_board'
+      //       | 'school_board'. A UI/matching bucket, not a DB enum.
+      //
+      //   offices.office_type
+      //       The BRANCH of government: 'executive' | 'legislative' | 'judicial'
+      //       | 'administrative' (admin-offices.js VALID_TYPES). Recruit never
+      //       writes this — it reads offices.level + offices.name and classifies
+      //       them itself (classifyOffice), because "county board" is a name
+      //       pattern, not a branch.
+      //
+      //   election_contests.office_type
+      //       A RESULTS-TIER bucket: 'statewide' | 'county' | … used to group
+      //       and order the results board. Unrelated to both of the above.
+      //
+      // Never copy a value from one of these columns into another.
       const { data: search, error: sErr } = await createRecruitmentSearch({
         name,
         voter_list_id: listId,
-        office_type: typeKey,
+        office_type: typeKey,   // Recruit type key — see the block above
         office_scope: {
-          office_type: typeKey,
+          office_type: typeKey,   // same Recruit type key, denormalized for replay
           district_column: districtColumnForOfficeType(typeKey),
           district_value: districtValue,
           voter_list_name: list?.name || null,
@@ -547,7 +589,19 @@ export default function Recruit() {
                   </button>
                 )
               })}
-              {!officeTypes.length && <EmptyNote>No county or municipal offices are seeded yet.</EmptyNote>}
+              {/* Three distinct states, never conflated: still loading, loaded
+                  but empty, and (the normal case) the buttons above. The empty
+                  copy names the reason and the fix instead of leaving the step
+                  blank. */}
+              {!officesLoaded && <EmptyNote>Loading the office list…</EmptyNote>}
+              {officesLoaded && !officeTypes.length && (
+                <EmptyNote>
+                  No offices on file for any Recruit-eligible type yet. Recruit only
+                  offers types that have seeded seats behind them (county board, city
+                  council, village board, town board, school board), so this list fills
+                  in as county and municipal offices are added on the Offices page.
+                </EmptyNote>
+              )}
             </div>
           </StepCard>
         )}

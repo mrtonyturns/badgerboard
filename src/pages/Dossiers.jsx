@@ -31,7 +31,7 @@ import DossierDisclaimerModal, { useDossierAck } from '../components/DossierDisc
 import { UpgradeLink, WebOnlyCta, NATIVE_PLAN_NOTE } from '../components/UpgradeCta'
 
 import {
-  T, cardStyle, ProfilerShell, Btn, Pill, Avatar, StatStrip, StatCell, RatioBar,
+  T, cardStyle, ProfilerShell, Btn, Pill, Avatar, ProfilerStatStrip, StatCell, RatioBar,
   relativeAge, plural,
 } from './profiler/shared'
 import ReportReader from './profiler/ReportReader'
@@ -1068,7 +1068,7 @@ export default function Dossiers() {
       )}
 
       {/* ── Stat strip: the ONE place the plan is stated ─────────────────── */}
-      <StatStrip cols={3}>
+      <ProfilerStatStrip cols={3}>
         <StatCell
           center
           label="Saved profiles"
@@ -1112,7 +1112,7 @@ export default function Dossiers() {
             )}
           />
         )}
-      </StatStrip>
+      </ProfilerStatStrip>
 
       {/* ── Credit CTA: ≥85% consumed or fewer than 5 left ───────────────── */}
       {showUpsell && (

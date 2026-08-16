@@ -95,6 +95,12 @@ async function getNotificationPrefs(userId) {
     plan_changed:    true,
     account_locked:  true,
     dossier_ready:   true,
+    // Both columns are BOOLEAN NOT NULL DEFAULT true in the migration; a user
+    // with no prefs row must read the same as one who never touched the
+    // toggles. monitoring-digest.js checks `prefs.weekly_digest === false`,
+    // which happened to fail safe on undefined — but only by accident.
+    weekly_digest:     true,
+    ai_access_default: true,
   }
   if (!userId || !process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return defaults
   try {

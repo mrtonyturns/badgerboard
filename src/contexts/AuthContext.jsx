@@ -32,23 +32,47 @@ export const AuthProvider = ({ children }) => {
     // captive-portal network, or a hung refresh leaves the promise pending and
     // the app stuck on the full-screen spinner with no way out. Race it against
     // a 10s timeout and fall through to signed-out, which at least renders the
-    // login screen. `settled` makes the race one-way: whichever arm lands first
-    // owns the loading gate, and the loser is ignored.
-    let settled = false
+    // login screen.
+    //
+    // The race is over the LOADING GATE ONLY. It used to be over the session as
+    // well (`if (settled) return` at the top of every arm), so a getSession()
+    // that took 10.1s had its perfectly good session thrown away: the user sat
+    // there looking signed out, with a valid token in storage, until they
+    // reloaded the page. `settled` now guards nothing but setLoading(false) —
+    // whenever the real session lands, early or late, it is applied.
+    //
+    // App.jsx's PUBLIC_PATHS behaviour is untouched by this: the gate still
+    // opens at 10s no matter what, so public routes keep rendering without
+    // waiting on auth.
+    let settled  = false   // loading gate resolved (by either arm)
+    let disposed = false   // effect cleaned up — stop touching React state
+
+    // Single writer for session state during init. Honours the same
+    // expires_at watermark onAuthStateChange uses, so a late arm can never
+    // install an OLDER session over a newer one that landed in the meantime.
+    const applySession = (incoming) => {
+      if (disposed) return
+      const exp = incoming?.expires_at ?? 0
+      if (incoming && exp < latestExpiresAt.current) return  // stale — discard
+      latestExpiresAt.current = incoming ? Math.max(latestExpiresAt.current, exp) : 0
+      setSession(incoming ?? null)
+      setUser(incoming?.user ?? null)
+    }
+
     const initTimer = setTimeout(() => {
       if (settled) return
       settled = true
-      console.warn('[Auth] getSession() did not settle within 10s — treating as signed out')
-      setSession(null)
-      setUser(null)
+      console.warn('[Auth] getSession() did not settle within 10s — opening the loading gate as signed out (a late session will still be applied)')
+      // Only assert "signed out" if nothing has committed a session yet.
+      // onAuthStateChange can deliver a real SIGNED_IN inside the 10s window,
+      // and blanking it here would sign a live user out of their own tab.
+      if (latestExpiresAt.current === 0) applySession(null)
       setLoading(false)
     }, 10000)
 
     supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (settled) return
-      if (session?.expires_at) latestExpiresAt.current = session.expires_at
-      setSession(session)
-      setUser(session?.user ?? null)
+      if (disposed) return
+      applySession(session)
 
       if (session) {
         // Skip auto-refresh when the user landed via a password-recovery link.
@@ -63,12 +87,7 @@ export const AuthProvider = ({ children }) => {
           // background call — if it fails we still have the cached session as fallback.
           try {
             const { data: refreshed } = await supabase.auth.refreshSession()
-            if (refreshed?.session) {
-              const exp = refreshed.session.expires_at ?? 0
-              latestExpiresAt.current = Math.max(latestExpiresAt.current, exp)
-              setSession(refreshed.session)
-              setUser(refreshed.session.user)
-            }
+            if (refreshed?.session) applySession(refreshed.session)
           } catch {
             // silently ignore — cached session is still valid for auth purposes
           }
@@ -77,15 +96,15 @@ export const AuthProvider = ({ children }) => {
 
     }).catch((err) => {
       // Network/storage failure during auth init — treat as signed-out rather than
-      // hanging on the loading spinner forever.
-      if (settled) return
+      // hanging on the loading spinner forever. Same rule as the timeout arm:
+      // only assert signed-out when no session has been committed by anyone.
       console.error('[Auth] getSession failed during init:', err)
-      setSession(null)
-      setUser(null)
+      if (latestExpiresAt.current === 0) applySession(null)
     }).finally(() => {
-      if (settled) return
-      settled = true
       clearTimeout(initTimer)
+      if (disposed) return  // unmounted mid-flight
+      if (settled) return   // the 10s arm already opened the gate
+      settled = true
       setLoading(false)
     })
 
@@ -106,6 +125,7 @@ export const AuthProvider = ({ children }) => {
     })
 
     return () => {
+      disposed = true
       clearTimeout(initTimer)
       subscription.unsubscribe()
     }

@@ -5,6 +5,9 @@ import { useNavigate, Link } from 'react-router-dom'
 import { Eye, EyeOff, AlertCircle, CheckCircle, User, Building2, Phone, Mail, Briefcase } from 'lucide-react'
 import BluejackLogo from '../components/BluejackLogo'
 import BadgerBoardLogo from '../components/BadgerBoardLogo'
+// One password scorer for the whole app — ResetPassword.jsx and
+// settings/SecurityPane.jsx used to carry their own identical copies.
+import { scorePassword, PASSWORD_MIN_SCORE } from '../lib/password'
 
 const POSITION_OPTIONS = [
   { value: '', label: 'Select your role...' },
@@ -18,22 +21,6 @@ const POSITION_OPTIONS = [
   { value: 'Journalist / Researcher', label: 'Journalist / Researcher' },
   { value: 'Other',                   label: 'Other' },
 ]
-
-// ── Password strength scorer ──────────────────────────────────────────────────
-function scorePassword(pw) {
-  if (!pw) return { score: 0, label: '', color: '', pct: 0 }
-  let score = 0
-  if (pw.length >= 8)           score++
-  if (pw.length >= 12)          score++
-  if (/[A-Z]/.test(pw))        score++
-  if (/[a-z]/.test(pw))        score++
-  if (/[0-9]/.test(pw))        score++
-  if (/[^A-Za-z0-9]/.test(pw)) score++
-  if (score <= 2) return { score, label: 'Weak',   color: '#ef4444', pct: 25  }
-  if (score <= 3) return { score, label: 'Fair',   color: '#f97316', pct: 50  }
-  if (score <= 4) return { score, label: 'Good',   color: '#eab308', pct: 75  }
-  return             { score, label: 'Strong', color: '#22c55e', pct: 100 }
-}
 
 function PasswordStrengthBar({ password }) {
   const { label, color, pct } = useMemo(() => scorePassword(password), [password])
@@ -118,7 +105,7 @@ export default function Login() {
     if (mode === 'signup') {
       if (!firstName.trim() || !lastName.trim()) { setError('First and last name are required.'); return }
       if (!position)                              { setError('Please select your role/position.'); return }
-      if (pwStrength.score < 3)                  { setError('Please choose a stronger password (Fair or better required).'); return }
+      if (pwStrength.score < PASSWORD_MIN_SCORE)  { setError('Please choose a stronger password (Fair or better required).'); return }
       if (password !== confirmPw)                { setError('Passwords do not match.'); return }
       if (!agreedToTos)                          { setError('You must agree to the Terms of Service to create an account.'); return }
     }

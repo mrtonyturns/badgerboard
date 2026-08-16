@@ -57,7 +57,8 @@ exports.handler = async (event) => {
     ? 'agency'
     : (await require('./_entitlements').resolveEntitlement(caller)).plan  // v1.18: honors beta + trials
   if (!CAMPAIGN_PLUS.includes(plan)) {
-    return { statusCode: 403, headers, body: JSON.stringify({ error: 'Campaign plan or higher required.' }) }
+    // Gate opens at c_active (see CAMPAIGN_PLUS above) — name the real floor.
+    return { statusCode: 403, headers, body: JSON.stringify({ error: 'Active plan or higher required.' }) }
   }
 
   // ── Durable per-user rate limit ───────────────────────────────────────────────

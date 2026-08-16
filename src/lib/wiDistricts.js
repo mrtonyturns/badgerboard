@@ -257,22 +257,5 @@ export const WI_COUNTY_CENTROIDS = {
   'Wood': [44.45497, -90.04187],
 }
 
-/**
- * Look up centroid [lat, lng] for any WI district.
- * @param {"assembly"|"senate"|"federal"|"county"} level
- * @param {number|string} identifier  district_number or county name
- * @returns {[number,number]|null}
- */
-export function getDistrictCentroid(level, identifier) {
-  if (level === "assembly" || (level === "state" && typeof identifier === "number" && identifier >= 1 && identifier <= 99)) {
-    const senateNum = Math.ceil(identifier / 3)
-    return WI_ASSEMBLY_CENTROIDS[identifier] || WI_SENATE_CENTROIDS[senateNum] || [44.5, -89.5]
-  }
-  if (level === "senate") return WI_SENATE_CENTROIDS[identifier] || [44.5, -89.5]
-  if (level === "federal") return WI_CD_CENTROIDS[identifier] || [44.5, -89.5]
-  if (level === "county") return WI_COUNTY_CENTROIDS[identifier] || [44.5, -89.5]
-  return [44.5, -89.5]
-}
-
 // WI geographic centroid fallback
 export const WI_CENTROID = [44.5, -89.5]

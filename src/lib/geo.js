@@ -32,15 +32,3 @@ export function pointInGeometry(lng, lat, geometry) {
   }
   return false
 }
-
-/** [ [minLng,minLat], [maxLng,maxLat] ] bounds of a geometry */
-export function geometryBounds(geometry) {
-  let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity
-  const scan = (ring) => ring.forEach(([lng, lat]) => {
-    if (lng < minLng) minLng = lng; if (lng > maxLng) maxLng = lng
-    if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat
-  })
-  if (geometry.type === 'Polygon') geometry.coordinates.forEach(scan)
-  else if (geometry.type === 'MultiPolygon') geometry.coordinates.forEach(p => p.forEach(scan))
-  return [[minLng, minLat], [maxLng, maxLat]]
-}

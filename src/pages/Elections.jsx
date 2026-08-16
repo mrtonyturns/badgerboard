@@ -8,10 +8,9 @@ import { format, differenceInDays, isPast, isFuture, parseISO, isToday } from 'd
 
 // Crash-proof parseISO: null/undefined/malformed dates → epoch (renders as
 // past) instead of Invalid Date, which crashes format() and comparisons.
-const safeISO = (d) => {
-  const t = parseISO(String(d ?? ''))
-  return Number.isNaN(+t) ? new Date(0) : t
-}
+// This page passes the result straight into date-fns with no null check, so it
+// needs the EPOCH contract — not lib/date.js's safeISO, which returns null.
+import { safeISOOrEpoch as safeISO } from '../lib/date'
 import {
   CalendarDays, Plus, Clock, CheckCircle, Edit2, Trash2, X,
   BarChart2, AlertCircle, AlertTriangle, Radio,

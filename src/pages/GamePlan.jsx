@@ -9,10 +9,9 @@ import {
 } from 'date-fns'
 
 // Crash-proof parseISO (see Elections.jsx): bad/missing dates → epoch.
-const safeISO = (d) => {
-  const t = parseISO(String(d ?? ''))
-  return Number.isNaN(+t) ? new Date(0) : t
-}
+// The EPOCH contract, not lib/date.js's safeISO (which returns null) — the
+// results below go straight into isToday/isPast with no null check.
+import { safeISOOrEpoch as safeISO } from '../lib/date'
 
 // Seed/QA rows ("TEST …", "ZZTEST …") never belong in the Results picker.
 // (?![a-z]) so a real "Testing …" election is never swallowed by the filter.

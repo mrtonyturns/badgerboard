@@ -6,7 +6,7 @@ import {
   FileText, FolderPlus, BarChart2, ChevronRight,
   AlertTriangle,
 } from 'lucide-react'
-import { partyAbbrev, partyBadgeClasses, partyMapHex, partyGroup, partyVanCode } from '../lib/party'
+import { partyAbbrev, partyBadgeClasses, partyMapHex, partyGroup, partyVanCode, PARTY_FAMILY_OPTIONS } from '../lib/party'
 
 // ─── Vote history dot trail ───────────────────────────────────────────────────
 // NOTE: This displays simulated/placeholder data. Integrate a real voter file
@@ -798,11 +798,14 @@ export default function VoterLists() {
                   />
                 </div>
                 <select className="input text-xs py-1.5 w-28" value={partyFilter} onChange={e => setPartyFilter(e.target.value)}>
-                  {/* Values are partyGroup() families, not text prefixes. */}
+                  {/* Values are partyGroup() families, not text prefixes, and
+                      the list is derived from lib/party.js DB_PARTIES. It was
+                      hardcoded to R/D/I, so a Libertarian, Green, Nonpartisan
+                      or third-party voter could not be filtered to at all. */}
                   <option value="">All Parties</option>
-                  <option value="R">Republican</option>
-                  <option value="D">Democrat</option>
-                  <option value="I">Independent</option>
+                  {PARTY_FAMILY_OPTIONS.map(o => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
                 </select>
                 <select
                   className="input text-xs py-1.5 w-40"

@@ -24,7 +24,7 @@ import {
   getVoterFileEntries, upsertVoterFileEntries, getVoterFileCount,
   getDoorKnockStats, getDoorKnockFeed,
 } from '../lib/supabase'
-import { queueKnock, getPendingKnocks, pendingCount, flushQueue } from '../lib/offlineQueue'
+import { queueKnock, pendingCount, flushQueue } from '../lib/offlineQueue'
 import { VolunteerManager } from './VolunteerPortal'
 
 // ─── Empty defaults — door knocking requires real DB candidates ───────────────

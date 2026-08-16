@@ -25,7 +25,8 @@ import {
   sourceStats, inlineHtml, plainText, claimState, verdictDate, urlHost,
   GROUP_ORDER, SEV_COLOR,
 } from './reportModel'
-import { T, cardStyle, Rich, StatStrip, StatCell, RatioBar, plural } from './shared'
+import { officeLine } from '../../lib/office'
+import { T, cardStyle, Rich, ProfilerStatStrip, StatCell, RatioBar, plural } from './shared'
 
 // ─── Model hook ──────────────────────────────────────────────────────────────
 
@@ -615,10 +616,9 @@ export default function ReportReader({
   }, [active])
 
   const office = candidate.office || candidate.offices || null
-  const officeLabel = office
-    ? [office.name, office.district_name || (office.district_number ? `District ${office.district_number}` : '')]
-        .filter(Boolean).join(' — ')
-    : ''
+  // Shared formatter (lib/office.js). This header renders the label straight
+  // into JSX, so it wants '' — not the null the dashboards branch on.
+  const officeLabel = officeLine(office, { empty: '' })
   const generated = dossier?.generated_at ? new Date(dossier.generated_at) : null
   const generatedLabel = generated && !Number.isNaN(+generated)
     ? generated.toLocaleString('en-US', {
@@ -682,7 +682,7 @@ export default function ReportReader({
       {notice}
 
       {/* ── Sourcing strip: every number is counted, never estimated ───────── */}
-      <StatStrip cols={4}>
+      <ProfilerStatStrip cols={4}>
         <StatCell
           label="Sourcing"
           value={sourcing.ratio == null ? '—' : sourcing.strong}
@@ -716,7 +716,7 @@ export default function ReportReader({
                sources.social ? `${sources.social} social` : ''].filter(Boolean).join(' · ')
             : 'No source links in this report'}
         />
-      </StatStrip>
+      </ProfilerStatStrip>
 
       {researchNote}
       {beforeDoc}

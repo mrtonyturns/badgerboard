@@ -1,14 +1,21 @@
 // Shared helpers for Campaign Connect (account linking between Action & Candidate accounts).
 const SUPABASE_URL       = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-const { ADMIN_EMAILS } = require('./_config')
+const { ADMIN_EMAILS, corsHeaders } = require('./_config')
 const { resolveEntitlement } = require('./_entitlements')
 
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Content-Type': 'application/json',
+// CORS is built PER REQUEST from the caller's Origin (same pattern as
+// support-chat.js), not a module-level constant. The constant this replaced
+// sent 'Access-Control-Allow-Origin: *' on two authenticated, Bearer-token
+// endpoints (campaign-connect, campaign-connect-delegate), which told every
+// browser that any site on the internet may read their responses.
+// _config.corsHeaders() echoes the origin only when it is an allowed one and
+// otherwise falls back to the production origin, so a mismatched caller is
+// blocked by the browser.
+//
+// Callers: `H.cors(event)` — pass the raw Netlify event, not a header string.
+function cors(event, methods = 'POST, OPTIONS') {
+  return corsHeaders(event?.headers?.origin || event?.headers?.Origin, methods)
 }
 
 // service-role REST helper
@@ -95,6 +102,6 @@ async function activeLinkFor(actorId, candidateUserId) {
 }
 
 module.exports = {
-  SUPABASE_URL, SUPABASE_SERVICE_KEY, CORS, sb, verifyUser, findUserByEmail,
+  SUPABASE_URL, SUPABASE_SERVICE_KEY, cors, sb, verifyUser, findUserByEmail,
   planOf, planTypeOf, isActionUser, isPaidCandidate, DEFAULT_PERMS, logActivity, activeLinkFor, ADMIN_EMAILS,
 }

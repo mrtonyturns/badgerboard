@@ -963,14 +963,14 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
             <h3 className="text-gray-700 font-semibold text-lg">No results yet</h3>
             <p className="text-gray-400 text-sm mt-2 max-w-sm">
               {isFuture(parseISO(election.election_date))
-                ? 'Results will appear here once staff begins entering them after polls close on election night.'
-                : 'No results have been entered for this election yet. Check back on election night.'}
+                ? 'Results will appear here once polls close on election night.'
+                : 'No results have been recorded for this election yet. Check back on election night.'}
             </p>
           </div>
           <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl flex items-start gap-3">
             <Info className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
             <p className="text-sm text-blue-700">
-              Results are entered by Badger Board staff on election night and update here in real time — no page refresh needed.
+              Results are collected automatically on election night and update here in real time — no page refresh needed.
             </p>
           </div>
         </div>

@@ -13,12 +13,10 @@
  * Requires: node 18+ (built-in fetch, no extra dependencies)
  */
 
+// The key check moved into main() (bottom of file) so this module can be
+// IMPORTED for its pricing tables without exiting the process. Importing it
+// never talks to Stripe; only running it as a CLI does.
 const sk = process.argv[2]
-if (!sk || !sk.startsWith('sk_')) {
-  console.error('Usage: node stripe-setup.mjs sk_live_YOUR_KEY_HERE')
-  console.error('Get your secret key from: https://dashboard.stripe.com/apikeys')
-  process.exit(1)
-}
 
 // ── Pricing tables ────────────────────────────────────────────────────────────
 
@@ -58,6 +56,56 @@ const BILLING = [
   { key: 'annual',     suffix: 'A', label: 'Annual',      interval: 'year',  interval_count: 1 },
 ]
 
+// ── One-time credit packs (SOURCE OF TRUTH for the pack catalog) ─────────────
+//
+// WHY THIS BLOCK EXISTS
+// The subscription prices above are auditable end-to-end: this script mints
+// them, create-checkout-session.js bakes in the resulting price IDs, and
+// tests/tiers.test.mjs asserts periodTotal() matches periodAmountCents() for
+// all 84 combos. The credit packs had none of that. Their price IDs
+// (STRIPE_PRICE_CREDITS_*, STRIPE_PRICE_BULK_CREDITS_*) appeared in
+// create-checkout-session.js with no in-repo statement of what they cost, so
+// nothing could catch tiers.js CREDIT_PACKS drifting from what Stripe charges.
+//
+// WHERE THE LIVE IDs LIVE
+// The price *IDs* are baked into netlify/functions/create-checkout-session.js
+// (STRIPE_PRICES_V2 / STRIPE_PRICES), deliberately — Lambda's 4KB env-var
+// ceiling will not hold ~100 of them. A same-named Netlify env var
+// (STRIPE_PRICE_CREDITS_C5, etc.) still overrides the baked-in value at
+// runtime. Nothing in this repo can verify an ID against Stripe's API without
+// a live key, and this script is never run in CI — so the ASSERTION is on the
+// SKUs and AMOUNTS, which is what tests/tier3b.test.mjs checks three ways:
+//   tiers.js CREDIT_PACKS/BULK_CREDIT_PACKS ↔ this registry ↔
+//   create-checkout-session.js VALID_CREDIT_PACKS/VALID_BULK_CREDIT_PACKS.
+//
+// Amounts MUST equal tiers.js CREDIT_PACKS[].price / BULK_CREDIT_PACKS[].price.
+// `envKey` MUST equal the key create-checkout-session.js derives:
+//   credits → `STRIPE_PRICE_CREDITS_${pack.toUpperCase()}`
+//   bulk    → `STRIPE_PRICE_BULK_CREDITS_${pack.toUpperCase()}`
+const CREDIT_PACKS = [
+  { key: 'c1',  qty: 1,  price: 49,  name: 'Badger Board Profile Credits' },
+  { key: 'c5',  qty: 5,  price: 199, name: 'Badger Board Profile Credits' },
+  { key: 'c10', qty: 10, price: 349, name: 'Badger Board Profile Credits' },
+  { key: 'c25', qty: 25, price: 749, name: 'Badger Board Profile Credits' },
+]
+
+const BULK_CREDIT_PACKS = [
+  { key: 'bulk25',  qty: 25,  price: 99,  name: 'Badger Board Bulk Profile Credits' },
+  { key: 'bulk50',  qty: 50,  price: 179, name: 'Badger Board Bulk Profile Credits' },
+  { key: 'bulk100', qty: 100, price: 299, name: 'Badger Board Bulk Profile Credits' },
+  { key: 'bulk250', qty: 250, price: 599, name: 'Badger Board Bulk Profile Credits' },
+]
+
+/** Env-var name create-checkout-session.js looks up for a pack. */
+export function packEnvKey(kind, packKey) {
+  return kind === 'bulk'
+    ? `STRIPE_PRICE_BULK_CREDITS_${packKey.toUpperCase()}`
+    : `STRIPE_PRICE_CREDITS_${packKey.toUpperCase()}`
+}
+
+// Exported so tests can assert parity without executing the script body.
+export { CREDIT_PACKS, BULK_CREDIT_PACKS }
+
 function periodAmountCents(base, billingKey) {
   if (billingKey === 'monthly')    return base * 100
   if (billingKey === 'quarterly')  return Math.round(base * 0.95 * 3) * 100
@@ -68,7 +116,7 @@ function periodAmountCents(base, billingKey) {
 
 // ── Stripe API helpers (using built-in fetch) ─────────────────────────────────
 
-const AUTH = `Basic ${Buffer.from(sk + ':').toString('base64')}`
+const AUTH = `Basic ${Buffer.from((sk || '') + ':').toString('base64')}`
 
 async function stripePost(path, data) {
   const params = new URLSearchParams()
@@ -146,6 +194,39 @@ async function getOrCreatePrice(productId, amountCents, billing, nickname, metad
     ...(metadata.bracket ? { 'metadata[bracket]': metadata.bracket } : {}),
     'metadata[billing]':         metadata.billing,
     'metadata[plan_type]':       metadata.plan_type,
+  })
+  if (p.error) throw new Error(p.error.message)
+  process.stdout.write('✅')
+  return p
+}
+
+// One-time (non-recurring) price — credit packs. Matched on amount + "no
+// recurring", so re-running the script is idempotent the same way the
+// subscription path is.
+async function findExistingOneTimePrice(productId, amountCents) {
+  let url = `/prices?product=${productId}&active=true&limit=100`
+  let page
+  do {
+    const j = await stripeGet(url + (page ? `&starting_after=${page}` : ''))
+    for (const p of (j.data || [])) {
+      if (p.unit_amount === amountCents && !p.recurring) return p
+    }
+    page = j.has_more ? j.data?.at(-1)?.id : null
+  } while (page)
+  return null
+}
+
+async function getOrCreateOneTimePrice(productId, amountCents, nickname, metadata) {
+  const existing = await findExistingOneTimePrice(productId, amountCents)
+  if (existing) { process.stdout.write('↩'); return existing }
+  const p = await stripePost('/prices', {
+    product:                 productId,
+    unit_amount:             amountCents,
+    currency:                'usd',
+    nickname,
+    'metadata[product]':     metadata.product,
+    'metadata[pack]':        metadata.pack,
+    'metadata[credits]':     String(metadata.credits),
   })
   if (p.error) throw new Error(p.error.message)
   process.stdout.write('✅')
@@ -231,6 +312,38 @@ async function run() {
     console.log()
   }
 
+  // ── Credit packs (one-time payments) ─────────────────────────────────────────
+  // Amounts come from the registry at the top of this file, which
+  // tests/tier3b.test.mjs pins to tiers.js CREDIT_PACKS / BULK_CREDIT_PACKS and
+  // to create-checkout-session.js's VALID_* pack lists.
+  console.log('\n── Credit Packs (one-time) ──────────────────────────────')
+  for (const [kind, packs] of [['credits', CREDIT_PACKS], ['bulk', BULK_CREDIT_PACKS]]) {
+    const productName = packs[0].name
+    process.stdout.write(`  ${productName}: `)
+    let productId
+    try {
+      const product = await getOrCreateProduct(productName, { plan_key: kind, plan_type: 'one_time' })
+      productId = product.id
+    } catch (err) {
+      console.log(` ERROR: ${err.message}`)
+      continue
+    }
+    process.stdout.write(' | ')
+    for (const pack of packs) {
+      const cents = pack.price * 100
+      try {
+        const price = await getOrCreateOneTimePrice(
+          productId, cents, `${pack.key} — ${pack.qty} credits`,
+          { product: kind === 'bulk' ? 'bulk_credits' : 'credits', pack: pack.key, credits: pack.qty },
+        )
+        envVars[packEnvKey(kind, pack.key)] = price.id
+      } catch (err) {
+        process.stdout.write(`ERR(${pack.key})`)
+      }
+    }
+    console.log()
+  }
+
   // ── Output ───────────────────────────────────────────────────────────────────
   console.log('\n\n' + '='.repeat(50))
   console.log(`✅ Done — ${Object.keys(envVars).length} price IDs collected`)
@@ -249,7 +362,22 @@ async function run() {
   console.log('\n(Also saved to stripe-env-vars.txt)')
 }
 
-run().catch(err => {
-  console.error('\nFatal:', err.message)
-  process.exit(1)
-})
+// ── CLI entry point ──────────────────────────────────────────────────────────
+// Only runs when this file is executed directly (`node stripe-setup.mjs sk_…`).
+// Importing it — which tests/tier3b.test.mjs does to assert the pack registry —
+// gets the pricing tables and nothing else: no key required, no Stripe calls.
+const isCli = process.argv[1] && (
+  process.argv[1].endsWith('stripe-setup.mjs') || process.argv[1].endsWith('stripe-setup')
+)
+
+if (isCli) {
+  if (!sk || !sk.startsWith('sk_')) {
+    console.error('Usage: node stripe-setup.mjs sk_live_YOUR_KEY_HERE')
+    console.error('Get your secret key from: https://dashboard.stripe.com/apikeys')
+    process.exit(1)
+  }
+  run().catch(err => {
+    console.error('\nFatal:', err.message)
+    process.exit(1)
+  })
+}

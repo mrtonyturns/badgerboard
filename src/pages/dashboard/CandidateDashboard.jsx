@@ -221,6 +221,9 @@ export default function CandidateDashboard() {
   const [profilesUsed, setProfilesUsed] = useState(null)
   const [busyId, setBusyId]         = useState(null)
   const [picking, setPicking]       = useState(false)
+  // Authoritative count of THIS USER's candidates with monitoring switched on.
+  // null = not answered yet (fall back to the client-side derivation below).
+  const [monitoredCount, setMonitoredCount] = useState(null)
 
   // geodata
   const [popPoints, setPopPoints] = useState(null)
@@ -449,8 +452,46 @@ export default function CandidateDashboard() {
     window.location.reload()
   }
 
+  // ── Active-monitoring slots: used count comes from the server ──────────────
+  // monitoringSlots(user, candidates) derives `used` by counting the loaded
+  // array. That is only correct while the array happens to hold every candidate
+  // the user owns — and getCandidates({}) sets no explicit range, so PostgREST's
+  // default 1000-row ceiling silently truncates it for large Action accounts,
+  // and any future filter/paginate on this page would truncate it further. A
+  // short count under-reports used slots and the stat strip tells the user they
+  // have free slots the `monitoring_cap` trigger will refuse to fill.
+  //
+  // Same query shape as Candidates.jsx refreshActiveCount() and Settings.jsx's
+  // usage panel, so all three agree: scoped to created_by, head+exact count.
+  // Change one, change the others.
+  useEffect(() => {
+    if (!supabase || !user?.id) return
+    let dead = false
+    supabase
+      .from('candidates')
+      .select('id', { count: 'exact', head: true })
+      .eq('created_by', user.id)
+      .contains('section_timestamps', { monitoring: true })
+      .then(({ count, error }) => {
+        if (dead || error) return    // on error keep the client-side fallback
+        setMonitoredCount(count ?? 0)
+      })
+    return () => { dead = true }
+  }, [user?.id])
+
   // ── stat strip values ─────────────────────────────────────────────────────
-  const slots = monitoringSlots(user, candidates)
+  // Defensive fallback: until the count lands (or if it errors) we still show
+  // the array-derived number rather than a blank — it is a display stat, and
+  // the real boundary is the DB trigger.
+  const slots = useMemo(() => {
+    const base = monitoringSlots(user, candidates)
+    if (monitoredCount == null) return base
+    return {
+      ...base,
+      used: monitoredCount,
+      left: base.max === Infinity ? Infinity : Math.max(0, base.max - monitoredCount),
+    }
+  }, [user, candidates, monitoredCount])
   const profileLimit = getEffectiveProfileLimit(user)
   const banked = getBankedProfileCredits(user)
   const monitoredIsSelf = monitored && self && monitored.id === self.id

@@ -12,7 +12,7 @@ import {
 } from 'lucide-react'
 import { supabase, adminElections } from '../lib/supabase'
 import SearchableSelect from '../components/SearchableSelect'
-import { partyGroup } from '../lib/party'
+import { partyGroup, DB_PARTIES } from '../lib/party'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 // Order and labels match the public board (ElectionResultsBoard.jsx). The three
@@ -62,10 +62,10 @@ function pickDefaultElection(list) {
   return [...pool].sort((a, b) => a.election_date.localeCompare(b.election_date))[0] || null
 }
 
-const PARTIES = [
-  'Democrat', 'Republican', 'Independent', 'Nonpartisan',
-  'Libertarian', 'Green', 'Constitution', 'Other',
-]
+// Same vocabulary the rest of the app writes (lib/party.js DB_PARTIES — the
+// `candidates.party` CHECK). This was a hand-kept copy that had drifted out of
+// order and was missing 'Working Families'.
+const PARTIES = DB_PARTIES
 
 // Keyed by partyGroup() — results rows carry both 'Democrat' and 'Democratic'.
 const PARTY_COLORS = {

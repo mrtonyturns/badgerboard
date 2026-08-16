@@ -19,6 +19,7 @@
 // do not inherit font-family by default — stay on Geist.
 
 import React from 'react'
+import { plural } from '../../lib/text'
 
 export const T = {
   page:    '#FBFBFA',
@@ -59,7 +60,10 @@ export const cardStyle = {
   overflow: 'hidden',
 }
 
-export const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || `${one}s`)}`
+// One copy, in lib/text.js (a dependency-free module, so importing it does not
+// undo the "copy the tokens rather than import the shell" rule above).
+// Re-exported so the settings panes keep importing everything from ./shared.
+export { plural }
 
 /** Money, always grouped: $3,990 — never $3990. */
 export const money = (n) => `$${Number(n).toLocaleString('en-US')}`

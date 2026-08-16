@@ -4,6 +4,8 @@ import { Eye, EyeOff, CheckCircle, AlertCircle, KeyRound } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import BadgerBoardLogo from '../components/BadgerBoardLogo'
+// Same scorer Login.jsx and settings/SecurityPane.jsx use — one copy, in lib.
+import { scorePassword, PASSWORD_MIN_SCORE } from '../lib/password'
 
 // ── Friendly error copy ───────────────────────────────────────────────────────
 // Supabase's raw messages ("New password should be different from the old
@@ -23,22 +25,6 @@ function friendlyError(err) {
   const raw = String(err?.message || '')
   for (const [re, copy] of ERROR_COPY) if (re.test(raw)) return copy
   return 'We could not update your password. Request a new reset link and try again.'
-}
-
-// ── Password strength (same as Login.jsx) ─────────────────────────────────────
-function scorePassword(pw) {
-  if (!pw) return { score: 0, label: '', color: '', pct: 0 }
-  let score = 0
-  if (pw.length >= 8)           score++
-  if (pw.length >= 12)          score++
-  if (/[A-Z]/.test(pw))        score++
-  if (/[a-z]/.test(pw))        score++
-  if (/[0-9]/.test(pw))        score++
-  if (/[^A-Za-z0-9]/.test(pw)) score++
-  if (score <= 2) return { score, label: 'Weak',   color: '#ef4444', pct: 25  }
-  if (score <= 3) return { score, label: 'Fair',   color: '#f97316', pct: 50  }
-  if (score <= 4) return { score, label: 'Good',   color: '#eab308', pct: 75  }
-  return             { score, label: 'Strong', color: '#22c55e', pct: 100 }
 }
 
 function PasswordStrengthBar({ password }) {
@@ -156,7 +142,7 @@ export default function ResetPassword() {
     e.preventDefault()
     setError('')
 
-    if (pwStrength.score < 3) {
+    if (pwStrength.score < PASSWORD_MIN_SCORE) {
       setError('Please choose a stronger password (Fair or better required).')
       return
     }

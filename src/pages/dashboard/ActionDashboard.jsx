@@ -14,6 +14,7 @@ import { format, differenceInCalendarDays } from 'date-fns'
 import LoadingBar from '../../components/LoadingBar'
 import { useAuth } from '../../contexts/AuthContext'
 import {
+  supabase,
   getCandidates, getMilestones, getElections, getDossiers,
   getProspectingLists, getVoterLists, getRecentActivity,
 } from '../../lib/supabase'
@@ -23,6 +24,7 @@ import {
 } from '../../lib/tiers'
 import { PHASE_MAP } from '../../lib/campaignEnums'
 import { isRep, isDem } from '../../lib/party'
+import { officeLine } from '../../lib/office'
 import {
   T, Card, CardHead, DashboardShell, DashboardHeader, NextRaceBlock,
   StatStrip, StatCell, WeeklyChip, PartyPill, StatusPill, Pill, PhaseDot, DueChip,
@@ -38,12 +40,9 @@ import {
 // isThisWeek / latestDigestOf / weekDigestOf moved to shared.jsx so the two
 // dashboards cannot drift on what "this week's digest" means.
 
-const officeText = (office) => {
-  if (!office) return 'No office linked'
-  const d = office.district_name ||
-    (office.district_number ? `District ${office.district_number}` : null)
-  return [office.name, d].filter(Boolean).join(' · ')
-}
+// Same office line as the rest of the app (lib/office.js) — this page's own
+// separator and its own "nothing linked" copy, which is all that ever differed.
+const officeText = (office) => officeLine(office, { sep: ' · ', empty: 'No office linked' })
 
 // Profile freshness, stated as a fact about the row rather than a rating.
 const freshness = (dossier) => {
@@ -255,6 +254,9 @@ export default function ActionDashboard() {
   const [activity, setActivity]   = useState([])
   const [profilesUsed, setUsed]   = useState(null)
   const [selId, setSelId]         = useState(null)
+  // Authoritative count of THIS USER's candidates with monitoring switched on.
+  // null = not answered yet (fall back to the client-side derivation below).
+  const [monitoredCount, setMonitoredCount] = useState(null)
 
   useEffect(() => {
     let dead = false
@@ -397,7 +399,43 @@ export default function ActionDashboard() {
     return bits.join(' · ') || 'No candidates added yet'
   }, [candidates])
 
-  const slots = monitoringSlots(user, candidates)
+  // ── Active-monitoring slots: used count comes from the server ──────────────
+  // monitoringSlots(user, candidates) counts the loaded array. Action accounts
+  // are exactly the ones where that breaks: getCandidates({}) sets no explicit
+  // range, so PostgREST's default 1000-row ceiling truncates the list for a
+  // b51/ent roster, and a short count tells the user they have free slots the
+  // `monitoring_cap` trigger will refuse to fill. Ask the server instead.
+  //
+  // Same query shape as Candidates.jsx refreshActiveCount() and Settings.jsx's
+  // usage panel — scoped to created_by, head+exact count. Change one, change
+  // the others.
+  useEffect(() => {
+    if (!supabase || !user?.id) return
+    let dead = false
+    supabase
+      .from('candidates')
+      .select('id', { count: 'exact', head: true })
+      .eq('created_by', user.id)
+      .contains('section_timestamps', { monitoring: true })
+      .then(({ count, error }) => {
+        if (dead || error) return    // on error keep the client-side fallback
+        setMonitoredCount(count ?? 0)
+      })
+    return () => { dead = true }
+  }, [user?.id])
+
+  // Defensive fallback: until the count lands (or if it errors) show the
+  // array-derived number rather than a blank — it is a display stat, and the
+  // real boundary is the DB trigger.
+  const slots = useMemo(() => {
+    const base = monitoringSlots(user, candidates)
+    if (monitoredCount == null) return base
+    return {
+      ...base,
+      used: monitoredCount,
+      left: base.max === Infinity ? Infinity : Math.max(0, base.max - monitoredCount),
+    }
+  }, [user, candidates, monitoredCount])
   const profileLimit = getEffectiveProfileLimit(user)
   const banked = getBankedProfileCredits(user)
 

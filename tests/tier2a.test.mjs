@@ -77,7 +77,10 @@ t('empty filter matches everything, including a blank party',
   const s = src('src/pages/VoterLists.jsx')
   t('VoterLists routes the party filter through partyGroup()', /matchParty\s*=[^\n]*partyGroup\(v\.party\)/.test(s))
   t('VoterLists no longer prefix-matches party text', !/party\s*\|\|\s*''\)\.toLowerCase\(\)\.startsWith\(partyFilter/.test(s))
-  t('the filter <option> values are partyGroup families', /<option value="R">Republican<\/option>/.test(s))
+  // v1.34.0: the hardcoded R/D/I trio became the shared PARTY_FAMILY_OPTIONS
+  // list from party.js (Tier 3A) — the values are still partyGroup families,
+  // just sourced from one place instead of three literals.
+  t('the filter <option> values are partyGroup families', /PARTY_FAMILY_OPTIONS\.map/.test(s))
   t('the VAN export uses partyVanCode()', /partyVanCode\(v\.party\)/.test(s))
   t('the VAN export no longer writes the first letter of the raw party',
     !/\(v\.party \|\| ''\)\.toUpperCase\(\)\.charAt\(0\)/.test(s))

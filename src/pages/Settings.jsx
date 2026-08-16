@@ -64,8 +64,36 @@ const HASH_TO_PANE = {
   notifications: 'notifications', privacy: 'privacy', account: 'account',
 }
 
+// EVERY notification_preferences column the app reads, with the default a user
+// who has no row must get. All of them are `BOOLEAN NOT NULL DEFAULT true` in
+// the table (supabase/migrations/20260812000020_schema_reconciliation.sql and
+// 20260721000005_share_ack_org_ai_default.sql), so "no row" means "all on".
+//
+// weekly_digest and ai_access_default are the two most recently added columns
+// and were never added here, so readPrefs() returned `undefined` for them —
+// every read of prefs.weekly_digest / prefs.ai_access_default got undefined
+// instead of the true the DB would have supplied.
+const NOTIF_PREF_DEFAULTS = {
+  payment_failed:    true,
+  payment_receipt:   true,
+  plan_changed:      true,
+  account_locked:    true,
+  dossier_ready:     true,
+  weekly_digest:     true,   // Monday monitoring digest — netlify/functions/monitoring-digest.js
+  ai_access_default: true,   // org-level AI default for newly added candidates
+}
+
+// The subset the email toggles own. weekly_digest and ai_access_default have
+// their own controls (and their own single-column writes) further down, so a
+// toggle must not carry a possibly-stale copy of them back into the row.
 const NOTIF_KEYS = ['payment_failed', 'payment_receipt', 'plan_changed', 'account_locked', 'dossier_ready']
-const readPrefs = (row) => NOTIF_KEYS.reduce((acc, k) => ({ ...acc, [k]: row?.[k] ?? true }), {})
+
+const readPrefs = (row) => Object.keys(NOTIF_PREF_DEFAULTS).reduce(
+  (acc, k) => ({ ...acc, [k]: row?.[k] ?? NOTIF_PREF_DEFAULTS[k] }), {}
+)
+
+/** Narrow a full prefs object down to the columns the toggles are allowed to write. */
+const toggleWrite = (prefs) => NOTIF_KEYS.reduce((acc, k) => ({ ...acc, [k]: prefs[k] }), {})
 
 export default function Settings() {
   const { user, session, signOut, refreshSession, isDowngradeLocked, downgradedAt } = useAuth()
@@ -209,7 +237,9 @@ export default function Settings() {
         if (loaded.payment_failed === false || loaded.account_locked === false) {
           const repaired = { ...loaded, payment_failed: true, account_locked: true }
           setNotifPrefs(repaired)
-          writePrefRow(repaired).then(() => {}, () => {})
+          // Only the toggle columns — the digest and AI-default columns are
+          // owned by their own controls below and are not being repaired here.
+          writePrefRow(toggleWrite(repaired)).then(() => {}, () => {})
         } else {
           setNotifPrefs(loaded)
         }
@@ -239,7 +269,7 @@ export default function Settings() {
         const toWrite = notifPendingRef.current
         if (!toWrite || !user?.id) return
         try {
-          const { error } = await writePrefRow(toWrite)
+          const { error } = await writePrefRow(toggleWrite(toWrite))
           if (error) throw error
         } catch (e) {
           // Revert to last saved state on error — reload from the DB.

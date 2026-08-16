@@ -227,6 +227,20 @@ const VALID_BRACKETS  = Object.keys(BRACKET_CONFIG)
 const VALID_BILLING   = ['monthly', 'quarterly', 'semiannual', 'annual']
 
 // A la carte dossier credit packs (one-time purchase)
+//
+// WHERE THE PRICE IDs LIVE (audit note, no behaviour change):
+// The pack price IDs are the STRIPE_PRICE_CREDITS_* / STRIPE_PRICE_BULK_CREDITS_*
+// entries in STRIPE_PRICES_V2 / STRIPE_PRICES above — baked in rather than env
+// vars because ~100 of them will not fit under Lambda's 4KB env-var ceiling. A
+// same-named Netlify env var still overrides the baked-in value at runtime
+// (see the envKey lookup in the 'credits' / 'bulk_credits' branches below).
+//
+// Nothing in this repo can verify an ID against Stripe without a live key, so
+// the SKUs and AMOUNTS are what is asserted instead. The catalog's source of
+// truth is the CREDIT_PACKS / BULK_CREDIT_PACKS registry in stripe-setup.mjs
+// (which now also mints these prices), and tests/tier3b.test.mjs pins all three
+// copies together: tiers.js ↔ stripe-setup.mjs ↔ the two lists below. Adding a
+// pack means editing all three; the test fails until you do.
 const VALID_CREDIT_PACKS      = ['c1', 'c5', 'c10', 'c25']
 const VALID_BULK_CREDIT_PACKS = ['bulk25', 'bulk50', 'bulk100', 'bulk250']
 

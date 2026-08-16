@@ -24,43 +24,6 @@ export const supabase = createClient(
   }
 )
 
-// ── Office election history ────────────────────────────────────
-// Past contests + results for an office, matched on the free-text contest.office
-// field. Used by the Offices page "history" view to show previous office holders.
-export const getOfficeHistory = async (officeName) => {
-  if (!officeName) return { data: [], error: null }
-  // Contest names are free text ("Wisconsin Supreme Court") while office names are
-  // more specific ("Wisconsin Supreme Court Justice — Seat 1"). Strip descriptors,
-  // then progressively shorten the needle from the end until something matches.
-  const base = officeName
-    .replace(/\s*\(.*?\)\s*/g, ' ')     // "(Portage Co.)"
-    .split('—')[0]                       // "— Seat 1" / "— District 2"
-    .replace(/\s+/g, ' ')
-    .trim()
-  const words = base.split(' ')
-  const candidates = []
-  for (let n = words.length; n >= 2; n--) {
-    candidates.push(words.slice(0, n).join(' '))
-    if (candidates.length >= 4) break
-  }
-  const select = 'id, office, district, county, seats, election:elections(id, name, election_date, type), results:election_results(id, candidate_name, party, votes, vote_pct, winner, declared)'
-  for (const needle of candidates) {
-    const { data, error } = await supabase
-      .from('election_contests')
-      .select(select)
-      .ilike('office', `%${needle.slice(0, 60)}%`)
-      .limit(50)
-    if (error) return { data: [], error }
-    if (data?.length) {
-      const sorted = data.sort((a, b) =>
-        new Date(b.election?.election_date || 0) - new Date(a.election?.election_date || 0)
-      )
-      return { data: sorted, error: null }
-    }
-  }
-  return { data: [], error: null }
-}
-
 // ── Helper: get current user ID ────────────────────────────────
 // Used by create functions to stamp ownership.  Cached per call.
 async function currentUserId() {

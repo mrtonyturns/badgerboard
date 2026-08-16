@@ -41,6 +41,7 @@ import { getUserTier, hasFeature } from '../lib/tiers'
 import UpgradePrompt from '../components/UpgradePrompt'
 import { parseCsvRows } from '../lib/csv'
 import { buildProspectCsv, confidenceBand, csvFilename, factorSummary } from '../lib/prospectCsv'
+import { DB_PARTIES } from '../lib/party'
 import { T, cardStyle, Btn, Pill, Spinner, EmptyNote } from './profiler/shared.jsx'
 
 // Must match MAX_PROSPECTS_PER_RUN in enrich-prospects-background.js. The server
@@ -58,7 +59,12 @@ const POLL_MS            = 3000
 const MAX_WAIT_MS        = 12 * 60 * 1000
 const HEARTBEAT_STALE_MS = 3 * 60 * 1000
 
-const PARTY_OPTIONS  = ['Republican', 'Democrat', 'Independent', 'Nonpartisan', 'Libertarian', 'Green', 'Other']
+// The party filter offers what the DB can actually hold (lib/party.js
+// DB_PARTIES = the `candidates.party` CHECK). The hand-kept list this replaces
+// was two values short, so prospects saved as 'Constitution' or 'Working
+// Families' could never be filtered to. The "All parties" blank option is
+// rendered separately below, as before.
+const PARTY_OPTIONS  = DB_PARTIES
 const STATUS_OPTIONS = ['exploring', 'declared', 'primary_winner', 'general', 'elected']
 const LEVEL_OPTIONS  = [
   { v: '', l: 'All levels' }, { v: 'federal', l: 'Federal' }, { v: 'state', l: 'State' },

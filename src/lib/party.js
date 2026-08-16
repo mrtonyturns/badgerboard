@@ -57,6 +57,26 @@ export function normalizePartyForDb(raw) {
   return DB_PARTIES.find(p => partyGroup(p) === g) ?? null
 }
 
+/**
+ * Options for a dropdown that filters by party FAMILY rather than by the exact
+ * DB spelling — the voter-file filters, where the stored text is whatever the
+ * WisVote export said ('GOP', 'DEM', 'Dem.') and only partyGroup() is
+ * meaningful. Derived from DB_PARTIES so this list can never drift from the
+ * vocabulary again; the three names that share the 'O' family ('Constitution',
+ * 'Working Families', 'Other') collapse to a single "Other" entry, because a
+ * filter on group 'O' cannot tell them apart.
+ *
+ * @type {{value: string, label: string}[]}
+ */
+export const PARTY_FAMILY_OPTIONS = (() => {
+  const byGroup = new Map()
+  for (const name of DB_PARTIES) {
+    const g = partyGroup(name)
+    if (!byGroup.has(g)) byGroup.set(g, g === 'O' ? 'Other' : name)
+  }
+  return [...byGroup].map(([value, label]) => ({ value, label }))
+})()
+
 /** Single-letter abbreviation for chips ("R", "D", "I", …). */
 export const partyAbbrev = (p) => {
   const g = partyGroup(p)

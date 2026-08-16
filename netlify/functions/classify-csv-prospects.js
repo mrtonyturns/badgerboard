@@ -18,15 +18,15 @@ const MODEL             = 'claude-haiku-4-5-20251001'
 const { PLAN_CONFIG } = require('../../src/lib/tiers.js')
 const { logAiUsage } = require('./_ai-usage')
 const { enforceRateLimit } = require('./_rate-limit')
-const { ADMIN_EMAILS } = require('./_config')
+const { ADMIN_EMAILS, corsHeaders } = require('./_config')
 const PROSPECTING_PLANS = Object.keys(PLAN_CONFIG).filter(k => PLAN_CONFIG[k]?.features?.prospecting)
 
-const HEADERS = {
-  'Access-Control-Allow-Origin':  '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Content-Type': 'application/json',
-}
+// CORS is built PER REQUEST from the caller's Origin (same pattern as
+// support-chat.js). The module-level HEADERS constant this replaced sent
+// 'Access-Control-Allow-Origin: *' from an authenticated, Bearer-token,
+// AI-spending endpoint — telling every browser that any site may read the
+// classification results. _config.corsHeaders() echoes the origin only when it
+// is an allowed one and otherwise falls back to the production origin.
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 async function verifyUser(authHeader) {
@@ -79,7 +79,12 @@ function describeProspect(row) {
 }
 
 // ── Classify a batch of prospects via Haiku ───────────────────────────────────
-async function classifyBatch(prospects) {
+// `userId` is REQUIRED for spend attribution: one request fans out to up to 25
+// Haiku calls, and every one of them used to be logged with userId: null, so
+// the whole endpoint's cost landed in the unattributed bucket and no account
+// could be shown (or billed) for what it spent. The handler is authenticated —
+// pass user.id straight through.
+async function classifyBatch(prospects, userId) {
   const items = prospects.map((p, i) => {
     const { displayName, description } = describeProspect(p)
     return `[${i}] ${description}`
@@ -125,7 +130,7 @@ No markdown, no explanation outside the JSON array.`
   }
 
   const data = await res.json()
-  logAiUsage({ userId: null, endpoint: 'prospecting', provider: 'anthropic', model: MODEL, inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
+  logAiUsage({ userId: userId ?? null, endpoint: 'prospecting', provider: 'anthropic', model: MODEL, inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
   const raw  = data.content?.[0]?.text?.trim() || '[]'
 
   // Strip any accidental markdown fences
@@ -143,6 +148,7 @@ No markdown, no explanation outside the JSON array.`
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 exports.handler = async (event) => {
+  const HEADERS = corsHeaders(event.headers?.origin || event.headers?.Origin)
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: HEADERS, body: '' }
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, headers: HEADERS, body: JSON.stringify({ error: 'Method not allowed' }) }
@@ -197,7 +203,8 @@ exports.handler = async (event) => {
     const batchStart = i
 
     try {
-      const classifications = await classifyBatch(batch)
+      // user.id → logAiUsage, so this run's Haiku spend is attributed to the caller.
+      const classifications = await classifyBatch(batch, user.id)
 
       // Merge classifications back into original rows
       batch.forEach((prospect, j) => {

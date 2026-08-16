@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Building2, Search, Plus,
          MapPin, Briefcase, Scale, X, Users, ChevronRight } from 'lucide-react'
-import { getOffices, createOffice, getCandidates, getOfficeHistory } from '../lib/supabase'
+import { getOffices, createOffice, getCandidates } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { ADMIN_EMAILS } from '../lib/tiers'
 import LeafletMapView from '../components/LeafletMapView'
@@ -184,103 +184,6 @@ function matchOffices(district, allOffices) {
   return []
 }
 
-// ── Office history modal — past elections & previous office holders ──────────
-function OfficeHistoryModal({ office, onClose }) {
-  const [history, setHistory] = useState([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    let mounted = true
-    getOfficeHistory(office.name).then(({ data }) => {
-      if (mounted) { setHistory(data || []); setLoading(false) }
-    }).catch(() => { if (mounted) setLoading(false) })
-    return () => { mounted = false }
-  }, [office.name])
-
-  return (
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
-        <div className="p-6 border-b border-gray-100 flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900">{office.name}</h2>
-            <p className="text-sm text-gray-500 mt-1">
-              {office.current_officeholder
-                ? <>Current officeholder: <span className="font-semibold text-gray-900">{office.current_officeholder}</span></>
-                : 'No current officeholder on record'}
-            </p>
-          </div>
-          <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="p-6 overflow-y-auto flex-1">
-          {loading ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="w-8 h-8 border-4 border-brand-red border-t-transparent rounded-full animate-spin" />
-            </div>
-          ) : history.length === 0 ? (
-            <div className="text-center py-10">
-              <p className="text-gray-500 font-medium">No election records for this office yet</p>
-              <p className="text-gray-400 text-sm mt-1">
-                Past results appear here once elections for this office are recorded on the Elections page.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-5">
-              {history.map(contest => {
-                const winners = (contest.results || []).filter(r => r.winner && r.declared)
-                const others  = (contest.results || []).filter(r => !(r.winner && r.declared))
-                  .sort((a, b) => (b.votes || 0) - (a.votes || 0))
-                return (
-                  <div key={contest.id} className="rounded-xl border border-gray-200 overflow-hidden">
-                    <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-100 flex items-center justify-between gap-2 flex-wrap">
-                      <span className="text-sm font-semibold text-gray-900">{contest.election?.name || contest.office}</span>
-                      <span className="text-xs text-gray-400">
-                        {contest.election?.election_date
-                          ? new Date(contest.election.election_date + 'T12:00:00').toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' })
-                          : ''}
-                      </span>
-                    </div>
-                    <div className="divide-y divide-gray-50">
-                      {winners.map(r => (
-                        <div key={r.id} className="px-4 py-2.5 flex items-center justify-between gap-2 bg-green-50/50">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="text-xs font-bold text-green-700 bg-green-100 px-1.5 py-0.5 rounded flex-shrink-0">WON</span>
-                            <span className="text-sm font-semibold text-gray-900 truncate">{r.candidate_name}</span>
-                            {r.party && <span className="text-xs text-gray-400 flex-shrink-0">({r.party})</span>}
-                          </div>
-                          <span className="text-sm text-gray-600 flex-shrink-0">
-                            {(r.votes || 0).toLocaleString()} votes{r.vote_pct != null ? ` · ${Number(r.vote_pct).toFixed(1)}%` : ''}
-                          </span>
-                        </div>
-                      ))}
-                      {others.map(r => (
-                        <div key={r.id} className="px-4 py-2 flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="text-sm text-gray-600 truncate">{r.candidate_name}</span>
-                            {r.party && <span className="text-xs text-gray-400 flex-shrink-0">({r.party})</span>}
-                          </div>
-                          <span className="text-sm text-gray-400 flex-shrink-0">
-                            {(r.votes || 0).toLocaleString()} votes{r.vote_pct != null ? ` · ${Number(r.vote_pct).toFixed(1)}%` : ''}
-                          </span>
-                        </div>
-                      ))}
-                      {(contest.results || []).length === 0 && (
-                        <div className="px-4 py-3 text-sm text-gray-400">No results recorded for this contest</div>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ── District side panel ───────────────────────────────────────────────────────
 function DistrictPanel({ district, panelOffices, allCandidates, onClose, navigate }) {
   const theme = PANEL_HEADER_BG[district.layerKey] || PANEL_HEADER_BG.county
@@ -450,7 +353,6 @@ export default function Offices() {
   const [levelFilter, setLevelFilter] = useState('')
   const [typeFilter, setTypeFilter]   = useState('')
   const [showModal, setShowModal]     = useState(false)
-  const [historyOffice, setHistoryOffice] = useState(null)   // office row for history modal
   const [saving, setSaving]           = useState(false)
   const [saveError, setSaveError]     = useState(null)
   const [fetchError, setFetchError]   = useState(null)
@@ -699,11 +601,6 @@ export default function Offices() {
           onClose={() => setSelectedDistrict(null)}
           navigate={navigate}
         />
-      )}
-
-      {/* ── Office history modal ── */}
-      {historyOffice && (
-        <OfficeHistoryModal office={historyOffice} onClose={() => setHistoryOffice(null)} />
       )}
 
       {/* ── Add Office Modal ── */}

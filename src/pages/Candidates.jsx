@@ -430,7 +430,7 @@ export default function Candidates() {
         if (res.status === 401) {
           setAutofillNote('Your session expired. Sign in again to use AI autofill.')
         } else if (res.status === 403) {
-          setAutofillNote(json.error || 'AI autofill is available on the Campaign plan and above.')
+          setAutofillNote(json.error || 'AI autofill is available on the Active plan and above.')
         } else if (res.status === 429) {
           setAutofillNote(json.error || 'AI autofill rate limit reached — try again in a few minutes.')
         } else {

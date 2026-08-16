@@ -11,6 +11,7 @@
 
 import React from 'react'
 import { partyGroup } from '../../lib/party'
+import { plural } from '../../lib/text'
 
 export const T = {
   page:    '#FBFBFA',
@@ -184,8 +185,18 @@ const PARTY_TINT_BY_GROUP = {
 export const partyTint = (p) => PARTY_TINT[p] || PARTY_TINT_BY_GROUP[partyGroup(p)] || PARTY_TINT.Other
 
 // ── Stat strip ────────────────────────────────────────────────────────────────
+//
+// NOT the same widget as `StatStrip` in src/pages/dashboard/shared.jsx, despite
+// having shared a name until now. That one is a fixed N-across card that
+// collapses to a 2-up grid below 760px, with 18px/22px cells and a 26px numeral.
+// This one takes an explicit `cols` (the profiler headers are 3- and 4-up
+// regardless of width), a `style` override, a 14px radius and tighter 15px/20px
+// cells. Renamed rather than merged: consolidating them would change the pixels
+// on one page or the other. The same caveat applies to `StatCell` below, whose
+// props (`of`, `valueColor`, `bar`, `center`, `right`) are not the dashboard
+// cell's props (`chip`, `valueSize`, `truncate`).
 
-export function StatStrip({ children, cols, style }) {
+export function ProfilerStatStrip({ children, cols, style }) {
   const cells = React.Children.toArray(children)
   return (
     <div className="pf-strip" style={{
@@ -285,4 +296,6 @@ export function elapsedLabel(startedAt) {
   return `started ${min} minute${min === 1 ? '' : 's'} ago`
 }
 
-export const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || `${one}s`)}`
+// One copy, in lib/text.js. Re-exported so the profiler files can keep pulling
+// everything they need from ./shared.
+export { plural }

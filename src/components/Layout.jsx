@@ -41,10 +41,19 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.33.0'
+const APP_VERSION = 'v1.34.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.34.0',
+    date: 'August 16, 2026',
+    changes: [
+      'Signing in is sturdier: a slow connection no longer drops your session, and monitoring slot counts come straight from the database',
+      'Party pickers everywhere now offer the full list (including Working Families and Constitution), and the voter-list filter can reach every party',
+      'Under the hood: shared date/password/formatting helpers replace scattered copies, dead code removed, and stale copy corrected across the app',
+    ],
+  },
   {
     version: 'v1.33.0',
     date: 'August 16, 2026',

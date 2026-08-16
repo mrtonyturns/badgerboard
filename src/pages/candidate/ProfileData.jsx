@@ -8,10 +8,15 @@
 import React from 'react'
 import SearchableSelect from '../../components/SearchableSelect'
 import { candidateStatusLabel } from '../../lib/campaignEnums'
+import { DB_PARTIES } from '../../lib/party'
 import { hasFindings } from '../../lib/profileContent'
 import { T, Card, EmptyState, fmtDate } from './shared'
 
-export const PARTIES = ['Republican', 'Democrat', 'Independent', 'Libertarian', 'Green', 'Constitution', 'Nonpartisan', 'Other']
+// The party picker must offer exactly what `candidates.party` accepts — this
+// list was hand-maintained and had fallen a value behind (no 'Working
+// Families'), so the one party you could not pick here was one the DB allows.
+// DB_PARTIES is that CHECK constraint, in lib/party.js.
+export const PARTIES = DB_PARTIES
 export const STATUSES = ['exploring', 'declared', 'primary_winner', 'general', 'elected', 'lost', 'withdrawn']
 
 // Which section_timestamps key stamps which card. `contact` / `campaign` are
