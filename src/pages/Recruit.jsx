@@ -507,7 +507,12 @@ export default function Recruit() {
         )}
 
         {/* ── Step 4: confirm residents ──────────────────────────────────── */}
-        {districtValue && (
+        {/* typeMeta, not just districtValue: toggling the office type off clears
+            typeKey immediately, but the effect that clears districtValue runs
+            after the commit — so for one render districtValue is still set while
+            recruitOfficeType('') is undefined, and typeMeta.districtLabel below
+            throws. Both have to be present for this step to mean anything. */}
+        {districtValue && typeMeta && (
           <StepCard
             n={4}
             title="Confirmed residents"

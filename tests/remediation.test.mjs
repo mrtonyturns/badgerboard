@@ -1716,6 +1716,7 @@ console.log('Phases 2-3 — election-results-poller window decision')
   console.log('Party vocabulary — src/lib/party.js + netlify/functions/_party.js')
   const {
     partyGroup, isDem, isRep, partyAbbrev, partyColorHex, partyMapHex, partyBadgeClasses,
+    normalizePartyForDb, DB_PARTIES,
   } = await import('../src/lib/party.js')
   const cjs = require('../netlify/functions/_party.js')
 
@@ -1749,6 +1750,95 @@ console.log('Phases 2-3 — election-results-poller window decision')
       cjs.partyAbbrev(v) === partyAbbrev(v) &&
       cjs.partyColorHex(v) === partyColorHex(v) &&
       cjs.isDem(v) === isDem(v) && cjs.isRep(v) === isRep(v)))
+
+  // ── normalizePartyForDb — the one write-path normalizer ──
+  // candidates.party has a CHECK constraint. Three write paths (Candidates CSV
+  // import, AI Discover "add", bulk-profiler CSV) each fed it free text; two of
+  // them passed it through raw, so 'Democratic' or 'GOP' 400'd the insert and
+  // the row silently never became a candidate. All three call this now.
+  console.log('Party vocabulary — normalizePartyForDb (candidates.party CHECK)')
+
+  // campaignEnums.js re-exports this array as PARTIES (it can't be imported
+  // here: its own imports are extensionless and only Vite resolves those).
+  t('DB_PARTIES is exactly the candidates.party CHECK list',
+    DB_PARTIES.join('|') === 'Republican|Democrat|Independent|Libertarian|Green|Constitution|Working Families|Nonpartisan|Other')
+  t('every canonical value round-trips to itself',
+    DB_PARTIES.every(p => normalizePartyForDb(p) === p))
+  t('exact match is case- and whitespace-insensitive',
+    normalizePartyForDb('  democrat ') === 'Democrat' &&
+    normalizePartyForDb('REPUBLICAN') === 'Republican' &&
+    normalizePartyForDb('nonpartisan') === 'Nonpartisan')
+  t("the AD77 spelling lands on the canon: 'Democratic' → 'Democrat'",
+    normalizePartyForDb('Democratic') === 'Democrat' &&
+    normalizePartyForDb('Democratic Party') === 'Democrat')
+  t('every partyGroup family resolves to its canonical name',
+    ['d', 'dem', 'Democratic'].every(v => normalizePartyForDb(v) === 'Democrat') &&
+    ['r', 'gop', 'Republican Party'].every(v => normalizePartyForDb(v) === 'Republican') &&
+    ['i', 'ind', 'Independent-ish'].every(v => normalizePartyForDb(v) === 'Independent') &&
+    ['lib', 'Libertarian Party'].every(v => normalizePartyForDb(v) === 'Libertarian') &&
+    ['gre', 'Greens'].every(v => normalizePartyForDb(v) === 'Green') &&
+    ['n', 'non', 'Non-partisan'].every(v => normalizePartyForDb(v) === 'Nonpartisan'))
+  t("partyGroup has no single-letter rule for L or G, so a bare 'L'/'G' is unknown, not a guess",
+    partyGroup('L') === 'O' && partyGroup('G') === 'O' &&
+    normalizePartyForDb('L') === null && normalizePartyForDb('G') === null)
+  t('the common CSV/AI spellings normalize',
+    ['GOP', 'gop', 'Rep', 'REP', 'Republican Party'].every(v => normalizePartyForDb(v) === 'Republican') &&
+    ['DEM', 'dem', 'Dem.'].every(v => normalizePartyForDb(v) === 'Democrat') &&
+    normalizePartyForDb('independent') === 'Independent' &&
+    normalizePartyForDb('Libertarian Party') === 'Libertarian' &&
+    normalizePartyForDb('Green Party') === 'Green')
+  t("'Constitution' and 'Other' have no family but are valid — exact match keeps them",
+    partyGroup('Constitution') === 'O' && normalizePartyForDb('Constitution') === 'Constitution' &&
+    partyGroup('Other') === 'O' && normalizePartyForDb('Other') === 'Other')
+  t('blank, whitespace, null and undefined → null, never the empty string the CHECK rejects',
+    normalizePartyForDb('') === null && normalizePartyForDb('   ') === null &&
+    normalizePartyForDb(null) === null && normalizePartyForDb(undefined) === null)
+  t('unknown text → null rather than a 400 at insert time',
+    normalizePartyForDb('Pirate') === null && normalizePartyForDb('???') === null &&
+    normalizePartyForDb('Working Families') === 'Working Families')
+  t('the output is ALWAYS null or a value the CHECK constraint accepts',
+    [...VOCAB, 'Constitution', 'Other', 'Pirate', '   ', 'D', 'l', 'g', 'n', 42, {}]
+      .every(v => {
+        const out = normalizePartyForDb(v)
+        return out === null || DB_PARTIES.includes(out)
+      }))
+}
+
+// ── Plan-cap trigger errors → copy a human can act on ────────────────────────
+// The monitoring toggle on both Candidates.jsx and CandidateDetail.jsx used to
+// revert in silence when the `monitoring_cap` trigger fired — the switch just
+// snapped back with no explanation. A sniffer that stops matching the trigger's
+// sentence would restore exactly that, quietly, so it is pinned here.
+{
+  console.log('Plan-cap errors — src/lib/capErrors.js')
+  const {
+    scoutCapMessage, SCOUT_CAP_MESSAGE,
+    monitoringCapMessage, MONITORING_CAP_MESSAGE, monitoringToggleError,
+  } = await import('../src/lib/capErrors.js')
+
+  // Verbatim from migration 20260812000040_cap_trigger_fixes.sql.
+  const capErr1 = { message: 'Your plan includes 1 active monitoring slot. Turn monitoring off on another candidate or upgrade.' }
+  const capErr3 = { message: 'Your plan includes 3 active monitoring slots. Turn monitoring off on another candidate or upgrade.' }
+  const wrapped = { message: 'unexpected error', details: 'P0001: Your plan includes 1 active monitoring slot. Turn monitoring off on another candidate or upgrade.' }
+
+  t('the trigger sentence is lifted verbatim, singular and plural',
+    monitoringCapMessage(capErr1) === capErr1.message &&
+    monitoringCapMessage(capErr3) === capErr3.message)
+  t('a wrapped PostgREST error still matches (details/hint are searched too)',
+    monitoringCapMessage(wrapped) === capErr1.message)
+  t('an unrecognizable wrapping still yields the generic cap sentence, not null',
+    monitoringCapMessage({ message: 'active monitoring slot' }) === MONITORING_CAP_MESSAGE)
+  t('a different failure is NOT dressed up as a cap',
+    monitoringCapMessage({ message: 'network error' }) === null &&
+    monitoringCapMessage(null) === null)
+  t('monitoringToggleError always returns something to show',
+    monitoringToggleError(capErr1) === capErr1.message &&
+    monitoringToggleError({ message: 'permission denied for table candidates' }) === 'permission denied for table candidates' &&
+    typeof monitoringToggleError(null) === 'string' && monitoringToggleError(null).length > 0)
+  t('the scout sniffer survived the move out of Candidates.jsx',
+    scoutCapMessage({ message: 'Scout plans track up to 2 candidates. Upgrade to add more.' }) === SCOUT_CAP_MESSAGE &&
+    scoutCapMessage({ message: 'something else' }) === null &&
+    scoutCapMessage(null) === null)
 }
 
 // ── Certification watch — eligibility window + cited-verdict parsing ─────────

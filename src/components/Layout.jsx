@@ -41,10 +41,18 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.31.1'
+const APP_VERSION = 'v1.32.0'
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.32.0',
+    date: 'August 12, 2026',
+    changes: [
+      'Plan-limit fixes: beta and trial accounts are no longer wrongly capped, Active Monitoring appears on every plan that includes slots, and limit messages actually show instead of toggles silently snapping back',
+      'Every map layer shows its office markers again, voter-list exports include the whole list, and party spellings are normalized on every import path',
+    ],
+  },
   {
     version: 'v1.31.1',
     date: 'August 12, 2026',

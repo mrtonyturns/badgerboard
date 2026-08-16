@@ -18,11 +18,20 @@ const OFFICE_FIELDS = [
   'name', 'level', 'office_type',
   'district_number', 'district_name',
   'county', 'city',
-  'term_years', 'notes', 'current_officeholder',
+  'term_years', 'seats', 'notes', 'current_officeholder',
 ]
 
-const VALID_LEVELS = ['federal', 'state', 'county', 'municipal', 'school', 'judicial']
-const VALID_TYPES  = ['legislative', 'executive', 'judicial', 'administrative', 'law_enforcement', 'education']
+// These MUST match the offices table's CHECK constraints exactly. They did not:
+// the whitelist also accepted levels 'school' and 'judicial' and office_types
+// 'law_enforcement' and 'education', none of which the table allows. Any admin
+// who picked one got a raw Postgres constraint violation instead of this
+// function's own "Invalid level" sentence — a validator that validates against
+// the wrong list is worse than none, because it reads like the value is fine.
+// Verified against production: level IN (federal, state, county, municipal),
+// office_type IN (executive, legislative, judicial, administrative). The
+// Offices page's own LEVELS/TYPES dropdowns already offer exactly these.
+const VALID_LEVELS = ['federal', 'state', 'county', 'municipal']
+const VALID_TYPES  = ['executive', 'legislative', 'judicial', 'administrative']
 
 const isUuid = (v) => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)
 
@@ -48,6 +57,10 @@ function normalize(row) {
   if ('term_years' in out) {
     const t = parseInt(out.term_years, 10)
     out.term_years = Number.isFinite(t) ? t : null
+  }
+  if ('seats' in out) {
+    const s = parseInt(out.seats, 10)
+    out.seats = Number.isFinite(s) && s > 0 ? s : null
   }
   return out
 }

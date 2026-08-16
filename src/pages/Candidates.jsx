@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Users, Plus, Search, ExternalLink, Trash2, X, Phone, Mail, Globe, Telescope, Lock, Wand2, CheckCircle, AlertCircle, Map, LayoutList, Upload, Zap, FileText } from 'lucide-react'
 import { supabase, getCandidates, getOffices, getElections, createCandidate, deleteCandidate, updateCandidate } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
-import { getUserTier, getUserBracket, getBracketConfig, getUserPlanType, getActiveCandidateLimit, hasFeature, ADMIN_EMAILS, SCOUT_CANDIDATE_LIMIT, featureUnlockLabel } from '../lib/tiers'
+import { getUserTier, getUserPlanType, getMonitoringSlotMax, canMonitorCandidates, monitoringUnlockLabel, hasFeature, SCOUT_CANDIDATE_LIMIT, featureUnlockLabel } from '../lib/tiers'
 import { WebOnlyCta, NATIVE_PLAN_NOTE } from '../components/UpgradeCta'
 import LeafletMapView from '../components/LeafletMapView'
 import SearchableSelect from '../components/SearchableSelect'
@@ -11,7 +11,8 @@ import MapErrorBoundary from '../components/MapErrorBoundary'
 import LoadingBar from '../components/LoadingBar'
 import CityDemographicsPanel, { usePlaceLookup } from '../components/CityDemographicsPanel'
 import { placePath } from '../lib/placeDemographics'
-import { partyGroup, partyBadgeClasses } from '../lib/party'
+import { partyGroup, partyBadgeClasses, normalizePartyForDb } from '../lib/party'
+import { SCOUT_CAP_MESSAGE, scoutCapMessage, monitoringToggleError } from '../lib/capErrors'
 
 // ── Map view/selection persistence (sessionStorage) ───────────────────────────
 // Lets "Back" from a city-demographics page (or any navigation away and back)
@@ -56,21 +57,6 @@ import {
   CANDIDATE_STATUSES as STATUSES,
   candidateStatusLabel as statusLabel,
 } from '../lib/campaignEnums'
-
-// ─── Scout candidate cap — server error → friendly copy ──────────────────────
-// Migration 20260812000030 added the `scout_candidate_cap` BEFORE INSERT
-// trigger, which raises this exact sentence when a Scout account tries to
-// insert a third candidate. PostgREST hands it back as a 400 whose message is
-// the raw RAISE text (sometimes wrapped, sometimes with the "P0001" detail
-// attached), so we sniff for the stable prefix and print the clean sentence
-// instead of whatever shape the error arrived in.
-const SCOUT_CAP_MESSAGE = 'Scout plans track up to 2 candidates. Upgrade to add more.'
-
-function scoutCapMessage(error) {
-  if (!error) return null
-  const raw = [error.message, error.details, error.hint].filter(Boolean).join(' ')
-  return raw.includes('Scout plans track') ? SCOUT_CAP_MESSAGE : null
-}
 
 const WI_COUNTIES = [
   'Adams', 'Ashland', 'Barron', 'Bayfield', 'Brown', 'Buffalo', 'Burnett', 'Calumet', 'Chippewa', 'Clark',
@@ -506,7 +492,11 @@ export default function Candidates() {
     try {
       const { error } = await createCandidate({
         name: candidate.name,
-        party: candidate.party || null,
+        // The model returns whatever the sources said — 'Democratic', 'GOP',
+        // 'Rep.'. candidates.party has a CHECK constraint, so raw text 400s the
+        // insert and the Add button just flashes red. Same normalizer as the
+        // two CSV paths.
+        party: normalizePartyForDb(candidate.party),
         status: candidate.status || 'exploring',
         notes: notesToV2(candidate.notes, user?.email || 'You'),
       })
@@ -525,11 +515,18 @@ export default function Candidates() {
   }
 
   const [monitoringToggles, setMonitoringToggles] = useState({}) // candidateId → true while saving
+  const [monitorError, setMonitorError] = useState('')           // why the last toggle failed
 
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }))
   const userTier    = getUserTier(user)
   const canDiscover = hasFeature(userTier, 'discoverCandidates')
-  const canMonitor  = hasFeature(userTier, 'weeklyProfile')
+  // Active Monitoring is sold as SLOTS, so the gate is "does your plan include
+  // one" — not features.weeklyProfile, which is the separate weekly auto-refresh
+  // perk and is false on c_active and on every Action plan. Gating on it hid the
+  // switch from Active (1 slot) and from every bracket-priced Action plan, i.e.
+  // from everyone who had actually paid for monitoring. Same helper as maxSlots
+  // below, so the gate and the counter can't drift.
+  const canMonitor  = canMonitorCandidates(user)
   // CSV bulk import is sold from Monitor up (pricing page "CSV bulk import" row,
   // tiers.js features.csvImport) — enforce it here, the only place it ships.
   const canCsvImport = hasFeature(userTier, 'csvImport')
@@ -539,7 +536,7 @@ export default function Candidates() {
   // been a real plan name in this app.
   const discoverPlanName = featureUnlockLabel('discoverCandidates', getUserPlanType(user))
   const csvPlanName      = featureUnlockLabel('csvImport', getUserPlanType(user))
-  const monitorPlanNames = featureUnlockLabel('weeklyProfile')
+  const monitorPlanNames = monitoringUnlockLabel(getUserPlanType(user))
 
   // Scout plan cap (use totalCandidateCount — not the filtered view). The number
   // itself lives in lib/tiers.js so this page, PlanPane and the copy in both
@@ -551,17 +548,12 @@ export default function Candidates() {
   // security boundary. Closing it needs an RLS/trigger migration (out of scope).
   const atScoutCandidateLimit = userTier === 'scout' && totalCandidateCount >= SCOUT_CANDIDATE_LIMIT
 
-  // Active monitoring slot accounting
-  // Candidate Plan uses activeCandidateLimit from plan config; Action Plan uses bracket-based max.
+  // Active monitoring slot accounting — getMonitoringSlotMax() in lib/tiers.js
+  // is the one ladder (admin → Infinity, candidate → activeCandidateLimit,
+  // action → bracket max) shared with CandidateDetail, Settings, the dashboards
+  // and the canMonitor gate above.
   const userPlanType  = getUserPlanType(user)
-  const userBracket   = getUserBracket(user)
-  const bracketCfg    = getBracketConfig(userBracket)
-  const isAdmin       = user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase())
-  const maxSlots      = isAdmin
-    ? Infinity                            // admins have unlimited monitoring (matches profile-limit rule)
-    : userPlanType === 'candidate'
-      ? getActiveCandidateLimit(userTier) // scout/c_monitor → 0, c_active → 1, c_campaign → 3
-      : (bracketCfg?.max ?? Infinity)     // Action Plan: bracket-based
+  const maxSlots      = getMonitoringSlotMax(user)
   // Server count, not `candidates.filter(...)` — the rendered array is filtered
   // and paginated, so counting it would let filters manufacture free slots.
   // The slot counter in the header reads this same value.
@@ -575,6 +567,7 @@ export default function Candidates() {
     const isActive = candidate.section_timestamps?.monitoring === true
     if (!isActive && atLimit) return  // slot limit reached — block new activations
 
+    setMonitorError('')
     setMonitoringToggles(prev => ({ ...prev, [candidate.id]: true }))
 
     const newVal = !isActive
@@ -599,6 +592,12 @@ export default function Candidates() {
         c.id === candidate.id ? { ...c, section_timestamps: candidate.section_timestamps } : c
       ))
       setActiveMonitoringCount(prev => Math.max(0, prev + (newVal ? -1 : 1)))
+      // A switch that flips back with no explanation reads as a broken toggle.
+      // The `monitoring_cap` trigger is the usual cause (another tab filled the
+      // last slot after this page's count was read) and it writes its own
+      // sentence; anything else shows its real message.
+      setMonitorError(monitoringToggleError(error))
+      refreshActiveCount()
     } else if (updated) {
       // Reconcile with actual server response
       setCandidates(prev => prev.map(c =>
@@ -710,6 +709,21 @@ export default function Candidates() {
         </div>
       </div>
 
+      {/* ── Monitoring toggle failure ──────────────────────────────────── */}
+      {monitorError && (
+        <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-red-200 bg-red-50">
+          <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-red-700 flex-1">{monitorError}</p>
+          <button
+            onClick={() => setMonitorError('')}
+            className="text-red-400 hover:text-red-600 font-bold text-xs flex-shrink-0"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* ── Active Monitoring Slot Counter ─────────────────────────────── */}
       {canMonitor ? (
         <div className={`flex items-center gap-4 px-4 py-3 rounded-xl border ${
@@ -775,7 +789,7 @@ export default function Candidates() {
         <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-dashed border-gray-200 bg-gray-50">
           <Zap className="w-4 h-4 text-gray-300 flex-shrink-0" />
           <p className="text-xs text-gray-500 flex-1">
-            <span className="font-semibold text-gray-600">Active Monitoring</span> — automatically refresh profiles weekly and track slot usage. Available on the {monitorPlanNames} plans.
+            <span className="font-semibold text-gray-600">Active Monitoring</span> — track a candidate week to week and get a weekly digest of news, endorsements and controversy. Your plan includes no monitoring slots; they start on {monitorPlanNames}.
           </p>
           <WebOnlyCta
             native={<span className="text-xs text-gray-400 flex-shrink-0 max-w-[16rem]">{NATIVE_PLAN_NOTE}</span>}
@@ -1647,16 +1661,12 @@ export default function Candidates() {
                         const match = offices.find(o => o.name.toLowerCase().includes(oName) || oName.includes(o.name.toLowerCase()))
                         if (match) officeId = match.id
                       }
-                      const validParties = ['Republican','Democrat','Independent','Libertarian','Green','Constitution','Nonpartisan','Other']
                       const validStatuses = ['exploring','declared','primary_winner','general','elected','lost','withdrawn']
-                      // null, not '' — the party CHECK constraint rejects an empty string
-                      // Exact name first, then by party family so 'Democratic',
-                      // 'DEM' or 'GOP' in a CSV still land on a valid value.
-                      const rowParty = (row.party || '').trim()
-                      const rowGroup = partyGroup(rowParty)
-                      const party = validParties.find(p => p.toLowerCase() === rowParty.toLowerCase())
-                        || (rowGroup !== 'O' ? validParties.find(p => partyGroup(p) === rowGroup) : null)
-                        || null
+                      // null, not '' — the party CHECK constraint rejects an empty
+                      // string. normalizePartyForDb does exact-name-then-family
+                      // ('Democratic', 'DEM', 'GOP' → a valid value); it is the
+                      // same helper the bulk profiler CSV and Discover use.
+                      const party = normalizePartyForDb(row.party)
                       const status = validStatuses.find(s => s === (row.status||'').toLowerCase()) || 'exploring'
                       const { error } = await createCandidate({
                         name: row.name.trim(),

@@ -18,7 +18,7 @@ import {
 import { pointInGeometry } from '../../lib/geo'
 import {
   getUserPlan, getPlanConfig, getEffectiveProfileLimit,
-  getBankedProfileCredits, hasFeature,
+  getBankedProfileCredits, hasFeature, monitoringUnlockLabel,
 } from '../../lib/tiers'
 import { PHASE_MAP, MONITORING_SERIES } from '../../lib/campaignEnums'
 import {
@@ -623,9 +623,13 @@ export default function CandidateDashboard() {
                 title="Active Monitoring is off"
                 body={
                   slots.max === 0
-                    // activeCandidateLimit in lib/tiers.js: scout 0, c_monitor 0,
-                    // c_active 1 — monitoring unlocks at Active, not Campaign.
-                    ? 'Active Monitoring is available on Candidate Active. Weekly digests track news, endorsements, polling and controversy for the candidate you choose.'
+                    // slots.max is getMonitoringSlotMax() — activeCandidateLimit
+                    // on the Candidate ladder (scout 0, c_monitor 0, c_active 1,
+                    // c_campaign 3), the bracket max on Action. Zero means the
+                    // plan bought no slot, so this copy is the only place that
+                    // has to name where slots start. It is also the gate the
+                    // Candidates page uses; the two cannot disagree.
+                    ? `Active Monitoring is available on ${monitoringUnlockLabel('candidate')}. Weekly digests track news, endorsements, polling and controversy for the candidate you choose.`
                     : 'Turn on Active Monitoring for yourself or an opponent from the Candidates page to start receiving weekly digests.'
                 }
                 action={<CtaButton onClick={() => nav('/candidates')}>Choose a candidate</CtaButton>}

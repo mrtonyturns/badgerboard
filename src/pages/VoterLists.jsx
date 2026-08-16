@@ -66,7 +66,7 @@ function SimulatedDataBanner() {
 }
 import {
   getVoterLists, createVoterList, deleteVoterList,
-  getVoters, createVoters, deleteVotersByList, updateVoter,
+  getVoters, getAllVoters, createVoters, deleteVotersByList, updateVoter,
   getVoterSavedLists, createVoterSavedList, updateVoterSavedList, deleteVoterSavedList,
 } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
@@ -275,6 +275,7 @@ export default function VoterLists() {
   const [partyFilter, setPartyFilter]       = useState('')
   const [showSuppressed, setShowSuppressed] = useState(false)
   const [showVANExport, setShowVANExport]   = useState(false)
+  const [exportState, setExportState]       = useState(null) // { rows } while an export is being prepared
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [uploadName, setUploadName]       = useState('')
   const [csvFile, setCsvFile]             = useState(null)
@@ -316,7 +317,16 @@ export default function VoterLists() {
     }
   }
 
-  const VOTER_DISPLAY_LIMIT = 1000
+  // Two numbers, stated once, interpolated into every sentence that mentions
+  // them. The page used to have four hard-coded figures in the copy (1,000 /
+  // 1,000 / 500 / 500) describing two different limits, so the banners
+  // contradicted each other and the "export for the full list" advice was false
+  // — the export read the same capped array the table did.
+  //   LOAD  — rows pulled into the page for filtering, the map and the table
+  //   TABLE — rows the table actually renders out of those
+  // Exports ignore both: they re-query the list server-side, uncapped.
+  const VOTER_DISPLAY_LIMIT = 1000   // LOAD
+  const VOTER_TABLE_ROWS    = 500    // TABLE
   const fetchVoters = async (listId) => {
     setLoading(true)
     const { data } = await getVoters(listId, VOTER_DISPLAY_LIMIT + 1)
@@ -501,21 +511,64 @@ export default function VoterLists() {
     voters.map(v => v[districtFilter.type]).filter(Boolean)
   )].sort()
 
-  const filteredVoters = voters.filter(v => {
+  // The active filters as a predicate, so the table and the exports apply
+  // exactly the same rules — the exports run it over rows the page never
+  // loaded, and a second copy of this logic would silently diverge.
+  const voterMatchesFilters = (v) => {
     const matchSearch = !searchVoter || [v.full_name, v.address, v.city, v.party].some(
       f => f?.toLowerCase().includes(searchVoter.toLowerCase())
     )
     const matchDistrict = !districtFilter.value || v[districtFilter.type] === districtFilter.value
     const matchParty = !partyFilter || (v.party || '').toLowerCase().startsWith(partyFilter.toLowerCase())
     return matchSearch && matchDistrict && matchParty
-  })
+  }
+
+  const filteredVoters = voters.filter(voterMatchesFilters)
+
+  // ── Exports ────────────────────────────────────────────────────────────────
+  // Both exports used to serialize `filteredVoters`, which is the filtered view
+  // of the FIRST 1,000 rows the page loaded. On a 40k-row list that silently
+  // wrote a 1,000-row file while the UI said "export for the full list" — the
+  // worst kind of wrong, because the file looks complete. Each export now
+  // re-queries the whole list server-side and applies the same filters to it.
+  const downloadBlob = (text, mime, filename) => {
+    const blob = new Blob([text], { type: mime })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    // Revoking on the next tick keeps Safari from cancelling the download.
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+
+  /** The full list from the server, filtered exactly as the table is. */
+  const loadVotersForExport = async () => {
+    if (!selectedList) return null
+    setError(null)
+    setExportState({ rows: 0 })
+    const { data, error: err } = await getAllVoters(selectedList.id, (n) => setExportState({ rows: n }))
+    setExportState(null)
+    if (err) {
+      console.error('[VoterLists] export fetch failed:', err)
+      setError(err.message || 'The export could not read the full list. Please try again.')
+      return null
+    }
+    const rows = (data || []).filter(voterMatchesFilters)
+    if (rows.length === 0) {
+      setError('No voters match the current filters, so there was nothing to export.')
+      return null
+    }
+    return rows
+  }
 
   // VAN export format
-  const handleVANExport = () => {
-    if (filteredVoters.length === 0) return
+  const handleVANExport = async () => {
+    const exportVoters = await loadVotersForExport()
+    if (!exportVoters) return
     const cols = ['VANID','FirstName','LastName','PreferredPhone','Address','City','Zip','PrecinctName','PartyCode']
     const header = cols.join('\t')
-    const rows = filteredVoters.map((v, i) => [
+    const rows = exportVoters.map((v, i) => [
       `WI${String(v.id || i).padStart(8,'0')}`,
       v.first_name || '',
       v.last_name || v.full_name?.split(' ').slice(-1)[0] || '',
@@ -526,29 +579,28 @@ export default function VoterLists() {
       v.ward || v.county || '',
       (v.party || '').toUpperCase().charAt(0) || 'U',
     ].map(c => `"${String(c).replace(/"/g,'""')}"`).join('\t'))
-    const tsv = [header, ...rows].join('\n')
-    const blob = new Blob([tsv], { type: 'text/tab-separated-values' })
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = `VAN_export_${format(new Date(), 'yyyy-MM-dd')}.txt`
-    a.click()
+    downloadBlob(
+      [header, ...rows].join('\n'),
+      'text/tab-separated-values',
+      `VAN_export_${format(new Date(), 'yyyy-MM-dd')}.txt`,
+    )
   }
 
   // Export filtered voters as CSV
-  const handleExport = () => {
-    if (filteredVoters.length === 0) return
+  const handleExport = async () => {
+    const exportVoters = await loadVotersForExport()
+    if (!exportVoters) return
     const cols = ['full_name','address','city','zip','county','ward','state_assembly_district','state_senate_district','congressional_district','party']
     const header = cols.join(',')
-    const rows = filteredVoters.map(v =>
+    const rows = exportVoters.map(v =>
       cols.map(c => `"${String(v[c] ?? '').replace(/"/g, '""')}"`).join(',')
     )
-    const csv = [header, ...rows].join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
     const suffix = districtFilter.value ? `_${districtFilter.value.replace(/\s+/g,'_')}` : ''
-    a.download = `voters${suffix}_${format(new Date(), 'yyyy-MM-dd')}.csv`
-    a.click()
+    downloadBlob(
+      [header, ...rows].join('\n'),
+      'text/csv',
+      `voters${suffix}_${format(new Date(), 'yyyy-MM-dd')}.csv`,
+    )
   }
 
   return (
@@ -659,7 +711,10 @@ export default function VoterLists() {
                 <div>
                   <h2 className="text-lg font-bold text-gray-900">{selectedList.name}</h2>
                   <p className="text-sm text-gray-400 mt-0.5">
-                    {filteredVoters.length.toLocaleString()} of {voters.length.toLocaleString()} voters shown
+                    {filteredVoters.length.toLocaleString()} of {voters.length.toLocaleString()} loaded voters shown
+                    {votersTruncated && selectedList.total_count
+                      ? ` · ${selectedList.total_count.toLocaleString()} in the full list`
+                      : ''}
                     {districtFilter.value && ` · Filtered by ${districtFilter.value}`}
                   </p>
                 </div>
@@ -672,18 +727,27 @@ export default function VoterLists() {
                     {viewMode === 'map' ? 'Table View' : 'Map View'}
                   </button>
                   <div className="relative">
-                    <button onClick={() => setShowVANExport(v => !v)} className="btn-secondary text-xs flex items-center gap-1.5 py-1.5">
+                    <button
+                      onClick={() => setShowVANExport(v => !v)}
+                      disabled={!!exportState}
+                      className="btn-secondary text-xs flex items-center gap-1.5 py-1.5 disabled:opacity-60 disabled:cursor-wait"
+                    >
                       <Download className="w-3.5 h-3.5" />
-                      Export <ChevronRight className={`w-3 h-3 transition-transform ${showVANExport ? 'rotate-90' : ''}`}/>
+                      {exportState
+                        ? `Preparing export… ${exportState.rows.toLocaleString()} rows`
+                        : <>Export <ChevronRight className={`w-3 h-3 transition-transform ${showVANExport ? 'rotate-90' : ''}`}/></>}
                     </button>
-                    {showVANExport && (
-                      <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1 z-50">
-                        <button onClick={() => { handleExport(); setShowVANExport(false) }} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50">
+                    {showVANExport && !exportState && (
+                      <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-xl shadow-xl border border-gray-200 py-1 z-50">
+                        <button onClick={() => { setShowVANExport(false); handleExport() }} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50">
                           <FileText className="w-3.5 h-3.5 text-gray-400"/> Standard CSV
                         </button>
-                        <button onClick={() => { handleVANExport(); setShowVANExport(false) }} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50">
+                        <button onClick={() => { setShowVANExport(false); handleVANExport() }} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50">
                           <BarChart2 className="w-3.5 h-3.5 text-blue-500"/> VAN / VoteBuilder Format
                         </button>
+                        <p className="px-3 pt-1.5 pb-1 text-[10px] leading-snug text-gray-400 border-t border-gray-100 mt-1">
+                          Exports every matching voter in the list, not just the rows loaded here.
+                        </p>
                       </div>
                     )}
                   </div>
@@ -743,7 +807,9 @@ export default function VoterLists() {
                   >
                     Load Voters
                   </button>
-                  <p className="text-xs text-gray-400">First 1,000 rows shown</p>
+                  <p className="text-xs text-gray-400">
+                    The first {VOTER_DISPLAY_LIMIT.toLocaleString()} rows load into this page · exports cover the whole list
+                  </p>
                 </div>
               )}
 
@@ -782,7 +848,9 @@ export default function VoterLists() {
                     }}>
                       <AlertTriangle style={{ width: 16, height: 16 }} />
                       <span>
-                        Showing first 1,000 voters. This list has more records — use filters to narrow results or export for the full list.
+                        This list has more records than the page loads. Filtering, the map and the counts above
+                        cover the first {VOTER_DISPLAY_LIMIT.toLocaleString()} rows only — narrow the filters to
+                        work inside them, or export, which re-reads every matching voter in the list.
                       </span>
                     </div>
                   )}
@@ -796,7 +864,7 @@ export default function VoterLists() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
-                      {filteredVoters.slice(0, 500).map(v => (
+                      {filteredVoters.slice(0, VOTER_TABLE_ROWS).map(v => (
                         <tr key={v.id} className="hover:bg-gray-50 transition-colors">
                           <td className="py-2 pr-3 font-medium text-gray-900 whitespace-nowrap">{v.full_name || '—'}</td>
                           <td className="py-2 pr-3 text-gray-600 max-w-36 truncate">{v.address || '—'}</td>
@@ -825,9 +893,10 @@ export default function VoterLists() {
                       ))}
                     </tbody>
                   </table>
-                  {filteredVoters.length > 500 && (
+                  {filteredVoters.length > VOTER_TABLE_ROWS && (
                     <p className="text-xs text-gray-400 text-center py-3">
-                      Showing first 500 of {filteredVoters.length.toLocaleString()} voters. Export CSV for full list.
+                      The table renders {VOTER_TABLE_ROWS.toLocaleString()} of the {filteredVoters.length.toLocaleString()} matching
+                      voters loaded. Export to get every match in the list.
                     </p>
                   )}
                   {filteredVoters.length === 0 && (

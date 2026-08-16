@@ -392,6 +392,34 @@ export const deleteVoterList = async (id) => {
 export const getVoters = async (voterListId, limit = 1000) =>
   supabase.from('voters').select('*').eq('voter_list_id', voterListId).order('last_name').limit(limit)
 
+// EVERY voter in a list, paginating past PostgREST's 1000-row max_rows ceiling
+// the same way fetchOffices does. getVoters() above is the screen loader and is
+// deliberately capped; exports have to see the whole list, so they call this.
+// `id` is the tiebreaker on the sort — last_name alone is not unique, and a
+// non-total order makes .range() pages overlap and drop rows.
+// onProgress(rowsSoFar) drives the "Preparing export… N rows" state.
+export const getAllVoters = async (voterListId, onProgress) => {
+  const PAGE = 1000
+  let all = []
+  let offset = 0
+  while (true) {
+    const { data, error } = await supabase
+      .from('voters')
+      .select('*')
+      .eq('voter_list_id', voterListId)
+      .order('last_name')
+      .order('id')
+      .range(offset, offset + PAGE - 1)
+    if (error) return { data: all, error }
+    if (!data || data.length === 0) break
+    all = all.concat(data)
+    onProgress?.(all.length)
+    if (data.length < PAGE) break   // last page
+    offset += PAGE
+  }
+  return { data: all, error: null }
+}
+
 // No .select() — avoids returning the full inserted payload for large batches
 export const createVoters = async (rows) =>
   supabase.from('voters').insert(rows)

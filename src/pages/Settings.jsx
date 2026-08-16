@@ -18,10 +18,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase, logActivity } from '../lib/supabase'
-import {
-  getUserPlan, getUserPlanType, getUserBracket, getBracketConfig,
-  getEffectiveProfileLimit, getActiveCandidateLimit, ADMIN_EMAILS,
-} from '../lib/tiers'
+import { getEffectiveProfileLimit, getMonitoringSlotMax } from '../lib/tiers'
 import { SettingsShell, Btn, Pill, T } from './settings/shared'
 import AccountPane from './settings/AccountPane'
 import SecurityPane from './settings/SecurityPane'
@@ -93,17 +90,10 @@ export default function Settings() {
   }
 
   // ── Plan facts ──────────────────────────────────────────────────────────────
-  const plan         = getUserPlan(user)
-  const planType     = getUserPlanType(user)
-  const bracketCfg   = getBracketConfig(getUserBracket(user))
   const profileLimit = getEffectiveProfileLimit(user)
-  const isAdmin      = !!user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase())
-  // Monitoring slot accounting mirrors Candidates.jsx exactly.
-  const maxSlots = isAdmin
-    ? Infinity
-    : planType === 'candidate'
-      ? getActiveCandidateLimit(plan)
-      : (bracketCfg?.max ?? Infinity)
+  // Monitoring slot accounting — same helper Candidates.jsx, CandidateDetail.jsx
+  // and the dashboards use, so the number here is the number enforced there.
+  const maxSlots = getMonitoringSlotMax(user)
 
   // ── Real usage counts ───────────────────────────────────────────────────────
   const [usage, setUsage] = useState({ loading: true, profilesUsed: 0, monitored: 0, candidates: 0 })

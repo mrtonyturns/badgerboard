@@ -20,10 +20,7 @@ import {
   ELECTION_TYPE_LABELS, ELECTION_TYPE_SHORT, ELECTION_TYPE_HEX,
   CANDIDATE_STATUS_HEX, candidateStatusLabel,
 } from '../../lib/campaignEnums'
-import {
-  ADMIN_EMAILS, getActiveCandidateLimit, getBracketConfig,
-  getUserBracket, getUserPlan, getUserPlanType,
-} from '../../lib/tiers'
+import { getMonitoringSlotMax } from '../../lib/tiers'
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
@@ -160,14 +157,7 @@ export const autoStatus = (m) => {
 // Active-monitoring slot accounting — identical rule to Candidates.jsx so the
 // dashboard never disagrees with the page that sets the flag.
 export const monitoringSlots = (user, candidates = []) => {
-  const plan     = getUserPlan(user)
-  const planType = getUserPlanType(user)
-  const isAdmin  = !!(user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase()))
-  const max = isAdmin
-    ? Infinity
-    : planType === 'candidate'
-      ? getActiveCandidateLimit(plan)
-      : (getBracketConfig(getUserBracket(user))?.max ?? Infinity)
+  const max = getMonitoringSlotMax(user)
   const used = candidates.filter(c => c.section_timestamps?.monitoring === true).length
   return { used, max, left: max === Infinity ? Infinity : Math.max(0, max - used) }
 }

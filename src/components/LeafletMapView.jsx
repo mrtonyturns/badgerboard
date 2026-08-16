@@ -417,7 +417,19 @@ export default function LeafletMapView({
     // ── Office dots (level-colored, layer-filtered, count-badged) ─────────
     // Only render dots for the active layer — prevents rendering 2000+ at once.
     // When no layer is selected there's nothing to plot.
-    const levelMap = { federal: 'federal', state: 'state', county: 'county', municipal: 'municipal' }
+    // Layer key → offices.level. v1.19.1 split 'federal' into congress/ussenate
+    // and 'state' into senate/assembly (DISTRICT_LAYERS above), but this map
+    // kept the pre-split keys — so those four layers matched nothing and drew
+    // zero office dots while their boundaries rendered normally. offices.level
+    // only ever holds federal | state | county | municipal.
+    const levelMap = {
+      congress:  'federal',
+      ussenate:  'federal',
+      senate:    'state',
+      assembly:  'state',
+      county:    'county',
+      municipal: 'municipal',
+    }
     const targetLevel = levelMap[activeLayer] || null
     const activeDots = targetLevel
       ? (offices || []).filter(o => o.level === targetLevel)

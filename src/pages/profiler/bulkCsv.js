@@ -9,6 +9,7 @@
 // with no `name` column yields zero usable rows and MUST reach the red state.
 
 import { parseCsvRows } from '../../lib/csv'
+import { normalizePartyForDb } from '../../lib/party'
 
 export const BULK_COLUMNS = [
   { key: 'name',             req: 'Required',    reqColor: '#A51C24', note: 'Full name as it appears publicly' },
@@ -120,7 +121,12 @@ export function rowToCandidatePatch(row) {
   if (place)  ctxBits.push(`Based in ${place}, Wisconsin.`)
   const ctx = ctxBits.join(' ').trim()
   if (ctx) patch.research_context = ctx.slice(0, 1000)
-  const party = (row.party || '').trim()
+  // The party column is free text in a spreadsheet — 'Democratic', 'DEM',
+  // 'GOP', 'R'. candidates.party has a CHECK constraint, so anything that
+  // isn't one of its exact values (or a recognizable family) has to be dropped
+  // rather than passed through: an unrecognized string 400s the whole insert
+  // and the row never becomes a candidate at all.
+  const party = normalizePartyForDb(row.party)
   if (party) patch.party = party
   patch.status = normalizeStatus(row.status) || 'exploring'
   return patch

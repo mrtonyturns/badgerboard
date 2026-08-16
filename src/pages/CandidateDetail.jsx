@@ -25,9 +25,10 @@ import {
 import { useAuth } from '../contexts/AuthContext'
 import LoadingBar from '../components/LoadingBar'
 import {
-  getUserTier, hasFeature, getUserPlanType, getUserBracket,
-  getBracketConfig, getActiveCandidateLimit, ADMIN_EMAILS, featureUnlockLabel,
+  getUserTier, hasFeature, getUserPlanType,
+  getMonitoringSlotMax, canMonitorCandidates, monitoringUnlockLabel,
 } from '../lib/tiers'
+import { monitoringToggleError } from '../lib/capErrors'
 import { WebOnlyCta, NATIVE_PLAN_NOTE } from '../components/UpgradeCta'
 import { partyHex, candidateStatusLabel, CANDIDATE_STATUS_HEX } from '../lib/campaignEnums'
 import {
@@ -82,6 +83,7 @@ export default function CandidateDetail() {
   const [form, setForm]       = useState({})
   const [saving, setSaving]   = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [monitorError, setMonitorError] = useState('')   // why the last monitoring toggle failed
 
   const [monitorSaving, setMonitorSaving] = useState(false)
   const [lastViewed, setLastViewed] = useState(null)
@@ -231,7 +233,11 @@ export default function CandidateDetail() {
   // ── derived ─────────────────────────────────────────────────────────────────
   const userTier = getUserTier(user)
   const canIntel = hasFeature(userTier, 'campaignIntel')
-  const canMonitor = hasFeature(userTier, 'weeklyProfile')
+  // Gate on SLOTS, not features.weeklyProfile — see the note on
+  // getMonitoringSlotMax() in lib/tiers.js. weeklyProfile is the weekly
+  // auto-refresh perk and is false on c_active/a_monitor, both of which buy a
+  // monitoring slot; gating the switch on it locked out the paying plans.
+  const canMonitor = canMonitorCandidates(user)
   const monitored = candidate?.section_timestamps?.monitoring === true
   const timestamps = candidate?.section_timestamps || {}
   const weaknesses = candidate?.weaknesses || []
@@ -314,23 +320,21 @@ export default function CandidateDetail() {
   const handleMonitoringToggle = async () => {
     if (!canMonitor || !candidate) return
     setMonitorSaving(true)
+    setMonitorError('')
     const newVal = !monitored
     if (newVal) {
-      const isAdmin = user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase())
-      if (!isAdmin) {
-        const maxSlots = getUserPlanType(user) === 'candidate'
-          ? getActiveCandidateLimit(userTier)
-          : (getBracketConfig(getUserBracket(user))?.max ?? Infinity)
-        if (maxSlots !== Infinity) {
-          const { count, error: countErr } = await supabase
-            .from('candidates')
-            .select('id', { count: 'exact', head: true })
-            .contains('section_timestamps', { monitoring: true })
-          if (!countErr && count >= maxSlots) {
-            setMonitorSaving(false)
-            window.alert(`All ${maxSlots} active candidate slot${maxSlots === 1 ? '' : 's'} on your plan ${maxSlots === 1 ? 'is' : 'are'} in use. Upgrade your plan or bracket on the Plans page to monitor more candidates.`)
-            return
-          }
+      // getMonitoringSlotMax already returns Infinity for admins and for every
+      // bracket-priced Action plan, so this needs no second admin rule.
+      const maxSlots = getMonitoringSlotMax(user)
+      if (maxSlots !== Infinity) {
+        const { count, error: countErr } = await supabase
+          .from('candidates')
+          .select('id', { count: 'exact', head: true })
+          .contains('section_timestamps', { monitoring: true })
+        if (!countErr && count >= maxSlots) {
+          setMonitorSaving(false)
+          setMonitorError(`All ${maxSlots} active candidate slot${maxSlots === 1 ? '' : 's'} on your plan ${maxSlots === 1 ? 'is' : 'are'} in use. Turn monitoring off on another candidate, or upgrade your plan or bracket on the Plans page.`)
+          return
         }
       }
     }
@@ -345,6 +349,11 @@ export default function CandidateDetail() {
     const { error } = await updateCandidate(id, { section_timestamps: newTimestamps })
     if (error) {
       setCandidate(prev => prev ? { ...prev, section_timestamps: prevTimestamps } : prev)
+      // Never snap the switch back in silence: show the `monitoring_cap`
+      // trigger's own sentence when that is what fired, otherwise the real
+      // error. The pre-check above counts slots before the write, but another
+      // tab can take the last one in between.
+      setMonitorError(monitoringToggleError(error))
     } else {
       logActivity(newVal ? 'enable_monitoring' : 'disable_monitoring', 'candidate', id, {
         candidate_name: candidate.name,
@@ -436,8 +445,8 @@ export default function CandidateDetail() {
     </>
   ) : (
     <div style={{ fontSize: 11, color: T.muted, maxWidth: 260, lineHeight: 1.5 }}>
-      <span style={{ fontWeight: 600 }}>Active Monitoring</span> refreshes {candidate.name}&rsquo;s profile every
-      week, free of charge. Available on the {featureUnlockLabel('weeklyProfile')} plans.{' '}
+      <span style={{ fontWeight: 600 }}>Active Monitoring</span> tracks {candidate.name} week to week and writes a
+      weekly digest, free of charge. Your plan includes no monitoring slots; they start on {monitoringUnlockLabel(getUserPlanType(user))}.{' '}
       <WebOnlyCta native={NATIVE_PLAN_NOTE}>
         <TextLink onClick={() => nav('/plans')} style={{ color: T.red, fontWeight: 600 }}>Upgrade →</TextLink>
       </WebOnlyCta>
@@ -551,6 +560,15 @@ export default function CandidateDetail() {
             alignItems: 'flex-end', gap: 9,
           }}>
             {monitoringPill}
+            {monitorError && (
+              <div style={{
+                display: 'flex', alignItems: 'flex-start', gap: 7, maxWidth: 260,
+                fontSize: 11, lineHeight: 1.45, color: T.redHot,
+              }}>
+                <span style={{ flex: 1 }}>{monitorError}</span>
+                <TextLink onClick={() => setMonitorError('')} style={{ color: T.redHot, fontWeight: 700 }}>✕</TextLink>
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
               {editing ? (
                 <>

@@ -746,6 +746,44 @@ export function getActiveCandidateLimit(planKey) {
   return PLAN_CONFIG[planKey]?.activeCandidateLimit ?? 0
 }
 
+// ─── Active monitoring slots ─────────────────────────────────────────────────
+// How many candidates a user may have monitoring switched on for:
+//   admin        → Infinity (matches the profile-limit rule)
+//   candidate    → activeCandidateLimit (scout 0, c_monitor 0, c_active 1, c_campaign 3)
+//   action       → the bracket max (every bracket is ≥ 1)
+// This mirrors the `monitoring_cap` trigger in migration 20260812000040 —
+// the trigger is the boundary, this is the friendly half.
+//
+// Candidates.jsx, CandidateDetail.jsx, Settings.jsx and dashboard/shared.jsx
+// each wrote this ladder out longhand. It lives here now because the FEATURE
+// GATE has to agree with it: monitoring used to be gated on features.weeklyProfile,
+// which is false on c_active and on every Action plan — so a plan that pays for
+// a slot could not reach the switch that fills it. The gate is "do you have a
+// slot", i.e. canMonitorCandidates(), and it reads the same number the counter does.
+export function getMonitoringSlotMax(user) {
+  if (user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase())) return Infinity
+  if (getUserPlanType(user) === 'candidate') return getActiveCandidateLimit(getUserPlan(user))
+  return getBracketConfig(getUserBracket(user))?.max ?? Infinity
+}
+
+/** Does this user's plan include any active-monitoring slots at all? */
+export function canMonitorCandidates(user) {
+  return getMonitoringSlotMax(user) > 0
+}
+
+/** Lowest plan in each family that includes a monitoring slot, as UI copy. */
+export function monitoringUnlockLabel(planTypeHint) {
+  const nameOf = (k) => (k ? (PLAN_CONFIG[k]?.name ?? k) : null)
+  const candidate = CANDIDATE_PLAN_ORDER.find(k => getActiveCandidateLimit(k) > 0) ?? null
+  const action    = ACTION_PLAN_ORDER.find(k => getActiveCandidateLimit(k) > 0) ?? null
+  if (planTypeHint === 'candidate' && candidate) return nameOf(candidate)
+  if (planTypeHint === 'action'    && action)    return nameOf(action)
+  const parts = []
+  if (candidate) parts.push(`${nameOf(candidate)} (Candidate)`)
+  if (action)    parts.push(`${nameOf(action)} (Action)`)
+  return parts.length ? parts.join(' and ') : null
+}
+
 export function isLiteProfileOnly(planKey) {
   return PLAN_CONFIG[planKey]?.liteProfileOnly ?? false
 }

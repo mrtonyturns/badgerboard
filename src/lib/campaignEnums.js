@@ -12,7 +12,7 @@
 // ── Game plan phases ──────────────────────────────────────────────────────────
 // `icon` is attached in GamePlan.jsx (lucide components don't belong in a data
 // module). `hex` is the inline-style equivalent of `dot`.
-import { partyGroup, partyAbbrev } from './party'
+import { partyGroup, partyAbbrev, DB_PARTIES } from './party'
 
 export const PHASES = [
   { key: 'planning',     label: 'Planning',      hex: '#a855f7', dot: 'bg-purple-500',  text: 'text-purple-700',  headerBg: 'bg-purple-50',  borderL: 'border-l-purple-400',  progressBg: 'bg-purple-500'  },
@@ -80,10 +80,11 @@ export const ELECTION_TYPE_SHORT = {
 }
 
 // ── Candidates ────────────────────────────────────────────────────────────────
-export const PARTIES = [
-  'Republican', 'Democrat', 'Independent', 'Libertarian',
-  'Green', 'Constitution', 'Nonpartisan', 'Other',
-]
+// The candidates.party CHECK list. Defined in lib/party.js next to
+// normalizePartyForDb() so the dropdown and the write-path normalizer can
+// never list different values; re-exported here because every consumer of the
+// campaign vocabulary already imports from this module.
+export const PARTIES = DB_PARTIES
 
 // DB values are unchanged; `exploring` has always displayed as "Not Known".
 export const CANDIDATE_STATUSES = [

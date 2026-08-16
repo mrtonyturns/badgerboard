@@ -23,6 +23,40 @@ export function partyGroup(p) {
 export const isRep = (p) => partyGroup(p) === 'R'
 export const isDem = (p) => partyGroup(p) === 'D'
 
+/**
+ * The exact strings the `candidates.party` CHECK constraint accepts. Anything
+ * else — including '' — is rejected by the DB, so every write path has to land
+ * on one of these or on null. campaignEnums.PARTIES re-exports this list; it
+ * lives here so the normalizer below and the vocabulary share one array.
+ */
+export const DB_PARTIES = [
+  'Republican', 'Democrat', 'Independent', 'Libertarian',
+  'Green', 'Constitution', 'Working Families', 'Nonpartisan', 'Other',
+]
+
+/**
+ * Free text → a value `candidates.party` will accept, or null.
+ *
+ * Exact (case-insensitive) match first, so 'Constitution' and 'Other' — which
+ * have no party family — survive. Then the partyGroup() family, so 'Democratic',
+ * 'DEM', 'GOP', 'R' and friends land on the canonical spelling instead of a 400.
+ * Unknown text ('Pirate') and blanks return null rather than '' — the CHECK
+ * constraint rejects the empty string.
+ *
+ * Every write path that puts user-supplied party text into `candidates` uses
+ * this: the Candidates CSV import, the AI-discover "add" button, and the bulk
+ * profiler CSV. They each had their own idea of the rules before (or none).
+ */
+export function normalizePartyForDb(raw) {
+  const s = String(raw ?? '').trim()
+  if (!s) return null
+  const exact = DB_PARTIES.find(p => p.toLowerCase() === s.toLowerCase())
+  if (exact) return exact
+  const g = partyGroup(s)
+  if (g === 'O') return null
+  return DB_PARTIES.find(p => partyGroup(p) === g) ?? null
+}
+
 /** Single-letter abbreviation for chips ("R", "D", "I", …). */
 export const partyAbbrev = (p) => {
   const g = partyGroup(p)
