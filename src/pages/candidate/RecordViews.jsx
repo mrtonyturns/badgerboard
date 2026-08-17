@@ -60,6 +60,10 @@ export function ElectionResultsView({ candidate, nav }) {
   const [results, setResults] = useState([])
   const [loading, setLoading] = useState(true)
   const [isLive, setIsLive] = useState(false)
+  // A failed load used to be console.error only, so a broken query and a
+  // genuinely empty record both rendered "No election results on file".
+  const [loadError, setLoadError] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
   // Realtime needs to know which rows are on screen without re-subscribing
   // every time they change.
   const rowsRef = useRef([])
@@ -70,12 +74,14 @@ export function ElectionResultsView({ candidate, nav }) {
     let cancelled = false
     const load = async () => {
       setLoading(true)
+      setLoadError(false)
       try {
         const sel = '*, contest:election_contests(*, election:elections(id, name, election_date, type))'
-        const { data: rows } = await supabase
+        const { data: rows, error: qErr } = await supabase
           .from('election_results').select(sel)
           .eq('candidate_id', candidate.id)
           .order('updated_at', { ascending: false })
+        if (qErr) throw qErr
         let mapped = (rows || []).map(r => ({ result: r, contest: r.contest, election: r.contest?.election }))
         if (!mapped.length) {
           // Fallback: name match for results that were never linked by id.
@@ -85,11 +91,12 @@ export function ElectionResultsView({ candidate, nav }) {
           // candidate's last name.
           const lastName = lastNameOf(candidate.name)
           if (lastName.length > 2) {
-            const { data: nameRows } = await supabase
+            const { data: nameRows, error: nameErr } = await supabase
               .from('election_results').select(sel)
               .ilike('candidate_name', `%${lastName}%`)
               .order('updated_at', { ascending: false })
               .limit(50)
+            if (nameErr) throw nameErr
             mapped = (nameRows || [])
               .filter(r => lastNameOf(r.candidate_name) === lastName)
               .slice(0, 20)
@@ -99,12 +106,13 @@ export function ElectionResultsView({ candidate, nav }) {
         if (!cancelled) setResults(mapped)
       } catch (err) {
         console.error('[CandidateProfile] election results load error:', err)
+        if (!cancelled) { setResults([]); setLoadError(true) }
       }
       if (!cancelled) setLoading(false)
     }
     load()
     return () => { cancelled = true }
-  }, [candidate?.id, candidate?.name])
+  }, [candidate?.id, candidate?.name, reloadKey])
 
   // Realtime. The old subscription filtered on candidate_id — but the rows this
   // view shows are mostly matched by name and carry no candidate_id, so the
@@ -138,7 +146,13 @@ export function ElectionResultsView({ candidate, nav }) {
           <span style={{ fontSize: 10.5, fontWeight: 700, color: T.red }}>LIVE</span>
         ) : null}
       />
-      {!results.length ? (
+      {loadError ? (
+        <EmptyState
+          title="Couldn't load election results"
+          body="The results query failed — this is a connection problem, not an empty record. Try again in a moment."
+          action={<CtaButton onClick={() => setReloadKey(k => k + 1)}>Retry</CtaButton>}
+        />
+      ) : !results.length ? (
         <EmptyState
           title="No election results on file"
           body={`Results populate automatically from the WEC feed when ${candidate.name} appears in a Wisconsin election that BadgerBoard is tracking.`}

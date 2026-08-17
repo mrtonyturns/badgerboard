@@ -74,6 +74,37 @@ import SearchableSelect from '../components/SearchableSelect'
 import { parseCsvRows } from '../lib/csv'
 import { extractDistrictColumns, RECRUIT_VOTER_COLUMNS } from '../lib/recruit'
 import LoadingBar from '../components/LoadingBar'
+import { useDialog } from '../lib/useDialog'
+
+// ─── Dialog plumbing ──────────────────────────────────────────────────────────
+// useDialog() has to mount and unmount WITH the dialog (its effect runs once per
+// mount), and this page's modals are inline JSX — so the overlay is its own tiny
+// component. Every modal below renders one instead of a bare overlay div, which
+// buys Escape-to-close and body scroll-lock without moving the modals.
+function ModalOverlay({ onClose, className = 'bg-black/40' }) {
+  useDialog(onClose)
+  return <div className={`fixed inset-0 ${className}`} onClick={onClose} />
+}
+
+/** Escape-to-close for a non-blocking popover: no scroll lock, no overlay. */
+function DismissOnEscape({ onClose }) {
+  useDialog(onClose, { locked: false })
+  return null
+}
+
+// Saved-list swatches. The names exist so each swatch can carry an aria-label —
+// a bare coloured circle announced as "button" told a screen-reader user
+// nothing, and nothing said which one was selected (aria-pressed does now).
+// The hexes are unchanged; the Add-to-List modal uses the first five.
+const LIST_COLORS = [
+  { hex: '#3B82F6', name: 'Blue' },
+  { hex: '#DC2626', name: 'Red' },
+  { hex: '#16A34A', name: 'Green' },
+  { hex: '#D97706', name: 'Amber' },
+  { hex: '#7C3AED', name: 'Purple' },
+  { hex: '#EC4899', name: 'Pink' },
+  { hex: '#374151', name: 'Charcoal' },
+]
 
 // ─── CSV upload limits ────────────────────────────────────────────────────────
 // Hard row cap. A statewide WisVote extract is ~3.5M rows; the browser parses
@@ -286,8 +317,21 @@ export default function VoterLists() {
   const [addToExistingId, setAddToExistingId] = useState('')
   const [newListColor, setNewListColor]   = useState('#3B82F6')
   const fileInputRef = useRef(null)
+  const exportMenuRef = useRef(null)
 
   useEffect(() => { fetchAll() }, [])
+
+  // Close the export menu on an outside click (it used to stay open until you
+  // picked a format or re-clicked the trigger). Escape is handled by the
+  // <DismissOnEscape/> mounted inside the menu.
+  useEffect(() => {
+    if (!showVANExport) return
+    const onDown = (e) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) setShowVANExport(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [showVANExport])
 
   // Promise.allSettled, not Promise.all: the two queries are independent, and a
   // rejection in either one used to throw out of fetchAll — leaving BOTH panes
@@ -668,12 +712,15 @@ export default function VoterLists() {
           <div className="card">
             <h2 className="text-sm font-bold text-gray-900 mb-3">Uploaded Lists ({voterLists.length})</h2>
             {voterLists.length === 0 ? (
+              /* Two upload entry points, not three: the button in the page
+                 header and the one in the big empty state on the right. This
+                 card sat between both of them with a third copy of the same
+                 action, so it states the situation and leaves the action to
+                 them. */
               <div className="text-center py-6">
                 <Upload className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-                <p className="text-xs text-gray-400 mb-2">No voter lists yet</p>
-                <button onClick={() => setShowUploadModal(true)} className="text-xs text-brand-red font-medium hover:underline">
-                  Upload CSV →
-                </button>
+                <p className="text-xs text-gray-400">No voter lists yet</p>
+                <p className="text-xs text-gray-400 mt-1">Use Upload CSV above to add one.</p>
               </div>
             ) : (
               <div className="space-y-1">
@@ -709,7 +756,13 @@ export default function VoterLists() {
               >+ New</button>
             </div>
             {savedLists.length === 0 ? (
-              <p className="text-xs text-gray-400 text-center py-3">Click a voter on the map to save them to a list</p>
+              /* Was: "Click a voter on the map to save them to a list" — the map
+                 is one view of an already-uploaded list, not how saved lists get
+                 built, so on an empty page that sentence pointed at nothing. */
+              <p className="text-xs text-gray-400 text-center py-3 leading-relaxed">
+                No saved lists yet. Upload a voter CSV, then use <span className="font-semibold text-gray-500">+ List</span> on
+                any voter row to start one — or create an empty list with <span className="font-semibold text-gray-500">+ New</span> above.
+              </p>
             ) : (
               <div className="space-y-1">
                 {savedLists.map(sl => (
@@ -769,10 +822,15 @@ export default function VoterLists() {
                     {viewMode === 'map' ? <List className="w-3.5 h-3.5" /> : <MapIcon className="w-3.5 h-3.5" />}
                     {viewMode === 'map' ? 'Table View' : 'Map View'}
                   </button>
-                  <div className="relative">
+                  {/* The ref wraps the trigger AND the menu (NotificationCenter's
+                      pattern): if it covered the menu only, mousedown on the
+                      trigger would close the menu and the click would reopen it. */}
+                  <div className="relative" ref={exportMenuRef}>
                     <button
                       onClick={() => setShowVANExport(v => !v)}
                       disabled={!!exportState}
+                      aria-haspopup="menu"
+                      aria-expanded={showVANExport}
                       className="btn-secondary text-xs flex items-center gap-1.5 py-1.5 disabled:opacity-60 disabled:cursor-wait"
                     >
                       <Download className="w-3.5 h-3.5" />
@@ -781,7 +839,8 @@ export default function VoterLists() {
                         : <>Export <ChevronRight className={`w-3 h-3 transition-transform ${showVANExport ? 'rotate-90' : ''}`}/></>}
                     </button>
                     {showVANExport && !exportState && (
-                      <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-xl shadow-xl border border-gray-200 py-1 z-50">
+                      <div role="menu" className="absolute right-0 top-full mt-1 w-52 bg-white rounded-xl shadow-xl border border-gray-200 py-1 z-50">
+                        <DismissOnEscape onClose={() => setShowVANExport(false)} />
                         <button onClick={() => { setShowVANExport(false); handleExport() }} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50">
                           <FileText className="w-3.5 h-3.5 text-gray-400"/> Standard CSV
                         </button>
@@ -902,7 +961,10 @@ export default function VoterLists() {
                     </div>
                   )}
                   <SimulatedDataBanner />
-                  <table className="w-full text-xs">
+                  {/* min-w is what makes the overflow-x-auto wrapper above
+                      actually scroll: without it eight columns squash to
+                      unreadable slivers on a phone instead of panning. */}
+                  <table className="w-full min-w-[820px] text-xs">
                     <thead>
                       <tr className="border-b border-gray-100">
                         {['Name','Address','City','Party','Vote History','Propensity','Assembly Dist.','Action'].map(h => (
@@ -959,7 +1021,7 @@ export default function VoterLists() {
       {/* Upload CSV Modal */}
       {showUploadModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setShowUploadModal(false)} />
+          <ModalOverlay className="bg-black/50" onClose={() => setShowUploadModal(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg">
             <div className="flex items-center justify-between p-6 border-b border-gray-100">
               <div className="flex items-center gap-2">
@@ -976,9 +1038,18 @@ export default function VoterLists() {
 
               <div>
                 <label className="label text-xs">CSV File *</label>
+                {/* The file input is visually hidden, so this div IS the control:
+                    without role/tabIndex/keyboard it was unreachable and
+                    unannounced — a keyboard user could not choose a file at all. */}
                 <div
                   onClick={() => fileInputRef.current?.click()}
-                  className="border-2 border-dashed border-gray-200 rounded-xl p-6 text-center cursor-pointer hover:border-brand-red hover:bg-red-50/30 transition-colors"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={csvFile ? `CSV file selected: ${csvFile.name}. Choose a different file` : 'Choose a voter CSV file'}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInputRef.current?.click() }
+                  }}
+                  className="border-2 border-dashed border-gray-200 rounded-xl p-6 text-center cursor-pointer hover:border-brand-red hover:bg-red-50/30 focus:outline-none focus:border-brand-red focus:ring-2 focus:ring-brand-red/30 transition-colors"
                 >
                   {csvFile ? (
                     <div>
@@ -1055,7 +1126,7 @@ export default function VoterLists() {
       {/* New Saved List Modal */}
       {showNewListModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-black/40" onClick={() => setShowNewListModal(false)} />
+          <ModalOverlay onClose={() => setShowNewListModal(false)} />
           <div className="relative bg-white rounded-xl shadow-xl p-6 w-full max-w-sm">
             <h3 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
               <FolderPlus className="w-4 h-4 text-brand-red" /> New Saved List
@@ -1065,12 +1136,16 @@ export default function VoterLists() {
               <div>
                 <label className="label text-xs">Color</label>
                 <div className="flex gap-2 flex-wrap">
-                  {['#3B82F6','#DC2626','#16A34A','#D97706','#7C3AED','#EC4899','#374151'].map(col => (
+                  {LIST_COLORS.map(({ hex, name }) => (
                     <button
-                      key={col}
-                      onClick={() => setNewListColor(col)}
-                      className={`w-6 h-6 rounded-full border-2 transition-all ${newListColor === col ? 'border-gray-900 scale-110' : 'border-transparent'}`}
-                      style={{ backgroundColor: col }}
+                      key={hex}
+                      type="button"
+                      onClick={() => setNewListColor(hex)}
+                      aria-label={`${name} list colour`}
+                      aria-pressed={newListColor === hex}
+                      title={name}
+                      className={`w-6 h-6 rounded-full border-2 transition-all ${newListColor === hex ? 'border-gray-900 scale-110' : 'border-transparent'}`}
+                      style={{ backgroundColor: hex }}
                     />
                   ))}
                 </div>
@@ -1099,19 +1174,23 @@ export default function VoterLists() {
       {/* Add to List Modal */}
       {addToListModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-black/40" onClick={() => setAddToListModal(null)} />
+          <ModalOverlay onClose={() => setAddToListModal(null)} />
           <div className="relative bg-white rounded-xl shadow-xl p-6 w-full max-w-sm">
             <h3 className="font-bold text-gray-900 mb-1">Add to List</h3>
             <p className="text-sm text-gray-500 mb-4">{addToListModal.voter.full_name}</p>
 
-            <div className="grid grid-cols-2 gap-3 mb-4">
+            {/* Hard 2-col put two 3-unit-padded buttons side by side inside a
+                max-w-sm modal on a 320px phone; they stack now and widen at sm. */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
               <button
+                aria-pressed={addToListModal.mode === 'existing'}
                 onClick={() => setAddToListModal(p => ({ ...p, mode: 'existing' }))}
                 className={`p-3 rounded-lg border-2 text-sm font-medium transition-all ${addToListModal.mode === 'existing' ? 'border-brand-red bg-brand-red/5 text-brand-red' : 'border-gray-200 text-gray-600'}`}
               >
                 Existing List
               </button>
               <button
+                aria-pressed={addToListModal.mode === 'new'}
                 onClick={() => setAddToListModal(p => ({ ...p, mode: 'new' }))}
                 className={`p-3 rounded-lg border-2 text-sm font-medium transition-all ${addToListModal.mode === 'new' ? 'border-brand-navy bg-brand-navy/5 text-brand-navy' : 'border-gray-200 text-gray-600'}`}
               >
@@ -1141,10 +1220,13 @@ export default function VoterLists() {
               <div className="space-y-3 mb-4">
                 <input className="input" value={newListName} onChange={e => setNewListName(e.target.value)} placeholder="New list name..." autoFocus />
                 <div className="flex gap-2">
-                  {['#3B82F6','#DC2626','#16A34A','#D97706','#7C3AED'].map(col => (
-                    <button key={col} onClick={() => setNewListColor(col)}
-                      className={`w-5 h-5 rounded-full border-2 ${newListColor === col ? 'border-gray-900 scale-110' : 'border-transparent'}`}
-                      style={{ backgroundColor: col }} />
+                  {LIST_COLORS.slice(0, 5).map(({ hex, name }) => (
+                    <button key={hex} type="button" onClick={() => setNewListColor(hex)}
+                      aria-label={`${name} list colour`}
+                      aria-pressed={newListColor === hex}
+                      title={name}
+                      className={`w-5 h-5 rounded-full border-2 ${newListColor === hex ? 'border-gray-900 scale-110' : 'border-transparent'}`}
+                      style={{ backgroundColor: hex }} />
                   ))}
                 </div>
               </div>

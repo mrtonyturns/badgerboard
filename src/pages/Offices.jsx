@@ -12,6 +12,14 @@ import LoadingBar from '../components/LoadingBar'
 import CityDemographicsPanel, { usePlaceLookup } from '../components/CityDemographicsPanel'
 import { placePath } from '../lib/placeDemographics'
 import { partyGroup } from '../lib/party'
+import { useDialog } from '../lib/useDialog'
+
+// Escape + scroll-lock for the add-office dialog. Mounted only while the dialog
+// is open, so the hook's effect is scoped to its lifetime.
+function Dialog({ onClose, children }) {
+  useDialog(onClose)
+  return <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">{children}</div>
+}
 
 // ── Map view/selection persistence (sessionStorage) ───────────────────────────
 // Lets "Back" from a city-demographics page (or any navigation away and back)
@@ -684,7 +692,7 @@ export default function Offices() {
 
       {/* ── Add Office Modal ── */}
       {isAdmin && showModal && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
+        <Dialog onClose={() => setShowModal(false)}>
           <div className="fixed inset-0 bg-black/50" onClick={() => setShowModal(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b border-gray-100">
@@ -696,7 +704,7 @@ export default function Offices() {
                 <label className="label">Office Name *</label>
                 <input className="input" value={form.name} onChange={e => setForm({...form, name:e.target.value})} placeholder="e.g. State Assembly Representative" required />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="label">Level *</label>
                   <select className="input" value={form.level} onChange={e => setForm({...form, level:e.target.value})}>
@@ -710,7 +718,7 @@ export default function Offices() {
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="label">District Number</label>
                   <input className="input" value={form.district_number} onChange={e => setForm({...form, district_number:e.target.value})} placeholder="e.g. 42" />
@@ -724,7 +732,7 @@ export default function Offices() {
                 <label className="label">District Name</label>
                 <input className="input" value={form.district_name} onChange={e => setForm({...form, district_name:e.target.value})} placeholder="e.g. Madison (central)" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="label">County</label>
                   <input className="input" value={form.county} onChange={e => setForm({...form, county:e.target.value})} placeholder="e.g. Dane" />
@@ -749,7 +757,7 @@ export default function Offices() {
               </div>
             </form>
           </div>
-        </div>
+        </Dialog>
       )}
     </div>
   )

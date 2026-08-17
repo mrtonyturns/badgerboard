@@ -77,6 +77,7 @@ export default function SecurityPane({ user }) {
   const [confirmPw, setConfirmPw]     = useState('')
   const [showCurrent, setShowCurrent] = useState(false)
   const [showNew, setShowNew]         = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
   const [saving, setSaving]           = useState(false)
   const [msg, setMsg]                 = useState(null)
 
@@ -127,8 +128,13 @@ export default function SecurityPane({ user }) {
     setSaving(false)
   }
 
+  // All three password fields get the same control. `aria-label` flips with the
+  // state so a screen reader announces the action, not just "button"; the
+  // Confirm field was previously the only one without an eye at all.
   const eyeBtn = (shown, set) => (
-    <button type="button" onClick={() => set(v => !v)} aria-label={shown ? 'Hide password' : 'Show password'}
+    <button type="button" onClick={() => set(v => !v)}
+      aria-label={shown ? 'Hide password' : 'Show password'}
+      aria-pressed={shown}
       style={{
         // sits over the input, which is now the mockup's ~38px field (was 44)
         position: 'absolute', right: 6, top: 20, width: 38, height: 38,
@@ -174,14 +180,18 @@ export default function SecurityPane({ user }) {
             </div>
           </div>
           <div className="st-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
-            <Field
-              label="Confirm new password"
-              type="password"
-              value={confirmPw}
-              onChange={e => setConfirmPw(e.target.value)}
-              placeholder="Repeat the new password"
-              autoComplete="new-password"
-            />
+            <div style={{ position: 'relative' }}>
+              <Field
+                label="Confirm new password"
+                type={showConfirm ? 'text' : 'password'}
+                value={confirmPw}
+                onChange={e => setConfirmPw(e.target.value)}
+                placeholder="Repeat the new password"
+                autoComplete="new-password"
+                inputStyle={{ paddingRight: 46 }}
+              />
+              {eyeBtn(showConfirm, setShowConfirm)}
+            </div>
             <span />
           </div>
 

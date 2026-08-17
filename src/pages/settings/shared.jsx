@@ -99,6 +99,20 @@ export function SettingsStyles() {
       @media (max-width: 1080px) {
         .st-rail { width: 180px !important }
       }
+      /* Unsaved-changes bar vs. the support-chat bubble (Layout.jsx: fixed,
+         bottom 20 / right 20, 52px square, z-CHAT 30). Centred on a phone the
+         bar's right-most control — "Save changes" — sat straight under the FAB.
+         Below 720px the bar stops being centred and reserves 84px on the right
+         (52 FAB + 20 offset + 12 gap). The bar's own z-index (35, set inline in
+         Settings.jsx) keeps it above the chat and below the modal band. */
+      @media (max-width: 720px) {
+        .st-savebar {
+          left: 16px !important; right: 84px !important;
+          transform: none !important; max-width: none !important;
+          animation: stRiseFlat .22s ease !important;
+        }
+      }
+      @keyframes stRiseFlat { 0% { transform: translateY(14px); opacity: 0 } 100% { transform: translateY(0); opacity: 1 } }
       @media (max-width: 900px) {
         .st-rail  { display: none !important }
         .st-chips { display: flex !important }
@@ -258,33 +272,47 @@ export function StubPill() {
   return <Pill c={T.ink4} bg={T.chip}>NOT YET AVAILABLE</Pill>
 }
 
-export function Toggle({ on, onChange, disabled, label, title }) {
+/**
+ * `disabled` covers two different states and they must not look alike:
+ *   • locked ON  (payment_failed / account_locked) — a real, enforced setting
+ *   • `unavailable` — the feature does not exist yet. That one used to render
+ *     at 0.55 opacity, i.e. a live-looking switch for something nothing will
+ *     ever honour. It now sits at 0.4 behind a hollow, dashed track.
+ * Either way the button is `disabled` AND `aria-disabled`, so it is inert to
+ * pointer, keyboard and assistive tech alike.
+ */
+export function Toggle({ on, onChange, disabled, unavailable, label, title }) {
+  const off = !!(disabled || unavailable)
   return (
     <button
       type="button"
       role="switch"
       aria-checked={!!on}
       aria-label={label}
+      aria-disabled={off || undefined}
       title={title}
-      disabled={disabled}
-      onClick={onChange}
+      disabled={off}
+      onClick={off ? undefined : onChange}
       style={{
         // mockup: a 40×23 track, nothing around it. The old 44px minimum was
         // what made every toggle row taller than the mockup's.
         marginLeft: 'auto', flex: 'none', background: 'none', border: 0,
         padding: '0 0 0 10px', fontFamily: 'inherit',
         display: 'flex', alignItems: 'center',
-        cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.55 : 1,
+        cursor: off ? 'not-allowed' : 'pointer',
+        opacity: unavailable ? 0.4 : disabled ? 0.55 : 1,
       }}
     >
       <span style={{
-        display: 'block', width: 40, height: 23, borderRadius: 99,
-        background: on ? T.green : T.off, position: 'relative',
-        transition: 'background .2s ease',
+        display: 'block', width: 40, height: 23, borderRadius: 99, boxSizing: 'border-box',
+        background: unavailable ? 'transparent' : (on ? T.green : T.off),
+        border: unavailable ? `1.5px dashed ${T.off}` : '1.5px solid transparent',
+        position: 'relative', transition: 'background .2s ease',
       }}>
         <span style={{
-          position: 'absolute', top: 3, left: on ? 20 : 3, width: 17, height: 17,
-          borderRadius: '50%', background: '#fff', transition: 'left .2s ease',
+          position: 'absolute', top: 1.5, left: on ? 18.5 : 1.5, width: 17, height: 17,
+          borderRadius: '50%', transition: 'left .2s ease',
+          background: unavailable ? T.off : '#fff',
         }} />
       </span>
     </button>

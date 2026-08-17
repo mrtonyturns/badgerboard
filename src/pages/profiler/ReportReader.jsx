@@ -26,6 +26,7 @@ import {
   GROUP_ORDER, SEV_COLOR,
 } from './reportModel'
 import { officeLine } from '../../lib/office'
+import { useDialog } from '../../lib/useDialog'
 import { T, cardStyle, Rich, ProfilerStatStrip, StatCell, RatioBar, plural } from './shared'
 
 // ─── Model hook ──────────────────────────────────────────────────────────────
@@ -474,11 +475,9 @@ const VERDICT_BUTTONS = [
 ]
 
 function VerdictLightbox({ claim, current, onPick, onClose }) {
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Same close path as before (Escape records nothing), now with the shared
+  // body scroll-lock — the document behind used to scroll under the lightbox.
+  useDialog(onClose)
 
   const full = plainText(claim || '')
   const quote = full.length > 200

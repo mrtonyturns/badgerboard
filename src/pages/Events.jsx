@@ -11,6 +11,7 @@ import {
 import { supabase } from '../lib/supabase'
 import { getUserPlanType } from '../lib/tiers'
 import { eventImage } from '../lib/imageProxy'
+import { useDialog } from '../lib/useDialog'
 
 let _placesCache = null
 async function loadPlaces() {
@@ -103,7 +104,7 @@ const CAL_META = {
 const PHASE_LABELS = [
   'Searching public calendars and community sources…',
   'Checking local news coverage…',
-  'Organising events and reading each crowd…',
+  'Organizing events and reading each crowd…',
   'Adding venues, addresses and photos…',
 ]
 const POLL_MS            = 3000
@@ -113,6 +114,46 @@ const phaseLabel = (stage) => PHASE_LABELS[Math.min(Math.max(Number(stage) || 1,
 const freshMs = (iso) => {
   const t = Date.parse(iso || '')
   return Number.isFinite(t) ? Date.now() - t : Infinity
+}
+
+// ── lean.basis → a neutral, human badge ──────────────────────────────────────
+// `lean.basis` is the classifier's own audit trail ("T3: chamber of commerce
+// host, unknown area lean", "Registry check: no partisan signal found"). It was
+// printed raw on the card face and truncated mid-word. The tier codes come from
+// the SIGNAL HIERARCHY in research-district-events-background.js:
+//   T1 = registered partisan entity (party/candidate committee)
+//   T2 = organisation with documented alignment (unions, advocacy orgs)
+//   T3 = no org-level signal — the score is the area's crowd lean, not the event
+//   "Registry check: …" = the second-pass verification against public registries
+// Returns null when nothing useful can be said, so the badge simply isn't shown.
+// ─── R2C PURE HELPERS BEGIN ───
+export function leanBadge(basis) {
+  const s = String(basis || '').trim()
+  if (!s) return null
+  if (/^t1\b/i.test(s))            return { text: 'Registered host',      title: s }
+  if (/^t2\b/i.test(s))            return { text: 'Documented alignment', title: s }
+  if (/^t3\b/i.test(s))            return { text: 'Area lean only',       title: s }
+  if (/^registry check\b/i.test(s)) return { text: 'Registry checked',    title: s }
+  return null
+}
+
+/** Month-over-day date badge, matching the rest of the app ("AUG" over "19"). */
+export function dateBadgeParts(dateStr) {
+  const d = new Date(`${dateStr}T12:00:00`)
+  if (Number.isNaN(d.getTime())) return null
+  return { month: d.toLocaleDateString('en-US', { month: 'short' }), day: String(d.getDate()) }
+}
+// ─── R2C PURE HELPERS END ───
+
+// Escape + scroll-lock for this page's dialogs. Mounted only while the dialog
+// is open, so the hook's effect is scoped to the dialog's lifetime.
+function Dialog({ onClose, className = '', onClick, children }) {
+  useDialog(onClose)
+  return (
+    <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 ${className}`} onClick={onClick}>
+      {children}
+    </div>
+  )
 }
 
 function fmtDate(e) {
@@ -138,6 +179,7 @@ export default function Events() {
   const [sel, setSel]                 = useState('')
   const [events, setEvents]           = useState(null)
   const [fetchedAt, setFetchedAt]     = useState(null)
+  const [cacheChecked, setCacheChecked] = useState(false)  // stored events looked up for this area
   const [loading, setLoading]         = useState(false)
   const [phase, setPhase]             = useState('')
   const [error, setError]             = useState(null)
@@ -302,8 +344,40 @@ export default function Events() {
     if (alive()) setLoading(false)
   }, [target?.key, readCache, readProgress, watchRun]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // auto-load when office changes (cache-first — cheap)
-  useEffect(() => { if (target?.key) { setEvents(null); loadEvents(false) } }, [target?.key]) // eslint-disable-line
+  // Area change → show what is already stored, and nothing else.
+  //
+  // This used to call loadEvents(false), which on a cache miss kicked off the
+  // ~2-minute server research job on page LOAD, with no user action. The search
+  // now only ever starts from the explicit "Search for new events" button
+  // below; mounting is a single cheap SELECT against the shared cache.
+  useEffect(() => {
+    if (!target?.key) return
+    const key = target.key
+    // Same generation guard loadEvents uses: bumping it cancels the previous
+    // area's watch loop, and makes this one cancellable in turn.
+    const gen = ++pollGenRef.current
+    const alive = () => pollGenRef.current === gen
+    setEvents(null); setFetchedAt(null); setError(null); setPhase(''); setLoading(false); setCacheChecked(false)
+    ;(async () => {
+      const [row, prog] = await Promise.all([readCache(key), readProgress(key)])
+      if (!alive()) return
+      if (row?.events?.length) { setEvents(row.events); setFetchedAt(row.fetched_at) }
+      setCacheChecked(true)
+      // Attaching to a run that is ALREADY in flight (this user's, from before
+      // they navigated away, or another user's) starts nothing — it only
+      // watches — so it keeps the documented "leave the page and come back"
+      // behavior without reintroducing the auto-start.
+      if (prog?.status === 'running' && freshMs(prog.updated_at) < HEARTBEAT_STALE_MS) {
+        setLoading(true); setPhase(phaseLabel(prog.stage))
+        try {
+          await watchRun(key, Date.parse(prog.started_at || prog.updated_at) || Date.now(), alive)
+        } catch (e) {
+          if (alive()) { setError(e.message); setPhase('') }
+        }
+        if (alive()) setLoading(false)
+      }
+    })()
+  }, [target?.key, readCache, readProgress, watchRun])
 
   const filtered = useMemo(() => {
     if (!events) return []
@@ -471,12 +545,16 @@ export default function Events() {
             {target && (
               <span className="text-xs font-bold bg-red-50 text-brand-red px-2.5 py-1 rounded-full whitespace-nowrap">{target.name}</span>
             )}
-            <button onClick={() => loadEvents(true)} disabled={loading || !target} className="flex items-center gap-1.5 text-sm font-bold text-brand-red hover:underline disabled:opacity-50 whitespace-nowrap">
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh events
+            {/* The only thing that starts the AI search — never a page load. */}
+            <button onClick={() => loadEvents(true)} disabled={loading || !target}
+              className="flex items-center gap-1.5 bg-brand-red text-white text-sm font-extrabold px-4 py-2 rounded-xl hover:bg-red-800 disabled:opacity-50 whitespace-nowrap transition-colors">
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              {loading ? 'Searching…' : events ? 'Search for new events' : 'Search for events'}
             </button>
           </div>
           <p className="text-xs text-gray-400 font-semibold">
             Browse upcoming public events by legislative district, county, or city — pick any area in Wisconsin.
+            {fetchedAt ? ` Last searched ${new Date(fetchedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.` : ''}
           </p>
         </div>
       </div>
@@ -559,6 +637,24 @@ export default function Events() {
         </div>
       )}
 
+      {/* Start state — nothing stored for this area yet, and nothing is running.
+          The search is a couple of minutes of server work, so it waits for a click. */}
+      {cacheChecked && !events && !loading && !error && (
+        <div className="card py-14 text-center">
+          <Sparkles className="w-8 h-8 text-brand-red mx-auto mb-3" />
+          <p className="text-base font-extrabold text-gray-900">Find conservative events in your districts</p>
+          <p className="text-sm text-gray-500 font-medium mt-1.5 max-w-md mx-auto leading-relaxed">
+            Nothing has been searched for {target?.name || 'this area'} yet. Badger Board will research public
+            calendars, local news and community sources, then read each crowd&rsquo;s lean.
+          </p>
+          <button onClick={() => loadEvents(true)} disabled={!target}
+            className="mt-5 inline-flex items-center gap-2 bg-brand-red text-white text-sm font-extrabold px-5 py-3 rounded-xl hover:bg-red-800 disabled:opacity-50 transition-colors">
+            <Sparkles className="w-4 h-4" /> Search for new events
+          </button>
+          <p className="text-xs text-gray-400 font-semibold mt-3">Takes a couple of minutes — it runs on the server, so you can leave this page.</p>
+        </div>
+      )}
+
       {/* event grid */}
       {filtered.length > 0 && (
         <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(310px, 1fr))' }}>
@@ -566,18 +662,26 @@ export default function Events() {
             const cat = CATEGORY_META[ev.category] || CATEGORY_META.other
             const lean = ev.lean || { label: 'nonpartisan', certainty: 0, score: 0 }
             const pill = LEAN_PILL[lean.label] || LEAN_PILL.nonpartisan
-            const day = new Date(ev.date_start + 'T12:00:00')
+            const dayBadge = dateBadgeParts(ev.date_start)
             const isAdded = added[ev.name]
             const isSelected = Boolean(selectedEvents[ev.name])
             return (
               <div key={`${ev.name}-${i}`}
                 onClick={selectMode ? () => toggleSelectEvent(ev) : undefined}
-                className={`bg-white rounded-2xl overflow-hidden border-2 transition-all shadow-sm hover:shadow-lg hover:-translate-y-0.5 ${
+                {...(selectMode ? {
+                  role: 'button',
+                  tabIndex: 0,
+                  'aria-pressed': isSelected,
+                  onKeyDown: (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSelectEvent(ev) }
+                  },
+                } : {})}
+                className={`bg-white rounded-2xl overflow-hidden border-2 transition-all shadow-sm hover:shadow-lg hover:-translate-y-0.5 flex flex-col ${
                   selectMode
-                    ? `cursor-pointer ${isSelected ? 'border-brand-red ring-2 ring-brand-red/30' : 'border-gray-200 hover:border-brand-red/50'}`
+                    ? `cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-red ${isSelected ? 'border-brand-red ring-2 ring-brand-red/30' : 'border-gray-200 hover:border-brand-red/50'}`
                     : 'border-transparent hover:border-brand-red'
                 }`}>
-                <div className="h-28 relative flex items-center justify-center" style={ev.image
+                <div className="h-28 flex-shrink-0 relative flex items-center justify-center" style={ev.image
                   ? { backgroundImage: `linear-gradient(rgba(10,22,40,0.08), rgba(10,22,40,0.35)), url(${eventImage(ev.image)})`, backgroundSize: 'cover', backgroundPosition: 'center' }
                   : { backgroundImage: `${PATTERN}, ${cat.art}` }}>
                   {!ev.image && <span style={{ fontSize: 38, filter: 'drop-shadow(0 3px 6px rgba(0,0,0,0.35))' }}>{cat.emoji}</span>}
@@ -590,12 +694,16 @@ export default function Events() {
                     </span>
                   )}
                   <span className={`absolute top-2.5 text-[10px] font-extrabold uppercase tracking-wide text-white px-2.5 py-1 rounded-full ${selectMode ? 'left-10' : 'left-2.5'}`} style={{ background: cat.color }}>{cat.label}</span>
-                  <div className="absolute top-2.5 right-2.5 bg-white rounded-lg px-2.5 py-1.5 text-center shadow-lg">
-                    <div className="text-base font-black text-brand-red leading-none">{day.getDate()}</div>
-                    <div className="text-[9px] font-extrabold text-gray-400 uppercase tracking-wide">{day.toLocaleDateString('en-US', { month: 'short' })}</div>
-                  </div>
+                  {/* Month over day — the rest of the app reads month-first
+                      ("Aug 19"); this badge used to read "19 / AUG". */}
+                  {dayBadge && (
+                    <div className="absolute top-2.5 right-2.5 bg-white rounded-lg px-2.5 py-1.5 text-center shadow-lg">
+                      <div className="text-[9px] font-extrabold text-gray-400 uppercase tracking-wide">{dayBadge.month}</div>
+                      <div className="text-base font-black text-brand-red leading-none">{dayBadge.day}</div>
+                    </div>
+                  )}
                 </div>
-                <div className="p-4">
+                <div className="p-4 flex flex-col flex-1">
                   <h3 className="text-[15px] font-extrabold text-gray-900 leading-snug">{ev.name}</h3>
                   <p className="text-xs text-gray-400 font-bold mt-1">
                     {fmtDate(ev)}{ev.time ? ` · ${ev.time}` : ''} · {[ev.venue, ev.address, ev.city].filter(Boolean).join(', ')}
@@ -616,11 +724,24 @@ export default function Events() {
                       <span className="text-[10px] font-black uppercase tracking-wide px-2 py-0.5 rounded-full whitespace-nowrap" style={{ background: pill.bg, color: pill.fg }}>
                         {pill.text}{lean.label.startsWith('likely') && lean.certainty ? ` · ${lean.certainty}%` : ''}
                       </span>
-                      <span className="text-[10px] font-bold text-gray-400 truncate">{lean.basis || ''}</span>
+                      {/* The raw classifier string (tier codes, registry notes)
+                          is internal — show the evidence class, keep the full
+                          string on hover for anyone who needs it. */}
+                      {(() => {
+                        const badge = leanBadge(lean.basis)
+                        return badge ? (
+                          <span title={badge.title}
+                            className="text-[10px] font-bold text-gray-400 bg-gray-100 rounded-full px-2 py-0.5 whitespace-nowrap">
+                            {badge.text}
+                          </span>
+                        ) : null
+                      })()}
                     </div>
                   </div>
 
-                  <div className="mt-3 flex gap-2" onClick={e => selectMode && e.stopPropagation()}>
+                  {/* mt-auto: the CTA sits on the card's bottom edge whatever the
+                      description length, so the row of buttons lines up. */}
+                  <div className="mt-auto pt-3 flex gap-2" onClick={e => selectMode && e.stopPropagation()}>
                     <button onClick={() => handleAdd(ev)} disabled={isAdded || selectMode}
                       className={`flex-1 text-[13px] font-extrabold py-2.5 rounded-xl transition-colors ${isAdded ? 'bg-green-100 text-green-700' : 'bg-brand-red text-white hover:bg-red-800'} ${selectMode ? 'opacity-40' : ''}`}>
                       {isAdded ? '✓ Added to calendar' : '＋ Add to calendar'}
@@ -660,7 +781,7 @@ export default function Events() {
 
       {/* calendar picker modal */}
       {pickerEvent && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <Dialog onClose={() => setPickerEvent(null)}>
           <div className="fixed inset-0 bg-black/50" onClick={() => setPickerEvent(null)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
             <div className="p-5 border-b border-gray-100">
@@ -708,12 +829,12 @@ export default function Events() {
               </div>
             )}
           </div>
-        </div>
+        </Dialog>
       )}
 
       {/* candidate calendar picker (Campaign Connect) */}
       {candPicker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => !pushing && setCandPicker(null)}>
+        <Dialog onClose={() => !pushing && setCandPicker(null)} className="bg-black/40 backdrop-blur-sm" onClick={() => !pushing && setCandPicker(null)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="p-5 border-b border-gray-100 flex items-start justify-between gap-3">
               <div>
@@ -755,7 +876,7 @@ export default function Events() {
               </button>
             </div>
           </div>
-        </div>
+        </Dialog>
       )}
     </div>
   )

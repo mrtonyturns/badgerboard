@@ -40,9 +40,50 @@ import { useAuth } from '../contexts/AuthContext'
 import SearchableSelect from '../components/SearchableSelect'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { ADMIN_EMAILS, normalizePlan } from '../lib/tiers'
+import { ADMIN_EMAILS, normalizePlan, PLAN_CONFIG } from '../lib/tiers'
+import { useDialog } from '../lib/useDialog'
 import { sanitizeAnnouncementHtml } from '../lib/sanitize'
 import ElectionResultsAdmin from './ElectionResultsAdmin'
+
+// ─── R2C PURE HELPERS BEGIN ───
+/**
+ * Plan slugs are storage keys, not English. The Plan column printed them raw,
+ * so one table showed five spellings of three products (c_campaign, a_campaign,
+ * campaign, monitor, Free). Labels are DERIVED from the plan config rather than
+ * duplicated here, so they can't drift from tiers.js; the config and the
+ * legacy-alias normalizer are passed in to keep this function importable on its
+ * own. Legacy keys keep a "(legacy)" marker so an admin can see the account is
+ * still on a pre-v1.10 slug.
+ */
+export function planLabelFrom(rawPlan, planConfig, normalize) {
+  const key = normalize(rawPlan)
+  const cfg = planConfig[key]
+  if (!cfg || key === 'scout') return 'Scout (free)'
+  const family = cfg.planType === 'action' ? 'Action' : 'Candidate'
+  const legacy = rawPlan && rawPlan !== key && planConfig[rawPlan] ? ' (legacy)' : ''
+  return `${family} ${cfg.name}${legacy}`
+}
+
+/** Short relative time for the Last Login column ("3d ago"). '' for no value. */
+export function relativeTime(iso, now = Date.now()) {
+  const t = Date.parse(iso || '')
+  if (!Number.isFinite(t)) return ''
+  const secs = Math.round((now - t) / 1000)
+  if (secs < 0) return 'just now'
+  if (secs < 60) return 'just now'
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 30) return `${days}d ago`
+  const months = Math.floor(days / 30)
+  if (months < 12) return `${months}mo ago`
+  return `${Math.floor(days / 365)}y ago`
+}
+// ─── R2C PURE HELPERS END ───
+
+const planLabel = (rawPlan) => planLabelFrom(rawPlan, PLAN_CONFIG, normalizePlan)
 
 const AdminDashboard = () => {
   const { user, session } = useAuth()
@@ -116,10 +157,16 @@ const AdminDashboard = () => {
     <div className="min-h-screen bg-gray-50">
       {/* Header lives in the top bar (v1.24.1) */}
 
-      {/* Tab Navigation */}
-      <div className="border-b border-gray-200 bg-white sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-6">
-          <div className="flex gap-2 py-4 overflow-x-auto">
+      {/* Tab Navigation
+          Nine tabs in a horizontal scroller: at phone width six of them are off
+          the right edge with nothing to say so. The wrapper is `relative` and
+          carries a right-edge fade so the strip visibly continues, and the
+          scroller snaps so a swipe lands on a tab rather than mid-label.
+          bg-white sits on BOTH the sticky bar and the scroller — table rows were
+          showing through it while the page scrolled. */}
+      <div className="border-b border-gray-200 bg-white sticky top-0 z-20 shadow-sm">
+        <div className="max-w-7xl mx-auto px-6 relative">
+          <div className="flex gap-2 py-4 overflow-x-auto snap-x snap-mandatory bg-white scroll-pl-6">
             {[
               { id: 'health', label: 'Platform Health' },
               { id: 'accounts', label: 'Account Management' },
@@ -134,7 +181,7 @@ const AdminDashboard = () => {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`px-4 py-2 rounded-full font-medium text-sm transition-colors whitespace-nowrap ${
+                className={`px-4 py-2 rounded-full font-medium text-sm transition-colors whitespace-nowrap snap-start ${
                   activeTab === tab.id
                     ? 'bg-gray-900 text-white'
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -144,6 +191,8 @@ const AdminDashboard = () => {
               </button>
             ))}
           </div>
+          {/* right-edge fade: "there is more over here" */}
+          <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-10 bg-gradient-to-l from-white to-transparent" />
         </div>
       </div>
 
@@ -160,9 +209,10 @@ const AdminDashboard = () => {
         {activeTab === 'coupons' && <CouponsTab session={session} showToast={showToast} />}
       </div>
 
-      {/* Toast */}
+      {/* Toast — TOAST band (9999) from Layout's z-index ladder. It sat at z-50,
+          inside the modal band, so it painted over admin dialogs. */}
       {toast && (
-        <div className="fixed bottom-6 right-6 p-4 rounded-lg shadow-lg text-white text-sm font-medium z-50" style={{
+        <div className="fixed bottom-6 right-6 p-4 rounded-lg shadow-lg text-white text-sm font-medium z-[9999]" style={{
           backgroundColor: toast.type === 'success' ? '#10b981' : '#ef4444'
         }}>
           {toast.message}
@@ -647,14 +697,27 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
                       )}
                     </div>
                   </td>
+                  {/* Shows the RESOLVED entitlement (admin > beta > trial > paid),
+                      the same thing Settings shows the user. The raw slug used to
+                      be the whole cell — five spellings of three products, and
+                      "Free" for accounts that actually had Campaign access. */}
                   <td className="px-4 py-3 text-gray-600">
-                    {u.plan || 'Free'}
+                    <span title={`raw app_metadata.plan: ${u.plan || '(none)'}`}>
+                      {planLabel(u.resolved_plan || u.plan)}
+                    </span>
+                    {u.plan_source === 'admin' && (
+                      <span className="ml-1.5 px-1.5 py-0.5 bg-red-100 text-red-800 text-[10px] rounded-full font-semibold align-middle">Admin</span>
+                    )}
                     {u.beta_mode && (
                       <span className="ml-1.5 px-1.5 py-0.5 bg-indigo-100 text-indigo-800 text-[10px] rounded-full font-semibold align-middle">Beta</span>
                     )}
                     {u.trial_plan && u.trial_ends_at && Date.parse(u.trial_ends_at) > Date.now() && (
                       <span className="ml-1.5 px-1.5 py-0.5 bg-purple-100 text-purple-800 text-[10px] rounded-full font-semibold align-middle">Trial</span>
                     )}
+                    {/* raw slug kept visible for debugging */}
+                    <div className="text-[10px] text-gray-400 font-mono">
+                      {u.plan || '—'}{u.plan_source ? ` · ${u.plan_source}` : ''}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     {/* payment_status is only set once Stripe has reported something.
@@ -674,8 +737,17 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-gray-600">{new Date(u.created_at).toLocaleDateString()}</td>
+                  {/* The API has always returned `last_sign_in_at` (Supabase admin
+                      listUsers); this cell read `last_login`, a key that has never
+                      existed in the payload, so all 43 accounts read "Never". */}
                   <td className="px-4 py-3 text-gray-600">
-                    {u.last_login ? new Date(u.last_login).toLocaleDateString() : 'Never'}
+                    {u.last_sign_in_at ? (
+                      <span title={new Date(u.last_sign_in_at).toLocaleString()}>
+                        {relativeTime(u.last_sign_in_at)}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400" title="Supabase has no sign-in on record for this account">Never</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2">
@@ -838,6 +910,7 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
 }
 
 const EditEmailModal = ({ user, onSave, onClose }) => {
+  useDialog(onClose)
   const [email, setEmail] = useState(user.email)
 
   const handleSave = () => {
@@ -849,7 +922,7 @@ const EditEmailModal = ({ user, onSave, onClose }) => {
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-lg">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Edit Email</h3>
         <input
@@ -879,6 +952,7 @@ const EditEmailModal = ({ user, onSave, onClose }) => {
 }
 
 const ChangePasswordModal = ({ user, onSave, onClose }) => {
+  useDialog(onClose)
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
 
@@ -891,7 +965,7 @@ const ChangePasswordModal = ({ user, onSave, onClose }) => {
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-lg">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Change Password for {user.email}</h3>
         <div className="relative mb-4">
@@ -930,6 +1004,7 @@ const ChangePasswordModal = ({ user, onSave, onClose }) => {
 }
 
 const NotesModal = ({ user, onAddNote, onClose }) => {
+  useDialog(onClose)
   const [noteText, setNoteText] = useState('')
   const [notes, setNotes] = useState([])
 
@@ -940,7 +1015,7 @@ const NotesModal = ({ user, onAddNote, onClose }) => {
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-lg max-h-96 overflow-y-auto">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Notes for {user.email}</h3>
 
@@ -1239,7 +1314,10 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
                 }`}
               >
                 <div className="font-medium text-gray-900">{u.email}</div>
-                <div className="text-xs text-gray-500">{u.plan || 'Free'}</div>
+                {/* same resolved label as the accounts table, not the raw slug */}
+                <div className="text-xs text-gray-500" title={`raw app_metadata.plan: ${u.plan || '(none)'}`}>
+                  {planLabel(u.resolved_plan || u.plan)}
+                </div>
               </button>
             ))}
           </div>
@@ -1522,6 +1600,7 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
 }
 
 const ApplyCreditModal = ({ onSave, onClose }) => {
+  useDialog(onClose)
   const [amount, setAmount] = useState('')
   const [description, setDescription] = useState('')
 
@@ -1534,7 +1613,7 @@ const ApplyCreditModal = ({ onSave, onClose }) => {
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-lg">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Apply Credit</h3>
         <input
@@ -1610,6 +1689,7 @@ const ChangePlanModal = ({ currentPlan, currentBracket, onSave, onClose }) => {
   // (campaign → a_campaign): opening this modal for a legacy 'campaign' account
   // preselected the wrong plan, and saving silently downgraded them from an
   // Action plan to a Candidate plan.
+  useDialog(onClose)
   const [plan, setPlan]       = useState(normalizePlan(currentPlan))
   const [bracket, setBracket] = useState(currentBracket || 'b1')
   const [saving, setSaving]   = useState(false)
@@ -1621,7 +1701,7 @@ const ChangePlanModal = ({ currentPlan, currentBracket, onSave, onClose }) => {
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl p-6 max-w-lg w-full mx-4 shadow-xl">
         <h3 className="text-lg font-semibold text-gray-900 mb-1">Change Plan</h3>
         <p className="text-sm text-gray-500 mb-5">Select a plan family and tier. Changes take effect on the user's next login.</p>
@@ -1629,7 +1709,7 @@ const ChangePlanModal = ({ currentPlan, currentBracket, onSave, onClose }) => {
         {/* Candidate Plans */}
         <div className="mb-5">
           <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Candidate Plans</p>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {PLAN_FAMILIES.candidate.map(p => (
               <button
                 key={p.key}
@@ -1649,7 +1729,7 @@ const ChangePlanModal = ({ currentPlan, currentBracket, onSave, onClose }) => {
         {/* Action Plans */}
         <div className="mb-5">
           <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Action Plans</p>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             {PLAN_FAMILIES.action.map(p => (
               <button
                 key={p.key}
@@ -2320,6 +2400,7 @@ const ErrorLogsTab = ({ apiCall, showToast }) => {
 }
 
 const FixPromptModal = ({ error, onClose }) => {
+  useDialog(onClose)
   const [copied, setCopied] = useState(false)
 
   const prompt = `I have a bug in my React/Netlify app (Badger Board — a Wisconsin political intelligence SaaS). Please help me diagnose and fix it.
@@ -2348,7 +2429,7 @@ Please:
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4 shadow-lg max-h-[80vh] overflow-y-auto">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Claude Fix Prompt</h3>
         <textarea

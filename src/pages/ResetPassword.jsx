@@ -235,9 +235,13 @@ export default function ResetPassword() {
 
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div>
-                    <label className="label">New Password <span className="text-brand-red">*</span></label>
+                    {/* id/htmlFor: the visible label is now the field's
+                        accessible name, and the eye buttons say what they do
+                        instead of announcing as unlabelled buttons. */}
+                    <label className="label" htmlFor="reset-new-password">New Password <span className="text-brand-red">*</span></label>
                     <div className="relative">
                       <input
+                        id="reset-new-password"
                         type={showPw ? 'text' : 'password'}
                         className="input pr-10"
                         value={password}
@@ -248,6 +252,8 @@ export default function ResetPassword() {
                         autoFocus
                       />
                       <button type="button" onClick={() => setShowPw(p => !p)}
+                        aria-label={showPw ? 'Hide password' : 'Show password'}
+                        aria-pressed={showPw}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
                         {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
@@ -256,9 +262,10 @@ export default function ResetPassword() {
                   </div>
 
                   <div>
-                    <label className="label">Confirm New Password <span className="text-brand-red">*</span></label>
+                    <label className="label" htmlFor="reset-confirm-password">Confirm New Password <span className="text-brand-red">*</span></label>
                     <div className="relative">
                       <input
+                        id="reset-confirm-password"
                         type={showConfirm ? 'text' : 'password'}
                         className={`input pr-10 ${confirmPw && confirmPw !== password ? 'border-red-400' : ''}`}
                         value={confirmPw}
@@ -268,6 +275,8 @@ export default function ResetPassword() {
                         autoComplete="new-password"
                       />
                       <button type="button" onClick={() => setShowConfirm(p => !p)}
+                        aria-label={showConfirm ? 'Hide confirmed password' : 'Show confirmed password'}
+                        aria-pressed={showConfirm}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
                         {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>

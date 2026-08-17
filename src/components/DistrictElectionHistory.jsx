@@ -167,9 +167,18 @@ function CycleBlock({ cycle }) {
 
 // ── compact fallback row for AI-researched history not covered by real results ──
 function HistoryRow({ entry, onProfiler }) {
+  // Clickable rows are keyboard-reachable: role/tabIndex/Enter/Space only when
+  // there is actually something to activate.
+  const clickable = typeof onProfiler === 'function'
+  const activate = () => clickable && onProfiler(entry.name)
   return (
-    <div onClick={() => onProfiler && onProfiler(entry.name)}
-      style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 0', cursor: onProfiler ? 'pointer' : 'default' }}>
+    <div onClick={activate}
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onKeyDown={clickable ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate() }
+      } : undefined}
+      style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 0', cursor: clickable ? 'pointer' : 'default' }}>
       <div style={{ width: 8, height: 8, borderRadius: 3, background: partyColorHex(entry.party), flexShrink: 0 }} />
       <div style={{ fontSize: 12.5, fontWeight: 800, color: '#0F172A' }}>{entry.name}</div>
       <span style={{ fontSize: 10, fontWeight: 700, color: '#94A3B8' }}>{entry.party}</span>

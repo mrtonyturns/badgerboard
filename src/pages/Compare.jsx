@@ -499,16 +499,25 @@ export default function Compare() {
           )}
 
           {/* Profile facts */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          {/* NO overflow-hidden here, deliberately. An overflow-hidden ancestor
+              is itself the scrollport for anything sticky inside it — and this
+              card never scrolls, so `sticky top-0` below had nothing to stick
+              against and the candidate names scrolled away with the rows. The
+              page's scroll container is Layout's <main className="overflow-y-auto">,
+              and the app header + section tabs are siblings ABOVE it rather than
+              overlays, so top-0 is the correct offset once the clip is gone.
+              The rounded corners are kept by rounding the first and last
+              children instead of clipping them. */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 [&>*:last-child]:rounded-b-2xl">
             {/* Section header */}
-            <div className="px-5 py-3.5 bg-gray-50 border-b border-gray-100">
+            <div className="px-5 py-3.5 bg-gray-50 border-b border-gray-100 rounded-t-2xl">
               <h3 className="font-bold text-sm text-gray-800 flex items-center gap-2">
                 <FileText className="w-4 h-4 text-gray-500" />
                 Profile Facts
               </h3>
             </div>
             {/* Sticky column headers */}
-            <div className="grid grid-cols-2 divide-x divide-gray-100 border-b border-gray-200 bg-gradient-to-r from-red-50 to-blue-50 sticky top-0 z-10 text-xs sm:text-sm">
+            <div className="grid grid-cols-2 divide-x divide-gray-100 border-b border-gray-200 bg-gradient-to-r from-red-50 to-blue-50 sticky top-0 z-10 text-xs sm:text-sm shadow-sm">
               <div className="px-4 py-2 flex items-center gap-2">
                 <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
                 <span className="text-xs font-bold text-red-700 truncate">{lName}</span>

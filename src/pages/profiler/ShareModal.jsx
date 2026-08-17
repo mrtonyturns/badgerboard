@@ -31,6 +31,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
+import { useDialog } from '../../lib/useDialog'
 import { T, Btn, plural, relativeAge } from './shared'
 
 const APP_URL = 'https://www.badgerboardwi.com'
@@ -241,11 +242,9 @@ export default function ShareModal({
     return () => clearInterval(id)
   }, [step])
 
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose?.() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Was a hand-rolled Escape listener with no scroll-lock, so the page kept
+  // scrolling behind the modal. Same close path, plus the shared lock.
+  useDialog(() => onClose?.())
 
   const activeShares = shares.filter(s => s.is_active && !isExpired(s.expires_at))
   const shareUrl = live ? (live.share_url || `${APP_URL}/temporary-dossier/${live.token}`) : ''

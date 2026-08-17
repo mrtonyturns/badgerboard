@@ -15,6 +15,7 @@
 // else in this file assumes a list-driven picker.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { format } from 'date-fns'
 import {
   UserPlus, Users, ListFilter, Search, Download, AlertTriangle, ChevronDown,
@@ -527,12 +528,30 @@ export default function Recruit() {
 
         {/* ── Step 1: voter list ─────────────────────────────────────────── */}
         <StepCard n={1} title="Pick a voter list" sub="Recruit matches seats off the district columns in your uploaded list." done={Boolean(listId)}>
-          <select style={selectStyle} value={listId} onChange={e => setListId(e.target.value)}>
-            <option value="">Select a list…</option>
-            {lists.map(l => (
-              <option key={l.id} value={l.id}>{l.name} · {l.total_count || 0} rows</option>
-            ))}
-          </select>
+          {/* With no lists, this select was an empty dropdown and a dead end —
+              nothing on the page said where lists come from. Same three-state
+              rule as step 2: loading / genuinely empty / the picker. */}
+          {officesLoaded && !lists.length ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8, background: T.hover, border: `1px solid ${T.border}`, borderRadius: 10, padding: '12px 14px' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: T.ink }}>You don&apos;t have a voter list yet</div>
+              <div style={{ fontSize: 11.5, color: T.muted, lineHeight: 1.5 }}>
+                Recruit works from the district columns in an uploaded voter file, so it needs a list
+                before it can match anyone to a seat. Upload a Badger Voters / WisVote CSV on Voter Lists
+                and come back — it will appear here.
+              </div>
+              <Link to="/voter-lists" style={{ fontSize: 11.5, fontWeight: 700, color: T.red, textDecoration: 'underline', textUnderlineOffset: 2 }}>
+                Upload a voter list first →
+              </Link>
+            </div>
+          ) : (
+            <select style={selectStyle} value={listId} onChange={e => setListId(e.target.value)}
+              aria-label="Voter list">
+              <option value="">{officesLoaded ? 'Select a list…' : 'Loading your voter lists…'}</option>
+              {lists.map(l => (
+                <option key={l.id} value={l.id}>{l.name} · {l.total_count || 0} rows</option>
+              ))}
+            </select>
+          )}
           {loadingVoters && (
             <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: T.muted }}>
               <Spinner size={13} /> Loading residents…{votersLoaded ? ` ${votersLoaded.toLocaleString()} so far` : ''}
@@ -737,17 +756,28 @@ export default function Recruit() {
               )}
             </div>
 
+            {/* minWidth is what makes the wrapper SCROLL instead of crushing six
+                columns into a phone width — width:100% alone just squashes them
+                (same pattern as Prospecting's tableStyle). */}
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5, minWidth: 760 }}>
                 <thead>
                   <tr style={{ background: T.hover }}>
                     {[
                       ['name', 'Name'], ['affiliation', 'Affiliation'], ['notoriety', 'Notoriety'],
                       ['sentiment', 'Sentiment'], ['status', 'Research'],
                     ].map(([k, label]) => (
-                      <th key={k} onClick={() => toggleSort(k)}
-                        style={{ textAlign: 'left', padding: '9px 14px', fontSize: 10.5, fontWeight: 700, color: T.muted, textTransform: 'uppercase', letterSpacing: '.4px', cursor: 'pointer', whiteSpace: 'nowrap', borderBottom: `1px solid ${T.divider}` }}>
-                        {label}{sort.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}
+                      // The sort control is a real <button> inside the header cell:
+                      // a click handler on the <th> itself was unreachable by
+                      // keyboard and announced nothing. aria-sort reports the
+                      // current column/direction to screen readers.
+                      <th key={k} scope="col"
+                        aria-sort={sort.key === k ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                        style={{ padding: 0, borderBottom: `1px solid ${T.divider}` }}>
+                        <button type="button" onClick={() => toggleSort(k)}
+                          style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 14px', fontSize: 10.5, fontWeight: 700, color: T.muted, textTransform: 'uppercase', letterSpacing: '.4px', cursor: 'pointer', whiteSpace: 'nowrap', background: 'none', border: 'none', fontFamily: 'inherit' }}>
+                          {label}{sort.key === k ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}
+                        </button>
                       </th>
                     ))}
                     <th style={{ textAlign: 'left', padding: '9px 14px', fontSize: 10.5, fontWeight: 700, color: T.muted, textTransform: 'uppercase', letterSpacing: '.4px', borderBottom: `1px solid ${T.divider}` }}>Evidence</th>
@@ -822,7 +852,10 @@ export default function Recruit() {
             <div style={{ display: 'grid', gap: 6 }}>
               {searches.map(s => (
                 <div key={s.id} className="pf-row" onClick={() => openSearch(s)}
-                  style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '9px 11px', borderRadius: 9, border: `1px solid ${s.id === activeSearch?.id ? T.field : T.border}`, fontSize: 11.5 }}>
+                  role="button" tabIndex={0}
+                  aria-pressed={s.id === activeSearch?.id}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSearch(s) } }}
+                  style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '9px 11px', borderRadius: 9, border: `1px solid ${s.id === activeSearch?.id ? T.field : T.border}`, fontSize: 11.5, cursor: 'pointer' }}>
                   <span style={{ fontWeight: 600, color: T.ink }}>{s.name}</span>
                   <span style={{ color: T.muted }}>
                     {s.total_matched || 0} matched · {s.research_completed_count || 0} researched · {s.status}

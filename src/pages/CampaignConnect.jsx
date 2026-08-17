@@ -2,11 +2,13 @@
 // accounts. Redesigned visual layer (v2): hero, connection motif, gradient stat tiles,
 // card grids, modern empty states. Logic/endpoints unchanged.
 import React, { useEffect, useState, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Users, UserPlus, Send, Clock, Check, X, Shield, AlertTriangle, RefreshCw, ChevronRight, Inbox, Trash2, Eye, ArrowLeft, Copy, Link2, Sparkles, CheckCircle2, ListChecks, FileText, Zap } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import SearchableSelect from '../components/SearchableSelect'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserPlan, getUserPlanType } from '../lib/tiers'
+import { useDialog } from '../lib/useDialog'
 
 const api = async (fn, body) => {
   const { data: { session } } = await supabase.auth.getSession()
@@ -43,6 +45,18 @@ function countdown(iso) {
   return h > 0 ? `${h}h ${m}m left` : `${m}m left`
 }
 
+// ?tab= support (same pattern as GamePlan). All three tabs used to share one
+// URL, so back/forward and deep links always landed on the default tab.
+// 'invitations' is accepted as a friendly alias for the internal 'invites' key.
+// ─── R2C PURE HELPERS BEGIN ───
+export const TAB_ALIASES = { invitations: 'invites', team: 'team', managers: 'managers', shared: 'shared' }
+
+export function parseTabParam(raw, validKeys = [], fallback = '') {
+  const key = TAB_ALIASES[String(raw || '').toLowerCase()] || String(raw || '').toLowerCase()
+  return validKeys.includes(key) ? key : fallback
+}
+// ─── R2C PURE HELPERS END ───
+
 function Avatar({ seed, size = 'md', icon: Icon }) {
   const s = size === 'lg' ? 'w-14 h-14 text-xl' : size === 'sm' ? 'w-8 h-8 text-xs' : 'w-11 h-11 text-sm'
   return (
@@ -59,7 +73,6 @@ export default function CampaignConnect() {
   const isAction = planType === 'action'
   const isPaidCandidate = plan !== 'scout'
 
-  const [tab, setTab] = useState(isAction ? 'team' : 'invites')
   const [toast, setToast] = useState(null)
   const flash = (m, err) => { setToast({ m, err }); setTimeout(() => setToast(null), 3500) }
 
@@ -70,8 +83,28 @@ export default function CampaignConnect() {
     { k: 'shared', icon: Send, label: 'Shared Profiles' },
   ].filter(Boolean)
 
+  // Tab state lives in the URL so back/forward and shared links work.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const defaultTab = isAction ? 'team' : 'invites'
+  const tab = parseTabParam(searchParams.get('tab'), tabs.map(t => t.k), defaultTab)
+  const setTab = (k) => setSearchParams(k === defaultTab ? {} : { tab: k })
+
   return (
     <div className="space-y-6">
+      {/* ── Tabs ─────────────────────────────────────────────────
+          The tab row is the FIRST thing on the page on purpose. It used to sit
+          under the hero, and anything that changed the hero's height moved the
+          tabs out from under the pointer mid-click. Nothing renders above it
+          now, so its position is fixed for every tab. */}
+      <div className="flex gap-1.5 flex-wrap">
+        {tabs.map(({ k, icon: Icon, label }) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={`flex items-center gap-2 text-sm font-bold px-4 py-2.5 rounded-2xl border-2 transition-all ${tab === k ? 'bg-brand-navy border-brand-navy text-white shadow-md scale-[1.02]' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700'}`}>
+            <Icon className="w-4 h-4" /> {label}
+          </button>
+        ))}
+      </div>
+
       {/* ── Hero ─────────────────────────────────────────────── */}
       <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-brand-navy via-[#0d1b30] to-[#16273f] text-white p-7 sm:p-9" style={{ backgroundImage: `${DOTS}, linear-gradient(to bottom right, #0A1628, #16273f)` }}>
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-center gap-6">
@@ -104,21 +137,13 @@ export default function CampaignConnect() {
         </div>
       </div>
 
-      {/* ── Tabs ─────────────────────────────────────────────── */}
-      <div className="flex gap-1.5 flex-wrap">
-        {tabs.map(({ k, icon: Icon, label }) => (
-          <button key={k} onClick={() => setTab(k)}
-            className={`flex items-center gap-2 text-sm font-bold px-4 py-2.5 rounded-2xl border-2 transition-all ${tab === k ? 'bg-brand-navy border-brand-navy text-white shadow-md scale-[1.02]' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700'}`}>
-            <Icon className="w-4 h-4" /> {label}
-          </button>
-        ))}
-      </div>
-
       {tab === 'team' && isAction && <TeamPanel flash={flash} />}
       {tab === 'invites' && <InvitesPanel flash={flash} isPaidCandidate={isPaidCandidate} />}
       {tab === 'managers' && !isAction && <ManagersPanel flash={flash} />}
       {tab === 'shared' && <SharedPanel isAction={isAction} flash={flash} />}
 
+      {/* Self-dismissing status toast, not a dialog — deliberately no useDialog
+          (nothing to Escape from, and it must not scroll-lock the page). */}
       {toast && (
         <div className={`fixed bottom-6 right-6 px-4 py-3 rounded-2xl text-sm font-bold shadow-2xl z-50 flex items-center gap-2 ${toast.err ? 'bg-red-600 text-white' : 'bg-brand-navy text-white'}`}>
           {toast.err ? <AlertTriangle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}{toast.m}
@@ -178,7 +203,7 @@ function TeamPanel({ flash }) {
       <div className="rounded-2xl border border-gray-100 bg-white shadow-sm p-5">
         <h2 className="font-bold text-gray-900 flex items-center gap-2 mb-4"><span className="w-8 h-8 rounded-xl bg-brand-red/10 flex items-center justify-center"><UserPlus className="w-4 h-4 text-brand-red" /></span> Invite a candidate</h2>
         <input className="input w-full mb-3" type="email" placeholder="candidate@email.com" value={email} onChange={e => setEmail(e.target.value)} />
-        <div className="grid grid-cols-2 gap-2 mb-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
           {[['team', 'My Team', 'Staff / consultant you hired', Users], ['outside', 'Outside org', 'Party, PAC, or affiliate', Shield]].map(([val, title, sub, Icon]) => (
             <button key={val} onClick={() => setRelType(val)}
               className={`text-left rounded-xl border-2 p-3 transition-all ${relType === val ? 'border-brand-red bg-brand-red/5' : 'border-gray-200 hover:border-gray-300'}`}>
@@ -465,18 +490,25 @@ function SharedPanel({ isAction, flash }) {
         </div>
       )}
 
-      {open && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setOpen(null)}>
-          <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[85vh] overflow-auto p-6" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-black text-lg text-gray-900">{open.dossier?.title || 'Profile'}</h3>
-              <button onClick={() => setOpen(null)} className="text-gray-400 hover:text-gray-700 p-1 rounded-lg hover:bg-gray-100"><X className="w-5 h-5" /></button>
-            </div>
-            <div className="inline-flex text-xs text-brand-red font-bold mb-3 items-center gap-1 bg-brand-red/10 rounded-full px-2.5 py-1"><Clock className="w-3 h-3" /> {countdown(open.handoff.expires_at)}</div>
-            <div className="prose prose-sm max-w-none whitespace-pre-wrap text-sm text-gray-800">{open.dossier?.content || 'Content unavailable.'}</div>
-          </div>
+      {open && <ProfileDialog data={open} onClose={() => setOpen(null)} />}
+    </div>
+  )
+}
+
+// Escape + scroll-lock (useDialog) for the shared-profile viewer. Split into its
+// own component so the hook mounts and unmounts with the dialog itself.
+function ProfileDialog({ data, onClose }) {
+  useDialog(onClose)
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[85vh] overflow-auto p-6" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-black text-lg text-gray-900">{data.dossier?.title || 'Profile'}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 p-1 rounded-lg hover:bg-gray-100"><X className="w-5 h-5" /></button>
         </div>
-      )}
+        <div className="inline-flex text-xs text-brand-red font-bold mb-3 items-center gap-1 bg-brand-red/10 rounded-full px-2.5 py-1"><Clock className="w-3 h-3" /> {countdown(data.handoff.expires_at)}</div>
+        <div className="prose prose-sm max-w-none whitespace-pre-wrap text-sm text-gray-800">{data.dossier?.content || 'Content unavailable.'}</div>
+      </div>
     </div>
   )
 }

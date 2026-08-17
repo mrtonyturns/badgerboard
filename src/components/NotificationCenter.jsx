@@ -39,6 +39,10 @@ const saveSet = (key, set) => {
 // ── shared announcement feed (poll + focus refetch) ──────────────────────────
 function useAnnouncements() {
   const [announcements, setAnnouncements] = useState([])
+  // A failed fetch used to leave the list empty, which the panel rendered as
+  // "No notifications yet" — an empty-state lie. Tracked separately so the
+  // panel can say the truth instead.
+  const [loadFailed, setLoadFailed] = useState(false)
 
   useEffect(() => {
     const load = () => {
@@ -49,7 +53,8 @@ function useAnnouncements() {
         .order('created_at', { ascending: false })
         .limit(30)
         .then(({ data, error }) => {
-          if (error) { console.warn('[notifications] load failed:', error.message); return }
+          if (error) { console.warn('[notifications] load failed:', error.message); setLoadFailed(true); return }
+          setLoadFailed(false)
           if (data) setAnnouncements(data)
         })
     }
@@ -65,12 +70,12 @@ function useAnnouncements() {
     }
   }, [])
 
-  return announcements
+  return { announcements, loadFailed }
 }
 
 // ── main component: render inside the header where the bell lives ────────────
 export default function NotificationCenter() {
-  const announcements = useAnnouncements()
+  const { announcements, loadFailed } = useAnnouncements()
   const [open, setOpen] = useState(false)
   const [readIds, setReadIds] = useState(() => loadSet(READ_KEY))
   const [toast, setToast] = useState(null)          // announcement currently popped up
@@ -160,8 +165,18 @@ export default function NotificationCenter() {
             <div className="max-h-96 overflow-y-auto">
               {announcements.length === 0 && (
                 <div className="py-10 text-center">
-                  <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-                  <p className="text-sm text-gray-400">No notifications yet</p>
+                  {loadFailed ? (
+                    <>
+                      <AlertCircle className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                      <p className="text-sm text-gray-500">Couldn&apos;t load notifications</p>
+                      <p className="text-xs text-gray-400 mt-1">We&apos;ll try again shortly.</p>
+                    </>
+                  ) : (
+                    <>
+                      <Bell className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+                      <p className="text-sm text-gray-400">No notifications yet</p>
+                    </>
+                  )}
                 </div>
               )}
               {announcements.map(a => {

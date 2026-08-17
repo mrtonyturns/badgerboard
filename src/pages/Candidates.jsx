@@ -13,6 +13,22 @@ import CityDemographicsPanel, { usePlaceLookup } from '../components/CityDemogra
 import { placePath } from '../lib/placeDemographics'
 import { partyGroup, partyBadgeClasses, normalizePartyForDb } from '../lib/party'
 import { SCOUT_CAP_MESSAGE, scoutCapMessage, monitoringToggleError } from '../lib/capErrors'
+import { useDialog } from '../lib/useDialog'
+
+// How long the search box waits before it queries the server. The input itself
+// stays instant — only the network call is debounced, because keying it on
+// `search` directly fired one getCandidates() round trip PER KEYSTROKE (typing
+// "Van Orden" was nine queries, each of which could land out of order).
+const SEARCH_DEBOUNCE_MS = 300
+
+// useDialog()'s effect runs once per mount, so it has to live in something that
+// mounts and unmounts with the modal — these modals are inline JSX. The overlay
+// is that something: every modal below renders one and gets Escape-to-close plus
+// body scroll-lock, without the modals themselves being restructured.
+function ModalOverlay({ onClose, className = 'bg-black/50' }) {
+  useDialog(onClose)
+  return <div className={`fixed inset-0 ${className}`} onClick={onClose} />
+}
 
 // ── Map view/selection persistence (sessionStorage) ───────────────────────────
 // Lets "Back" from a city-demographics page (or any navigation away and back)
@@ -154,7 +170,8 @@ export default function Candidates() {
   const [offices, setOffices]       = useState([])
   const [elections, setElections]   = useState([])
   const [loading, setLoading]       = useState(true)
-  const [search, setSearch]         = useState('')
+  const [search, setSearch]         = useState('')   // what the input shows — updates instantly
+  const [searchQuery, setSearchQuery] = useState('') // what the SERVER is asked for — debounced
   const [partyFilter, setPartyFilter]   = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [officeFilter, setOfficeFilter] = useState(preFilterOfficeId)
@@ -301,13 +318,23 @@ export default function Candidates() {
     refreshActiveCount()
   }, [])
 
-  useEffect(() => { fetchData() }, [search, partyFilter, statusFilter, officeFilter])
+  // Typing stays instant (`search` re-renders the input on every key); only this
+  // mirror moves, SEARCH_DEBOUNCE_MS after the last keystroke, and only it is a
+  // dependency of the fetch below — so a nine-character name is one query.
+  useEffect(() => {
+    if (searchQuery === search) return
+    const id = setTimeout(() => setSearchQuery(search), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(id)
+  }, [search])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { fetchData() }, [searchQuery, partyFilter, statusFilter, officeFilter])
 
   // Used by the empty state to tell "this account has nothing yet" apart from
   // "the current search/filters matched nothing".
   const hasActiveFilters = !!(search || partyFilter || statusFilter || officeFilter)
   const clearFilters = () => {
     setSearch('')
+    setSearchQuery('')   // clearing is deliberate, not typing — don't make it wait
     setPartyFilter('')
     setStatusFilter('')
     setOfficeFilter('')
@@ -329,7 +356,7 @@ export default function Candidates() {
     setLoading(true)
     try {
       const { data, error } = await getCandidates({
-        search: search || undefined,
+        search: searchQuery || undefined,
         party: partyFilter || undefined,
         status: undefined,   // status filter removed — monitoring filters are client-side
         office_id: officeFilter || undefined,
@@ -1082,12 +1109,18 @@ export default function Candidates() {
                                 const isActive = c.section_timestamps?.monitoring === true
                                 const isSaving = !!monitoringToggles[c.id]
                                 const blocked  = !isActive && atLimit
-                                return (
+                                const slotMessage = `Slot limit reached (${maxSlots}/${maxSlots}) — deactivate another candidate first`
+                                const toggle = (
                                   <button
                                     onClick={() => handleToggleMonitoring(c)}
                                     disabled={isSaving || blocked}
+                                    aria-label={
+                                      blocked ? slotMessage
+                                      : isActive ? 'Deactivate monitoring'
+                                      : 'Activate monitoring'
+                                    }
                                     title={
-                                      blocked ? `Slot limit reached (${maxSlots}/${maxSlots}) — deactivate another candidate first`
+                                      blocked ? undefined
                                       : isActive ? 'Deactivate monitoring'
                                       : 'Activate monitoring'
                                     }
@@ -1100,6 +1133,20 @@ export default function Candidates() {
                                   >
                                     <Zap className={`w-4 h-4 ${isSaving ? 'animate-pulse' : ''}`} />
                                   </button>
+                                )
+                                // A disabled button fires no pointer events, so its
+                                // title= never renders — the reason the toggle was
+                                // dead was invisible. Same group-hover span the
+                                // locked Upload CSV / Add Candidate buttons above
+                                // already use: the WRAPPER hovers, so it works.
+                                if (!blocked) return toggle
+                                return (
+                                  <div className="relative group">
+                                    {toggle}
+                                    <div className="absolute bottom-full right-0 mb-2 w-56 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl hidden group-hover:block z-20 leading-relaxed">
+                                      {slotMessage}
+                                    </div>
+                                  </div>
                                 )
                               })()}
                               {/* Primary click (the name) opens the candidate RECORD.
@@ -1135,7 +1182,7 @@ export default function Candidates() {
       {/* Discover Candidates Modal */}
       {showDiscover && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setShowDiscover(false)} />
+          <ModalOverlay onClose={() => setShowDiscover(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col">
             <div className="flex items-center justify-between p-6 border-b border-gray-100 flex-shrink-0">
               <div>
@@ -1325,7 +1372,7 @@ export default function Candidates() {
       {/* Add Candidate Modal */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setShowModal(false)} />
+          <ModalOverlay onClose={() => setShowModal(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col">
             <div className="flex items-center justify-between p-6 border-b border-gray-100 flex-shrink-0">
               <div>
@@ -1523,7 +1570,7 @@ export default function Candidates() {
       {/* ── CSV Upload Modal ── (canCsvImport re-checked so stale state can't open it) */}
       {showCsvModal && canCsvImport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setShowCsvModal(false)} />
+          <ModalOverlay onClose={() => setShowCsvModal(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b border-gray-100">
               <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">

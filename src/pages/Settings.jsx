@@ -19,6 +19,7 @@ import {
 import { useAuth } from '../contexts/AuthContext'
 import { supabase, logActivity } from '../lib/supabase'
 import { getEffectiveProfileLimit, getMonitoringSlotMax } from '../lib/tiers'
+import { useDialog } from '../lib/useDialog'
 import { SettingsShell, Btn, Pill, T } from './settings/shared'
 import AccountPane from './settings/AccountPane'
 import SecurityPane from './settings/SecurityPane'
@@ -41,7 +42,11 @@ const startOfThisMonth = () => {
 const NAV_GROUPS = [
   { label: 'ACCOUNT', items: [
     { id: 'account',       label: 'Your account',  Icon: User },
-    { id: 'security',      label: 'Security',      Icon: Shield, badge: '2FA OFF' },
+    // No `badge` here: the rail used to carry a hardcoded red two-factor
+    // warning pill for a feature that does not exist (SecurityPane's own card
+    // says so, labelled NOT YET AVAILABLE). A red alarm for a setting nobody
+    // can change is noise, and it never reflected any real account state.
+    { id: 'security',      label: 'Security',      Icon: Shield },
   ] },
   { label: 'PLAN', items: [
     { id: 'plan',          label: 'Plan & billing', Icon: CreditCard },
@@ -87,6 +92,18 @@ const NOTIF_PREF_DEFAULTS = {
 // their own controls (and their own single-column writes) further down, so a
 // toggle must not carry a possibly-stale copy of them back into the row.
 const NOTIF_KEYS = ['payment_failed', 'payment_receipt', 'plan_changed', 'account_locked', 'dossier_ready']
+
+/**
+ * Escape-to-close + body scroll-lock for the two confirm dialogs at the bottom
+ * of this file. They render inline inside Settings(), so the hook cannot be
+ * called there conditionally; this wrapper mounts only while its dialog is open,
+ * which is exactly what useDialog's ref-counted lock expects. It renders its
+ * child untouched, so both dialogs keep their existing markup and close buttons.
+ */
+function DialogLayer({ onClose, children }) {
+  useDialog(onClose)
+  return children
+}
 
 const readPrefs = (row) => Object.keys(NOTIF_PREF_DEFAULTS).reduce(
   (acc, k) => ({ ...acc, [k]: row?.[k] ?? NOTIF_PREF_DEFAULTS[k] }), {}
@@ -673,8 +690,13 @@ export default function Settings() {
 
       {/* ── Unsaved-changes bar ──────────────────────────────────────────── */}
       {dirtyCount > 0 && (
-        <div role="status" style={{
-          position: 'fixed', bottom: 22, left: '50%', transform: 'translateX(-50%)', zIndex: 40,
+        <div role="status" className="st-savebar" style={{
+          position: 'fixed', bottom: 22, left: '50%', transform: 'translateX(-50%)',
+          // Layout.jsx's Z scale: CHAT 30 < 35 < MODAL 40. The bar must paint
+          // over the support-chat bubble it sits beside and under every dialog.
+          // Below 720px `.st-savebar` (settings/shared.jsx) also pulls the bar
+          // off the right edge so the chat FAB stops covering "Save changes".
+          zIndex: 35,
           display: 'flex', alignItems: 'center', gap: 14,
           background: T.navy, color: '#fff', borderRadius: 99,
           padding: '11px 14px 11px 20px', boxShadow: '0 14px 34px rgba(13,21,38,.34)',
@@ -702,6 +724,7 @@ export default function Settings() {
 
       {/* ── Cancel at period end modal ───────────────────────────────────── */}
       {cancelPeriodModal && (
+        <DialogLayer onClose={() => { if (!cancelPeriodLoading) setCancelPeriodModal(false) }}>
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
             <div className="bg-gradient-to-r from-yellow-500 to-orange-500 px-6 py-5 flex items-start justify-between">
@@ -740,10 +763,12 @@ export default function Settings() {
             </div>
           </div>
         </div>
+        </DialogLayer>
       )}
 
       {/* ── Cancellation / deletion modal ────────────────────────────────── */}
       {cancelStep && (
+        <DialogLayer onClose={() => { if (!deleteLoading) setCancelStep(null) }}>
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
           {cancelStep === 'warn' && (
             <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
@@ -900,6 +925,7 @@ export default function Settings() {
             </div>
           )}
         </div>
+        </DialogLayer>
       )}
     </SettingsShell>
   )

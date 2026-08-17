@@ -7,7 +7,7 @@
 // marks anything connected.
 
 import React, { useEffect, useRef, useState } from 'react'
-import { Check, Copy } from 'lucide-react'
+import { Check, Copy, Eye, EyeOff } from 'lucide-react'
 import { supabase, logActivity } from '../../lib/supabase'
 import {
   Card, CardBody, Row, Btn, LinkBtn, ChoicePill, Pill, Note, Msg, Spinner, T,
@@ -39,6 +39,7 @@ export default function CalendarsPane({ user }) {
   const [verifying, setVerifying]   = useState(null)   // provider key being verified
   const [verifyMsg, setVerifyMsg]   = useState(null)   // { key, ok, text }
   const [copied, setCopied]         = useState(false)
+  const [revealed, setRevealed]     = useState(false)   // feed URL is a bearer secret
   const [saving, setSaving]         = useState(false)
   const [rotating, setRotating]     = useState(false)
   const [rotateMsg, setRotateMsg]   = useState(null)
@@ -60,6 +61,15 @@ export default function CalendarsPane({ user }) {
 
   const feedUrl   = feedToken ? `https://badgerboardwi.com/.netlify/functions/calendar-feed?token=${feedToken}` : ''
   const webcalUrl = feedUrl.replace(/^https:/, 'webcal:')
+  // The token IS the credential — the note under this field says "treat it like
+  // a password", so the field has to behave like one. Masked by default: the
+  // URL without its token, then dots and the last 4 so the user can still tell
+  // one issued URL from another (e.g. after Rotate). Copy always copies in full.
+  const maskedFeedUrl = feedToken
+    ? `https://badgerboardwi.com/.netlify/functions/calendar-feed?token=${'•'.repeat(8)}${String(feedToken).slice(-4)}`
+    : ''
+  // Re-mask whenever a new token is issued (Rotate URL).
+  useEffect(() => { setRevealed(false) }, [feedToken])
 
   const localRef = useRef(local)
   useEffect(() => { localRef.current = local }, [local])
@@ -162,10 +172,35 @@ export default function CalendarsPane({ user }) {
             <div style={{
               flex: 1, minWidth: 220, border: `1px solid ${T.field}`, borderRadius: 10,
               padding: '10px 13px', fontSize: 12, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-              color: T.ink3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-              display: 'flex', alignItems: 'center',
+              color: T.ink3, display: 'flex', alignItems: 'center', gap: 8,
             }}>
-              {feedUrl || 'Preparing your private feed URL…'}
+              <span
+                title={feedUrl && !revealed ? 'Hidden — use the eye to reveal, or Copy URL' : undefined}
+                style={{
+                  // ellipsis, not a hard cut, so the visible half stays readable
+                  flex: 1, minWidth: 0,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}
+              >
+                {feedUrl ? (revealed ? feedUrl : maskedFeedUrl) : 'Preparing your private feed URL…'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setRevealed(v => !v)}
+                disabled={!feedUrl}
+                aria-label={revealed ? 'Hide feed URL' : 'Show feed URL'}
+                aria-pressed={revealed}
+                style={{
+                  flex: 'none', width: 26, height: 26, borderRadius: 7, border: 0,
+                  background: 'none', color: T.faint, fontFamily: 'inherit',
+                  cursor: feedUrl ? 'pointer' : 'not-allowed', opacity: feedUrl ? 1 : 0.5,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+              >
+                {revealed
+                  ? <EyeOff style={{ width: 15, height: 15 }} />
+                  : <Eye style={{ width: 15, height: 15 }} />}
+              </button>
             </div>
             <Btn
               kind="primary"

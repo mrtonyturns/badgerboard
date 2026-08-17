@@ -25,6 +25,7 @@ import {
   hasFeature, isLiteProfileOnly,
 } from '../lib/tiers'
 import { CANDIDATE_STATUS_LABELS } from '../lib/campaignEnums'
+import { useDialog } from '../lib/useDialog'
 import LoadingBar from '../components/LoadingBar'
 import SearchableSelect from '../components/SearchableSelect'
 import DossierDisclaimerModal, { useDossierAck } from '../components/DossierDisclaimerModal'
@@ -1088,7 +1089,10 @@ export default function Dossiers() {
             center
             label="Profiles this month"
             value={dossiersUsed}
-            sub="this plan has no monthly cap"
+            // The allowance is unlimited because of the ACCOUNT's entitlement
+            // (admin / beta / enterprise bracket), not because "this plan" has
+            // no cap — plans do. Same phrase as the dashboards and Settings.
+            sub="Unlimited on your account"
           />
         ) : (
           <StatCell
@@ -1381,6 +1385,10 @@ function Banner({ children, tone = 'warm', action, onDismiss }) {
 }
 
 function Modal({ title, children, onClose }) {
+  // Escape closes and the library behind stops scrolling. The backdrop click
+  // and every child's own Cancel/X button are untouched.
+  useDialog(onClose)
+
   return (
     <div
       role="dialog" aria-modal="true" aria-label={title}

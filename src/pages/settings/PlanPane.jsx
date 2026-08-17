@@ -15,6 +15,7 @@ import { isNativeApp } from '../../lib/native'
 import {
   Card, CardBody, Btn, LinkBtn, Pill, Note, Msg, Spinner, T, money, plural,
 } from './shared'
+import { meterFraction, meterTicks, monitoringRowValue, UNLIMITED_ACCOUNT } from './planMath'
 
 // The three rungs of each ladder. Scout is the free floor, not a purchase card.
 const FAMILY = {
@@ -30,14 +31,23 @@ const nextResetLabel = () => {
     .toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-/** 18-tick equalizer bar. Green when uncapped, red at 85% or more, navy otherwise. */
+/**
+ * 18-tick equalizer bar, filled to used/cap. Red at 85% or more, navy otherwise.
+ *
+ * An UNLIMITED allowance (cap == null) has no fraction to draw — it used to
+ * light all 18 ticks green, which is why "Profiles generated 1", "Monitoring
+ * slots 3" and "Candidates tracked 27" all rendered as full gauges on the same
+ * account. It now gets a thin flat rule and an explicit "Unlimited — N used".
+ * The fraction itself lives in ./planMath so it can be tested.
+ */
 function Meter({ label, used, cap, note, loading }) {
-  const uncapped = cap == null
-  const pct   = uncapped || !cap ? 0 : Math.min(100, Math.round((used / cap) * 100))
-  const tight = !uncapped && !!cap && pct >= 85
-  const fill  = uncapped ? T.green : tight ? T.red : T.navy
-  const lit   = loading ? 0 : uncapped ? TICKS : cap ? Math.round((pct / 100) * TICKS) : 0
-  const value = loading ? '—' : uncapped ? String(used) : `${used} of ${cap}`
+  const frac  = meterFraction(used, cap)
+  const uncapped = frac == null
+  const pct   = uncapped ? 0 : Math.round(frac * 100)
+  const tight = !uncapped && pct >= 85
+  const fill  = tight ? T.red : T.navy
+  const lit   = loading ? 0 : meterTicks(used, cap, TICKS)
+  const value = loading ? '—' : uncapped ? `Unlimited — ${used} used` : `${used} of ${cap}`
 
   return (
     <div>
@@ -45,16 +55,24 @@ function Meter({ label, used, cap, note, loading }) {
         <span style={{ fontSize: 12, fontWeight: 600, color: T.ink3 }}>{label}</span>
         <span style={{ marginLeft: 'auto', fontSize: 12.5, fontWeight: 700, color: tight && !loading ? T.red : T.ink }}>{value}</span>
       </div>
-      <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 16 }} aria-hidden="true">
-        {Array.from({ length: TICKS }, (_, i) => (
-          <div key={i} style={{
-            flex: 1,
-            height: i < lit ? 10 + ((i % 3) * 3) : 8,
-            borderRadius: 2,
-            background: i < lit ? fill : T.track,
-          }} />
-        ))}
-      </div>
+      {uncapped && !loading ? (
+        // Deliberately NOT a gauge: a full 18-tick bar reads as "you are at your
+        // limit". A 2px rule says "there is no limit to draw".
+        <div aria-hidden="true" style={{ height: 16, display: 'flex', alignItems: 'center' }}>
+          <div style={{ width: '100%', height: 2, borderRadius: 2, background: T.green, opacity: .55 }} />
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 16 }} aria-hidden="true">
+          {Array.from({ length: TICKS }, (_, i) => (
+            <div key={i} style={{
+              flex: 1,
+              height: i < lit ? 10 + ((i % 3) * 3) : 8,
+              borderRadius: 2,
+              background: i < lit ? fill : T.track,
+            }} />
+          ))}
+        </div>
+      )}
       <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>{loading ? 'Counting…' : note}</div>
     </div>
   )
@@ -98,7 +116,12 @@ export default function PlanPane({
       return `Free until ${new Date(trial.endsAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} — then the free Scout plan unless you subscribe.`
     }
     if (basePrice == null) return 'Free forever. Upgrade whenever you need full profiles.'
-    const bracketPart = planType === 'action' ? ` · ${bracketCfg.label} active candidates` : ''
+    // The viewer's own bracket, which is correct HERE (this line is the current
+    // subscription, not a plan spec) — but it read "1 active candidates" on the
+    // b1 bracket. The label can be a range ("2 – 5"), so pluralise off max.
+    const bracketPart = planType === 'action'
+      ? ` · ${bracketCfg.label} active candidate${bracketCfg.max === 1 ? '' : 's'}`
+      : ''
     if (period === 'monthly') return `${money(basePrice)} per month${bracketPart}`
     const total = periodTotal(basePrice, period)
     const eff   = effectiveMonthlyRate(basePrice, period)
@@ -118,8 +141,11 @@ export default function PlanPane({
       label: 'Profiles generated',
       used: usage.profilesUsed,
       cap: profileLimit === Infinity ? null : profileLimit,
+      // "on your account", not "on your plan": admin / beta / enterprise
+      // entitlements are what lift the cap, and the plan cards below still
+      // quote the plan's own number.
       note: profileLimit === Infinity
-        ? 'Unlimited on your plan'
+        ? UNLIMITED_ACCOUNT
         : `${plural(profilesLeft, 'profile')} left · resets ${nextResetLabel()}`,
     },
     {
@@ -127,7 +153,7 @@ export default function PlanPane({
       used: usage.monitored,
       cap: maxSlots === Infinity ? null : maxSlots,
       note: maxSlots === Infinity
-        ? 'Unlimited slots · refreshes Mondays'
+        ? `${UNLIMITED_ACCOUNT} · refreshes Mondays`
         : maxSlots === 0
           ? 'Active monitoring is not included on your plan'
           : `${slotsOpen === 1 ? '1 slot open' : `${slotsOpen} slots open`} · refreshes Mondays`,
@@ -138,7 +164,7 @@ export default function PlanPane({
       cap: scoutCandidateCap,
       note: scoutCandidateCap
         ? `Scout tracks up to ${plural(scoutCandidateCap, 'candidate')}`
-        : 'Unlimited on your plan',
+        : UNLIMITED_ACCOUNT,
     },
   ]
 
@@ -151,6 +177,9 @@ export default function PlanPane({
     const base = c.monthlyPrice != null ? c.monthlyPrice : (MONTHLY_PRICES[key]?.[bracket] ?? null)
     const isCurrent = key === plan
 
+    // These rows describe what the PLAN includes, not what this account is
+    // currently allowed — the "THIS MONTH" meters above are the account. The
+    // card header says so, so a plan number here can never be read as a cap.
     const rows = [
       {
         k: 'Profiles',
@@ -159,10 +188,11 @@ export default function PlanPane({
           : `${plural(c.profileLimit ?? 0, 'profile')} per month`,
       },
       {
+        // Every Action card used to print the VIEWER's bracket label verbatim,
+        // so all three read "1 active candidates" — not the card's plan, and
+        // ungrammatical with it. See planMath.monitoringRowValue.
         k: 'Monitoring',
-        v: c.planType === 'action'
-          ? `${bracketCfg.label} active candidates`
-          : (c.activeCandidateLimit ? plural(c.activeCandidateLimit, 'active candidate') : 'Not included'),
+        v: monitoringRowValue(key, bracket),
       },
       {
         k: 'Seats',
@@ -282,7 +312,11 @@ export default function PlanPane({
 
       <Card
         title="Change plan"
-        desc="Plans differ by how many candidates you track and how many profiles you generate."
+        desc={
+          'Plans differ by how many candidates you track and how many profiles you generate. ' +
+          'The figures on these cards are each plan’s specification — your account’s ' +
+          'current allowance is the one shown under THIS MONTH above.'
+        }
         right={
           <div style={{ marginLeft: 'auto', flex: 'none', display: 'flex', gap: 4, background: T.chip, borderRadius: 99, padding: 4 }}>
             {[['Monthly', false], ['Yearly', true]].map(([label, val]) => {

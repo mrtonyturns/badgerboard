@@ -44,6 +44,24 @@ export function splitSwotPoints(value) {
 }
 
 /**
+ * News summaries come out of parseNewsItems (shared.jsx) already cut to 250
+ * characters with a hard .slice(), so a long summary lands mid-word with no
+ * marker — "…a difference of" just stops. Trim back to the last whole word and
+ * say so with an ellipsis. Text comfortably under the cap is returned as-is.
+ */
+export function trimToWord(text, max = 250) {
+  const s = String(text ?? '').trim()
+  if (!s || s.length < max) return s
+  const cut = s.slice(0, max)
+  const lastSpace = cut.lastIndexOf(' ')
+  // Only fall back to a mid-word cut if the last space is implausibly early
+  // (one very long token), otherwise the summary loses most of its text.
+  const body = (lastSpace > max * 0.5 ? cut.slice(0, lastSpace) : cut)
+    .replace(/[\s,;:.\-–—]+$/, '')
+  return body ? `${body}…` : ''
+}
+
+/**
  * True when a string carries no information a user can read — empty, or made
  * up entirely of unfilled bracket tokens like '[RESEARCH REQUIRED]',
  * '[TBD]', '[KNOWN] · [X/Live]' plus punctuation.
@@ -146,7 +164,7 @@ function NewsCard({ item, isNew }) {
       </div>
       <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.4, marginBottom: 5 }}>{item.title}</div>
       {item.description && (
-        <div style={{ fontSize: 12.5, color: T.ink3, lineHeight: 1.55 }}>{item.description}</div>
+        <div style={{ fontSize: 12.5, color: T.ink3, lineHeight: 1.55 }}>{trimToWord(item.description)}</div>
       )}
       <a
         className="cp-a"
@@ -592,12 +610,23 @@ export function OppositionView({ candidate, dossiers, canIntel, weaknesses, oppo
                     <div style={{ fontSize: 12.5, color: T.ink3, lineHeight: 1.55 }}>{body}</div>
                   )}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 10, flexWrap: 'wrap' }}>
-                    <Btn
-                      kind="primary"
-                      disabled={!sparHref}
-                      title={sparHref ? 'Open Broadside and spar against this profile' : 'Generate a profile first'}
-                      onClick={() => sparHref && nav(sparHref)}
-                    >Spar on this in Broadside</Btn>
+                    {/* A `title` on a DISABLED button never shows — browsers
+                        swallow hover events on disabled controls, so the "why
+                        is this greyed out?" answer was unreachable. Same
+                        group-hover span pattern as Candidates.jsx. */}
+                    <span className="relative group" style={{ display: 'inline-flex' }}>
+                      <Btn
+                        kind="primary"
+                        disabled={!sparHref}
+                        title={sparHref ? 'Open Broadside and spar against this profile' : undefined}
+                        onClick={() => sparHref && nav(sparHref)}
+                      >Spar on this in Broadside</Btn>
+                      {!sparHref && (
+                        <span className="absolute bottom-full left-0 mb-2 w-56 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl hidden group-hover:block z-20 leading-relaxed">
+                          Generate a profile first — Broadside spars against the profile's content.
+                        </span>
+                      )}
+                    </span>
                     <span style={{ fontSize: 11, color: T.faint }}>
                       From the profile{newest?.generated_at ? ` · ${fmtDate(newest.generated_at)}` : ''}
                     </span>

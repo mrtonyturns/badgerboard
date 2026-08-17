@@ -14,11 +14,17 @@
 import React from 'react'
 import { Card, CardBody, Row, ChoicePill, Toggle, Pill, Note, Msg, StubPill, plural, T } from './shared'
 
+// `lockNote` is per-alert on purpose: both locked rows used to append one
+// shared boilerplate sentence about silenced alerts letting access lapse, so
+// the two descriptions ended verbatim identical and read as a copy-paste slip.
+// Each now explains why ITS OWN alert is locked.
 export const NOTIF_PREFS = [
   { key: 'payment_failed',  locked: true,  label: 'Payment failed warning',
-    desc: 'Sent when a payment attempt fails, so you can fix your card before access is interrupted.' },
+    desc: 'Sent when a payment attempt fails, so you can fix your card before access is interrupted.',
+    lockNote: 'Locked on: a failed payment is the one warning that still has time to save your subscription.' },
   { key: 'account_locked',  locked: true,  label: 'Account security alerts',
-    desc: 'Sent if your account is locked by a security event or by repeated failed payments.' },
+    desc: 'Sent if your account is locked by a security event or by repeated failed payments.',
+    lockNote: 'Locked on: if someone else triggers a lock on this account, you have to hear about it from us.' },
   { key: 'payment_receipt', locked: false, label: 'Payment receipts',
     desc: 'A receipt each time a subscription payment goes through.' },
   { key: 'plan_changed',    locked: false, label: 'Plan changes',
@@ -64,7 +70,14 @@ export default function NotificationsPane({
           title="Alert me immediately on controversy items"
           badge={<StubPill />}
           desc="Not built yet. Controversy findings arrive with the Monday digest and are waiting on the candidate's profile before then."
-          control={<Toggle on={false} disabled label="Immediate controversy alerts (not yet available)" />}
+          control={(
+            <Toggle
+              on={false}
+              unavailable
+              label="Immediate controversy alerts (not yet available)"
+              title="Not yet available — there is no immediate-alert path on the server"
+            />
+          )}
           last
         />
       </Card>
@@ -80,9 +93,7 @@ export default function NotificationsPane({
               key={p.key}
               title={p.label}
               badge={p.locked ? <Pill>ALWAYS ON</Pill> : null}
-              desc={p.locked
-                ? `${p.desc} This one can't be switched off — silencing it is how access lapses without warning.`
-                : p.desc}
+              desc={p.locked ? `${p.desc} ${p.lockNote}` : p.desc}
               control={(
                 <Toggle
                   on={on}

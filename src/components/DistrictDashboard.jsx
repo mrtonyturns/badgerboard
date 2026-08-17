@@ -502,10 +502,19 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
               ) : (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 10 }}>
                   {districtCandidates.map(c => (
+                    // Keyboard-operable: the whole card is the link to the candidate.
                     <div key={c.id} onClick={() => navigate(`/candidates/${c.id}`)}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Open ${c.name}`}
+                      onKeyDown={ev => {
+                        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); navigate(`/candidates/${c.id}`) }
+                      }}
                       style={{ border: '1.5px solid #E9EDF3', borderRadius: 14, padding: 14, display: 'flex', gap: 12, alignItems: 'center', cursor: 'pointer' }}
                       onMouseEnter={ev => { ev.currentTarget.style.borderColor = '#8B0000' }}
-                      onMouseLeave={ev => { ev.currentTarget.style.borderColor = '#E9EDF3' }}>
+                      onMouseLeave={ev => { ev.currentTarget.style.borderColor = '#E9EDF3' }}
+                      onFocus={ev => { ev.currentTarget.style.borderColor = '#8B0000' }}
+                      onBlur={ev => { ev.currentTarget.style.borderColor = '#E9EDF3' }}>
                       <div style={{ width: 44, height: 44, borderRadius: 13, background: c.party ? partyColorHex(c.party) : '#0A1628', color: '#fff', fontWeight: 800, fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                         {(c.name || '?').split(' ').map(w => w[0]).slice(0, 2).join('')}
                       </div>

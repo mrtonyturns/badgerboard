@@ -809,7 +809,7 @@ export default function CandidateDashboard() {
                 icon="✦" tint="#E7F0FD" ink="#1D4ED8"
                 label="Build a profile"
                 sub={
-                  profileLimit === Infinity ? 'Unlimited'
+                  profileLimit === Infinity ? 'Unlimited on your account'
                   : profilesUsed == null ? ''
                   : `${Math.max(0, profileLimit - profilesUsed)} left this month`
                 }

@@ -28,6 +28,7 @@ import {
 import ElectionResultsBoard from './ElectionResultsBoard'
 import LoadingBar from '../components/LoadingBar'
 import TaskBoard from '../components/TaskBoard'
+import { useDialog } from '../lib/useDialog'
 import UpgradePrompt from '../components/UpgradePrompt'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserPlan, hasFeature, PLAN_CONFIG } from '../lib/tiers'
@@ -41,15 +42,22 @@ const defaultElectionForm = {
   year: new Date().getFullYear(), notes: '',
 }
 
-function ElectionModal({ open, onClose, editing, onSave, saving }) {
+// Thin open/closed gate so the body (and its useDialog hook) mounts and
+// unmounts with the dialog — hooks can't sit behind an `if (!open) return null`.
+function ElectionModal({ open, ...props }) {
+  if (!open) return null
+  return <ElectionModalBody {...props} />
+}
+
+function ElectionModalBody({ onClose, editing, onSave, saving }) {
   const [form, setForm] = useState(defaultElectionForm)
   useEffect(() => {
     setForm(editing
       ? { name: editing.name, election_date: editing.election_date, filing_deadline: editing.filing_deadline || '', type: editing.type, year: editing.year, notes: editing.notes || '' }
       : defaultElectionForm)
-  }, [editing, open])
+  }, [editing])
+  useDialog(onClose)
 
-  if (!open) return null
   const f = k => e => setForm(p => ({ ...p, [k]: e.target.value }))
 
   return (
@@ -65,7 +73,7 @@ function ElectionModal({ open, onClose, editing, onSave, saving }) {
             <label className="label">Election Name *</label>
             <input className="input" value={form.name} onChange={f('name')} placeholder="e.g. 2026 November General Election" required autoFocus />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="label">Election Date *</label>
               <input className="input" type="date" value={form.election_date} onChange={f('election_date')} required />
@@ -75,7 +83,7 @@ function ElectionModal({ open, onClose, editing, onSave, saving }) {
               <input className="input" type="date" value={form.filing_deadline} onChange={f('filing_deadline')} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="label">Type *</label>
               <select className="input" value={form.type} onChange={f('type')}>

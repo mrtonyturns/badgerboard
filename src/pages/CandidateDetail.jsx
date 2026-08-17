@@ -605,36 +605,6 @@ export default function CandidateDetail() {
         </div>
       </div>
 
-      {/* ── unread strip (SPEC §2) ── */}
-      {monitored && unseen.total > 0 && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 11, background: T.warmBg,
-          border: `1px solid ${T.warmBr}`, borderRadius: 12, padding: '11px 16px',
-          marginBottom: 14, flexWrap: 'wrap',
-        }}>
-          <span style={{
-            flexShrink: 0, width: 7, height: 7, borderRadius: '50%',
-            background: T.red, animation: 'cpPulse 2s infinite',
-          }} />
-          <div style={{ fontSize: 12.5, minWidth: 0 }}>
-            <span style={{ fontWeight: 700 }}>
-              {unseen.total} new item{unseen.total === 1 ? '' : 's'}
-            </span>
-            {lastViewed ? ` since you last opened this profile on ${fmtDate(lastViewed)}` : ''}
-            {' — from the latest refresh.'}
-          </div>
-          <button
-            type="button"
-            onClick={markAllRead}
-            style={{
-              marginLeft: 'auto', flexShrink: 0, border: '1px solid #E8D5C0', background: 'transparent',
-              borderRadius: 99, padding: '8px 13px', fontSize: 11.5, fontWeight: 600,
-              fontFamily: 'inherit', cursor: 'pointer', minHeight: 34,
-            }}
-          >Mark all read</button>
-        </div>
-      )}
-
       {/* ── group pill nav (SPEC §3) ── */}
       <div className="cp-nav" style={{
         display: 'flex', alignItems: 'center', gap: 4, background: T.chip,
@@ -717,6 +687,41 @@ export default function CandidateDetail() {
               </button>
             )
           })}
+        </div>
+      )}
+
+      {/* ── unread strip (SPEC §2) ──
+          Renders BELOW both nav rows. The unseen counts arrive a couple of
+          seconds after first paint, and while this strip sat above the tabs it
+          pushed the whole nav down ~60px the moment it appeared — often out from
+          under a finger already on its way to a tab. Below the nav it can only
+          ever move the view content, which nobody is aiming at yet. */}
+      {monitored && unseen.total > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 11, background: T.warmBg,
+          border: `1px solid ${T.warmBr}`, borderRadius: 12, padding: '11px 16px',
+          marginBottom: 14, flexWrap: 'wrap',
+        }}>
+          <span style={{
+            flexShrink: 0, width: 7, height: 7, borderRadius: '50%',
+            background: T.red, animation: 'cpPulse 2s infinite',
+          }} />
+          <div style={{ fontSize: 12.5, minWidth: 0 }}>
+            <span style={{ fontWeight: 700 }}>
+              {unseen.total} new item{unseen.total === 1 ? '' : 's'}
+            </span>
+            {lastViewed ? ` since you last opened this profile on ${fmtDate(lastViewed)}` : ''}
+            {' — from the latest refresh.'}
+          </div>
+          <button
+            type="button"
+            onClick={markAllRead}
+            style={{
+              marginLeft: 'auto', flexShrink: 0, border: '1px solid #E8D5C0', background: 'transparent',
+              borderRadius: 99, padding: '8px 13px', fontSize: 11.5, fontWeight: 600,
+              fontFamily: 'inherit', cursor: 'pointer', minHeight: 34,
+            }}
+          >Mark all read</button>
         </div>
       )}
 

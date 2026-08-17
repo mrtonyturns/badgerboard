@@ -59,6 +59,51 @@ const POLL_MS            = 3000
 const MAX_WAIT_MS        = 12 * 60 * 1000
 const HEARTBEAT_STALE_MS = 3 * 60 * 1000
 
+// ─── R2B PURE HELPERS BEGIN ──────────────────────────────────────────────────
+// ONE derivation of a prospect's pipeline state. The header subtitle, the tab
+// counts and the per-row badges each used to ask a different question:
+//   header/results  p.enriched_at
+//   enrich queue    p.enrichment_status !== 'enriched'
+//   discover badge  "a prospect row exists at all"  → always rendered "queued"
+// so a single fully enriched prospect read "1 enriched · 0 queued" in the
+// header while its own Discover row was badged "queued", and a 'partial' row
+// was counted in the Enrich tab AND the Results tab at once.
+//
+// The truthful reading, from the writer (enrich-prospects-background.js) and
+// the schema CHECK (pending|running|enriched|partial|error):
+//   • enriched_at is stamped only when a run actually saved enrichment data,
+//     and a 'partial' run saves data too — so enriched_at, not the status
+//     string, is what "this prospect has been enriched" means;
+//   • a failed run rewrites enrichment_status to 'error' and leaves
+//     enriched_at untouched, so a row that already carries data stays
+//     enriched (its failure is surfaced on the row, not by hiding it).
+// Every prospect therefore lands in exactly one bucket and the counts add up.
+export function prospectStatus(p) {
+  if (!p) return 'queued'
+  if (p.enriched_at) return 'enriched'
+  if (p.enrichment_status === 'error') return 'failed'
+  return 'queued'
+}
+
+/** Rows the Enrich tab works on: anything not enriched yet (failed included). */
+export function isQueuedProspect(p) { return prospectStatus(p) !== 'enriched' }
+
+/** Rows the Results tab shows. */
+export function isEnrichedProspect(p) { return prospectStatus(p) === 'enriched' }
+
+/** The numbers the header and the tabs both print. */
+export function prospectCounts(rows) {
+  const list = Array.isArray(rows) ? rows : []
+  let enriched = 0, queued = 0, failed = 0
+  for (const p of list) {
+    const s = prospectStatus(p)
+    if (s === 'enriched') enriched += 1
+    else { queued += 1; if (s === 'failed') failed += 1 }
+  }
+  return { total: list.length, enriched, queued, failed }
+}
+// ─── R2B PURE HELPERS END ────────────────────────────────────────────────────
+
 // The party filter offers what the DB can actually hold (lib/party.js
 // DB_PARTIES = the `candidates.party` CHECK). The hand-kept list this replaces
 // was two values short, so prospects saved as 'Constitution' or 'Working
@@ -725,6 +770,15 @@ export default function Prospecting() {
     [prospects]
   )
 
+  // The Discover badge reports the prospect's REAL state (prospectStatus), not
+  // the mere existence of a prospect row — which is why an already-enriched
+  // candidate used to sit under a "queued" pill while the header said 0 queued.
+  const prospectByCandidateId = useMemo(() => {
+    const m = new Map()
+    for (const p of prospects) if (p.candidate_id) m.set(p.candidate_id, p)
+    return m
+  }, [prospects])
+
   const discoverRows = useMemo(() => {
     const needle = lower(q).trim()
     return (candidates || []).filter(c => {
@@ -819,14 +873,11 @@ export default function Prospecting() {
   }
 
   // ── Enrichment run ─────────────────────────────────────────────────────────
-  const queueRows = useMemo(
-    () => prospects.filter(p => p.enrichment_status !== 'enriched'),
-    [prospects]
-  )
-  const enrichedRows = useMemo(
-    () => prospects.filter(p => p.enriched_at),
-    [prospects]
-  )
+  // Both lists and the header counts come from prospectStatus() — see the pure
+  // block at the top of this file for why enriched_at is the deciding field.
+  const queueRows    = useMemo(() => prospects.filter(isQueuedProspect),   [prospects])
+  const enrichedRows = useMemo(() => prospects.filter(isEnrichedProspect), [prospects])
+  const counts       = useMemo(() => prospectCounts(prospects),            [prospects])
 
   const pollRun = useCallback(async (runId, startedAt) => {
     const deadline = startedAt + MAX_WAIT_MS
@@ -1060,7 +1111,8 @@ export default function Prospecting() {
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: '-.2px' }}>Prospecting</div>
           <div style={{ fontSize: 12.5, color: T.muted, marginTop: 3 }}>
-            Discover → enrich → score → export. {enrichedRows.length} enriched · {queueRows.length} queued
+            Discover → enrich → score → export. {counts.enriched} enriched · {counts.queued} queued
+            {counts.failed ? ` (${counts.failed} failed)` : ''}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -1079,8 +1131,8 @@ export default function Prospecting() {
       <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
         {[
           ['discover', `Discover (${discoverRows.length})`],
-          ['enrich', `Enrich (${queueRows.length})`],
-          ['results', `Results (${enrichedRows.length})`],
+          ['enrich', `Enrich (${counts.queued})`],
+          ['results', `Results (${counts.enriched})`],
         ].map(([key, label]) => (
           <Chip key={key} active={tab === key} onClick={() => setTab(key)}>{label}</Chip>
         ))}
@@ -1190,6 +1242,7 @@ export default function Prospecting() {
                   )}
                   {discoverRows.map(c => {
                     const already = queuedCandidateIds.has(c.id)
+                    const state   = already ? prospectStatus(prospectByCandidateId.get(c.id)) : null
                     return (
                       <tr key={c.id} className="pp-row" style={trStyle}>
                         <td style={tdStyle}>
@@ -1213,7 +1266,10 @@ export default function Prospecting() {
                         <td style={{ ...tdStyle, textTransform: 'capitalize' }}>{String(c.status || '').replace(/_/g, ' ')}</td>
                         <td style={tdStyle}>{c.election?.name || '—'}</td>
                         <td style={tdStyle}>
-                          {already ? <Pill c={T.green} bg="#E6F5EC">queued</Pill> : <span style={{ color: T.faint }}>—</span>}
+                          {state === 'enriched' ? <Pill c="#1F6F43" bg="#E6F5EC">enriched</Pill>
+                            : state === 'failed' ? <Pill c="#9F1239" bg="#FDF1F1">failed</Pill>
+                            : state === 'queued' ? <Pill>queued</Pill>
+                            : <span style={{ color: T.faint }}>—</span>}
                         </td>
                       </tr>
                     )
@@ -1304,9 +1360,9 @@ export default function Prospecting() {
                         <td style={tdStyle}>{p.office_name || '—'}{p.district_name ? ` · ${p.district_name}` : ''}</td>
                         <td style={tdStyle}>{fmtDay(p.discovered_at || p.created_at)}</td>
                         <td style={tdStyle}>
-                          {p.enrichment_status === 'error'
+                          {prospectStatus(p) === 'failed'
                             ? <span title={p.enrichment_error || ''}><Pill c="#9F1239" bg="#FDF1F1">failed</Pill></span>
-                            : <Pill>{p.enrichment_status}</Pill>}
+                            : <Pill>{p.enrichment_status || 'pending'}</Pill>}
                         </td>
                         <td style={tdStyle}>
                           <button onClick={() => removeProspect(p.id)} title="Remove"

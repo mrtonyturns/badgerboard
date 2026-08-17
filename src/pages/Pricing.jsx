@@ -328,8 +328,11 @@ const FAQS = [
     a: "Each profile is a 14-section report covering news coverage, biography, political timeline, voting record, campaign finance, controversies, policy positions, organizational affiliations, political network, social media, digital presence, media strategy, attack and defense vectors, and verification flags.",
   },
   {
-    q: 'What is a lite profile on Scout?',
-    a: "Scout users get one profile per month. Biography and Political Record are fully visible. Affiliations shows the first two entries. Everything else is locked. It gives you a clear sense of what the full report contains.",
+    // Retitled off the brand name: "Scout" reads as a product you have to know
+    // about, when the thing being described is simply what the free tier gives
+    // you. The free tier itself is unchanged (tiers.js CANDIDATE_PLAN_CONFIG).
+    q: 'What is a lite profile on the free tier?',
+    a: "The free tier gives you one profile per month. Biography and Political Record are fully visible. Affiliations shows the first two entries. Everything else is locked. It gives you a clear sense of what the full report contains.",
   },
   {
     q: 'Can I switch plans or billing periods anytime?',
@@ -964,10 +967,19 @@ export default function Pricing() {
                   </thead>
                   <tbody>
                     {bracketList.map((b, i) => (
+                      // Picking a bracket was mouse-only: the row carried the
+                      // click and nothing else, so keyboard users could not
+                      // change bracket and nothing announced which was chosen.
                       <tr
                         key={b.key}
                         onClick={() => setBracket(b.key)}
-                        className={`border-t border-gray-100 cursor-pointer transition-colors ${
+                        role="button"
+                        tabIndex={0}
+                        aria-pressed={bracket === b.key}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setBracket(b.key) }
+                        }}
+                        className={`border-t border-gray-100 cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 ${
                           bracket === b.key ? 'bg-gray-50' : 'hover:bg-gray-50'
                         }`}
                       >
@@ -1109,7 +1121,10 @@ export default function Pricing() {
       <section className="mt-16 pt-10 border-t border-gray-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
         <div>
           <h2 className="text-lg font-semibold text-gray-900">Ready to get started?</h2>
-          <p className="text-sm text-gray-500 mt-1">Scout is free, takes 60 seconds to set up, and requires no credit card.</p>
+          {/* Plan-neutral: the old line sold "Scout" by name and promised a
+              60-second setup. The free tier is still real (tiers.js), so the
+              free-to-start promise stays — the brand name and the stopwatch go. */}
+          <p className="text-sm text-gray-500 mt-1">Start on the free tier — no credit card required. Upgrade whenever you need more.</p>
         </div>
         <div className="flex items-center gap-3 flex-shrink-0">
           <button

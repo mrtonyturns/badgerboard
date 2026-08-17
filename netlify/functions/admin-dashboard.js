@@ -1,5 +1,6 @@
 import { passwordResetTemplate } from './_email-templates.js';
 import { ADMIN_EMAILS } from './_config.js';
+import { resolveEntitlement, getGlobalBetaEnabled } from './_entitlements.js';
 
 // Returns: user object if admin, 'forbidden' if valid token but not admin, null if no/invalid token
 async function verifyAdmin(authHeader) {
@@ -39,14 +40,28 @@ async function getAllUsers() {
     if (batch.length < 1000) break;
     page++;
   }
-  return allRaw
-    .map((u) => ({
+  // The Plan column used to print raw app_metadata.plan, which is only the PAID
+  // layer — an admin/beta/trial account (e.g. the owner, who has no paid plan
+  // row at all) showed "Free" while Settings correctly showed Campaign. Resolve
+  // the effective entitlement server-side with the same resolver the rest of
+  // the backend uses, and ship BOTH: raw slug for debugging, resolved for display.
+  const globalBeta = await getGlobalBetaEnabled();
+
+  const mapped = await Promise.all(allRaw.map(async (u) => {
+    const resolved = await resolveEntitlement(u, { globalBeta });
+    return {
       id: u.id,
       email: u.email,
       created_at: u.created_at,
-      last_sign_in_at: u.last_sign_in_at,
+      // Supabase's admin listUsers returns this on every user; the client read
+      // a `last_login` field that has never existed in this payload, so every
+      // account rendered "Never".
+      last_sign_in_at: u.last_sign_in_at || null,
       plan: u.app_metadata?.plan || null,
+      resolved_plan: resolved.plan,        // effective plan (admin > beta > trial > paid > scout)
+      plan_source: resolved.source,        // admin | beta | trial | paid | free
       bracket: u.app_metadata?.bracket || null,
+      resolved_bracket: resolved.bracket,
       payment_status: u.app_metadata?.payment_status || null,
       email_confirmed: !!u.email_confirmed_at,
       // v1.18 access layers (trials + beta)
@@ -54,8 +69,10 @@ async function getAllUsers() {
       trial_bracket: u.app_metadata?.trial_bracket || null,
       trial_ends_at: u.app_metadata?.trial_ends_at || null,
       beta_mode: u.app_metadata?.beta_mode === true,
-    }))
-    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    };
+  }));
+
+  return mapped.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 }
 
 async function getUserActivity(userId) {

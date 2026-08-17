@@ -9,13 +9,24 @@
 // modal only reports per-row progress and can be closed while it continues.
 
 import React, { useRef, useState } from 'react'
+import { useDialog } from '../../lib/useDialog'
 import { T, Btn, Spinner, plural } from './shared'
 import { parseBulkCsv, bulkFailure, BULK_COLUMNS, rowOfficeLabel } from './bulkCsv'
 
 const MAX_BYTES = 5 * 1024 * 1024
 const MAX_ROWS  = 200
 
-export default function BulkModal({ open, onClose, balance, onRun, runState }) {
+// The dialog body is its own component so useDialog (Escape + ref-counted body
+// scroll-lock) can be a real, unconditional hook: it mounts when the modal
+// opens and unmounts when it closes, which is what the lock's refcount expects.
+// The old `if (!open) return null` sat *after* the hooks in one component, so
+// there was nowhere to put it.
+export default function BulkModal({ open, ...props }) {
+  if (!open) return null
+  return <BulkDialog {...props} />
+}
+
+function BulkDialog({ onClose, balance, onRun, runState }) {
   const [fileName, setFileName] = useState('')
   const [parsed, setParsed]     = useState(null)   // parseBulkCsv result
   const [failure, setFailure]   = useState(null)   // { title, body }
@@ -23,10 +34,11 @@ export default function BulkModal({ open, onClose, balance, onRun, runState }) {
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef(null)
 
-  if (!open) return null
-
   const reset = () => { setFileName(''); setParsed(null); setFailure(null); setTruncated(0) }
   const close = () => { reset(); onClose() }
+
+  // Escape closes through the same path the X and the backdrop already use.
+  useDialog(close)
 
   const readFile = (file) => {
     if (!file) return
@@ -82,7 +94,7 @@ export default function BulkModal({ open, onClose, balance, onRun, runState }) {
               ? `${plural(rows.length, 'profile')}. Each takes 2–4 minutes and runs in the background.`
               : `Uses ${rows.length} of the ${plural(left, 'profile')} left on your plan, leaving ${left - rows.length}. Each takes 2–4 minutes and runs in the background.`)
         : unlimited
-          ? 'This plan has no monthly profile cap. Each row becomes a full 14-section profile.'
+          ? 'Your account has no monthly profile cap. Each row becomes a full 14-section profile.'
           : `${left} of ${balance?.limit} profiles left on your plan this month. Each row becomes a full 14-section profile and uses one.`
 
   const canRun = loaded && !running && overBy === 0

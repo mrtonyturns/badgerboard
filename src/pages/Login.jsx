@@ -179,20 +179,23 @@ export default function Login() {
 
               {mode === 'signup' && (
                 <>
-                  {/* First / Last name */}
-                  <div className="grid grid-cols-2 gap-3">
+                  {/* First / Last name — two full-width text fields side by side
+                      were ~120px each on a 320px screen; they stack now. Every
+                      field below carries id/htmlFor so the visible label is its
+                      accessible name (and so clicking the label focuses it). */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="label">First Name <span className="text-brand-red">*</span></label>
+                      <label className="label" htmlFor="signup-first-name">First Name <span className="text-brand-red">*</span></label>
                       <div className="relative">
                         <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                        <input type="text" className="input pl-9" value={firstName}
+                        <input id="signup-first-name" type="text" className="input pl-9" value={firstName}
                           onChange={e => setFirstName(e.target.value)} placeholder="Tony"
                           required autoComplete="given-name" />
                       </div>
                     </div>
                     <div>
-                      <label className="label">Last Name <span className="text-brand-red">*</span></label>
-                      <input type="text" className="input" value={lastName}
+                      <label className="label" htmlFor="signup-last-name">Last Name <span className="text-brand-red">*</span></label>
+                      <input id="signup-last-name" type="text" className="input" value={lastName}
                         onChange={e => setLastName(e.target.value)} placeholder="Smith"
                         required autoComplete="family-name" />
                     </div>
@@ -200,10 +203,10 @@ export default function Login() {
 
                   {/* Business */}
                   <div>
-                    <label className="label">Organization / Business</label>
+                    <label className="label" htmlFor="signup-business">Organization / Business</label>
                     <div className="relative">
                       <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                      <input type="text" className="input pl-9" value={business}
+                      <input id="signup-business" type="text" className="input pl-9" value={business}
                         onChange={e => setBusiness(e.target.value)}
                         placeholder="The Bluejack Group" autoComplete="organization" />
                     </div>
@@ -211,16 +214,19 @@ export default function Login() {
 
                   {/* Phone */}
                   <div>
-                    <label className="label">Phone Number</label>
+                    <label className="label" htmlFor="signup-phone">Phone Number</label>
                     <div className="relative">
                       <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                      <input type="tel" className="input pl-9" value={phone}
+                      <input id="signup-phone" type="tel" className="input pl-9" value={phone}
                         onChange={e => setPhone(formatPhone(e.target.value))}
                         placeholder="(715) 555-0100" autoComplete="tel" />
                     </div>
                   </div>
 
-                  {/* Position */}
+                  {/* Position — SearchableSelect renders its own button and takes
+                      no label prop, so this one stays a plain <label>; giving it
+                      a programmatic name means changing that shared component,
+                      which is outside this pass. */}
                   <div>
                     <label className="label">Position / Role <span className="text-brand-red">*</span></label>
                     <div className="relative">
@@ -239,10 +245,10 @@ export default function Login() {
 
               {/* Email */}
               <div>
-                <label className="label">Email Address <span className="text-brand-red">*</span></label>
+                <label className="label" htmlFor="login-email">Email Address <span className="text-brand-red">*</span></label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
-                  <input type="email" className="input pl-9" value={email}
+                  <input id="login-email" type="email" className="input pl-9" value={email}
                     onChange={e => setEmail(e.target.value)} placeholder="you@example.com"
                     required autoComplete="email" />
                 </div>
@@ -252,7 +258,7 @@ export default function Login() {
               {mode !== 'forgot' && (
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="label mb-0">Password <span className="text-brand-red">*</span></label>
+                    <label className="label mb-0" htmlFor="login-password">Password <span className="text-brand-red">*</span></label>
                     {mode === 'signin' && (
                       <button type="button" onClick={() => switchMode('forgot')}
                         className="text-xs text-brand-red hover:opacity-75 font-medium">
@@ -261,11 +267,13 @@ export default function Login() {
                     )}
                   </div>
                   <div className="relative">
-                    <input type={showPw ? 'text' : 'password'} className="input pr-10"
+                    <input id="login-password" type={showPw ? 'text' : 'password'} className="input pr-10"
                       value={password} onChange={e => setPassword(e.target.value)}
                       placeholder="••••••••" required minLength={8}
                       autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} />
                     <button type="button" onClick={() => setShowPw(!showPw)}
+                      aria-label={showPw ? 'Hide password' : 'Show password'}
+                      aria-pressed={showPw}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
                       {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
@@ -277,13 +285,15 @@ export default function Login() {
               {/* Confirm password */}
               {mode === 'signup' && (
                 <div>
-                  <label className="label">Confirm Password <span className="text-brand-red">*</span></label>
+                  <label className="label" htmlFor="signup-confirm-password">Confirm Password <span className="text-brand-red">*</span></label>
                   <div className="relative">
-                    <input type={showConfirmPw ? 'text' : 'password'}
+                    <input id="signup-confirm-password" type={showConfirmPw ? 'text' : 'password'}
                       className={`input pr-10 ${confirmPw && confirmPw !== password ? 'border-red-400' : ''}`}
                       value={confirmPw} onChange={e => setConfirmPw(e.target.value)}
                       placeholder="••••••••" required autoComplete="new-password" />
                     <button type="button" onClick={() => setShowConfirmPw(!showConfirmPw)}
+                      aria-label={showConfirmPw ? 'Hide confirmed password' : 'Show confirmed password'}
+                      aria-pressed={showConfirmPw}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
                       {showConfirmPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>

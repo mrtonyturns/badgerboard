@@ -31,6 +31,7 @@ import {
   DigestItems, ElectionRows, EmptyState, CtaButton, TextLink, LivePulseDot,
   PartyAvatar,
   safeISO, fmtInt, fmtDate, daysUntil, isUpcoming, relativeTime, initialsOf, autoStatus,
+  countdownLabel, fmtDueDate, dueChipLabel,
   isMonitored, monitoringSlots,
   resolveDistrict, loadBoundary, countVotersInDistrict,
   latestDigestOf, weekDigestOf,
@@ -489,13 +490,17 @@ export default function ActionDashboard() {
     Object.entries(overdueBy).forEach(([id, list]) => {
       const c = candidates.find(x => x.id === id)
       const soonest = list.slice().sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''))[0]
-      const late = Math.abs(daysUntil(soonest.due_date) ?? 0)
       out.push({
         key: `o-${id}`, priority: 1, candidateId: c?.id,
         glyph: '!', tileBg: '#FFF7ED', tileFg: '#C2410C',
-        title: `${c ? `${c.name}: ` : ''}${soonest.title}${list.length > 1 ? ` +${list.length - 1} more overdue` : ''}`,
-        sub: `Game Plan · ${PHASE_MAP[soonest.phase]?.label || 'Unassigned'} · due ${fmtDate(soonest.due_date)}`,
-        chip: `${late}d overdue`, chipColor: T.redHot, chipBg: '#FEF2F2',
+        // "overdue" is the chip's word and the chip's alone — the title used to
+        // repeat it, so one row said "overdue" twice.
+        title: `${c ? `${c.name}: ` : ''}${soonest.title}${list.length > 1 ? ` +${list.length - 1} more` : ''}`,
+        // fmtDueDate carries the year when it isn't this one: a bare "Sep 2"
+        // beside "348d overdue" read as a date 17 days in the FUTURE.
+        sub: `Game Plan · ${PHASE_MAP[soonest.phase]?.label || 'Unassigned'} · due ${fmtDueDate(soonest.due_date)}`,
+        // Signed, so a future due date can never be announced as overdue.
+        chip: dueChipLabel(soonest.due_date), chipColor: T.redHot, chipBg: '#FEF2F2',
       })
     })
     upcoming.forEach(e => {
@@ -508,7 +513,7 @@ export default function ActionDashboard() {
         glyph: '◷', tileBg: '#F4F0E6', tileFg: T.warmInk,
         title: `${e.name}: ${on.length} candidate${on.length === 1 ? '' : 's'} on the ballot`,
         sub: on.slice(0, 3).map(c => c.name).join(' · ') + (on.length > 3 ? ` +${on.length - 3}` : ''),
-        chip: d === 0 ? 'today' : `${d} days`, chipColor: T.ink3, chipBg: T.chip,
+        chip: countdownLabel(e.election_date), chipColor: T.ink3, chipBg: T.chip,
       })
     })
     return out.sort((a, b) => a.priority - b.priority).slice(0, 6)
@@ -577,7 +582,16 @@ export default function ActionDashboard() {
           of={profileLimit === Infinity ? '∞' : profileLimit}
           sub={
             `${fmtInt(dossiers.length)} profile${dossiers.length === 1 ? '' : 's'} on file` +
-            (planCfg?.profilesPerCandidate ? ` · ${planCfg.profilesPerCandidate} per candidate / mo` : '') +
+            // Never quote the PLAN spec as if it were the ACCOUNT's cap. When the
+            // resolved allowance is unlimited (admin / beta / enterprise) this
+            // sublabel read "4 per candidate / mo" directly under "1 of ∞".
+            // One treatment app-wide: "Unlimited on your account", and any plan
+            // number is labelled as a plan spec.
+            (profileLimit === Infinity
+              ? ' · Unlimited on your account'
+              : planCfg?.profilesPerCandidate
+                ? ` · ${planCfg.name} plan spec: ${planCfg.profilesPerCandidate}/candidate/mo`
+                : '') +
             (banked > 0 ? ` · ${banked} banked` : '')
           }
         />

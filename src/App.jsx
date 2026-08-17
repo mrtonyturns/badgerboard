@@ -121,6 +121,7 @@ const Broadside = lazyRetry(() => import('./pages/Broadside'))  // code-split: a
 const CityDemographics = lazyRetry(() => import('./pages/CityDemographics'))  // code-split: trims the initial bundle (M1)
 const Polling = lazyRetry(() => import('./pages/Polling'))  // code-split: beta-only (v1.22)
 import ResetPassword from './pages/ResetPassword'
+import NotFound from './pages/NotFound'
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth()
@@ -281,8 +282,14 @@ const AppRoutes = () => {
         <Route path="broadside" element={<FeatureRoute feature="broadside"><Broadside /></FeatureRoute>} />
         <Route path="polling" element={<BetaRoute><Polling /></BetaRoute>} />
         <Route path="admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
+        {/* Catch-all. It lives INSIDE the Layout route so a signed-in user who
+            follows a dead link keeps the app chrome and gets told what happened,
+            instead of being silently teleported to the Dashboard. Signed-out
+            visitors still fall through ProtectedRoute to /login, exactly as
+            the old blanket redirect left them. The deliberate legacy redirects
+            above (/volunteer, /elections/results…) are unaffected. */}
+        <Route path="*" element={<NotFound />} />
       </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
     </Suspense>
   )

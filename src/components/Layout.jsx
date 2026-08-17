@@ -41,7 +41,7 @@ import NotificationCenter from './NotificationCenter'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.35.0'
+const APP_VERSION = 'v1.36.0'
 
 // ─── z-index scale (v1.34.1 — audit fix B1) ──────────────────────────────────
 // One ladder for everything that floats, lowest to highest:
@@ -83,6 +83,15 @@ export const Z = {
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.36.0',
+    date: 'August 16, 2026',
+    changes: [
+      'UI repair round 2: every dialog now closes on Escape and locks the page behind it, dashboard countdowns match the calendar, and quota copy tells one consistent story',
+      'Events search runs when you ask (not on page load), Campaign Connect tabs are stable and linkable, unknown pages get a real 404, and admin shows real plan names and last sign-ins',
+      'Dozens of smaller fixes: masked calendar tokens, keyboard-accessible uploads and sorts, search debouncing, honest error states, and tables that scroll instead of squashing',
+    ],
+  },
   {
     version: 'v1.35.0',
     date: 'August 16, 2026',

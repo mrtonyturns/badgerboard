@@ -7,6 +7,7 @@
 import React, { useEffect, useState } from 'react'
 import { ThumbsUp, ThumbsDown, HelpCircle, Check, X } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
+import { useDialog } from '../../lib/useDialog'
 import { parseFlaggedClaims } from './reportModel'
 import { T } from './shared'
 
@@ -23,6 +24,10 @@ const STATUS_BUTTONS = [
 ]
 
 export default function ClaimReviewer({ dossier, onClose }) {
+  // Escape closes and the page behind stops scrolling — the drawer previously
+  // had neither, and no dismissal at all except its own X.
+  useDialog(onClose)
+
   const [reviews, setReviews]   = useState({})
   const [saving, setSaving]     = useState(null)
   const [savedIds, setSavedIds] = useState(new Set())
@@ -81,11 +86,23 @@ export default function ClaimReviewer({ dossier, onClose }) {
   }
 
   return (
-    <div style={{
-      position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(380px, 100vw)', zIndex: 60,
-      background: '#fff', borderLeft: `1px solid ${T.border}`, boxShadow: '-12px 0 40px rgba(13,21,38,.12)',
-      display: 'flex', flexDirection: 'column', fontFamily: T.font, color: T.ink,
-    }}>
+    <>
+    {/* Backdrop: covers everything behind the sheet (including the reader's own
+        sticky chrome) and closes on click. At phone widths the drawer is a full
+        100vw sheet, which is intended — the backdrop is then simply behind it. */}
+    <div
+      onClick={onClose}
+      aria-hidden="true"
+      style={{ position: 'fixed', inset: 0, zIndex: 59, background: 'rgba(13,21,38,.38)' }}
+    />
+    <div
+      role="dialog" aria-modal="true" aria-label="Claim review"
+      style={{
+        position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(380px, 100vw)', zIndex: 60,
+        background: '#fff', borderLeft: `1px solid ${T.border}`, boxShadow: '-12px 0 40px rgba(13,21,38,.12)',
+        display: 'flex', flexDirection: 'column', fontFamily: T.font, color: T.ink,
+      }}
+    >
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8, padding: '14px 16px',
         borderBottom: `1px solid ${T.divider}`,
@@ -172,5 +189,6 @@ export default function ClaimReviewer({ dossier, onClose }) {
         </div>
       </div>
     </div>
+    </>
   )
 }

@@ -12,8 +12,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { format, differenceInCalendarDays, isPast, isToday, startOfWeek } from 'date-fns'
+import { format, startOfWeek } from 'date-fns'
 import { safeISO } from '../../lib/date'
+// Date arithmetic lives in ./dueMath (a JSX-free module the tests can import).
+import {
+  daysUntil, isUpcoming, autoStatus, countdownLabel, fmtDueDate, dueChipLabel,
+} from './dueMath'
 import { officeLine } from '../../lib/office'
 import { pointInGeometry } from '../../lib/geo'
 import { supabase } from '../../lib/supabase'
@@ -90,18 +94,11 @@ export const fmtDate = (d, pattern = 'MMM d') => {
   return t ? format(t, pattern) : '—'
 }
 
-export const daysUntil = (d) => {
-  const t = safeISO(d)
-  return t ? differenceInCalendarDays(t, new Date()) : null
-}
-
-// A row with a missing or unparseable date is NOT upcoming. Guarding this
-// explicitly matters because `daysUntil` returns null and `null >= 0` is true
-// in JS, which would otherwise slip dateless elections into "next race".
-export const isUpcoming = (d) => {
-  const n = daysUntil(d)
-  return n != null && n >= 0
-}
+// daysUntil / isUpcoming / autoStatus / countdownLabel / fmtDueDate /
+// dueChipLabel all live in ./dueMath now — see the countdown-parity note there.
+// Re-exported because the candidate views import them (and everything else in
+// this module) from ./shared.
+export { daysUntil, isUpcoming, autoStatus, countdownLabel, fmtDueDate, dueChipLabel }
 
 export const relativeTime = (d) => {
   const t = safeISO(d)
@@ -144,15 +141,6 @@ export { officeLine }
 export const electionTypeLabel = (t) => ELECTION_TYPE_LABELS[t] || 'Election'
 export const electionTypeShort = (t) => ELECTION_TYPE_SHORT[t] || 'Election'
 export const electionTypeHex   = (t) => ELECTION_TYPE_HEX[t] || { c: T.ink3, bg: T.chip }
-
-// Mirrors the milestone status rule in GamePlan.jsx (`autoStatus`) so the
-// dashboard and the Game Plan page agree on what "overdue" means.
-export const autoStatus = (m) => {
-  if (m.status === 'complete' || m.status === 'skipped') return m.status
-  const t = safeISO(m.due_date)
-  if (m.due_date && t && isPast(t) && !isToday(t)) return 'overdue'
-  return m.status
-}
 
 // Active-monitoring slot accounting — identical rule to Candidates.jsx so the
 // dashboard never disagrees with the page that sets the flag.
@@ -419,8 +407,9 @@ export function NextRaceBlock({ election, contextLine }) {
       </div>
     )
   }
-  const d = daysUntil(election.election_date)
-  const away = d == null ? '' : d === 0 ? 'today' : d > 0 ? `${d} day${d === 1 ? '' : 's'}` : 'past'
+  // Same count the Elections/Game Plan calendars publish; today and tomorrow
+  // are named from the calendar day so neither can read as "0 days".
+  const away = countdownLabel(election.election_date)
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
       <div style={{ textAlign: 'right' }}>
@@ -594,7 +583,7 @@ export function ElectionRows({ elections, hotId }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {elections.map(e => {
-        const d   = daysUntil(e.election_date)
+        const away = countdownLabel(e.election_date, new Date(), { short: true })
         const hot = hotId ? e.id === hotId : false
         const ty  = electionTypeHex(e.type)
         return (
@@ -612,7 +601,7 @@ export function ElectionRows({ elections, hotId }) {
               </div>
             </div>
             <div style={{ fontSize: 10.5, color: T.faint, whiteSpace: 'nowrap' }}>
-              {d == null ? '' : d === 0 ? 'today' : d > 0 ? `${d}d` : 'past'}
+              {away}
             </div>
           </div>
         )

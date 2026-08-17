@@ -19,6 +19,14 @@ import { supabase, getElections, createElection, updateElection, deleteElection 
 import { useAuth } from '../contexts/AuthContext'
 import ElectionResultsBoard from './ElectionResultsBoard'
 import LoadingBar from '../components/LoadingBar'
+import { useDialog } from '../lib/useDialog'
+
+// Escape + scroll-lock for this page's add/edit dialog. Mounted only while the
+// dialog is open, so the hook's effect is scoped to its lifetime.
+function Dialog({ onClose, children }) {
+  useDialog(onClose)
+  return <div className="fixed inset-0 z-50 flex items-center justify-center p-4">{children}</div>
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const TYPE_LABELS = {
@@ -536,7 +544,7 @@ export default function Elections() {
 
       {/* ── Add/Edit modal ── */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <Dialog onClose={() => setShowModal(false)}>
           <div className="fixed inset-0 bg-black/50" onClick={() => setShowModal(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg">
             <div className="flex items-center justify-between p-6 border-b border-gray-100">
@@ -548,7 +556,7 @@ export default function Elections() {
                 <label className="label">Election Name *</label>
                 <input className="input" value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="e.g. 2026 November General Election" required />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="label">Election Date *</label>
                   <input className="input" type="date" value={form.election_date} onChange={e => setForm({...form, election_date: e.target.value})} required />
@@ -558,7 +566,7 @@ export default function Elections() {
                   <input className="input" type="date" value={form.filing_deadline} onChange={e => setForm({...form, filing_deadline: e.target.value})} />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="label">Type *</label>
                   <select className="input" value={form.type} onChange={e => setForm({...form, type: e.target.value})}>
@@ -582,7 +590,7 @@ export default function Elections() {
               </div>
             </form>
           </div>
-        </div>
+        </Dialog>
       )}
     </div>
   )
