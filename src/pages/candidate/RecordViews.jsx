@@ -18,6 +18,7 @@ import {
   LockedView, Spinner, fmtDate, fmtInt, safeISO,
   fetchDossierContent, computeSectionDiff,
 } from './shared'
+import { RESULTS_ENABLED } from '../../lib/featureFlags'
 
 const RECORD_TYPES = ['bill', 'act', 'regulation', 'law', 'legal', 'vote', 'other']
 const VOTE_RESULTS = ['yes', 'no', 'abstain', 'absent', 'not_applicable']
@@ -197,7 +198,7 @@ export function ElectionResultsView({ candidate, nav }) {
                 {pct == null && result.votes != null && (
                   <div style={{ fontSize: 10.5, color: T.faint }}>{fmtInt(Number(result.votes))} votes · share not reported</div>
                 )}
-                {election?.id && (
+                {RESULTS_ENABLED && election?.id && (
                   <div style={{ marginTop: 8 }}>
                     <TextLink onClick={() => nav(`/elections?tab=results&election=${election.id}`)}>
                       View full race results →

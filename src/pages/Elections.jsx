@@ -20,6 +20,7 @@ import { useAuth } from '../contexts/AuthContext'
 import ElectionResultsBoard from './ElectionResultsBoard'
 import LoadingBar from '../components/LoadingBar'
 import { useDialog } from '../lib/useDialog'
+import { RESULTS_ENABLED } from '../lib/featureFlags'
 
 // Escape + scroll-lock for this page's add/edit dialog. Mounted only while the
 // dialog is open, so the hook's effect is scoped to its lifetime.
@@ -62,7 +63,9 @@ export default function Elections() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Tab state — driven by ?tab=results&election=<id> so it survives refresh
-  const activeTab        = searchParams.get('tab') || 'calendar'
+  // Results tab gated by RESULTS_ENABLED (featureFlags.js) — ?tab=results falls back to calendar
+  const _rawTab          = searchParams.get('tab') || 'calendar'
+  const activeTab        = (_rawTab === 'results' && !RESULTS_ENABLED) ? 'calendar' : _rawTab
   // Guard against "null" / "undefined" strings that end up in the URL if id was missing
   const _rawElection     = searchParams.get('election')
   const selectedResultsId = (_rawElection && _rawElection !== 'null' && _rawElection !== 'undefined')
@@ -303,14 +306,16 @@ export default function Elections() {
 
               {/* Action buttons */}
               <div className="flex items-center gap-1 flex-shrink-0">
-                <button
-                  onClick={() => goToResults(election.id)}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-brand-red/10 text-brand-red hover:bg-brand-red hover:text-white"
-                  title="View results"
-                >
-                  <BarChart2 className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Results</span>
-                </button>
+                {RESULTS_ENABLED && (
+                  <button
+                    onClick={() => goToResults(election.id)}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-brand-red/10 text-brand-red hover:bg-brand-red hover:text-white"
+                    title="View results"
+                  >
+                    <BarChart2 className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Results</span>
+                  </button>
+                )}
                 {isAdmin && (
                   <>
                     <button onClick={() => openEdit(election)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors">
@@ -392,23 +397,25 @@ export default function Elections() {
           <CalendarDays className="w-4 h-4" />
           Calendar
         </button>
-        <button
-          onClick={() => goToResults(resolvedResultsId)}
-          className={`flex items-center gap-2 px-5 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
-            activeTab === 'results'
-              ? 'border-brand-red text-brand-red'
-              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-          }`}
-        >
-          <BarChart2 className="w-4 h-4" />
-          Results
-          {hasTodayElection(elections) && (
-            <span className="relative flex h-2 w-2 ml-0.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
-            </span>
-          )}
-        </button>
+        {RESULTS_ENABLED && (
+          <button
+            onClick={() => goToResults(resolvedResultsId)}
+            className={`flex items-center gap-2 px-5 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
+              activeTab === 'results'
+                ? 'border-brand-red text-brand-red'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <BarChart2 className="w-4 h-4" />
+            Results
+            {hasTodayElection(elections) && (
+              <span className="relative flex h-2 w-2 ml-0.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+              </span>
+            )}
+          </button>
+        )}
       </div>
 
       {/* ══════════════════════════════════════════════════════════ */}
@@ -417,7 +424,7 @@ export default function Elections() {
       {activeTab === 'calendar' && (
         <>
           {/* Election night banner — quick jump to results */}
-          {hasTodayElection(elections) && (() => {
+          {RESULTS_ENABLED && hasTodayElection(elections) && (() => {
             const todayEl = elections.find(e => isToday(safeISO(e.election_date)))
             return (
               <button

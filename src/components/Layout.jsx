@@ -12,6 +12,7 @@ import BluejackLogo from './BluejackLogo'
 import BadgerBoardLogo from './BadgerBoardLogo'
 import { getUserTier, getTierConfig, isBetaActive, getUserPlanType } from '../lib/tiers'
 import { isNativeApp } from '../lib/native'
+import { RESULTS_ENABLED } from '../lib/featureFlags'
 
 // ── Offline banner ─────────────────────────────────────────────────────────────
 // Shown while the device has no connection. Reads (recently viewed data) are
@@ -537,7 +538,8 @@ const NAV_SECTIONS = [
   ] },
   { key: 'campaign', label: 'Campaign', icon: CalendarDays, items: [
     { to: '/game-plan?tab=calendar', icon: CalendarDays, label: 'Calendar', q: { path: '/game-plan', tab: 'calendar' } },
-    { to: '/game-plan?tab=results',  icon: BarChart2,    label: 'Results',  q: { path: '/game-plan', tab: 'results' } },
+    // Results nav item gated by RESULTS_ENABLED (featureFlags.js) — hidden from every account
+    ...(RESULTS_ENABLED ? [{ to: '/game-plan?tab=results', icon: BarChart2, label: 'Results', q: { path: '/game-plan', tab: 'results' } }] : []),
     { to: '/events',      icon: CalendarDays, label: 'Events', badge: 'New' },
     { to: '/voter-lists', icon: UserCheck,    label: 'Voter Lists' },
   ] },

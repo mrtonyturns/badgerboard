@@ -33,6 +33,7 @@ import UpgradePrompt from '../components/UpgradePrompt'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserPlan, hasFeature, PLAN_CONFIG } from '../lib/tiers'
 import { ELECTION_TYPE_LABELS, ELECTION_TYPE_COLORS } from '../lib/campaignEnums'
+import { RESULTS_ENABLED } from '../lib/featureFlags'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ElectionModal
@@ -159,10 +160,12 @@ function ElectionRow({ election, onEdit, onDelete, deleting, onViewResults }) {
               </div>
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
-              <button onClick={() => onViewResults(election.id)} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-brand-red/10 text-brand-red hover:bg-brand-red hover:text-white">
-                <BarChart2 className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Results</span>
-              </button>
+              {RESULTS_ENABLED && (
+                <button onClick={() => onViewResults(election.id)} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-brand-red/10 text-brand-red hover:bg-brand-red hover:text-white">
+                  <BarChart2 className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Results</span>
+                </button>
+              )}
               <button onClick={() => onEdit(election)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors">
                 <Edit2 className="w-4 h-4" />
               </button>
@@ -203,7 +206,9 @@ export default function GamePlan() {
   const [searchParams, setSearchParams] = useSearchParams()
   // Unknown ?tab= values fall back to milestones instead of a blank page.
   const rawTab = searchParams.get('tab')
-  const activeTab = ['milestones', 'calendar', 'results'].includes(rawTab) ? rawTab : 'milestones'
+  // Results tab gated by RESULTS_ENABLED — ?tab=results falls back to milestones when hidden
+  const validTabs = RESULTS_ENABLED ? ['milestones', 'calendar', 'results'] : ['milestones', 'calendar']
+  const activeTab = validTabs.includes(rawTab) ? rawTab : 'milestones'
 
   // ── Plan gate — Game Plan unlocks at Monitor (locked on Scout) ────────────
   const userPlan = getUserPlan(user)
@@ -456,7 +461,7 @@ export default function GamePlan() {
       {/* ══════════════════════════════════════════════════════════ */}
       {activeTab === 'calendar' && (
         <>
-          {hasTodayElection && (() => {
+          {RESULTS_ENABLED && hasTodayElection && (() => {
             const todayEl = elections.find(e => isToday(parseISO(e.election_date)))
             return (
               <button
