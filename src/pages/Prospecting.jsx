@@ -906,8 +906,15 @@ export default function Prospecting() {
         const rows = parseCsvRows(e.target.result)
         if (rows.length < 2) { setError('That CSV has no data rows.'); return }
         const headers = rows[0].map(h => lower(h).trim())
-        const find = (...names) => headers.findIndex(h => names.some(n => h.includes(n)))
-        const iName = find('name', 'full name', 'candidate')
+        // v1.36.3: exact header match wins before substring fallback — pure
+        // `includes` used to grab "county name" or "office name" as the name
+        // column whenever it appeared first, importing garbage names.
+        const find = (...names) => {
+          const exact = headers.findIndex(h => names.includes(h))
+          if (exact >= 0) return exact
+          return headers.findIndex(h => names.some(n => h.includes(n)))
+        }
+        const iName = find('name', 'full name', 'full_name', 'candidate name', 'candidate')
         const iEmail = find('email', 'e-mail')
         const iPhone = find('phone', 'mobile', 'cell')
         if (iName < 0) { setError('That CSV has no recognisable name column.'); return }

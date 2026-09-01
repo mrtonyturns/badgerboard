@@ -24,6 +24,7 @@ import {
 import {
   getVoterLists, getOffices, supabase,
   getRecruitmentSearches, createRecruitmentSearch, updateRecruitmentSearch,
+  deleteRecruitmentSearch,
   getRecruitmentProspects, createRecruitmentProspects, getRecruitmentProgress,
 } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
@@ -72,7 +73,7 @@ const VOTER_LOAD_CAP = 50000
 async function loadListVoters(listId, { onProgress, cancelled } = {}) {
   let all = []
   for (let offset = 0; offset < VOTER_LOAD_CAP; offset += VOTER_PAGE) {
-    if (cancelled?.()) return { data: all, error: null, truncated: false }
+    if (cancelled?.()) return { data: all, error: null, truncated: false, partial: true }
     const size = Math.min(VOTER_PAGE, VOTER_LOAD_CAP - offset)
     const { data, error } = await supabase
       .from('voters')
@@ -81,14 +82,17 @@ async function loadListVoters(listId, { onProgress, cancelled } = {}) {
       .order('last_name')
       .order('id')
       .range(offset, offset + size - 1)
-    if (error) return { data: all, error, truncated: false }
-    if (!data?.length) return { data: all, error: null, truncated: false }
+    // v1.36.3: a mid-paging error returns what we have, flagged PARTIAL — the
+    // UI used to show the error banner AND "N residents loaded — the whole
+    // list" over an incomplete list at the same time.
+    if (error) return { data: all, error, truncated: false, partial: true }
+    if (!data?.length) return { data: all, error: null, truncated: false, partial: false }
     all = all.concat(data)
     onProgress?.(all.length)
-    if (data.length < size) return { data: all, error: null, truncated: false }
+    if (data.length < size) return { data: all, error: null, truncated: false, partial: false }
   }
   // Filled the cap exactly — there may be more rows we deliberately did not read.
-  return { data: all, error: null, truncated: true }
+  return { data: all, error: null, truncated: true, partial: false }
 }
 
 const DISCLAIMER =
@@ -164,6 +168,7 @@ export default function Recruit() {
   const [listId, setListId]       = useState('')
   const [voters, setVoters]       = useState([])
   const [votersTruncated, setVotersTruncated] = useState(false)
+  const [votersPartial, setVotersPartial]     = useState(false)  // load errored mid-paging
   const [votersLoaded, setVotersLoaded]       = useState(0)   // paging progress
   const [loadingVoters, setLoadingVoters] = useState(false)
   const [offices, setOffices]     = useState([])
@@ -212,13 +217,14 @@ export default function Recruit() {
 
   // ── Load the voters of the chosen list ─────────────────────────────────────
   useEffect(() => {
-    if (!listId) { setVoters([]); setVotersTruncated(false); setVotersLoaded(0); return }
+    if (!listId) { setVoters([]); setVotersTruncated(false); setVotersPartial(false); setVotersLoaded(0); return }
     let cancelled = false
     setLoadingVoters(true)
     setVotersTruncated(false)
+    setVotersPartial(false)
     setVotersLoaded(0)
     ;(async () => {
-      const { data, error: e, truncated } = await loadListVoters(listId, {
+      const { data, error: e, truncated, partial } = await loadListVoters(listId, {
         cancelled: () => cancelled,
         onProgress: (n) => { if (!cancelled) setVotersLoaded(n) },
       })
@@ -226,6 +232,7 @@ export default function Recruit() {
       if (e) setError(e.message)
       setVoters(data || [])
       setVotersTruncated(Boolean(truncated))
+      setVotersPartial(Boolean(partial))
       setLoadingVoters(false)
     })()
     return () => { cancelled = true }
@@ -390,7 +397,13 @@ export default function Recruit() {
       }))
       for (let i = 0; i < rows.length; i += 200) {
         const { error: pErr } = await createRecruitmentProspects(rows.slice(i, i + 200))
-        if (pErr) throw pErr
+        if (pErr) {
+          // v1.36.3: a failed chunk used to strand a half-populated search in
+          // the list; re-pressing Create then made a duplicate. Delete the
+          // orphan (prospect rows cascade) so the user can simply retry.
+          await deleteRecruitmentSearch(search.id)   // resolves {error}, never throws
+          throw new Error(`Could not save all residents (${pErr.message}). The partial search was removed — try again.`)
+        }
       }
       setActiveSearch(search)
       setSearches(prev => [search, ...prev])
@@ -471,21 +484,36 @@ export default function Recruit() {
       'research_error', 'researched_at', 'model_version',
     ]
     const header = [...cols, 'evidence'].join(',')
-    const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
+    // v1.36.3: neutralize spreadsheet formula injection — AI-derived text
+    // beginning with = + - @ (or tab/CR) executes as a formula in Excel.
+    // A leading apostrophe makes Excel render it as literal text.
+    const cell = (v) => {
+      let s = String(v ?? '')
+      if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`
+      return `"${s.replace(/"/g, '""')}"`
+    }
     const rows = view.map(p => [
       ...cols.map(c => cell(p[c])),
       cell((p.evidence || []).map(e => `${e.title || ''} <${e.url}>`).join('; ')),
     ].join(','))
     const blob = new Blob([[header, ...rows].join('\n')], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
+    a.href = url
     a.download = `recruit_prospects_${format(new Date(), 'yyyy-MM-dd')}.csv`
     a.click()
+    // Revoke on a delay so the click's navigation grabs the blob first.
+    setTimeout(() => URL.revokeObjectURL(url), 10000)
   }
 
   const openSearch = async (s) => {
     setActiveSearch(s)
     setPhase(''); setProgress(null); setError(null)
+    // v1.36.3: the attestation checkbox reflects THIS search's recorded state,
+    // never the previous search's checkbox. Without this reset, opening a
+    // second search showed the box pre-checked and runResearch recorded
+    // attested_use: true without the user actually attesting.
+    setAttested(!!s.attested_use)
     await loadProspects(s.id)
   }
 
@@ -579,9 +607,14 @@ export default function Recruit() {
               <Spinner size={13} /> Loading residents…{votersLoaded ? ` ${votersLoaded.toLocaleString()} so far` : ''}
             </div>
           )}
-          {!loadingVoters && listId && !votersTruncated && (
+          {!loadingVoters && listId && !votersTruncated && !votersPartial && (
             <div style={{ marginTop: 10, fontSize: 11, color: T.muted }}>
               {voters.length.toLocaleString()} residents loaded — the whole list.
+            </div>
+          )}
+          {!loadingVoters && listId && votersPartial && (
+            <div style={{ marginTop: 10, fontSize: 11, color: '#b45309' }}>
+              Only {voters.length.toLocaleString()} residents loaded before the list stopped loading — matching below is incomplete. Re-select the list to retry.
             </div>
           )}
           {/* Truncation is never silent: it changes which people Recruit can
