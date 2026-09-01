@@ -745,9 +745,14 @@ export default function Prospecting() {
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      const [{ data: c }, { data: e }] = await Promise.all([getCandidates({}), getElections()])
-      setCandidates(c || [])
-      setElections(e || [])
+      // Supabase query builders resolve with { data, error } and never throw —
+      // discarding `error` here used to render an empty Discover tab with no
+      // message when the candidates or elections query failed (v1.36.1 fix).
+      const [candRes, electRes] = await Promise.all([getCandidates({}), getElections()])
+      if (candRes.error)  throw new Error(`Couldn't load candidates: ${candRes.error.message}`)
+      if (electRes.error) throw new Error(`Couldn't load elections: ${electRes.error.message}`)
+      setCandidates(candRes.data || [])
+      setElections(electRes.data || [])
       await loadProspects()
     } catch (e) {
       setError(e.message || 'Could not load your prospecting data.')
@@ -787,8 +792,12 @@ export default function Prospecting() {
       if (statuses.length && !statuses.includes(c.status)) return false
       if (electionId && c.election_id !== electionId) return false
       if (upcomingOnly) {
+        // v1.36.1: candidates with NO election (e.g. fresh CSV imports) stay
+        // visible — "upcoming only" excludes past elections, not the undated.
+        // Hiding them made every CSV import invisible right after the modal
+        // promised "they now appear in Discover".
         const d = c.election?.election_date
-        if (!d || d < today) return false
+        if (d && d < today) return false
       }
       if (needle) {
         const hay = `${c.name || ''} ${c.office?.name || ''} ${c.office?.district_name || ''} ${c.office?.county || ''}`
@@ -1138,7 +1147,17 @@ export default function Prospecting() {
         ))}
       </div>
 
-      {error && <Banner kind="error" onClose={() => setError('')}>{error}</Banner>}
+      {error && (
+        <Banner kind="error" onClose={() => setError('')}>
+          {error}{' '}
+          <button
+            onClick={() => { setError(''); loadAll() }}
+            style={{ textDecoration: 'underline', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0 }}
+          >
+            Retry
+          </button>
+        </Banner>
+      )}
       {notice && <Banner kind="ok" onClose={() => setNotice('')}>{notice}</Banner>}
       {schemaMissing && (
         <Banner kind="warn">
