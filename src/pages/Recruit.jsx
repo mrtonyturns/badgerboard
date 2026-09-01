@@ -273,12 +273,24 @@ export default function Recruit() {
     return data || []
   }, [])
 
-  // `runStartedAt` fences out the progress row left behind by an EARLIER run of
+  // `prevUpdatedAt` fences out the progress row left behind by an EARLIER run of
   // the same search — without it a second "Research" press would read the old
   // row's status:'done' and return before the new run had written anything.
-  const watchRun = useCallback(async (searchId, alive, runStartedAt) => {
+  //
+  // v1.36.2 (clock-skew fix): fencing and staleness no longer compare server
+  // timestamps against the user's clock. The old fence (`updated_at >= client
+  // Date.now() - 5s`) made every genuine run report "never started" on any
+  // machine whose clock ran a minute fast. Now:
+  //   • fence:     server-vs-server — the row is from THIS run iff its
+  //                updated_at is strictly newer than the row that existed
+  //                before we fired the run (or there was no prior row).
+  //   • staleness: local-vs-local — how long has it been, on OUR clock, since
+  //                we last saw updated_at ADVANCE. No cross-clock math at all.
+  const watchRun = useCallback(async (searchId, alive, prevUpdatedAt) => {
     let sawProgress = false
-    const startedAt = runStartedAt || Date.now()
+    const startedAt = Date.now()               // local, compared only to local
+    let lastBeatValue = prevUpdatedAt || null  // last server timestamp we saw
+    let lastBeatLocal = Date.now()             // local time when it last advanced
     for (;;) {
       await new Promise(r => setTimeout(r, POLL_MS))
       if (!alive()) return
@@ -292,10 +304,17 @@ export default function Recruit() {
         await loadProspects(searchId)
         throw new Error('This is taking longer than expected. The run is still going in the background — come back in a minute and press Refresh.')
       }
-      const fromThisRun = prog && new Date(prog.updated_at).getTime() >= startedAt - 5000
+      const progTime = prog?.updated_at ? new Date(prog.updated_at).getTime() : null
+      const fromThisRun = progTime != null &&
+        (!prevUpdatedAt || progTime > new Date(prevUpdatedAt).getTime())
       if (prog && fromThisRun) {
         setProgress(prog)
-        const fresh = Date.now() - new Date(prog.updated_at).getTime() < HEARTBEAT_STALE_MS
+        // Heartbeat advanced? Reset the local staleness clock.
+        if (prog.updated_at !== lastBeatValue) {
+          lastBeatValue = prog.updated_at
+          lastBeatLocal = Date.now()
+        }
+        const fresh = Date.now() - lastBeatLocal < HEARTBEAT_STALE_MS
         if (prog.status === 'error') { await loadProspects(searchId); throw new Error(prog.message || 'Research failed — try again.') }
         if (prog.status === 'done')  { await loadProspects(searchId); setPhase(''); return }
         if (fresh) { sawProgress = true; setPhase(PHASE_LABELS[prog.stage] || 'Researching…') }
@@ -388,8 +407,11 @@ export default function Recruit() {
     setBusy(true); setError(null); setPhase(PHASE_LABELS[1]); setProgress(null)
     const gen = ++pollGenRef.current
     const alive = () => pollGenRef.current === gen
-    const runStartedAt = Date.now()
     try {
+      // Snapshot the PRIOR run's progress row (if any) so watchRun can fence
+      // server-timestamp-vs-server-timestamp — see the watchRun comment.
+      const { data: prevProg } = await getRecruitmentProgress(activeSearch.id)
+      const prevUpdatedAt = prevProg?.updated_at || null
       // Attestation is recorded BEFORE the run — the background function
       // refuses to research a search that isn't attested.
       if (!activeSearch.attested_use) {
@@ -405,7 +427,7 @@ export default function Recruit() {
         body: JSON.stringify({ search_id: activeSearch.id }),
       })
       if (res.status !== 202 && !res.ok) throw new Error('Could not start prospect research — try again.')
-      await watchRun(activeSearch.id, alive, runStartedAt)
+      await watchRun(activeSearch.id, alive, prevUpdatedAt)
     } catch (e) {
       if (alive()) { setError(e.message); setPhase('') }
     } finally {

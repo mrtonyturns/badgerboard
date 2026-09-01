@@ -133,6 +133,23 @@ const fmtDay = (d) => {
 }
 const lower = (s) => String(s ?? '').toLowerCase()
 
+// v1.36.2: a REAL v4 UUID in every environment. The old fallback
+// (`${Date.now()}`.padEnd(36,'0')) was not a UUID; the server 400-rejected it
+// AFTER Netlify had already answered 202, so the client cleared the queue and
+// polled a progress row that would never exist for the full 12-minute window.
+// crypto.randomUUID is missing in insecure contexts (plain-HTTP LAN testing)
+// and some older WebViews; crypto.getRandomValues is universal.
+function makeRunId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+  const bytes = new Uint8Array(16)
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes)
+  else for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40   // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80   // variant 10xx
+  const h = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
 // ── Small primitives ──────────────────────────────────────────────────────────
 
 function Field({ label, children, style }) {
@@ -763,6 +780,38 @@ export default function Prospecting() {
   useEffect(() => { loadAll() }, [loadAll])
   useEffect(() => () => { runAlive.current = false }, [])
 
+  // ── Resume an in-flight enrichment run after navigation/refresh ────────────
+  // v1.36.2: the page says "you can leave and come back" — now it's true.
+  // Polling used to die on unmount and nothing on mount looked for a running
+  // run, so returning users saw no progress bar and stale statuses. On mount,
+  // find the newest RLS-scoped progress row still marked running with a fresh
+  // heartbeat and re-attach the poller to it.
+  const resumedRef = useRef(false)
+  useEffect(() => {
+    if (resumedRef.current) return
+    resumedRef.current = true
+    ;(async () => {
+      try {
+        const { data } = await supabase
+          .from('prospecting_enrichment_progress')
+          .select('run_id,stage,status,message,total,completed,failed,current_name,started_at,updated_at')
+          .eq('status', 'running')
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (!data?.run_id) return
+        // Only resume a run that's still heartbeating — a long-dead "running"
+        // row is a crashed run, not something to re-attach a spinner to.
+        if (freshMs(data.updated_at) > HEARTBEAT_STALE_MS) return
+        setRun({ runId: data.run_id, ...data })
+        runAlive.current = true
+        await pollRun(data.run_id, Date.now())
+      } catch { /* resume is best-effort — a failure just means no progress bar */ }
+      finally { runAlive.current = false }
+    })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // ── Discover ───────────────────────────────────────────────────────────────
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const upcomingElections = useMemo(
@@ -933,9 +982,7 @@ export default function Prospecting() {
     setError(''); setNotice('')
     const ids = [...queued].slice(0, MAX_BATCH)
     if (!ids.length) { setNotice('Select at least one queued prospect.'); return }
-    const runId = (typeof crypto !== 'undefined' && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : `${Date.now()}`.padEnd(36, '0')
+    const runId = makeRunId()
     const startedAt = Date.now()
     setRun({ runId, stage: 1, status: 'running', total: ids.length, completed: 0, failed: 0 })
     runAlive.current = true
