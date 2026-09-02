@@ -35,6 +35,7 @@ import {
   isUnknownProspect, isRetryableProspect,
 } from '../lib/recruit'
 import UpgradePrompt from '../components/UpgradePrompt'
+import SearchableSelect from '../components/SearchableSelect'
 import { T, cardStyle, Btn, Pill, Spinner, EmptyNote, ProfilerShell } from './profiler/shared'
 
 // Mirrors the stage constants in netlify/functions/recruit-research-background.js
@@ -150,12 +151,6 @@ function StepCard({ n, title, sub, children, done }) {
       {children}
     </div>
   )
-}
-
-const selectStyle = {
-  width: '100%', minHeight: 40, padding: '9px 12px', borderRadius: 10,
-  border: `1px solid ${T.field}`, background: '#fff', color: T.ink,
-  fontSize: 12, fontFamily: 'inherit',
 }
 
 // ── Page ─────────────────────────────────────────────────────────────────────
@@ -594,13 +589,14 @@ export default function Recruit() {
               </Link>
             </div>
           ) : (
-            <select style={selectStyle} value={listId} onChange={e => setListId(e.target.value)}
-              aria-label="Voter list">
-              <option value="">{officesLoaded ? 'Select a list…' : 'Loading your voter lists…'}</option>
-              {lists.map(l => (
-                <option key={l.id} value={l.id}>{l.name} · {l.total_count || 0} rows</option>
-              ))}
-            </select>
+            <SearchableSelect
+              value={listId}
+              onChange={v => setListId(v)}
+              options={[
+                { value: '', label: officesLoaded ? 'Select a list…' : 'Loading your voter lists…' },
+                ...lists.map(l => ({ value: l.id, label: `${l.name} · ${l.total_count || 0} rows` })),
+              ]}
+              placeholder={officesLoaded ? 'Select a list…' : 'Loading your voter lists…'} />
           )}
           {loadingVoters && (
             <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: T.muted }}>
@@ -699,12 +695,14 @@ export default function Recruit() {
               </div>
             ) : (
               <>
-                <select style={selectStyle} value={districtValue} onChange={e => setDistrictValue(e.target.value)}>
-                  <option value="">Select…</option>
-                  {districtOptions.map(d => (
-                    <option key={d.value} value={d.value}>{typeMeta.districtLabel} {d.value} · {d.count} residents</option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  value={districtValue}
+                  onChange={v => setDistrictValue(v)}
+                  options={[
+                    { value: '', label: 'Select…' },
+                    ...districtOptions.map(d => ({ value: d.value, label: `${typeMeta.districtLabel} ${d.value} · ${d.count} residents` })),
+                  ]}
+                  placeholder="Select…" />
                 <div style={{ marginTop: 8, fontSize: 10.5, color: T.faint, display: 'flex', alignItems: 'center', gap: 5 }}>
                   <MapPin style={{ width: 12, height: 12 }} />
                   Matched from the list&apos;s own column — no geocoding.

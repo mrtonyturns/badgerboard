@@ -44,6 +44,7 @@ import {
 import { useAuth } from '../contexts/AuthContext'
 import { getUserTier, hasFeature } from '../lib/tiers'
 import UpgradePrompt from '../components/UpgradePrompt'
+import SearchableSelect from '../components/SearchableSelect'
 import { parseCsvRows } from '../lib/csv'
 import { buildProspectCsv, confidenceBand, csvFilename, factorSummary } from '../lib/prospectCsv'
 import { DB_PARTIES } from '../lib/party'
@@ -1353,21 +1354,32 @@ export default function Prospecting() {
               )}
               {dMode === 'level' && (
                 <Field label="Office level">
-                  <select style={inputStyle} value={dLevel} onChange={e => setDLevel(e.target.value)}>
-                    {LEVEL_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
-                  </select>
+                  <SearchableSelect
+                    value={dLevel}
+                    onChange={setDLevel}
+                    options={LEVEL_OPTIONS.map(o => ({ value: o.v, label: o.l }))}
+                    placeholder="Pick a level…"
+                  />
                 </Field>
               )}
               <Field label={dMode === 'county' ? 'County' : 'County (optional)'}>
-                <select style={inputStyle} value={dCounty} onChange={e => setDCounty(e.target.value)}>
-                  <option value="">{dMode === 'county' ? 'Pick a county…' : 'All of Wisconsin'}</option>
-                  {WI_COUNTIES.map(c => <option key={c} value={c}>{c} County</option>)}
-                </select>
+                <SearchableSelect
+                  value={dCounty}
+                  onChange={setDCounty}
+                  options={[
+                    { value: '', label: dMode === 'county' ? 'Pick a county…' : 'All of Wisconsin' },
+                    ...WI_COUNTIES.map(c => ({ value: c, label: `${c} County` })),
+                  ]}
+                  placeholder={dMode === 'county' ? 'Pick a county…' : 'All of Wisconsin'}
+                  searchPlaceholder="Type a county…"
+                />
               </Field>
               <Field label="Election year">
-                <select style={inputStyle} value={dYear} onChange={e => setDYear(Number(e.target.value))}>
-                  {YEAR_OPTIONS.map(y => <option key={y} value={y}>{y}</option>)}
-                </select>
+                <SearchableSelect
+                  value={dYear}
+                  onChange={v => setDYear(Number(v))}
+                  options={YEAR_OPTIONS.map(y => ({ value: y, label: String(y) }))}
+                />
               </Field>
             </div>
 
@@ -1627,12 +1639,16 @@ export default function Prospecting() {
                        onChange={e => setMinScore(Number(e.target.value))} style={{ width: '100%', accentColor: T.red }} />
               </Field>
               <Field label="Website">
-                <select style={inputStyle} value={websiteFilter} onChange={e => setWebsiteFilter(e.target.value)}>
-                  <option value="all">Any</option>
-                  <option value="yes">Has a live site</option>
-                  <option value="facebook_only">Facebook only</option>
-                  <option value="no">No web presence</option>
-                </select>
+                <SearchableSelect
+                  value={websiteFilter}
+                  onChange={setWebsiteFilter}
+                  options={[
+                    { value: 'all', label: 'Any' },
+                    { value: 'yes', label: 'Has a live site' },
+                    { value: 'facebook_only', label: 'Facebook only' },
+                    { value: 'no', label: 'No web presence' },
+                  ]}
+                />
               </Field>
               <Field label="Focus">
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>

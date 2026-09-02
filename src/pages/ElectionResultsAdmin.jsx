@@ -810,18 +810,18 @@ export default function ElectionResultsAdmin({ showToast }) {
                       )}
 
                       <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                        <select
+                        <SearchableSelect
                           value=""
                           disabled={statusSaving === contest.id}
-                          onChange={e => overrideStatus(contest.id, e.target.value)}
-                          className="text-xs border border-gray-200 rounded px-1.5 py-1 bg-white text-gray-600"
-                          title="Override the engine and pin this status"
-                        >
-                          <option value="">Override status…</option>
-                          {STATUS_OPTIONS.map(o => (
-                            <option key={o.value} value={o.value}>{o.label}</option>
-                          ))}
-                        </select>
+                          onChange={v => overrideStatus(contest.id, v)}
+                          options={[
+                            { value: '', label: 'Override status…' },
+                            ...STATUS_OPTIONS.map(o => ({ value: o.value, label: o.label })),
+                          ]}
+                          placeholder="Override status…"
+                          className="w-44"
+                          buttonClassName="text-xs text-gray-600"
+                        />
                         {contest.status_source === 'admin' && (
                           <button
                             onClick={() => backToAuto(contest.id)}
@@ -969,13 +969,11 @@ export default function ElectionResultsAdmin({ showToast }) {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="label">Office Type</label>
-                <select
-                  className="input"
+                <SearchableSelect
                   value={contestForm.office_type}
-                  onChange={e => setContestForm({ ...contestForm, office_type: e.target.value })}
-                >
-                  {OFFICE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
+                  onChange={v => setContestForm({ ...contestForm, office_type: v })}
+                  options={OFFICE_TYPES.map(t => ({ value: t.value, label: t.label }))}
+                />
               </div>
               <div>
                 <label className="label">District</label>

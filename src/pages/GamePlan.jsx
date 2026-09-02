@@ -34,6 +34,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { getUserPlan, hasFeature, PLAN_CONFIG } from '../lib/tiers'
 import { ELECTION_TYPE_LABELS, ELECTION_TYPE_COLORS } from '../lib/campaignEnums'
 import { RESULTS_ENABLED } from '../lib/featureFlags'
+import SearchableSelect from '../components/SearchableSelect'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ElectionModal
@@ -87,9 +88,8 @@ function ElectionModalBody({ onClose, editing, onSave, saving }) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="label">Type *</label>
-              <select className="input" value={form.type} onChange={f('type')}>
-                {Object.entries(ELECTION_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
+              <SearchableSelect value={form.type} onChange={v => setForm(p => ({ ...p, type: v }))}
+                options={Object.entries(ELECTION_TYPE_LABELS).map(([v, l]) => ({ value: v, label: l }))} />
             </div>
             <div>
               <label className="label">Year *</label>

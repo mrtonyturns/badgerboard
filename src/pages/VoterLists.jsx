@@ -867,23 +867,23 @@ export default function VoterLists() {
                     onChange={e => setSearchVoter(e.target.value)}
                   />
                 </div>
-                <select className="input text-xs py-1.5 w-28" value={partyFilter} onChange={e => setPartyFilter(e.target.value)}>
-                  {/* Values are partyGroup() families, not text prefixes, and
-                      the list is derived from lib/party.js DB_PARTIES. It was
-                      hardcoded to R/D/I, so a Libertarian, Green, Nonpartisan
-                      or third-party voter could not be filtered to at all. */}
-                  <option value="">All Parties</option>
-                  {PARTY_FAMILY_OPTIONS.map(o => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
-                <select
-                  className="input text-xs py-1.5 w-40"
+                {/* Values are partyGroup() families, not text prefixes, and
+                    the list is derived from lib/party.js DB_PARTIES. It was
+                    hardcoded to R/D/I, so a Libertarian, Green, Nonpartisan
+                    or third-party voter could not be filtered to at all. */}
+                <SearchableSelect
+                  className="w-28"
+                  buttonClassName="text-xs py-1.5"
+                  value={partyFilter}
+                  onChange={v => setPartyFilter(v)}
+                  options={[{ value: '', label: 'All Parties' }, ...PARTY_FAMILY_OPTIONS.map(o => ({ value: o.value, label: o.label }))]}
+                  placeholder="All Parties" />
+                <SearchableSelect
+                  className="w-40"
+                  buttonClassName="text-xs py-1.5"
                   value={districtFilter.type}
-                  onChange={e => setDistrictFilter({ type: e.target.value, value: '' })}
-                >
-                  {DISTRICT_TYPES.map(d => <option key={d.key} value={d.key}>{d.label}</option>)}
-                </select>
+                  onChange={v => setDistrictFilter({ type: v, value: '' })}
+                  options={DISTRICT_TYPES.map(d => ({ value: d.key, label: d.label }))} />
                 <SearchableSelect
                   className="w-40"
                   buttonClassName="text-xs py-1.5"

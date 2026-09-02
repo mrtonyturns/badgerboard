@@ -19,6 +19,7 @@ import {
   fetchDossierContent, computeSectionDiff,
 } from './shared'
 import { RESULTS_ENABLED } from '../../lib/featureFlags'
+import SearchableSelect from '../../components/SearchableSelect'
 
 const RECORD_TYPES = ['bill', 'act', 'regulation', 'law', 'legal', 'vote', 'other']
 const VOTE_RESULTS = ['yes', 'no', 'abstain', 'absent', 'not_applicable']
@@ -226,6 +227,8 @@ function RecordForm({ candidateId, userId, existing, onSave, onCancel }) {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const f = (key) => (e) => setForm(p => ({ ...p, [key]: e.target.value }))
+  // SearchableSelect hands back the value directly, not an event
+  const fv = (key) => (v) => setForm(p => ({ ...p, [key]: v }))
 
   const handleSave = async () => {
     if (!form.title.trim()) return
@@ -265,14 +268,12 @@ function RecordForm({ candidateId, userId, existing, onSave, onCancel }) {
     }}>
       <div className="cp-cols2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <Field label="Type">
-          <select style={inputStyle} value={form.record_type} onChange={f('record_type')}>
-            {RECORD_TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
-          </select>
+          <SearchableSelect value={form.record_type} onChange={fv('record_type')}
+            options={RECORD_TYPES.map(t => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))} />
         </Field>
         <Field label="Significance">
-          <select style={inputStyle} value={form.significance} onChange={f('significance')}>
-            {SIGNIFICANCE.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-          </select>
+          <SearchableSelect value={form.significance} onChange={fv('significance')}
+            options={SIGNIFICANCE.map(s => ({ value: s, label: s.charAt(0).toUpperCase() + s.slice(1) }))} />
         </Field>
       </div>
       <Field label="Title">
@@ -284,9 +285,8 @@ function RecordForm({ candidateId, userId, existing, onSave, onCancel }) {
           <input style={inputStyle} value={form.bill_number || ''} onChange={f('bill_number')} placeholder="AB 123" />
         </Field>
         <Field label="Vote result">
-          <select style={inputStyle} value={form.vote_result} onChange={f('vote_result')}>
-            {VOTE_RESULTS.map(v => <option key={v} value={v}>{v.replace(/_/g, ' ')}</option>)}
-          </select>
+          <SearchableSelect value={form.vote_result} onChange={fv('vote_result')}
+            options={VOTE_RESULTS.map(v => ({ value: v, label: v.replace(/_/g, ' ') }))} />
         </Field>
       </div>
       <Field label="Date">

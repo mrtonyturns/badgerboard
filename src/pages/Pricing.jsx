@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { isNativeApp } from '../lib/native'
+import SearchableSelect from '../components/SearchableSelect'
 import {
   CANDIDATE_PLAN_CONFIG, ACTION_PLAN_CONFIG,
   CANDIDATE_PLAN_ORDER, ACTION_PLAN_ORDER,
@@ -902,18 +903,13 @@ export default function Pricing() {
             {/* Bracket selector */}
             <div className="flex items-center gap-2 flex-shrink-0">
               <span className="text-sm text-gray-500">Active candidates:</span>
-              <div className="relative">
-                <select
-                  value={bracket}
-                  onChange={e => setBracket(e.target.value)}
-                  className="appearance-none text-sm font-medium text-gray-900 border border-gray-200 bg-white rounded-lg px-3 py-1.5 pr-8 focus:outline-none focus:ring-2 focus:ring-gray-200 cursor-pointer"
-                >
-                  {bracketList.map(b => (
-                    <option key={b.key} value={b.key}>{b.label}</option>
-                  ))}
-                </select>
-                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
-              </div>
+              <SearchableSelect
+                value={bracket}
+                onChange={setBracket}
+                options={bracketList.map(b => ({ value: b.key, label: b.label }))}
+                className="w-44"
+                buttonClassName="text-sm font-medium text-gray-900 py-1.5"
+              />
             </div>
           </div>
 

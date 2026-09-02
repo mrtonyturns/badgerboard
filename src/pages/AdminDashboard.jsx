@@ -1412,31 +1412,35 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
               ) : (
                 <div className="space-y-3">
                   <div className="flex flex-wrap gap-3">
-                    <select
+                    <SearchableSelect
                       value={trialPlan}
-                      onChange={(e) => setTrialPlan(e.target.value)}
-                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                    >
-                      <option value="c_monitor">Monitor (Candidate)</option>
-                      <option value="c_active">Active (Candidate)</option>
-                      <option value="c_campaign">Campaign (Candidate)</option>
-                      <option value="a_monitor">Monitor (Action)</option>
-                      <option value="a_active">Active (Action)</option>
-                      <option value="a_campaign">Campaign (Action)</option>
-                    </select>
+                      onChange={(v) => setTrialPlan(v)}
+                      options={[
+                        { value: 'c_monitor', label: 'Monitor (Candidate)' },
+                        { value: 'c_active', label: 'Active (Candidate)' },
+                        { value: 'c_campaign', label: 'Campaign (Candidate)' },
+                        { value: 'a_monitor', label: 'Monitor (Action)' },
+                        { value: 'a_active', label: 'Active (Action)' },
+                        { value: 'a_campaign', label: 'Campaign (Action)' },
+                      ]}
+                      className="min-w-[200px]"
+                      buttonClassName="text-sm"
+                    />
                     {trialPlan.startsWith('a_') && (
-                      <select
+                      <SearchableSelect
                         value={trialBracket}
-                        onChange={(e) => setTrialBracket(e.target.value)}
-                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                      >
-                        <option value="b1">1 candidate</option>
-                        <option value="b2_5">2–5 candidates</option>
-                        <option value="b6">6–10 candidates</option>
-                        <option value="b11">11–25 candidates</option>
-                        <option value="b26">26–50 candidates</option>
-                        <option value="b51">51–100 candidates</option>
-                      </select>
+                        onChange={(v) => setTrialBracket(v)}
+                        options={[
+                          { value: 'b1', label: '1 candidate' },
+                          { value: 'b2_5', label: '2–5 candidates' },
+                          { value: 'b6', label: '6–10 candidates' },
+                          { value: 'b11', label: '11–25 candidates' },
+                          { value: 'b26', label: '26–50 candidates' },
+                          { value: 'b51', label: '51–100 candidates' },
+                        ]}
+                        className="min-w-[200px]"
+                        buttonClassName="text-sm"
+                      />
                     )}
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -1750,15 +1754,13 @@ const ChangePlanModal = ({ currentPlan, currentBracket, onSave, onClose }) => {
         {isAction && (
           <div className="mb-5">
             <label className="block text-sm font-medium text-gray-700 mb-2">Candidate Bracket</label>
-            <select
+            <SearchableSelect
               value={bracket}
-              onChange={(e) => setBracket(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-700"
-            >
-              {BRACKET_OPTIONS.map(b => (
-                <option key={b.key} value={b.key}>{b.label}</option>
-              ))}
-            </select>
+              onChange={(v) => setBracket(v)}
+              options={BRACKET_OPTIONS.map(b => ({ value: b.key, label: b.label }))}
+              className="w-full"
+              buttonClassName="text-sm"
+            />
           </div>
         )}
 
@@ -2641,16 +2643,17 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
 
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-2">Type</label>
-            <select
+            <SearchableSelect
               value={formData.type}
-              onChange={(e) => setFormData({ ...formData, type: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-700"
-            >
-              <option value="info">Info</option>
-              <option value="warning">Warning</option>
-              <option value="success">Success</option>
-              <option value="error">Error</option>
-            </select>
+              onChange={(v) => setFormData({ ...formData, type: v })}
+              options={[
+                { value: 'info', label: 'Info' },
+                { value: 'warning', label: 'Warning' },
+                { value: 'success', label: 'Success' },
+                { value: 'error', label: 'Error' },
+              ]}
+              className="w-full"
+            />
           </div>
 
           <div className="mb-4">
@@ -2787,27 +2790,19 @@ const ManualUserCreation = ({ billingCall, showToast }) => {
         </div>
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1">Plan</label>
-          <select value={form.plan} onChange={e => setForm({...form, plan: e.target.value})}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-700">
-            <optgroup label="── Candidate Plans ──">
-              {PLAN_FAMILIES.candidate.map(p => (
-                <option key={p.key} value={p.key}>{p.label} — {p.price}</option>
-              ))}
-            </optgroup>
-            <optgroup label="── Action Plans ──">
-              {PLAN_FAMILIES.action.map(p => (
-                <option key={p.key} value={p.key}>{p.label} (Action) — {p.price}</option>
-              ))}
-            </optgroup>
-          </select>
+          <SearchableSelect value={form.plan} onChange={v => setForm({...form, plan: v})}
+            groups={[
+              { label: '── Candidate Plans ──', options: PLAN_FAMILIES.candidate.map(p => ({ value: p.key, label: `${p.label} — ${p.price}` })) },
+              { label: '── Action Plans ──', options: PLAN_FAMILIES.action.map(p => ({ value: p.key, label: `${p.label} (Action) — ${p.price}` })) },
+            ]}
+            className="w-full" buttonClassName="text-sm" />
         </div>
         {isActionPlan && (
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1">Candidate Bracket</label>
-          <select value={form.bracket} onChange={e => setForm({...form, bracket: e.target.value})}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-700">
-            {BRACKET_OPTIONS.map(b => <option key={b.key} value={b.key}>{b.label}</option>)}
-          </select>
+          <SearchableSelect value={form.bracket} onChange={v => setForm({...form, bracket: v})}
+            options={BRACKET_OPTIONS.map(b => ({ value: b.key, label: b.label }))}
+            className="w-full" buttonClassName="text-sm" />
         </div>
         )}
       </div>
@@ -3628,9 +3623,9 @@ const CouponsTab = ({ session, showToast }) => {
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5">
               Duration
             </label>
-            <select value={form.duration} onChange={f('duration')} className="input-field w-full max-w-sm">
-              {DURATION_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
+            <SearchableSelect value={form.duration} onChange={v => f('duration')({ target: { value: v } })}
+              options={DURATION_OPTS.map(o => ({ value: o.value, label: o.label }))}
+              className="w-full max-w-sm" />
             {form.duration === 'repeating' && (
               <div className="mt-2 flex items-center gap-2">
                 <input

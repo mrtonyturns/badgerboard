@@ -198,9 +198,11 @@ export default function ProfileData({ candidate, editing, form, setForm, timesta
               />
             </EditRow>
             <EditRow k="Status">
-              <select style={inputStyle} value={form.status || ''} onChange={f('status')}>
-                {STATUSES.map(s => <option key={s} value={s}>{candidateStatusLabel(s)}</option>)}
-              </select>
+              <SearchableSelect
+                value={form.status || ''}
+                onChange={v => setForm(p => ({ ...p, status: v }))}
+                options={STATUSES.map(s => ({ value: s, label: candidateStatusLabel(s) }))}
+              />
             </EditRow>
             <EditRow k="Committee"><input style={inputStyle} value={form.campaign_committee || ''} onChange={f('campaign_committee')} /></EditRow>
             <EditRow k="Campaign manager"><input style={inputStyle} value={form.campaign_manager || ''} onChange={f('campaign_manager')} /></EditRow>

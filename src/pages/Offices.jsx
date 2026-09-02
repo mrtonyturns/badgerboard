@@ -9,6 +9,7 @@ import LeafletMapView from '../components/LeafletMapView'
 import MapErrorBoundary from '../components/MapErrorBoundary'
 import DistrictDashboard, { districtKeyFor } from '../components/DistrictDashboard'
 import LoadingBar from '../components/LoadingBar'
+import SearchableSelect from '../components/SearchableSelect'
 import CityDemographicsPanel, { usePlaceLookup } from '../components/CityDemographicsPanel'
 import { placePath } from '../lib/placeDemographics'
 import { partyGroup } from '../lib/party'
@@ -534,14 +535,18 @@ export default function Offices() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input className="input pl-9" placeholder="Search offices..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-          <select className="input sm:w-44" value={levelFilter} onChange={e => setLevelFilter(e.target.value)}>
-            <option value="">All Levels</option>
-            {LEVELS.slice(1).map(l => <option key={l} value={l}>{LEVEL_LABELS[l]}</option>)}
-          </select>
-          <select className="input sm:w-44" value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
-            <option value="">All Types</option>
-            {TYPES.slice(1).map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
-          </select>
+          <SearchableSelect
+            className="sm:w-44"
+            value={levelFilter}
+            onChange={v => setLevelFilter(v)}
+            options={[{ value: '', label: 'All Levels' }, ...LEVELS.slice(1).map(l => ({ value: l, label: LEVEL_LABELS[l] }))]}
+            placeholder="All Levels" />
+          <SearchableSelect
+            className="sm:w-44"
+            value={typeFilter}
+            onChange={v => setTypeFilter(v)}
+            options={[{ value: '', label: 'All Types' }, ...TYPES.slice(1).map(t => ({ value: t, label: TYPE_LABELS[t] }))]}
+            placeholder="All Types" />
         </div>
         <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-100">
           {/* The first load pages through ~3,200 rows (8 requests). Showing the
@@ -707,15 +712,17 @@ export default function Offices() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="label">Level *</label>
-                  <select className="input" value={form.level} onChange={e => setForm({...form, level:e.target.value})}>
-                    {LEVELS.slice(1).map(l => <option key={l} value={l}>{LEVEL_LABELS[l]}</option>)}
-                  </select>
+                  <SearchableSelect
+                    value={form.level}
+                    onChange={v => setForm({...form, level:v})}
+                    options={LEVELS.slice(1).map(l => ({ value: l, label: LEVEL_LABELS[l] }))} />
                 </div>
                 <div>
                   <label className="label">Type *</label>
-                  <select className="input" value={form.office_type} onChange={e => setForm({...form, office_type:e.target.value})}>
-                    {TYPES.slice(1).map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
-                  </select>
+                  <SearchableSelect
+                    value={form.office_type}
+                    onChange={v => setForm({...form, office_type:v})}
+                    options={TYPES.slice(1).map(t => ({ value: t, label: TYPE_LABELS[t] }))} />
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

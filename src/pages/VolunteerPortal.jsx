@@ -1,3 +1,4 @@
+/* global Notification */
 /**
  * VolunteerPortal.jsx
  * Mobile-first portal for campaign volunteers.
@@ -16,6 +17,7 @@ import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { isNativeApp, API_ORIGIN } from '../lib/native'
+import SearchableSelect from '../components/SearchableSelect'
 import {
   Home, DoorOpen, MessageCircle, User, Bell, Send,
   CheckCircle, XCircle, Clock, MapPin, Phone, Mail,
@@ -879,14 +881,16 @@ export function VolunteerManager({ listId, session }) {
             </div>
             <div>
               <label className="text-white/50 text-xs mb-1 block">Role</label>
-              <select
+              <SearchableSelect
                 value={form.role}
-                onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
-                className="w-full bg-[#1a2236] border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-red-500/50"
-              >
-                <option value="canvasser">Canvasser</option>
-                <option value="captain">Captain</option>
-              </select>
+                onChange={v => setForm(f => ({ ...f, role: v }))}
+                options={[
+                  { value: 'canvasser', label: 'Canvasser' },
+                  { value: 'captain', label: 'Captain' },
+                ]}
+                className="w-full"
+                buttonClassName="bg-[#1a2236] border-white/20 text-white text-sm focus:ring-1 focus:ring-red-500/50"
+              />
             </div>
           </div>
           <div className="flex gap-2">
@@ -924,16 +928,18 @@ export function VolunteerManager({ listId, session }) {
             className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-blue-500/50 resize-none"
           />
           <div className="flex gap-2 items-center">
-            <select
+            <SearchableSelect
               value={notifForm.type}
-              onChange={e => setNotif(f => ({ ...f, type: e.target.value }))}
-              className="bg-[#1a2236] border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none"
-            >
-              <option value="info">Info</option>
-              <option value="success">Success</option>
-              <option value="warning">Warning</option>
-              <option value="urgent">Urgent</option>
-            </select>
+              onChange={v => setNotif(f => ({ ...f, type: v }))}
+              options={[
+                { value: 'info', label: 'Info' },
+                { value: 'success', label: 'Success' },
+                { value: 'warning', label: 'Warning' },
+                { value: 'urgent', label: 'Urgent' },
+              ]}
+              className="w-36"
+              buttonClassName="bg-[#1a2236] border-white/20 text-white text-sm"
+            />
             <button
               type="submit" disabled={saving}
               className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium py-2 rounded-lg text-sm transition-colors"

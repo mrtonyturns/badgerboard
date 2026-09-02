@@ -356,14 +356,17 @@ function TaskDetailModal({ task, tasks, projects, sections, labels, onClose, onS
               className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
             <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mt-3">Repeat</label>
             <div className="flex gap-2 mt-1">
-              <select value={recFreq} onChange={(e) => setRecFreq(e.target.value)}
-                className="flex-1 text-sm border border-gray-200 rounded-lg px-2.5 py-2 bg-white">
-                <option value="">Doesn't repeat</option>
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly{dueDate ? ` (${new Date(dueDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' })}s)` : ''}</option>
-                <option value="monthly">Monthly</option>
-                <option value="yearly">Yearly</option>
-              </select>
+              <SearchableSelect value={recFreq} onChange={setRecFreq}
+                options={[
+                  { value: '', label: "Doesn't repeat" },
+                  { value: 'daily', label: 'Daily' },
+                  { value: 'weekly', label: `Weekly${dueDate ? ` (${new Date(dueDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' })}s)` : ''}` },
+                  { value: 'monthly', label: 'Monthly' },
+                  { value: 'yearly', label: 'Yearly' },
+                ]}
+                placeholder="Doesn't repeat"
+                className="flex-1"
+                buttonClassName="text-sm" />
               {recFreq && (
                 <input type="number" min="1" max="52" value={recInterval}
                   onChange={(e) => setRecInterval(e.target.value)}

@@ -1246,16 +1246,16 @@ export default function Candidates() {
               {discoverMode === 'level' && (
                 <div>
                   <label className="label">Government Level *</label>
-                  <select
-                    className="input"
+                  <SearchableSelect
                     value={discoverLevel}
-                    onChange={e => setDiscoverLevel(e.target.value)}
-                  >
-                    <option value="federal">Federal</option>
-                    <option value="state">State</option>
-                    <option value="county">County</option>
-                    <option value="municipal">Municipal</option>
-                  </select>
+                    onChange={setDiscoverLevel}
+                    options={[
+                      { value: 'federal', label: 'Federal' },
+                      { value: 'state', label: 'State' },
+                      { value: 'county', label: 'County' },
+                      { value: 'municipal', label: 'Municipal' },
+                    ]}
+                  />
                 </div>
               )}
 
@@ -1409,9 +1409,8 @@ export default function Candidates() {
                       </div>
                       <div>
                         <label className="label">Status</label>
-                        <select className="input" value={form.status} onChange={f('status')}>
-                          {STATUSES.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
-                        </select>
+                        <SearchableSelect value={form.status} onChange={v => f('status')({ target: { value: v } })}
+                          options={STATUSES.map(s => ({ value: s, label: statusLabel(s) }))} />
                       </div>
                     </div>
                     <div>

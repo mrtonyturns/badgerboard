@@ -21,6 +21,7 @@ import ElectionResultsBoard from './ElectionResultsBoard'
 import LoadingBar from '../components/LoadingBar'
 import { useDialog } from '../lib/useDialog'
 import { RESULTS_ENABLED } from '../lib/featureFlags'
+import SearchableSelect from '../components/SearchableSelect'
 
 // Escape + scroll-lock for this page's add/edit dialog. Mounted only while the
 // dialog is open, so the hook's effect is scoped to its lifetime.
@@ -576,9 +577,8 @@ export default function Elections() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="label">Type *</label>
-                  <select className="input" value={form.type} onChange={e => setForm({...form, type: e.target.value})}>
-                    {Object.entries(TYPE_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
-                  </select>
+                  <SearchableSelect value={form.type} onChange={v => setForm({...form, type: v})}
+                    options={Object.entries(TYPE_LABELS).map(([val, label]) => ({ value: val, label }))} />
                 </div>
                 <div>
                   <label className="label">Year *</label>
