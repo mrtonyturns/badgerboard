@@ -256,6 +256,11 @@ const AppRoutes = () => {
         <Route path="elections" element={<Elections />} />
         <Route path="elections/results/:id" element={<ElectionResultsRedirect />} />
         <Route path="elections/results" element={<Navigate to="/elections?tab=results" replace />} />
+        {/* Friendly aliases: the Dashboard lives at "/" and Pricing at "/plans",
+            but /dashboard and /pricing are what people type and what old links
+            point at — send them along instead of 404ing. */}
+        <Route path="dashboard" element={<Navigate to="/" replace />} />
+        <Route path="pricing" element={<Navigate to="/plans" replace />} />
         <Route path="game-plan" element={<GamePlan />} />
         <Route path="candidates" element={<Candidates />} />
         <Route path="candidates/:id" element={<CandidateDetail />} />

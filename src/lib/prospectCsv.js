@@ -14,6 +14,28 @@
 // deliberately, not inherited by a `for (const key of Object.keys(row))` loop.
 // That is why COLUMNS below is an explicit allowlist.
 
+import { normalizePartyForDb } from './party.js'
+
+// ─── Display normalizers (shared by the results table and its sort) ─────────
+// The AI brief returns party as whatever the source page said — 'Democrat',
+// 'Democratic', 'Democratic Party', 'GOP' — and district as either 'District 21'
+// or a bare '7'. The table renders and SORTS through these two so one party
+// never splits into two groups and one column never shows two shapes.
+
+/** 'Democratic' / 'Democratic Party' / 'GOP' → the canonical DB spelling; unknown text passes through. */
+export function displayParty(raw) {
+  const s = String(raw ?? '').trim()
+  if (!s) return ''
+  return normalizePartyForDb(s) ?? s
+}
+
+/** A bare number ('7', '07') → 'District 7'; anything else unchanged. */
+export function displayDistrict(raw) {
+  const s = String(raw ?? '').trim()
+  if (!s) return ''
+  return /^\d+$/.test(s) ? `District ${Number(s)}` : s
+}
+
 /** RFC-4180 field escaping: quote when needed, double any inner quotes. */
 export function csvEscape(value) {
   if (value === null || value === undefined) return ''

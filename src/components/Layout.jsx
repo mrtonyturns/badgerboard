@@ -595,7 +595,9 @@ function itemBasePath(item) {
 function sectionForLocation(pathname, tab) {
   if (pathname === '/') return NAV_SECTIONS[0]
   if (pathname === '/game-plan' || pathname.startsWith('/game-plan/')) {
-    return (tab === 'calendar' || tab === 'results')
+    // With Results hidden (RESULTS_ENABLED false) ?tab=results is just the
+    // task board — otherwise Campaign AND the Todo NavLink both light up.
+    return (tab === 'calendar' || (RESULTS_ENABLED && tab === 'results'))
       ? NAV_SECTIONS.find(x => x.key === 'campaign')
       : NAV_SECTIONS.find(x => x.key === 'todo')
   }
@@ -1177,7 +1179,7 @@ function SectionTabs({ items, pathname, tab }) {
   const isItemActive = (item) => {
     if (item.q) return (pathname === item.q.path || pathname.startsWith(item.q.path + '/')) && tab === item.q.tab
     const base = item.to.split('?')[0]
-    if (base === '/game-plan') return pathname.startsWith('/game-plan') && tab !== 'calendar' && tab !== 'results'
+    if (base === '/game-plan') return pathname.startsWith('/game-plan') && tab !== 'calendar' && !(RESULTS_ENABLED && tab === 'results')
     // /dossiers and /profiler are the same page on two routes (see App.jsx).
     if (base === '/profiler') return pathname.startsWith('/profiler') || pathname.startsWith('/dossiers')
     return pathname === base || pathname.startsWith(base + '/')
@@ -1242,10 +1244,12 @@ export default function Layout() {
   // so pages start their content immediately — no duplicated headers.
   const PAGE_HEADERS = [
     { match: /^\/offices/,          title: 'Offices & Districts',    sub: 'All political offices tracked across Wisconsin' },
-    { match: /^\/elections/,        title: 'Elections',              sub: 'Wisconsin election calendar & live results' },
+    { match: /^\/elections/,        title: 'Elections',              sub: RESULTS_ENABLED ? 'Wisconsin election calendar & live results' : 'Wisconsin election calendar' },
     { match: /^\/places/,           title: 'City demographics',      sub: 'Census profile & comparisons' },
     { match: /^\/game-plan\?.*tab=calendar/, title: 'Calendar',       sub: 'Election calendar & key dates', useSearch: true },
-    { match: /^\/game-plan\?.*tab=results/,  title: 'Results',        sub: 'Election night results', useSearch: true },
+    // Results header gated by RESULTS_ENABLED (featureFlags.js) — with the
+    // feature off, /game-plan?tab=results falls through to the Todo entry.
+    ...(RESULTS_ENABLED ? [{ match: /^\/game-plan\?.*tab=results/,  title: 'Results',        sub: 'Election night results', useSearch: true }] : []),
     { match: /^\/game-plan/,        title: 'Todo',                   sub: 'Campaign tasks & priorities' },
     { match: /^\/candidates\/.+/,  title: 'Candidates',             sub: 'Candidate profile' },
     { match: /^\/candidates/,       title: 'Candidates',             sub: 'All tracked candidates across Wisconsin' },
@@ -1264,6 +1268,10 @@ export default function Layout() {
     // header could never match.
     { match: /^\/admin/,            title: 'Admin Panel',            sub: 'Platform health, accounts, billing & controls' },
     { match: /^\/$/,                title: 'Intelligence Dashboard', sub: 'Wisconsin statewide political tracking' },
+    // Fallback: the catch-all NotFound route (App.jsx path="*") renders inside
+    // Layout, and without this the top bar was simply blank on a dead link.
+    // Must stay LAST — every real page above matches first.
+    { match: /.*/,                  title: 'Page not found',         sub: 'That link doesn’t go anywhere' },
   ]
   const pageHeader = PAGE_HEADERS.find(h => h.match.test(pathname + search)) || null
   const navigate           = useNavigate()

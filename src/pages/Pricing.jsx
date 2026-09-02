@@ -314,7 +314,7 @@ const FAQS = [
   },
   {
     q: 'What is an active candidate?',
-    a: 'An active candidate is someone flagged for continuous monitoring. They appear on your dashboard, count toward your bracket on the Action Plan, and on eligible tiers receive a fresh AI profile every Friday. Candidate Plan has fixed active candidate slots (0, 1, or 3 depending on tier).',
+    a: 'An active candidate is someone flagged for continuous monitoring. They appear on your dashboard, count toward your bracket on the Action Plan, and on eligible tiers receive a fresh AI profile every Monday. Candidate Plan has fixed active candidate slots (0, 1, or 3 depending on tier).',
   },
   {
     q: 'How many candidates can I monitor on the Action Plan?',

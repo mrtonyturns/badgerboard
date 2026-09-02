@@ -369,5 +369,22 @@ console.log('V3 — CSV labels the estimate honestly')
   t('CSV says "AI estimate" in the confidence column', csv.includes('AI estimate'))
 }
 
+console.log('#27 — results-table display normalizers (party spelling, bare district numbers)')
+{
+  const { displayParty, displayDistrict } = await import('../src/lib/prospectCsv.js')
+  t('Democratic → Democrat', displayParty('Democratic') === 'Democrat')
+  t('Democratic Party → Democrat', displayParty('Democratic Party') === 'Democrat')
+  t('Republican Party / GOP → Republican', displayParty('Republican Party') === 'Republican' && displayParty('GOP') === 'Republican')
+  t('canonical spellings pass through untouched', displayParty('Democrat') === 'Democrat' && displayParty('Independent') === 'Independent')
+  t('unknown party text is kept, not blanked', displayParty('Pirate') === 'Pirate')
+  t('blank / null party → empty string', displayParty('') === '' && displayParty(null) === '')
+  t('one sort key for both spellings', displayParty('Democratic').toLowerCase() === displayParty('democrat').toLowerCase())
+  t('bare number → "District N"', displayDistrict('7') === 'District 7' && displayDistrict(' 21 ') === 'District 21')
+  t('leading zero is dropped', displayDistrict('07') === 'District 7')
+  t('"District 21" is unchanged', displayDistrict('District 21') === 'District 21')
+  t('named districts are unchanged', displayDistrict('City of Wausau') === 'City of Wausau' && displayDistrict('4th Ward') === '4th Ward')
+  t('blank / null district → empty string', displayDistrict('') === '' && displayDistrict(null) === '')
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

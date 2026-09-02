@@ -40,6 +40,11 @@ const fmtDecimal = (n, digits = 1) => (n == null || Number.isNaN(+n) ? '—' : (
 
 const CTV_LABEL = { city: 'City', village: 'Village', town: 'Town' }
 
+// "Tracked in this city" — how many office rows the list fetches. Beyond this,
+// the card says "Showing 50 of N" instead of silently cutting the list off.
+const OFFICE_LIMIT = 50
+const OFFICE_PREVIEW = 10
+
 const RACE_FIELDS = [
   ['white_pct', 'White'],
   ['black_pct', 'Black'],
@@ -153,7 +158,9 @@ export default function CityDemographics() {
   const [districtData, setDistrictData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [offices, setOffices] = useState([])
+  const [officesTotal, setOfficesTotal] = useState(0)
   const [officesLoading, setOfficesLoading] = useState(false)
+  const [showAllOffices, setShowAllOffices] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -176,29 +183,45 @@ export default function CityDemographics() {
   const place = found ? found[1] : null
 
   useEffect(() => {
-    if (!place) { setOffices([]); return }
+    if (!place) { setOffices([]); setOfficesTotal(0); return }
     const bareName = bareCityName(place)
-    if (!bareName) { setOffices([]); return }
-    // Match the map's municipal matcher (Offices.jsx matchOffices): municipal
-    // offices are imported either with a `city` value OR with the geography in
-    // `district_name` ("City of Wausau", "Town of Grant"). Filtering on `city`
-    // alone reported "No offices tracked" for every district_name-style import,
-    // even though clicking the same municipality on the map listed them.
+    if (!bareName) { setOffices([]); setOfficesTotal(0); return }
+    // Only MUNICIPAL offices for THIS municipality. The old query matched
+    // `city ILIKE '%Wausau%'` at any level, which pulled in "Wisconsin Court of
+    // Appeals — District III" (seated in Wausau) and every "Wausau"-containing
+    // name. Municipal offices are imported either with a `city` value OR with
+    // the geography in `district_name` ("City of Wausau", "Town of Grant") —
+    // both are matched EXACTLY (case-insensitive), no wildcards.
     // Commas, parens and quotes would be read as PostgREST `or` syntax — strip
     // them, then double-quote each value so names with spaces ("Eau Claire")
     // parse as one literal.
-    const term = bareName.replace(/["'(),*]/g, ' ').replace(/\s+/g, ' ').trim()
-    if (!term) { setOffices([]); return }
+    const clean = (v) => String(v || '').replace(/["'(),*]/g, ' ').replace(/\s+/g, ' ').trim()
+    const term = clean(bareName)
+    if (!term) { setOffices([]); setOfficesTotal(0); return }
+    const ctv = String(place.ctv || '').toLowerCase()
+    const geo = ['city', 'village', 'town'].includes(ctv)
+      ? [`${ctv} of ${term}`]
+      : [`city of ${term}`, `village of ${term}`, `town of ${term}`]
+    const county = clean(String(place.county || '').replace(/\s+county$/i, ''))
+
     let cancelled = false
     setOfficesLoading(true)
-    supabase
+    setShowAllOffices(false)
+    let q = supabase
       .from('offices')
-      .select('id, name, level, office_type, city, county, district_name')
-      .or(`city.ilike."%${term}%",district_name.ilike."%${term}%"`)
-      .limit(10)
-      .then(({ data, error }) => {
+      .select('id, name, level, office_type, city, county, district_name', { count: 'exact' })
+      .eq('level', 'municipal')
+      .or([`city.ilike."${term}"`, ...geo.map(g => `district_name.ilike."${g}"`)].join(','))
+    // County context: same-named towns exist in different counties. An office
+    // row imported without a county is still allowed through.
+    if (county) q = q.or(`county.ilike."${county}",county.ilike."${county} County",county.is.null`)
+    q.order('name', { ascending: true })
+      .limit(OFFICE_LIMIT)
+      .then(({ data, error, count }) => {
         if (cancelled) return
-        setOffices(!error && Array.isArray(data) ? data : [])
+        const rows = !error && Array.isArray(data) ? data : []
+        setOffices(rows)
+        setOfficesTotal(!error && Number.isFinite(count) ? count : rows.length)
       })
       .finally(() => { if (!cancelled) setOfficesLoading(false) })
     return () => { cancelled = true }
@@ -377,19 +400,39 @@ export default function CityDemographics() {
         ) : offices.length === 0 ? (
           <p className="text-sm text-gray-500">No tracked offices found for this municipality yet.</p>
         ) : (
-          <ul className="divide-y divide-gray-100">
-            {offices.map(o => (
-              <li key={o.id}>
-                <Link
-                  to="/offices"
-                  className="flex items-center justify-between py-2.5 text-sm text-gray-700 hover:text-brand-red transition-colors"
-                >
-                  <span className="font-medium">{o.name}</span>
-                  <span className="text-xs text-gray-400 capitalize">{o.office_type || o.level}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul className="divide-y divide-gray-100">
+              {(showAllOffices ? offices : offices.slice(0, OFFICE_PREVIEW)).map(o => (
+                <li key={o.id}>
+                  <Link
+                    to="/offices"
+                    className="flex items-center justify-between py-2.5 text-sm text-gray-700 hover:text-brand-red transition-colors"
+                  >
+                    <span className="font-medium">{o.name}</span>
+                    <span className="text-xs text-gray-400 capitalize">{o.office_type || o.level}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+            {(offices.length > OFFICE_PREVIEW || officesTotal > offices.length) && (
+              <div className="flex items-center justify-between pt-3 mt-1 border-t border-gray-100 text-xs text-gray-500">
+                <span>
+                  {showAllOffices || offices.length <= OFFICE_PREVIEW
+                    ? `Showing ${offices.length} of ${officesTotal}`
+                    : `Showing ${Math.min(OFFICE_PREVIEW, offices.length)} of ${officesTotal}`}
+                </span>
+                {offices.length > OFFICE_PREVIEW && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllOffices(v => !v)}
+                    className="font-semibold text-brand-navy hover:text-brand-red transition-colors"
+                  >
+                    {showAllOffices ? 'Show fewer' : `Show all ${offices.length}`}
+                  </button>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

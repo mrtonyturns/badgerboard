@@ -99,6 +99,16 @@ const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState('health')
   const [toast, setToast] = useState(null)
 
+  // Tab switch → scroll to top. The app's <main> (Layout.jsx) is the scroll
+  // container, not the window, so scrolling to the bottom of AI Costs and then
+  // clicking Error Logs used to open the new tab with its toolbar above the fold.
+  // Mirrors scrollPageTop() in Dossiers.jsx; window fallback for safety.
+  useEffect(() => {
+    const main = document.querySelector('main')
+    if (main) main.scrollTo({ top: 0 })
+    window.scrollTo({ top: 0 })
+  }, [activeTab])
+
   const showToast = useCallback((message, type = 'success') => {
     setToast({ message, type })
     setTimeout(() => setToast(null), 3000)
@@ -326,51 +336,102 @@ const PlatformHealthTab = ({ apiCall, showToast, onNavigate }) => {
 }
 
 // Signup Chart Component (SVG-based)
+//
+// Y axis: integer-only, de-duplicated ticks on a "nice" max (step ≥ 1), so a
+// max of 2 renders 0/1/2 instead of the old "0, 1, 2, 2" from rounding
+// fractional ratios. X axis: ~5 evenly spaced date labels (first, last, and
+// a few between) regardless of series length. Bars sit inside a left gutter
+// so the first one no longer overlaps the Y-axis line.
+const niceStep = (rawStep) => {
+  // Snap a step to 1 / 2 / 5 × 10^n, never below 1 (signup counts are integers).
+  if (rawStep <= 1) return 1
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)))
+  const norm = rawStep / mag
+  const snapped = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10
+  return snapped * mag
+}
+
+const fmtChartDate = (raw) => {
+  if (!raw) return ''
+  // Date-only strings parse as UTC midnight and shift a day west of Greenwich;
+  // pin them to local noon.
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(raw)) ? new Date(`${raw}T12:00:00`) : new Date(raw)
+  return isNaN(d) ? String(raw) : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
 const SignupChart = ({ data }) => {
   const validData = data.filter(d => d.count !== null && d.count !== undefined)
   if (!validData.length) {
     return <p className="text-gray-500 text-sm">No data</p>
   }
 
-  const maxCount = Math.max(...validData.map(d => d.count), 1)
-  const barWidth = Math.max(15, 600 / validData.length)
-  const barSpacing = Math.max(2, (600 - barWidth * validData.length) / (validData.length + 1))
+  const n = validData.length
+  const rawMax = Math.max(...validData.map(d => Number(d.count) || 0), 1)
+  const TARGET_TICKS = 4
+  const step = niceStep(rawMax / TARGET_TICKS)
+  const niceMax = Math.max(step, Math.ceil(rawMax / step) * step)
+  const yTicks = []
+  for (let v = 0; v <= niceMax; v += step) yTicks.push(v)
+
   const chartHeight = 300
+  const AXIS_X   = 40                 // Y-axis line; tick labels right-align just left of it
+  const PAD_L    = 8                  // gutter between the axis and the first bar
+  const PAD_R    = 8
+  const TOP_Y    = 40
+  const BASE_Y   = chartHeight - 40
+  const plotH    = BASE_Y - TOP_Y
+  const plotW    = Math.max(600, 20 * n)   // grows for long series, scrolls horizontally
+  const slot     = plotW / n
+  const barWidth = Math.max(4, Math.min(28, slot * 0.7))
+  const plotLeft = AXIS_X + PAD_L
+  const plotRight = plotLeft + plotW
+  const svgWidth = plotRight + PAD_R
+
+  // ~5 evenly spaced X labels: first, last, and three between (deduped for
+  // short series).
+  const LABELS = Math.min(5, n)
+  const labelIdx = new Set(
+    Array.from({ length: LABELS }, (_, k) => Math.round(k * (n - 1) / Math.max(1, LABELS - 1)))
+  )
+
+  const yFor = (v) => BASE_Y - (v / niceMax) * plotH
 
   return (
     <div className="overflow-x-auto">
-      <svg width={Math.max(600, barWidth * validData.length + barSpacing * (validData.length + 1))} height={chartHeight} className="mx-auto">
-        {/* Y-axis labels */}
-        {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
-          const y = chartHeight - 40 - ratio * (chartHeight - 80)
-          const label = Math.round(maxCount * ratio)
+      <svg width={svgWidth} height={chartHeight} className="mx-auto">
+        {/* Y-axis ticks + gridlines */}
+        {yTicks.map((v) => {
+          const y = yFor(v)
           return (
-            <g key={`y-${i}`}>
-              <text x={30} y={y + 4} className="text-xs fill-gray-600" textAnchor="end">
-                {label}
+            <g key={`y-${v}`}>
+              <text x={AXIS_X - 6} y={y + 4} className="text-xs fill-gray-600" textAnchor="end">
+                {v}
               </text>
-              <line x1={35} y1={y} x2={barSpacing + barWidth * validData.length + barSpacing} y2={y} stroke="#e5e7eb" strokeWidth={1} />
+              <line x1={AXIS_X} y1={y} x2={plotRight} y2={y} stroke="#e5e7eb" strokeWidth={1} />
             </g>
           )
         })}
 
         {/* Bars */}
         {validData.map((d, i) => {
-          const barHeight = ((d.count || 0) / maxCount) * (chartHeight - 80)
-          const x = barSpacing + i * (barWidth + barSpacing)
-          const y = chartHeight - 40 - barHeight
+          const count = Number(d.count) || 0
+          const barHeight = (count / niceMax) * plotH
+          const x = plotLeft + i * slot + (slot - barWidth) / 2
+          const y = BASE_Y - barHeight
 
           return (
             <g key={i}>
-              <rect x={x} y={y} width={barWidth} height={barHeight} fill="#1a2744" rx={2} />
-              {i % 7 === 0 && (
+              <rect x={x} y={y} width={barWidth} height={barHeight} fill="#1a2744" rx={2}>
+                <title>{`${fmtChartDate(d.date)}: ${count}`}</title>
+              </rect>
+              {labelIdx.has(i) && (
                 <text
                   x={x + barWidth / 2}
                   y={chartHeight - 10}
                   className="text-xs fill-gray-600"
                   textAnchor="middle"
                 >
-                  {d.date ? new Date(d.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
+                  {fmtChartDate(d.date)}
                 </text>
               )}
             </g>
@@ -378,11 +439,80 @@ const SignupChart = ({ data }) => {
         })}
 
         {/* Axes */}
-        <line x1={35} y1={40} x2={35} y2={chartHeight - 40} stroke="#d1d5db" strokeWidth={2} />
-        <line x1={35} y1={chartHeight - 40} x2={barSpacing + barWidth * validData.length + barSpacing} y2={chartHeight - 40} stroke="#d1d5db" strokeWidth={2} />
+        <line x1={AXIS_X} y1={TOP_Y} x2={AXIS_X} y2={BASE_Y} stroke="#d1d5db" strokeWidth={2} />
+        <line x1={AXIS_X} y1={BASE_Y} x2={plotRight} y2={BASE_Y} stroke="#d1d5db" strokeWidth={2} />
       </svg>
     </div>
   )
+}
+
+// ── Activity-log labels ──────────────────────────────────────────────────────
+// activity_log rows carry { action, entity_type, entity_id, details JSON } —
+// there has never been a `page` column, which is why every row in "View
+// Activity" used to read "Unknown page". Build a readable label from what is
+// actually there: "Updated candidate — Jane Doe (3 fields)".
+const ENTITY_WORDS = {
+  candidate:        'candidate',
+  incumbent_record: 'record',
+  account:          'account',
+  milestone:        'milestone',
+  dossier:          'profile',
+  profile:          'profile',
+}
+const ACTION_VERBS = {
+  create:   'Created',
+  update:   'Updated',
+  delete:   'Deleted',
+  view:     'Viewed',
+  generate: 'Generated',
+}
+const ACTION_PHRASES = {
+  enable_monitoring:         'Enabled monitoring',
+  disable_monitoring:        'Disabled monitoring',
+  ai_lock:                   'Locked AI access',
+  ai_unlock:                 'Unlocked AI access',
+  password_changed:          'Changed password',
+  profile_updated:           'Updated profile',
+  calendar_feed_rotated:     'Rotated calendar feed URL',
+  ai_access_default_changed: 'Changed AI access default',
+  milestone_completed:       'Completed milestone',
+  milestone_reopened:        'Reopened milestone',
+}
+const humanize = (str) => String(str || '')
+  .replace(/[_-]+/g, ' ')
+  .trim()
+  .replace(/^\w/, c => c.toUpperCase())
+
+function activityLabel(a) {
+  const action = String(a?.action || '').toLowerCase()
+  const entity = String(a?.entity_type || '').toLowerCase()
+  if (!action && !entity) return 'Activity'
+  if (ACTION_PHRASES[action]) return ACTION_PHRASES[action]
+  const verb = ACTION_VERBS[action]
+  const noun = ENTITY_WORDS[entity] || (entity ? humanize(entity).toLowerCase() : '')
+  if (verb) return noun ? `${verb} ${noun}` : verb
+  // Unknown action string — fall back to the raw action, humanized. Never
+  // "Unknown page".
+  return humanize(action || entity)
+}
+
+function activityDetail(a) {
+  const d = (a?.details && typeof a.details === 'object') ? a.details : {}
+  const parts = []
+  const name = d.candidate_name || d.record_title || d.title || d.name
+  if (name) parts.push(String(name))
+  if (d.record_type) parts.push(humanize(d.record_type))
+  if (Array.isArray(d.fields_changed) && d.fields_changed.length) {
+    parts.push(`${d.fields_changed.length} field${d.fields_changed.length === 1 ? '' : 's'}: ${d.fields_changed.slice(0, 4).join(', ')}${d.fields_changed.length > 4 ? '…' : ''}`)
+  } else if (d.changed_count) {
+    parts.push(`${d.changed_count} field${d.changed_count === 1 ? '' : 's'}`)
+  }
+  if (d.ai_access_default !== undefined) parts.push(`→ ${String(d.ai_access_default)}`)
+  if (d.source) parts.push(`via ${d.source}`)
+  if (!parts.length && a?.entity_type && a?.entity_id) {
+    return `${humanize(a.entity_type)} ${String(a.entity_id).slice(0, 8)}`
+  }
+  return parts.join(' · ')
 }
 
 // TAB 2: Account Management
@@ -814,8 +944,10 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
                           <div className="space-y-2 max-h-64 overflow-y-auto">
                             {activityData[u.id].map((activity, i) => (
                               <div key={i} className="text-sm text-gray-700 bg-white p-3 rounded border border-gray-200">
-                                <div className="font-medium">{activity.action || 'Unknown'}</div>
-                                <div className="text-xs text-gray-500">{activity.page || 'Unknown page'}</div>
+                                <div className="font-medium">{activityLabel(activity)}</div>
+                                {activityDetail(activity) && (
+                                  <div className="text-xs text-gray-500">{activityDetail(activity)}</div>
+                                )}
                                 <div className="text-xs text-gray-500">
                                   {activity.created_at ? new Date(activity.created_at).toLocaleString() : 'Unknown time'}
                                 </div>
@@ -1810,15 +1942,33 @@ const ChangePlanModal = ({ currentPlan, currentBracket, onSave, onClose }) => {
 // Real metering from the ai_usage table: every AI call logs actual token
 // counts and computed cost. Shows where spend comes from (app section),
 // which provider it goes to, and which users drive it.
+// Every ai_usage.endpoint key → Title-case product name. Anything not listed
+// (new endpoints, one-offs) gets a capitalized fallback via endpointLabel()
+// so the list never mixes "polling" with "Profiler — AI profiles" again.
 const ENDPOINT_LABELS = {
-  'profiler':       'Profiler — AI profiles',
-  'events':         'District Events research',
-  'district-intel': 'District Intelligence',
-  'broadside':      'Broadside sparring',
-  'support-chat':   'Support chat',
-  'campaign-intel': 'Campaign Intel & SWOT',
-  'prospecting':    'Prospecting & discovery',
-  'candidates':     'Candidate tools',
+  'profiler':        'Profiler — AI profiles',
+  'dossier':         'Profiler — AI profiles',
+  'events':          'Events',
+  'district-intel':  'District Intelligence',
+  'broadside':       'Broadside',
+  'broadside-brain': 'Broadside',
+  'support-chat':    'Support Chat',
+  'campaign-intel':  'Campaign Intel & SWOT',
+  'prospecting':     'Prospecting',
+  'recruit':         'Recruit',
+  'polling':         'Polling',
+  'monitoring':      'Monitoring',
+  'candidates':      'Candidate Tools',
+}
+const endpointLabel = (key) => {
+  const k = String(key || '').trim().toLowerCase()
+  if (!k) return 'Other'
+  if (ENDPOINT_LABELS[k]) return ENDPOINT_LABELS[k]
+  if (k.startsWith('broadside')) return 'Broadside'
+  if (k.startsWith('profiler') || k.startsWith('dossier')) return 'Profiler — AI profiles'
+  // Unknown → "some-new_key" → "Some new key"
+  const words = k.replace(/[_-]+/g, ' ').trim()
+  return words.charAt(0).toUpperCase() + words.slice(1)
 }
 const PROVIDER_META = {
   anthropic:  { label: 'Anthropic (Claude)',    color: '#D97757' },
@@ -1952,7 +2102,7 @@ const AICostsTab = ({ apiCall, showToast }) => {
             {(data.by_endpoint || []).map(e => (
               <div key={e.key}>
                 <div className="flex items-baseline justify-between mb-1">
-                  <span className="text-sm font-bold text-gray-800">{ENDPOINT_LABELS[e.key] || e.key}</span>
+                  <span className="text-sm font-bold text-gray-800">{endpointLabel(e.key)}</span>
                   <span className="text-sm font-black text-gray-900 tabular-nums">{fmtUsd(e.cost)}</span>
                 </div>
                 <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">

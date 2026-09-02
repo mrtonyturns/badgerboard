@@ -575,7 +575,7 @@ export default function ActionDashboard() {
             election={nextRace}
             contextLine={
               onNextRace.length
-                ? `${onNextRace.length} of your candidate${onNextRace.length === 1 ? ' is' : 's are'} on this ballot`
+                ? `${onNextRace.length} of your candidates ${onNextRace.length === 1 ? 'is' : 'are'} on this ballot`
                 : nextRace ? 'No candidates linked to this ballot yet' : null
             }
           />

@@ -1,4 +1,5 @@
-// Elections.jsx — Calendar + live results in one page
+// Elections.jsx — Calendar + live results in one page (Results gated by RESULTS_ENABLED;
+// the page header/subtitle is owned by Layout.jsx PAGE_HEADERS and follows the same flag)
 // Two tabs: Calendar (upcoming/past) | Results (live board for selected election)
 // Clicking "View Results" on any card switches to Results tab with that election loaded.
 

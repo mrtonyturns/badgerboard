@@ -46,7 +46,7 @@ import { getUserTier, hasFeature } from '../lib/tiers'
 import UpgradePrompt from '../components/UpgradePrompt'
 import SearchableSelect from '../components/SearchableSelect'
 import { parseCsvRows } from '../lib/csv'
-import { buildProspectCsv, confidenceBand, csvFilename, factorSummary } from '../lib/prospectCsv'
+import { buildProspectCsv, confidenceBand, csvFilename, factorSummary, displayParty, displayDistrict } from '../lib/prospectCsv'
 import { DB_PARTIES } from '../lib/party'
 import { WI_COUNTY_CENTROIDS } from '../lib/wiDistricts'
 import { T, cardStyle, Btn, Pill, Spinner, EmptyNote } from './profiler/shared.jsx'
@@ -338,7 +338,7 @@ function ScoreCell({ row }) {
           {score == null ? '—' : Math.round(score)}
         </span>
         <Pill c={tint.c} bg={tint.bg}>{band}</Pill>
-        {isEstimate && score != null && <span style={{ fontSize: 10, color: T.faint, fontWeight: 600 }}>AI est.</span>}
+        {isEstimate && score != null && <span style={{ fontSize: 10, color: T.faint, fontWeight: 600, whiteSpace: 'nowrap' }}>AI est.</span>}
         {hasDetail && <Info style={{ width: 12, height: 12, color: T.faint }} />}
       </button>
 
@@ -540,13 +540,15 @@ function ContactCell({ row }) {
     const href = kind === 'phone' ? telHref(item.value) : `mailto:${item.value}`
     const actAsLink = kind === 'email' || (IS_TOUCH_DEVICE && href)
     return (
-      <div key={item.value} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 0', borderBottom: `1px solid ${T.border}` }}>
+      // The address is the point of the row: it wraps rather than clipping to
+      // "info@yeefor…" — the pills and icons after it never shrink.
+      <div key={item.value} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 0', borderBottom: `1px solid ${T.border}`, flexWrap: 'wrap' }}>
         {actAsLink ? (
           <a href={href} aria-label={`${kind === 'phone' ? 'Call' : 'Email'} ${row.name} at ${item.value}, ${confidenceBand(item.confidence)} ${item.confidence ?? 0}% confidence, source ${item.source || 'unknown'}`}
-            style={{ fontSize: 12, color: T.ink, textDecoration: 'none', fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</a>
+            style={{ fontSize: 12, color: T.ink, textDecoration: 'none', fontWeight: 600, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'left' }}>{item.value}</a>
         ) : (
           <button onClick={() => copy(item.value)} aria-label={`Copy ${item.value}`}
-            style={{ background: 'none', border: 'none', padding: 0, fontSize: 12, color: T.ink, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</button>
+            style={{ background: 'none', border: 'none', padding: 0, fontSize: 12, color: T.ink, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'left' }}>{item.value}</button>
         )}
         <BandPill confidence={item.confidence} />
         <span style={{ fontSize: 10, color: T.faint }}>{(item.source || '').replace(/_/g, ' ')}</span>
@@ -625,7 +627,7 @@ function ContactCell({ row }) {
         <div style={{ fontSize: 11, fontWeight: 700, color: T.ink4, letterSpacing: .4, marginBottom: 6 }}>PHONE NUMBERS</div>
         {phones.map(p => popRow(p, 'phone'))}
       </Popover>
-      <Popover open={open === 'emails'} onClose={() => setOpen(null)} width={320} anchorRef={emailBtnRef}>
+      <Popover open={open === 'emails'} onClose={() => setOpen(null)} width={360} anchorRef={emailBtnRef}>
         <div style={{ fontSize: 11, fontWeight: 700, color: T.ink4, letterSpacing: .4, marginBottom: 6 }}>EMAIL ADDRESSES</div>
         {emails.map(e => popRow(e, 'email'))}
       </Popover>
@@ -1209,7 +1211,8 @@ export default function Prospecting() {
         case 'win_odds_score': return row.win_odds_score == null ? null : Number(row.win_odds_score)
         case 'name':           return lower(row.name)
         case 'office_name':    return lower(row.office_name)
-        case 'affiliation':    return lower(row.affiliation)
+        // Sort on the DISPLAYED spelling — 'Democrat' and 'Democratic' are one group.
+        case 'affiliation':    return lower(displayParty(row.affiliation || row.party))
         case 'website_state':  return lower(row.website_state)
         case 'agency':         return row.agency_signals?.detected ? 1 : 0
         case 'contact':        return (row.contact?.emails?.length || 0) + (row.contact?.phones?.length || 0)
@@ -1539,7 +1542,7 @@ export default function Prospecting() {
                   {discoverRows.map(p => {
                     const disc = p.win_odds_factors?.discovery || {}
                     const src = disc.source_url || p.research_citations?.[0]?.url || null
-                    const partyLabel = p.affiliation || p.party
+                    const partyLabel = displayParty(p.affiliation || p.party)
                     const inMine = !!p.candidate_id
                     const busy = adding.has(p.id)
                     return (
@@ -1567,7 +1570,7 @@ export default function Prospecting() {
                         </td>
                         <td style={tdStyle}>
                           {p.office_name || '—'}
-                          {p.district_name && <span style={{ color: T.muted }}> · {p.district_name}</span>}
+                          {p.district_name && <span style={{ color: T.muted }}> · {displayDistrict(p.district_name)}</span>}
                         </td>
                         <td style={tdStyle}>{partyLabel || <span style={{ color: T.faint }}>—</span>}</td>
                         <td style={tdStyle}>{p.county || <span style={{ color: T.faint }}>—</span>}</td>
@@ -1677,7 +1680,7 @@ export default function Prospecting() {
                           />
                         </td>
                         <td style={{ ...tdStyle, fontWeight: 700 }}>{p.name}</td>
-                        <td style={tdStyle}>{p.office_name || '—'}{p.district_name ? ` · ${p.district_name}` : ''}</td>
+                        <td style={tdStyle}>{p.office_name || '—'}{p.district_name ? ` · ${displayDistrict(p.district_name)}` : ''}</td>
                         <td style={tdStyle}>{fmtDay(p.discovered_at || p.created_at)}</td>
                         <td style={tdStyle}>
                           {prospectStatus(p) === 'failed'
@@ -1749,7 +1752,7 @@ export default function Prospecting() {
                     {sortBtn('name', 'Candidate', 170)}
                     {sortBtn('office_name', 'Office')}
                     {sortBtn('affiliation', 'Party', 120)}
-                    {sortBtn('win_odds_score', 'Win odds', 160)}
+                    {sortBtn('win_odds_score', 'Win odds', 190)}
                     {sortBtn('contact', 'Contact', 230)}
                     {sortBtn('website_state', 'Website', 120)}
                     {sortBtn('agency', 'Agency', 140)}
@@ -1782,10 +1785,10 @@ export default function Prospecting() {
                         </td>
                         <td style={tdStyle}>
                           {p.office_name || '—'}
-                          {p.district_name && <div style={{ color: T.muted, fontSize: 11 }}>{p.district_name}</div>}
+                          {p.district_name && <div style={{ color: T.muted, fontSize: 11 }}>{displayDistrict(p.district_name)}</div>}
                         </td>
                         <td style={tdStyle}>
-                          {p.affiliation || p.party || <span style={{ color: T.faint }}>unknown</span>}
+                          {displayParty(p.affiliation || p.party) || <span style={{ color: T.faint }}>unknown</span>}
                           {p.affiliation_detail?.inferred && (
                             <div title={p.affiliation_detail?.basis || ''} style={{ marginTop: 3 }}>
                               <Pill c={T.amber} bg={T.warmBg}>inferred {p.affiliation_detail?.confidence ?? 0}%</Pill>

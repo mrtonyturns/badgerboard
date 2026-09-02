@@ -25,6 +25,7 @@ import { recurrenceLabel, nextOccurrence } from '../lib/recurrence.js'
 import SearchableSelect from './SearchableSelect'
 import { parseQuickAdd } from '../lib/quickAdd'
 import LoadingBar from './LoadingBar'
+import { useDialog } from '../lib/useDialog'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -267,6 +268,10 @@ function TaskDetailModal({ task, tasks, projects, sections, labels, onClose, onS
   const [newSub, setNewSub]           = useState('')
   const [saving, setSaving]           = useState(false)
 
+  // Escape closes WITHOUT saving (edits are only written by the Save button),
+  // same contract as every other dialog in the app (src/lib/useDialog.js).
+  useDialog(onClose)
+
   const subtasks = tasks.filter(t => t.parent_id === task.id)
   const projectSections = sections.filter(s => s.project_id === projectId)
 
@@ -469,6 +474,7 @@ function ProjectModal({ editing, onClose, onSave }) {
   const [color, setColor]       = useState(editing?.color || PROJECT_COLORS[0])
   const [favorite, setFavorite] = useState(editing?.is_favorite || false)
   const [saving, setSaving]     = useState(false)
+  useDialog(onClose)
 
   const save = async () => {
     if (!name.trim()) return
@@ -516,6 +522,7 @@ function TemplateModal({ onClose, onGenerate }) {
   const [electionId, setElectionId] = useState('')
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
+  useDialog(onClose)
 
   useEffect(() => {
     getElections().then(({ data }) => {

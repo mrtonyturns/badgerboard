@@ -13,6 +13,8 @@ import {
 import { supabase, adminElections } from '../lib/supabase'
 import SearchableSelect from '../components/SearchableSelect'
 import { partyGroup, DB_PARTIES } from '../lib/party'
+import { useDialog } from '../lib/useDialog'
+import { WI_COUNTY_CENTROIDS } from '../lib/wiDistricts'
 // One definition of "called", shared with the public board.
 import { countCalled } from './ElectionResultsBoard'
 
@@ -31,6 +33,13 @@ const OFFICE_TYPES = [
   { value: 'legislative',    label: 'Legislative' },
   { value: 'municipal',      label: 'Municipal' },
   { value: 'referendum',     label: 'Referendum' },
+]
+
+// County dropdown for Add/Edit Contest — the 72 counties plus a blank
+// "— none —" for statewide contests (county is stored as null in that case).
+const COUNTY_OPTIONS = [
+  { value: '', label: '— none —' },
+  ...Object.keys(WI_COUNTY_CENTROIDS).sort().map(c => ({ value: c, label: c })),
 ]
 const OFFICE_TYPE_LABEL = Object.fromEntries(OFFICE_TYPES.map(t => [t.value, t.label]))
 const OFFICE_TYPE_ORDER = Object.fromEntries(OFFICE_TYPES.map((t, i) => [t.value, i]))
@@ -456,7 +465,12 @@ export default function ElectionResultsAdmin({ showToast }) {
   const [certifying,      setCertifying]      = useState(false)
   const [needsResolution, setNeedsResolution] = useState([])
 
-  const calledNotCertified = contests.filter(c => c.status === 'called').length
+  // One status tally feeds BOTH the "Races Called" stat card and the Certify
+  // button, so the two can never disagree again (they used to read 225 vs 165:
+  // the card counted called+certified, the button counted only still-uncertified).
+  const certifiedCount     = contests.filter(c => String(c.status || '').toLowerCase() === 'certified').length
+  const calledCount        = countCalled(contests)            // called OR certified (shared with public board)
+  const calledNotCertified = contests.filter(c => c.status === 'called').length  // called, awaiting the canvass (backend-aligned; guarded by tests/r1c)
 
   const certifyElection = async () => {
     if (!selectedElection || !calledNotCertified) return
@@ -483,8 +497,8 @@ export default function ElectionResultsAdmin({ showToast }) {
   // an election where the certify button, three inches away, read "225 called".
   // Declaring a winner row and the contest's status are different writes, and
   // the engine calls races without ever setting `declared`. One definition now:
-  // status IN ('called','certified'), shared with the public board.
-  const calledCount  = countCalled(contests)
+  // status IN ('called','certified'), shared with the public board — see
+  // calledCount / certifiedCount / calledNotCertified above.
   const totalVotes   = contests.reduce(
     (s, c) => s + (resultsMap[c.id] || []).reduce((x, r) => x + (r.votes || 0), 0), 0)
 
@@ -566,7 +580,9 @@ export default function ElectionResultsAdmin({ showToast }) {
               className="btn-secondary flex items-center gap-1.5 text-sm py-1.5"
             >
               <ShieldCheck className="w-4 h-4" />
-              {certifying ? 'Certifying…' : `Certify election (${calledNotCertified} called)`}
+              {certifying
+                ? 'Certifying…'
+                : `Certify election (${calledNotCertified} called${certifiedCount ? `, ${certifiedCount} certified` : ''})`}
             </button>
           )}
         </div>
@@ -602,7 +618,9 @@ export default function ElectionResultsAdmin({ showToast }) {
           <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
             <p className="text-2xl font-bold text-green-600">{calledCount}</p>
             <p className="text-xs text-gray-500 mt-0.5">Races Called</p>
-            <p className="text-[10px] text-gray-400 leading-tight">called or certified</p>
+            <p className="text-[10px] text-gray-400 leading-tight tabular-nums">
+              {calledNotCertified} called · {certifiedCount} certified
+            </p>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-3 text-center">
             <p className="text-xl font-bold text-gray-900 tabular-nums">{totalVotes.toLocaleString()}</p>
@@ -989,11 +1007,17 @@ export default function ElectionResultsAdmin({ showToast }) {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="label">County</label>
-                <input
-                  className="input"
+                <SearchableSelect
                   value={contestForm.county}
-                  onChange={e => setContestForm({ ...contestForm, county: e.target.value })}
-                  placeholder="e.g. Milwaukee"
+                  onChange={v => setContestForm({ ...contestForm, county: v })}
+                  options={contestForm.county && !WI_COUNTY_CENTROIDS[contestForm.county]
+                    // Legacy free-text value (e.g. "Milwaukee County") — keep it selectable so
+                    // opening Edit Contest doesn't silently blank it.
+                    ? [...COUNTY_OPTIONS, { value: contestForm.county, label: contestForm.county }]
+                    : COUNTY_OPTIONS}
+                  placeholder="— none —"
+                  searchPlaceholder="Search counties…"
+                  portal
                 />
               </div>
               <div className="flex items-center gap-2 mt-5">
@@ -1154,6 +1178,9 @@ export default function ElectionResultsAdmin({ showToast }) {
 
 // ── Shared modal shell ────────────────────────────────────────────────────────
 function Modal({ title, onClose, children }) {
+  // Escape closes without saving + body scroll-lock, same contract as every
+  // other admin modal (see src/lib/useDialog.js).
+  useDialog(onClose)
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="fixed inset-0 bg-black/50" onClick={onClose} />

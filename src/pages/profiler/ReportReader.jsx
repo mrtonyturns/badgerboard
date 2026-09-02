@@ -22,7 +22,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { filterSections } from '../../lib/profileContent'
 import {
   parseSections, buildReport, filterToUnverified, sourcingStats, riskStats,
-  sourceStats, inlineHtml, plainText, claimState, verdictDate, urlHost,
+  sourceStats, flaggedStats, inlineHtml, plainText, claimState, verdictDate, urlHost,
   GROUP_ORDER, SEV_COLOR,
 } from './reportModel'
 import { officeLine } from '../../lib/office'
@@ -40,6 +40,10 @@ export function useReport(content, showEmpty = false, verdicts = null) {
       report,
       hiddenCount,
       sourcing: sourcingStats(content || ''),
+      // The "needs verification" number — the same parseFlaggedClaims() list
+      // the reviewer drawer, the "Review flagged claims (n)" button and the
+      // library row count, so the four can never disagree.
+      flagged:  flaggedStats(content || '', verdicts),
       risk:     riskStats(content || ''),
       sources:  sourceStats(content || ''),
     }
@@ -584,7 +588,7 @@ export default function ReportReader({
   const verdictMap = verdicts
     || (dossier?.claim_verdicts && typeof dossier.claim_verdicts === 'object' ? dossier.claim_verdicts : null)
 
-  const { report, hiddenCount, sourcing, risk, sources } = useReport(content, showEmpty, verdictMap)
+  const { report, hiddenCount, sourcing, flagged, risk, sources } = useReport(content, showEmpty, verdictMap)
   const candidate = dossier?.candidate || {}
   const subject   = candidate.name || ''
 
@@ -638,7 +642,7 @@ export default function ReportReader({
   // deliberately untouched: a team verdict is not a primary record, so it never
   // moves the honest ratio — it only stops the report asking again.
   const team = report.verdictTotals || { valid: 0, false: 0, unsure: 0, resolvedWeak: 0, total: 0 }
-  const pendingWeak = Math.max(0, sourcing.weak - team.resolvedWeak)
+  const pendingWeak = flagged.open
   const teamNote = [
     team.valid  ? `${team.valid} verified by ${onVerdict ? 'your team' : 'the profile owner'}` : '',
     team.false  ? `${team.false} marked false` : '',
@@ -694,8 +698,8 @@ export default function ReportReader({
         <StatCell
           label="Needs verification"
           value={pendingWeak}
-          sub={teamNote || (sourcing.weak
-            ? `${sourcing.material} material · ${sourcing.minor} minor`
+          sub={teamNote || (flagged.open
+            ? `${flagged.material} material · ${flagged.minor} minor`
             : 'Nothing tagged for follow-up')}
         />
         <StatCell
