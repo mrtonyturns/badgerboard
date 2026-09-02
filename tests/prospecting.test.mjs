@@ -327,7 +327,7 @@ console.log('V3 — discover-prospects-background pure helpers')
     COUNTY_DISTRICTS.Marathon.assembly.join() === '35,69,85,86,87' && COUNTY_DISTRICTS.Marathon.senate.join() === '12,23,29' && COUNTY_DISTRICTS.Marathon.congress.join() === '7')
   t('chamber classification', d.chamberOf('State Senator') === 'senate' && d.chamberOf('State Representative') === 'assembly' &&
     d.chamberOf('U.S. Representative') === 'congress' && d.chamberOf('Governor of Wisconsin') === 'statewide' && d.chamberOf('County Board Supervisor') === 'local')
-  t('district number parsing', d.districtNumberOf('District 17', null) === 17 && d.districtNumberOf(null, 'Senate District 3') === 3 &&
+  t('district number parsing', d.districtNumberOf('District 17', null) === 17 && d.districtNumberOf(null, 'Senate District 3') === 3 && d.districtNumberOf('8', null) === 8 &&
     d.districtNumberOf('4th Congressional District', null) === 4 && d.districtNumberOf(null, 'County Sheriff') === null)
   const rej = []
   const kept = d.buildProspectRows([

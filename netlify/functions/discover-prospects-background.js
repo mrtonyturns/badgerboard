@@ -149,6 +149,9 @@ function chamberOf(office, level) {
 
 /** First district number found in the district or office string, else null. */
 function districtNumberOf(district, office) {
+  // A bare number in the district field ("8", "17") is the district.
+  const bare = String(district || '').trim().match(/^#?\s*(\d{1,3})$/)
+  if (bare) return parseInt(bare[1], 10)
   for (const s of [district, office]) {
     const m = String(s || '').match(/\b(?:district|dist\.?|ad|sd|cd)\s*#?\s*(\d{1,3})\b|\b(\d{1,3})(?:st|nd|rd|th)\s+(?:assembly|senate|congressional|district)/i)
     if (m) return parseInt(m[1] || m[2], 10)
