@@ -82,13 +82,47 @@ function parseCandidateJson(text) {
   let s = String(text).trim()
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i)
   if (fence) s = fence[1].trim()
-  const start = s.indexOf('[')
+  // Find the ARRAY OF OBJECTS — a bare indexOf('[') would land on a Perplexity
+  // citation marker like "[1]" in any prose the model put before the JSON.
+  const m = s.match(/\[\s*\{/)
+  if (!m) return []
+  const start = m.index
   const end = s.lastIndexOf(']')
-  if (start < 0 || end <= start) return []
-  try {
-    const arr = JSON.parse(s.slice(start, end + 1))
-    return Array.isArray(arr) ? arr : []
-  } catch { return [] }
+  if (end > start) {
+    try {
+      const arr = JSON.parse(s.slice(start, end + 1))
+      if (Array.isArray(arr)) return arr
+    } catch { /* fall through to salvage */ }
+  }
+  // Salvage: a truncated array (max_tokens) or a stray "]" from a citation
+  // marker breaks JSON.parse — recover every COMPLETE object from `start` on.
+  const objs = []
+  const re = /\{[^{}]*\}/g
+  const rest = s.slice(start)
+  let hit
+  while ((hit = re.exec(rest))) {
+    try { objs.push(JSON.parse(hit[0])) } catch { /* skip malformed object */ }
+  }
+  return objs
+}
+
+/**
+ * Resolve a source reference to a URL. Perplexity returns its sources as a
+ * separate `citations` array and refers to them inline as [1], [2]… — so the
+ * model often fills source_url with "[3]" or "3" instead of the URL. Map those
+ * through the citations list; otherwise normalize as a URL.
+ */
+function resolveSource(raw, citations = []) {
+  if (raw == null) return null
+  const s = String(raw).trim()
+  const idx = s.match(/^\[?\s*(\d{1,2})\s*\]?$/)
+  if (idx) return normalizeUrl(citations[parseInt(idx[1], 10) - 1]) || null
+  return normalizeUrl(s)
+}
+
+/** Strip inline citation markers the model glues onto values: "Jane Doe [1][2]". */
+function stripMarkers(v) {
+  return sanitize(v, 200).replace(/\s*\[\d{1,2}\]/g, '').trim()
 }
 
 /** Case/space-insensitive key for de-duplication: "name|office". */
@@ -103,16 +137,16 @@ function dedupeKey(name, office) {
  * or no source URL (an uncited name is a guess, not a discovery), de-dupes,
  * and caps at MAX_DISCOVERED.
  */
-function buildProspectRows(entries, { userId, query }) {
+function buildProspectRows(entries, { userId, query, citations = [] }) {
   const seen = new Set()
   const out = []
   for (const e of entries || []) {
     if (!e || typeof e !== 'object') continue
-    const name = sanitize(e.name, 150)
-    const source = normalizeUrl(e.source_url || e.source || e.url)
+    const name = stripMarkers(e.name)
+    const source = resolveSource(e.source_url ?? e.source ?? e.url, citations)
     if (!name || name.split(/\s+/).length < 2) continue    // need at least first + last
     if (!source) continue                                   // uncited → dropped
-    const office = sanitize(e.office, 150) || query.officeName || null
+    const office = stripMarkers(e.office) || query.officeName || null
     const key = dedupeKey(name, office)
     if (seen.has(key)) continue
     seen.add(key)
@@ -126,8 +160,8 @@ function buildProspectRows(entries, { userId, query }) {
       candidate_id: null,                       // siloed until "Add to My Candidates"
       name,
       office_name: office,
-      district_name: sanitize(e.district, 100) || query.districtName || null,
-      county: sanitize(e.county, 60) || query.county || null,
+      district_name: stripMarkers(e.district).slice(0, 100) || query.districtName || null,
+      county: stripMarkers(e.county).slice(0, 60).replace(/\s+county$/i, '') || query.county || null,
       level,
       election_date: /^\d{4}-\d{2}-\d{2}$/.test(String(e.election_date || '')) ? e.election_date : null,
       party,
@@ -167,7 +201,7 @@ const DISCOVERY_SYSTEM = [
   'Your job is to FIND EVERY candidate currently running (declared, filed, or on the ballot) that matches the query, using live web search.',
   'Use ballot access lists, county and municipal clerk notices, Wisconsin Elections Commission candidate lists, Ballotpedia, local news, and campaign websites.',
   'COMPLIANCE: do NOT use Wisconsin campaign-finance filings (CFIS, campaignfinance.wi.gov, WEC finance reports) as a source. Candidate LISTS from the WEC are fine; finance reports are not.',
-  'Every candidate MUST have a source_url pointing to the actual page that names them as a candidate. If you cannot cite a page, do not include the person.',
+  'Every candidate MUST have a source_url pointing to the actual page that names them as a candidate — write the FULL https URL in the JSON, not a citation number. If you cannot cite a page, do not include the person.',
   'Do not invent names. Do not include people who lost a primary or withdrew unless the query asks for them. Do not include incumbents who are not running.',
   'Return ONLY a JSON array. No markdown fences, no prose before or after.',
 ].join(' ')
@@ -202,7 +236,7 @@ Return the JSON array only.`
 }
 
 async function runPerplexity(prompt, userId) {
-  if (!PERPLEXITY_API_KEY) return { text: null, error: 'PERPLEXITY_API_KEY is not set' }
+  if (!PERPLEXITY_API_KEY) return { text: null, citations: [], error: 'PERPLEXITY_API_KEY is not set' }
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), PPLX_TIMEOUT_MS)
   try {
@@ -222,16 +256,17 @@ async function runPerplexity(prompt, userId) {
     })
     if (!res.ok) {
       const detail = await res.text().catch(() => '')
-      return { text: null, error: `Perplexity ${res.status}${detail ? `: ${detail.slice(0, 160)}` : ''}` }
+      return { text: null, citations: [], error: `Perplexity ${res.status}${detail ? `: ${detail.slice(0, 160)}` : ''}` }
     }
     const d = await res.json()
     logAiUsage({
       userId, endpoint: 'prospecting', provider: 'perplexity', model: PPLX_MODEL,
       inputTokens: d?.usage?.prompt_tokens || 0, outputTokens: d?.usage?.completion_tokens || 0,
     })
-    return { text: d?.choices?.[0]?.message?.content || null, error: null }
+    const citations = Array.isArray(d?.citations) ? d.citations.map(c => (typeof c === 'string' ? c : c?.url)).filter(Boolean) : []
+    return { text: d?.choices?.[0]?.message?.content || null, citations, error: null }
   } catch (e) {
-    return { text: null, error: e.name === 'AbortError' ? 'Discovery search timed out' : `Discovery search failed: ${e.message}` }
+    return { text: null, citations: [], error: e.name === 'AbortError' ? 'Discovery search timed out' : `Discovery search failed: ${e.message}` }
   } finally {
     clearTimeout(timer)
   }
@@ -381,9 +416,16 @@ exports.handler = async (event) => {
     const research = await runPerplexity(discoveryPrompt(query), user.id)
     if (research.error) return fail(502, research.error, STAGE_SEARCH)
     const entries = parseCandidateJson(research.text)
-    const rows = buildProspectRows(entries, { userId: user.id, query })
+    const rows = buildProspectRows(entries, { userId: user.id, query, citations: research.citations })
     if (!rows.length) {
-      return fail(404, 'No candidates with a citable public source were found for that search. Try a broader query or a different year.', STAGE_SEARCH)
+      // Say WHICH gate emptied the result — otherwise "nothing found" hides a
+      // parser problem behind a search problem.
+      const textLen = (research.text || '').length
+      const why = !textLen ? 'the search returned no text'
+        : !entries.length ? `the search returned text (${textLen} chars) but no parseable candidate list`
+        : `${entries.length} name${entries.length === 1 ? '' : 's'} came back but none had a citable source (${research.citations.length} citation${research.citations.length === 1 ? '' : 's'} available)`
+      console.warn(`[discover] empty result — ${why}. Sample: ${String(research.text || '').slice(0, 300).replace(/\s+/g, ' ')}`)
+      return fail(404, `No candidates found for that search — ${why}. Try a specific race or a different year.`, STAGE_SEARCH)
     }
 
     // ── 2. Skip anyone this user already has as a prospect ───────────────────
@@ -433,3 +475,5 @@ module.exports.parseCandidateJson = parseCandidateJson
 module.exports.dedupeKey = dedupeKey
 module.exports.buildProspectRows = buildProspectRows
 module.exports.MAX_DISCOVERED = MAX_DISCOVERED
+module.exports.resolveSource = resolveSource
+module.exports.stripMarkers = stripMarkers
