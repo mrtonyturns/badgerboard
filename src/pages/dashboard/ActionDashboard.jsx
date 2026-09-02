@@ -15,7 +15,7 @@ import LoadingBar from '../../components/LoadingBar'
 import { useAuth } from '../../contexts/AuthContext'
 import {
   supabase,
-  getCandidates, getMilestones, getElections, getDossiers,
+  getCandidates, getGamePlanSnapshots, getElections, getDossiers,
   getProspectingLists, getVoterLists, getRecentActivity,
 } from '../../lib/supabase'
 import {
@@ -31,7 +31,7 @@ import {
   DigestItems, ElectionRows, EmptyState, CtaButton, TextLink, LivePulseDot,
   PartyAvatar,
   safeISO, fmtInt, fmtDate, daysUntil, isUpcoming, relativeTime, initialsOf, autoStatus,
-  countdownLabel, fmtDueDate, dueChipLabel,
+  countdownLabel, fmtDueDate, dueChipLabel, taskToMilestone, byDueDate,
   isMonitored, monitoringSlots,
   resolveDistrict, loadBoundary, countVotersInDistrict,
   latestDigestOf, weekDigestOf,
@@ -247,7 +247,11 @@ export default function ActionDashboard() {
 
   const [loading, setLoading]     = useState(true)
   const [candidates, setCands]    = useState([])
-  const [milestones, setMiles]    = useState([])
+  // Game plans this account can open — its own plus every active Campaign
+  // Connect link — read from gp_tasks, the table <TaskBoard /> renders. Each
+  // entry is { owner: {id,label,self}, milestones: [adapted top-level tasks] }.
+  // The legacy game_plan_milestones table is no longer written by the app.
+  const [plans, setPlans]         = useState([])
   const [elections, setElections] = useState([])
   const [dossiers, setDossiers]   = useState([])
   const [prospects, setProspects] = useState([])
@@ -267,7 +271,7 @@ export default function ActionDashboard() {
       startOfMonth.setHours(0, 0, 0, 0)
       const [c, m, e, d, pl, vl, act] = await Promise.all([
         getCandidates({}),
-        getMilestones({}),
+        getGamePlanSnapshots(),
         getElections(),
         getDossiers(null, { list: true }),   // no `content` — this page only draws digests
         getProspectingLists(),
@@ -277,7 +281,10 @@ export default function ActionDashboard() {
       if (dead) return
       const allDossiers = d.data || []
       setCands(c.data || [])
-      setMiles(m.data || [])
+      setPlans((m.data || []).map(snap => {
+        const sectionsById = Object.fromEntries((snap.sections || []).map(x => [x.id, x]))
+        return { owner: snap.owner, milestones: (snap.tasks || []).map(t => taskToMilestone(t, sectionsById)) }
+      }))
       setElections(e.data || [])
       setDossiers(allDossiers)
       setProspects(pl.data || [])
@@ -340,17 +347,33 @@ export default function ActionDashboard() {
   )
 
   // ── selected candidate detail ─────────────────────────────────────────────
-  const selMilestones = useMemo(
-    () => (sel ? milestones.filter(m => m.candidate_id === sel.id) : []),
-    [milestones, sel],
+  // gp_tasks are keyed by plan OWNER (a user), not by candidate row. A
+  // candidate whose email matches an active Campaign Connect link gets that
+  // linked plan; otherwise the card shows this account's own plan — the same
+  // "My plan" the Todo page opens by default — and says which one it is.
+  const ownPlan = useMemo(() => plans.find(p => p.owner?.self) || null, [plans])
+  const planForCandidate = (c) => {
+    const email = String(c?.email || '').trim().toLowerCase()
+    if (!email) return null
+    return plans.find(p => !p.owner?.self && String(p.owner?.label || '').trim().toLowerCase() === email) || null
+  }
+  const candidateForPlan = (p) => {
+    if (!p || p.owner?.self) return null
+    const email = String(p.owner?.label || '').trim().toLowerCase()
+    return candidates.find(c => String(c.email || '').trim().toLowerCase() === email) || null
+  }
+  const selPlan = useMemo(
+    () => (sel ? planForCandidate(sel) || ownPlan : null),
+    [plans, ownPlan, sel],
   )
+  const selMilestones = useMemo(() => selPlan?.milestones || [], [selPlan])
 
   const selGp = useMemo(() => {
     const total = selMilestones.length
     const done = selMilestones.filter(m => ['complete', 'skipped'].includes(autoStatus(m))).length
     const next = selMilestones
       .filter(m => !['complete', 'skipped'].includes(autoStatus(m)))
-      .sort((a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999'))
+      .sort(byDueDate)
       .slice(0, 4)
     return { total, done, next }
   }, [selMilestones])
@@ -481,24 +504,24 @@ export default function ActionDashboard() {
         })
       }
     })
-    const overdueBy = {}
-    milestones.forEach(m => {
-      if (autoStatus(m) !== 'overdue') return
-      const id = m.candidate_id || 'none'
-      ;(overdueBy[id] ||= []).push(m)
-    })
-    Object.entries(overdueBy).forEach(([id, list]) => {
-      const c = candidates.find(x => x.id === id)
+    // One row per plan with overdue OPEN tasks. autoStatus() reads the
+    // adapter's `status`, which is 'complete' whenever gp_tasks.completed is
+    // true, so a checked-off task can never land here.
+    plans.forEach(p => {
+      const list = p.milestones.filter(m => autoStatus(m) === 'overdue')
+      if (!list.length) return
+      const c = candidateForPlan(p)
+      const who = c ? c.name : (p.owner?.self ? 'My plan' : p.owner?.label)
       const soonest = list.slice().sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''))[0]
       out.push({
-        key: `o-${id}`, priority: 1, candidateId: c?.id,
+        key: `o-${p.owner.id}`, priority: 1, candidateId: c?.id,
         glyph: '!', tileBg: '#FFF7ED', tileFg: '#C2410C',
         // "overdue" is the chip's word and the chip's alone — the title used to
         // repeat it, so one row said "overdue" twice.
-        title: `${c ? `${c.name}: ` : ''}${soonest.title}${list.length > 1 ? ` +${list.length - 1} more` : ''}`,
+        title: `${who ? `${who}: ` : ''}${soonest.title}${list.length > 1 ? ` +${list.length - 1} more` : ''}`,
         // fmtDueDate carries the year when it isn't this one: a bare "Sep 2"
         // beside "348d overdue" read as a date 17 days in the FUTURE.
-        sub: `Game Plan · ${PHASE_MAP[soonest.phase]?.label || 'Unassigned'} · due ${fmtDueDate(soonest.due_date)}`,
+        sub: `Game Plan · ${soonest.phase_label || PHASE_MAP[soonest.phase]?.label || 'Unassigned'} · due ${fmtDueDate(soonest.due_date)}`,
         // Signed, so a future due date can never be announced as overdue.
         chip: dueChipLabel(soonest.due_date), chipColor: T.redHot, chipBg: '#FEF2F2',
       })
@@ -517,14 +540,14 @@ export default function ActionDashboard() {
       })
     })
     return out.sort((a, b) => a.priority - b.priority).slice(0, 6)
-  }, [candidates, milestones, upcoming, byCandidate])
+  }, [candidates, plans, upcoming, byCandidate])
 
   const subLine = (
     <span style={{ fontSize: 13, color: T.muted }}>
       {candidates.length
         ? `${candidates.length} candidate${candidates.length === 1 ? '' : 's'} · ` +
           `${slots.used} actively monitored · ` +
-          `${new Set(milestones.map(m => m.candidate_id).filter(Boolean)).size} with a game plan`
+          `${plans.filter(p => p.milestones.length).length} game plan${plans.filter(p => p.milestones.length).length === 1 ? '' : 's'}`
         : 'Add candidates on the Candidates page to start tracking your portfolio.'}
     </span>
   )
@@ -753,10 +776,16 @@ export default function ActionDashboard() {
 
             {/* game plan */}
             <div style={{ padding: '18px 24px', borderLeft: `1px solid ${T.divider}`, minWidth: 0 }}>
-              <div style={{
-                fontSize: 11, fontWeight: 700, letterSpacing: '.8px',
-                color: T.muted, marginBottom: 13,
-              }}>GAME PLAN — NEXT UP</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 13 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.8px', color: T.muted }}>
+                  GAME PLAN — NEXT UP
+                </span>
+                {selPlan && (
+                  <span style={{ marginLeft: 'auto', fontSize: 10.5, color: T.faint, whiteSpace: 'nowrap' }}>
+                    {selPlan.owner?.self ? 'My plan' : 'Linked plan'}
+                  </span>
+                )}
+              </div>
               {selGp.next.length ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
                   {selGp.next.map(m => (
@@ -768,7 +797,7 @@ export default function ActionDashboard() {
                           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                         }}>{m.title}</div>
                         <div style={{ fontSize: 10.5, color: T.faint }}>
-                          {PHASE_MAP[m.phase]?.label || 'Unassigned'}
+                          {m.phase_label || PHASE_MAP[m.phase]?.label || 'Unassigned'}
                         </div>
                       </div>
                       <DueChip milestone={m} />
@@ -777,13 +806,13 @@ export default function ActionDashboard() {
                 </div>
               ) : selGp.total ? (
                 <EmptyState
-                  title="Every milestone is done"
-                  body="Nothing outstanding on this candidate's plan."
+                  title="Every task is done"
+                  body={`All ${selGp.total} task${selGp.total === 1 ? '' : 's'} on this plan are checked off. Nothing outstanding.`}
                 />
               ) : (
                 <EmptyState
                   title="No game plan yet"
-                  body="Build one and the next milestones show up here."
+                  body="Build one and the next tasks show up here."
                   action={<CtaButton onClick={() => nav('/game-plan')}>Open Game Plan</CtaButton>}
                 />
               )}
@@ -905,7 +934,7 @@ export default function ActionDashboard() {
             ) : (
               <EmptyState
                 title="Nothing needs attention"
-                body="No controversy items in this week's digests, no overdue milestones, and no ballots inside 45 days for your candidates."
+                body="No controversy items in this week's digests, no overdue Game Plan tasks, and no ballots inside 45 days for your candidates."
               />
             )}
           </Card>

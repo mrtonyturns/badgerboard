@@ -11,6 +11,7 @@ import {
 } from '../lib/wiDistricts'
 import { loadPlaceDemographics, placeKey, displayName, fmtNum, fmtMoney, fmtPct } from '../lib/placeDemographics'
 import { partyMapHex } from '../lib/party'
+import { candidateStatusLabel } from '../lib/campaignEnums'
 
 // Alias to the centroid maps — all values computed from the real GeoJSON boundary files
 const WI_COUNTY_COORDS  = WI_COUNTY_CENTROIDS
@@ -57,11 +58,27 @@ function getOfficeFallbackCoords(office, index) {
       const c = WI_COUNTY_COORDS[countyKey]
       if (c) return [c[0] + jitter(index) * 0.08, c[1] + jitter(index + 7) * 0.08]
     }
-    // Fall back to WI centroid with jitter spread
-    return [WI_CENTROID[0] + jitter(index) * 0.7, WI_CENTROID[1] + jitter(index + 17) * 0.7]
+    // No county on a county/municipal office → no resolvable location.
+    // (Previously dropped these at the WI centroid with jitter, which drew
+    // phantom pins in the middle of the state.)
+    return null
   }
 
   return null
+}
+
+/**
+ * True when a candidate can be placed on the map from real data (county
+ * centroid, district centroid, or a statewide office). Exported so the
+ * Candidates page can tell the user how many candidates are NOT plotted
+ * using exactly the same rules the marker layer uses.
+ */
+export function candidateHasLocation(c) {
+  const o = c?.office
+  if (!o) return false
+  const countyKey = (o.county || '').replace(/ county$/i, '').trim()
+  if (WI_COUNTY_COORDS[o.county] || (countyKey && WI_COUNTY_COORDS[countyKey])) return true
+  return getOfficeFallbackCoords(o, 0) !== null
 }
 
 // Dot colors come from lib/party.js — every party spelling maps to one hex.
@@ -399,18 +416,18 @@ export default function LeafletMapView({
     ;(candidates || []).forEach((c, i) => {
       let coords = WI_COUNTY_COORDS[c.office?.county]
       if (!coords && c.office) coords = getOfficeFallbackCoords(c.office, i)
-      // Fallback: place unresolved candidates at WI centroid with jitter so they
-      // still appear on the map rather than being silently dropped.
-      if (!coords) {
-        const jFn = (seed) => ((seed * 7919 + i * 1237) % 1000 - 500) / 2000
-        coords = [WI_CENTROID[0] + jFn(i), WI_CENTROID[1] + jFn(i + 99)]
-      }
+      // Candidates with no office / district / county have no real location.
+      // They used to be dropped at the WI centroid with an index-based offset,
+      // which drew a straight diagonal line of phantom pins across the state.
+      // Skip them — the Candidates page shows a "N not shown" notice instead
+      // (see candidateHasLocation above).
+      if (!coords) return
       L.marker(coords, { icon: dotIcon(partyColor(c.party)) })
         .bindPopup(
           `<b>${c.name}</b>` +
           (c.party        ? `<br><small>${c.party}</small>` : '') +
           (c.office?.name ? `<br><small>${c.office.name}</small>` : '') +
-          (c.status       ? `<br><small style="color:#888">${c.status.replace(/_/g,' ')}</small>` : '')
+          (c.status       ? `<br><small style="color:#888">${candidateStatusLabel(c.status)}</small>` : '')
         ).addTo(layer)
     })
 

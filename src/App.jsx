@@ -104,8 +104,10 @@ const CandidateDetail = lazyRetry(() => import('./pages/CandidateDetail'))  // c
 const Prospecting = lazyRetry(() => import('./pages/Prospecting'))  // code-split: trims the initial bundle (M1)
 const Recruit = lazyRetry(() => import('./pages/Recruit'))  // code-split: Action-plan exclusive (v1.29)
 const VoterLists = lazyRetry(() => import('./pages/VoterLists'))  // code-split: trims the initial bundle (M1)
-// Door Knocking parked — restore import + route to re-enable
-// import DoorKnocking from './pages/DoorKnocking'
+// Door Knocking — re-enabled Sept 2026 (QA bug #2: the page shipped in the
+// bundle but had no route, so every link/bookmark 404'd). Admin-gated as it
+// was when parked; the page sells Scout users the upgrade in-page.
+const DoorKnocking = lazyRetry(() => import('./pages/DoorKnocking'))  // code-split: heavy Leaflet page
 const CampaignConnect = lazyRetry(() => import('./pages/CampaignConnect'))  // code-split: trims the initial bundle (M1)
 const Dossiers = lazyRetry(() => import('./pages/Dossiers'))  // code-split: trims the initial bundle (M1)
 import Settings from './pages/Settings'
@@ -263,7 +265,7 @@ const AppRoutes = () => {
             bouncing the user to the dashboard. */}
         <Route path="recruit" element={<Recruit />} />
         <Route path="voter-lists" element={<VoterLists />} />
-        {/* <Route path="door-knocking" element={<AdminRoute><DoorKnocking /></AdminRoute>} /> */}
+        <Route path="door-knocking" element={<AdminRoute><DoorKnocking /></AdminRoute>} />
         <Route path="dossiers" element={<Dossiers />} />
         <Route path="profiler" element={<Dossiers />} />
         {/* Compare is sold as a plan feature (tiers.js features.compare) and the

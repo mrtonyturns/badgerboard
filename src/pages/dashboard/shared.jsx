@@ -17,6 +17,7 @@ import { safeISO } from '../../lib/date'
 // Date arithmetic lives in ./dueMath (a JSX-free module the tests can import).
 import {
   daysUntil, isUpcoming, autoStatus, countdownLabel, fmtDueDate, dueChipLabel,
+  taskToMilestone, byDueDate,
 } from './dueMath'
 import { officeLine } from '../../lib/office'
 import { pointInGeometry } from '../../lib/geo'
@@ -98,7 +99,7 @@ export const fmtDate = (d, pattern = 'MMM d') => {
 // dueChipLabel all live in ./dueMath now — see the countdown-parity note there.
 // Re-exported because the candidate views import them (and everything else in
 // this module) from ./shared.
-export { daysUntil, isUpcoming, autoStatus, countdownLabel, fmtDueDate, dueChipLabel }
+export { daysUntil, isUpcoming, autoStatus, countdownLabel, fmtDueDate, dueChipLabel, taskToMilestone, byDueDate }
 
 export const relativeTime = (d) => {
   const t = safeISO(d)
@@ -281,7 +282,7 @@ export function DueChip({ milestone }) {
     <span style={{
       fontSize: 10.5, fontWeight: 600, color: s.c, background: s.bg,
       border: `1px solid ${s.br}`, borderRadius: 99, padding: '3px 10px', whiteSpace: 'nowrap',
-    }}>{fmtDate(milestone.due_date)}</span>
+    }}>{fmtDueDate(milestone.due_date)}</span>
   )
 }
 
@@ -561,7 +562,7 @@ export function MilestoneRow({ milestone, onToggle, busy }) {
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{milestone.title}</div>
         <div style={{ fontSize: 11, color: T.faint, marginTop: 1 }}>
-          {phase?.label || 'Unassigned'}
+          {milestone.phase_label || phase?.label || 'Unassigned'}
         </div>
       </div>
       <DueChip milestone={milestone} />

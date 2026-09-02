@@ -5,7 +5,7 @@ import {
   FileText, Settings, LogOut, Menu, X, ChevronRight,
   User, CreditCard, Shield, ChevronDown, Tag, UserCheck,
   ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink, Users2, Swords, BarChart2, FlaskConical,
-  UserPlus,
+  UserPlus, MapPin,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import BluejackLogo from './BluejackLogo'
@@ -542,6 +542,8 @@ const NAV_SECTIONS = [
     ...(RESULTS_ENABLED ? [{ to: '/game-plan?tab=results', icon: BarChart2, label: 'Results', q: { path: '/game-plan', tab: 'results' } }] : []),
     { to: '/events',      icon: CalendarDays, label: 'Events', badge: 'New' },
     { to: '/voter-lists', icon: UserCheck,    label: 'Voter Lists' },
+    // Door Knocking is admin-only while it's being finished (route is AdminRoute-gated in App.jsx)
+    { to: '/door-knocking', icon: MapPin, label: 'Door Knocking', adminOnly: true, badge: 'Beta' },
   ] },
   { key: 'connect', label: 'Campaign Connect', icon: Users2, paidOnly: true, direct: { to: '/campaign-connect' } },
   // v1.29: Action is a real tab strip now — Recruit joins Prospecting. Both are
@@ -1250,6 +1252,7 @@ export default function Layout() {
     { match: /^\/prospecting/,      title: 'Prospecting Lists',      sub: 'AI-powered candidate prospecting for political marketing outreach' },
     { match: /^\/recruit/,          title: 'Recruit',                sub: 'Find and vet candidate prospects for local seats from your voter list' },
     { match: /^\/voter-lists/,      title: 'Voter Lists',            sub: 'Upload voter CSV files, map addresses, and build targeted prospect lists' },
+    { match: /^\/door-knocking/,    title: 'Door Knocking',          sub: 'Canvassing campaigns, walk lists, shifts and surveys' },
     { match: /^\/(dossiers|profiler)/, title: 'Profiler',            sub: 'AI-generated 14-section political intelligence reports' },
     { match: /^\/compare/,          title: 'Candidate Comparison',   sub: 'Side-by-side intelligence on two candidates', badge: 'Beta' },
     { match: /^\/events/,           title: 'District Events',        sub: 'Community events where your campaign should show up' },

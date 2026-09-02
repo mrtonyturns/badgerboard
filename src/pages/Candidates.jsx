@@ -5,7 +5,7 @@ import { supabase, getCandidates, getOffices, getElections, createCandidate, del
 import { useAuth } from '../contexts/AuthContext'
 import { getUserTier, getUserPlanType, getMonitoringSlotMax, canMonitorCandidates, monitoringUnlockLabel, hasFeature, SCOUT_CANDIDATE_LIMIT, featureUnlockLabel } from '../lib/tiers'
 import { WebOnlyCta, NATIVE_PLAN_NOTE } from '../components/UpgradeCta'
-import LeafletMapView from '../components/LeafletMapView'
+import LeafletMapView, { candidateHasLocation } from '../components/LeafletMapView'
 import SearchableSelect from '../components/SearchableSelect'
 import MapErrorBoundary from '../components/MapErrorBoundary'
 import LoadingBar from '../components/LoadingBar'
@@ -195,8 +195,14 @@ export default function Candidates() {
 
   const [viewMode, setViewMode] = useState(() => restoredMapCtx?.viewMode === 'map' ? 'map' : 'table')
   const [mapEverShown, setMapEverShown] = useState(() => restoredMapCtx?.viewMode === 'map')
-  const [activeLayer, setActiveLayer] = useState(() =>
-    typeof restoredMapCtx?.activeLayer === 'string' ? restoredMapCtx.activeLayer : '')
+  // Pre-v1.19.1 sessions may have persisted the legacy 'federal' / 'state'
+  // layer keys, which no longer exist in LeafletMapView's DISTRICT_LAYERS —
+  // map them onto the split layers so a restored toggle still draws something.
+  const LEGACY_LAYER_KEYS = { federal: 'congress', state: 'assembly' }
+  const [activeLayer, setActiveLayer] = useState(() => {
+    const k = typeof restoredMapCtx?.activeLayer === 'string' ? restoredMapCtx.activeLayer : ''
+    return LEGACY_LAYER_KEYS[k] || k
+  })
   // A restored selection must still look like a district (a `name` to parse a
   // district number out of and a `layerKey` to branch on). A stale or truncated
   // payload used to restore `{}`, and the first render then called
@@ -228,12 +234,25 @@ export default function Candidates() {
     writeMapCtx(CANDIDATES_MAP_CTX_KEY, { activeLayer, viewMode, selectedDistrict, view: mapView })
   }, [activeLayer, viewMode, selectedDistrict, mapView])
 
+  // Layer keys must match LeafletMapView's DISTRICT_LAYERS. v1.19.1 split
+  // 'federal' into Congress / U.S. Senate and 'state' into State Senate /
+  // Assembly (same toggles as Offices.jsx) — the old 'federal' / 'state' keys
+  // matched no layer config, so those toggles drew nothing.
   const LAYER_BUTTONS = [
-    { key: 'federal',   label: 'Federal',   activeCls: 'bg-blue-600 text-white border-blue-600',    dotColor: '#1d4ed8' },
-    { key: 'state',     label: 'State',     activeCls: 'bg-brand-red text-white border-brand-red',   dotColor: '#dc2626' },
-    { key: 'county',    label: 'County',    activeCls: 'bg-purple-600 text-white border-purple-600', dotColor: '#7c3aed' },
-    { key: 'municipal', label: 'Municipal', activeCls: 'bg-green-600 text-white border-green-600',   dotColor: '#16a34a' },
+    { key: 'congress',  label: 'Congress',     activeCls: 'bg-blue-600 text-white border-blue-600',     dotColor: '#1d4ed8' },
+    { key: 'ussenate',  label: 'U.S. Senate',  activeCls: 'bg-cyan-700 text-white border-cyan-700',     dotColor: '#0e7490' },
+    { key: 'senate',    label: 'State Senate', activeCls: 'bg-brand-red text-white border-brand-red',   dotColor: '#dc2626' },
+    { key: 'assembly',  label: 'Assembly',     activeCls: 'bg-orange-600 text-white border-orange-600', dotColor: '#ea580c' },
+    { key: 'county',    label: 'County',       activeCls: 'bg-purple-600 text-white border-purple-600', dotColor: '#7c3aed' },
+    { key: 'municipal', label: 'Municipal',    activeCls: 'bg-green-600 text-white border-green-600',   dotColor: '#16a34a' },
   ]
+
+  // Candidates the map can't place (no office / district / county). The map
+  // no longer plots these at a synthetic centroid position — surface the
+  // count above the map instead so nobody is silently missing.
+  const unplottedCount = viewMode === 'map'
+    ? candidates.filter(c => !candidateHasLocation(c)).length
+    : 0
 
   // Candidates visible in the selected district
   const panelCandidates = selectedDistrict ? (() => {
@@ -245,11 +264,22 @@ export default function Candidates() {
     return candidates.filter(c => {
       const o = c.office
       if (!o) return false
-      if (layerKey === 'federal') return o.level === 'federal' && (!num || o.district_number === num)
-      if (layerKey === 'state') {
-        if (o.level !== 'state' || o.district_number !== num) return false
+      // Mirrors matchOffices() in Offices.jsx. 'federal' / 'state' are the
+      // legacy pre-split keys and can still arrive via a restored session.
+      if (layerKey === 'congress' || layerKey === 'federal') {
+        if (o.level !== 'federal') return false
+        if (num && o.district_number != null) return parseInt(o.district_number) === num
+        if (layerKey === 'congress') return !num && !/senate|senator/i.test(o.name || '')
+        return true
+      }
+      if (layerKey === 'ussenate') {
+        return o.level === 'federal' && o.district_number == null && /senate|senator/i.test(o.name || '')
+      }
+      if (layerKey === 'senate' || layerKey === 'assembly' || layerKey === 'state') {
+        if (!num || o.level !== 'state' || parseInt(o.district_number) !== num) return false
+        const isSenate = layerKey === 'senate' || sublabel === 'State Senate District'
         const n = (o.name || '').toLowerCase()
-        return sublabel === 'State Senate District' ? n.includes('senate') : !n.includes('senate')
+        return isSenate ? n.includes('senate') : !n.includes('senate')
       }
       if (layerKey === 'county') {
         const stripCounty = (s) => (s || '').replace(/ county$/i, '').trim().toLowerCase()
@@ -922,6 +952,19 @@ export default function Candidates() {
             </div>
           )}
 
+          {/* Candidates with no resolvable location are not plotted — say so */}
+          {viewMode === 'map' && unplottedCount > 0 && (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              <span>
+                {unplottedCount} candidate{unplottedCount === 1 ? ' isn\'t' : 's aren\'t'} shown on the map — {unplottedCount === 1 ? 'it has' : 'they have'} no office or district yet.
+              </span>
+              <button type="button" onClick={() => switchView('table')}
+                className="font-semibold underline underline-offset-2 hover:text-amber-900">
+                View in list
+              </button>
+            </div>
+          )}
+
           {/* Map view with district side panel */}
           {mapEverShown && (
             <div style={{ display: viewMode === 'map' ? 'block' : 'none', position: 'relative' }}
@@ -958,7 +1001,13 @@ export default function Candidates() {
                 }}>
                   {/* Header */}
                   {(() => {
-                    const themes = { federal:{bg:'#dbeafe',color:'#1e40af'}, state:{bg:'#fee2e2',color:'#991b1b'}, county:{bg:'#ede9fe',color:'#5b21b6'}, municipal:{bg:'#dcfce7',color:'#14532d'} }
+                    const themes = {
+                      congress:{bg:'#dbeafe',color:'#1e40af'}, federal:{bg:'#dbeafe',color:'#1e40af'},
+                      ussenate:{bg:'#cffafe',color:'#155e75'},
+                      senate:{bg:'#fee2e2',color:'#991b1b'}, state:{bg:'#fee2e2',color:'#991b1b'},
+                      assembly:{bg:'#ffedd5',color:'#9a3412'},
+                      county:{bg:'#ede9fe',color:'#5b21b6'}, municipal:{bg:'#dcfce7',color:'#14532d'},
+                    }
                     const t = themes[selectedDistrict.layerKey] || themes.county
                     return (
                       <div style={{ background:t.bg, padding:'14px 16px', borderBottom:'1px solid rgba(0,0,0,0.07)', borderRadius:'12px 0 0 0', display:'flex', alignItems:'flex-start', gap:10 }}>

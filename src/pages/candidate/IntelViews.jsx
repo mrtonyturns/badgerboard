@@ -9,6 +9,7 @@
 
 import React, { useEffect, useState } from 'react'
 import { supabase, updateCandidate, getDossier } from '../../lib/supabase'
+import { isRealWeakness, cleanWeaknessText } from '../../lib/weaknesses'
 import {
   T, Card, EmptyState, CtaButton, TextLink, Btn, ViewHead, NewBadge,
   LockedView, Spinner, CategoryPill, useDossierSection, SectionContent,
@@ -530,7 +531,11 @@ export function OppositionView({ candidate, dossiers, canIntel, weaknesses, oppo
   // render as a card whose entire title was the placeholder. Drop those before
   // anything counts them — including the panel's own "(N)" badge — so the tab
   // falls through to its empty state rather than showing hollow cards.
+  // Same for rows the old extractor saved that are only a schema field label
+  // ("Background Narrative:", "**WEC Committee Filing:**") — a label with
+  // nothing after the colon rendered as a card with an empty body.
   const list = (weaknesses || []).filter(w => !isPlaceholderOnly(typeof w === 'string' ? w : w?.text))
+    .filter(w => isRealWeakness(w))
 
   const panels = [
     { id: 'weaknesses',    label: 'Key weaknesses', count: list.length },
@@ -585,7 +590,8 @@ export function OppositionView({ candidate, dossiers, canIntel, weaknesses, oppo
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {list.map((w, i) => {
-              const text = typeof w === 'string' ? w : w.text
+              // Stored rows may still carry markdown (** bullets, [n] cites).
+              const text = cleanWeaknessText(typeof w === 'string' ? w : w.text)
               const sev = typeof w === 'object' && w.severity ? SEVERITY[String(w.severity).toLowerCase()] : null
               // Headline is lifted from the weakness text itself — first
               // sentence / clause, cut at a word boundary. When nothing can be

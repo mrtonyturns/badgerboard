@@ -279,6 +279,11 @@ export default function CandidateDetail() {
         // free text) into null and canonicalises 'GOP'/'Democratic'/'R'.
         party: normalizePartyForDb(form.party),
         status: form.status,
+        // Office / Election pickers on the Campaign card (Profile Data). '' is
+        // the "No office" / "No election" option; the columns are nullable
+        // UUID FKs, so blank must be written as NULL.
+        office_id: form.office_id || null,
+        election_id: form.election_id || null,
         email: cleanEmail, phone: form.phone, website: form.website,
         campaign_address: form.campaign_address, campaign_city: form.campaign_city,
         campaign_zip: form.campaign_zip, campaign_committee: form.campaign_committee,

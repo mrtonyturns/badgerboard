@@ -12,8 +12,8 @@ import { format, startOfWeek, addWeeks } from 'date-fns'
 import LoadingBar from '../../components/LoadingBar'
 import { useAuth } from '../../contexts/AuthContext'
 import {
-  supabase, getCandidates, getMilestones, getElections,
-  getDossiers, getVoterLists, updateMilestone, logActivity,
+  supabase, getCandidates, getGamePlanSnapshots, getElections,
+  getDossiers, getVoterLists, updateTask, logActivity,
 } from '../../lib/supabase'
 import { pointInGeometry } from '../../lib/geo'
 import {
@@ -27,6 +27,7 @@ import {
   MilestoneRow, ElectionRows, EmptyState, CtaButton, TextLink, StatRow,
   DistrictHeatMap, HeatLegend, LivePulseDot,
   safeISO, fmtInt, fmtDate, daysUntil, isUpcoming, autoStatus, isMonitored,
+  taskToMilestone, byDueDate,
   monitoringSlots, nextMonday, loadPopPoints, loadCountyPres,
   resolveDistrict, loadBoundary, countVotersInDistrict,
   weekDigestOf, latestDigestOf,
@@ -118,9 +119,9 @@ function MonitoringActivity({ weeks }) {
 }
 
 // ── game plan burn-up ────────────────────────────────────────────────────────
-// Cumulative completed milestones vs. a dashed "all N by election day" target.
-// Completion time is `updated_at` on rows whose status is complete/skipped —
-// the schema stores no dedicated completed_at, so this is a stated proxy.
+// Cumulative completed tasks vs. a dashed "all N by election day" target.
+// Completion time is gp_tasks.completed_at (the adapter copies it onto
+// `updated_at` for completed rows; `updated_at` itself is the fallback).
 function BurnUp({ points, total, targetLabel }) {
   if (!points?.length || !total) return null
   const W = 560, BASE = 112, TOP = 10, L = 4, R = 556
@@ -214,6 +215,9 @@ export default function CandidateDashboard() {
 
   const [loading, setLoading]       = useState(true)
   const [candidates, setCandidates] = useState([])
+  // The user's own Game Plan tasks (gp_tasks, the table <TaskBoard /> renders),
+  // adapted to the milestone shape the shared rows expect. The legacy
+  // game_plan_milestones table is no longer written by anything in the app.
   const [milestones, setMilestones] = useState([])
   const [elections, setElections]   = useState([])
   const [dossiers, setDossiers]     = useState([])
@@ -238,7 +242,7 @@ export default function CandidateDashboard() {
       startOfMonth.setHours(0, 0, 0, 0)
       const [c, m, e, d, vl] = await Promise.all([
         getCandidates({}),
-        getMilestones({}),
+        getGamePlanSnapshots(),
         getElections(),
         getDossiers(null, { list: true }),   // no `content` — the dashboard only draws digests
         getVoterLists(),
@@ -246,7 +250,11 @@ export default function CandidateDashboard() {
       if (dead) return
       const allDossiers = d.data || []
       setCandidates(c.data || [])
-      setMilestones(m.data || [])
+      // A candidate account owns exactly one plan (its own); linked plans are
+      // an Action-side concept, so only the `self` snapshot is read here.
+      const own = (m.data || []).find(x => x.owner?.self) || (m.data || [])[0]
+      const sectionsById = Object.fromEntries((own?.sections || []).map(x => [x.id, x]))
+      setMilestones((own?.tasks || []).map(t => taskToMilestone(t, sectionsById)))
       setElections(e.data || [])
       setDossiers(allDossiers)
       setVoterLists(vl.data || [])
@@ -379,9 +387,9 @@ export default function CandidateDashboard() {
   }, [monitoredDossiers])
 
   // ── derived: game plan ────────────────────────────────────────────────────
-  const selfMilestones = useMemo(() => (
-    self ? milestones.filter(m => m.candidate_id === self.id) : milestones
-  ), [milestones, self])
+  // gp_tasks are per plan owner (this user), not per candidate row, so the
+  // whole plan is the user's plan — no candidate filter.
+  const selfMilestones = milestones
 
   const gp = useMemo(() => {
     const total = selfMilestones.length
@@ -389,12 +397,10 @@ export default function CandidateDashboard() {
     const overdue = selfMilestones.filter(m => autoStatus(m) === 'overdue').length
     const open = selfMilestones
       .filter(m => !['complete', 'skipped'].includes(autoStatus(m)))
-      .sort((a, b) => {
-        const ad = a.due_date || '9999', bd = b.due_date || '9999'
-        return ad.localeCompare(bd)
-      })
+      .sort(byDueDate)
     const phase = open[0]?.phase
-    return { total, done, overdue, next: open.slice(0, 5), phase }
+    const phaseLabel = open[0]?.phase_label
+    return { total, done, overdue, next: open.slice(0, 5), phase, phaseLabel }
   }, [selfMilestones])
 
   const nextElection = useMemo(() => {
@@ -429,14 +435,18 @@ export default function CandidateDashboard() {
     return { points: pts, total }
   }, [selfMilestones])
 
+  // Same write the task board makes: gp_tasks.completed + completed_at.
   const toggleMilestone = async (m) => {
     const done = ['complete', 'skipped'].includes(m.status)
     setBusyId(m.id)
-    const next = done ? 'in_progress' : 'complete'
-    const { error } = await updateMilestone(m.id, { status: next })
+    const stamp = done ? null : new Date().toISOString()
+    const { error } = await updateTask(m.id, { completed: !done, completed_at: stamp })
     if (!error) {
       setMilestones(prev => prev.map(x => (
-        x.id === m.id ? { ...x, status: next, updated_at: new Date().toISOString() } : x
+        x.id === m.id
+          ? { ...x, status: done ? 'not_started' : 'complete', completed: !done,
+              completed_at: stamp, updated_at: stamp || new Date().toISOString() }
+          : x
       )))
       logActivity(done ? 'milestone_reopened' : 'milestone_completed', 'milestone', m.id, { title: m.title })
     }
@@ -618,9 +628,9 @@ export default function CandidateDashboard() {
           of={gp.total || undefined}
           chip={<OverdueChip n={gp.overdue} />}
           sub={
-            !gp.total ? 'No milestones yet — build a plan in Game Plan'
-            : gp.phase ? PHASE_MAP[gp.phase]?.label || 'In progress'
-            : 'All milestones complete'
+            !gp.total ? 'No game plan yet — build one in Game Plan'
+            : gp.next.length ? gp.phaseLabel || PHASE_MAP[gp.phase]?.label || 'In progress'
+            : 'All tasks complete'
           }
         />
       </StatStrip>
@@ -698,8 +708,8 @@ export default function CandidateDashboard() {
               />
             ) : !gp.total ? (
               <EmptyState
-                title="No milestones yet"
-                body="Build a game plan for your race and the next five milestones show up here."
+                title="No game plan yet"
+                body="Build a game plan for your race and the next five tasks show up here."
                 action={<CtaButton onClick={() => nav('/game-plan')}>Build a game plan</CtaButton>}
               />
             ) : (
@@ -713,14 +723,14 @@ export default function CandidateDashboard() {
                 )}
                 {burnUp && (
                   <div style={{ fontSize: 10, color: T.faint, marginBottom: 10 }}>
-                    Completion dates use each milestone's last update time.
+                    Completion dates use the time each task was checked off.
                   </div>
                 )}
                 {gp.next.length ? gp.next.map(m => (
                   <MilestoneRow key={m.id} milestone={m} onToggle={toggleMilestone} busy={busyId === m.id} />
                 )) : (
                   <div style={{ fontSize: 12.5, color: T.muted, padding: '8px 0' }}>
-                    Every milestone is done. Nothing outstanding.
+                    Every task is done. Nothing outstanding.
                   </div>
                 )}
               </>
