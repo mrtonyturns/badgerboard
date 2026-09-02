@@ -35,6 +35,11 @@ const RATE_LIMITS = {
   // Perplexity research call + a Haiku classification + a live site fetch.
   // 2/min × 10 = 20 prospects a minute; 20 runs a day = 200 prospects a day.
   'enrich-prospects':            { perMinute: 2,  perDay: 20  },
+  // Prospecting v3 AI discovery: one Perplexity search per county / level /
+  // race query, writing up to 50 prospect rows. Cheap per call; the cap only
+  // stops loops. Brief enrichment of the discovered field reuses
+  // 'enrich-prospects' above (50 prospects × 1 Perplexity call per run).
+  'discover-prospects':          { perMinute: 4,  perDay: 40  },
   'autofill-candidate':          { perMinute: 10, perDay: 100 },
   'generate-bio-summary':        { perMinute: 10, perDay: 100 },
   // BROADSIDE sparring sessions are rapid-fire spoken lines — higher per-minute
