@@ -30,6 +30,7 @@ const { enforceRateLimit } = require('./_rate-limit')
 const { logAiUsage } = require('./_ai-usage')
 const { ADMIN_EMAILS } = require('./_config')
 const { sanitize, normalizeUrl } = require('./enrich-prospects-background')
+const { COUNTY_DISTRICTS } = require('./_wi-county-districts')
 
 const SUPABASE_URL         = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -125,6 +126,61 @@ function stripMarkers(v) {
   return sanitize(v, 200).replace(/\s*\[\d{1,2}\]/g, '').trim()
 }
 
+// ─── Jurisdiction guard ──────────────────────────────────────────────────────
+// A county query means "races a voter in this county sees on the ballot,
+// excluding statewide". The model does not respect that — asked for Milwaukee
+// County it returned Senate District 17 and a Governor candidate. So every
+// row is checked against the county → districts overlap map before it is
+// written, and anything that cannot be placed in the county is dropped.
+
+const STATEWIDE_RE = /\b(governor|lieutenant governor|attorney general|secretary of state|state treasurer|state superintendent|superintendent of public instruction|supreme court|u\.?s\.? senat|united states senat)\b/i
+
+/** 'senate' | 'assembly' | 'congress' | 'statewide' | 'local' */
+function chamberOf(office, level) {
+  const o = String(office || '')
+  if (STATEWIDE_RE.test(o)) return 'statewide'
+  if (/\b(u\.?s\.?|united states|congress)\b.*\b(house|representative|district)\b|\bcongress/i.test(o)) return 'congress'
+  if (/\bstate senat|\bsenate district|\bsenator\b/i.test(o)) return 'senate'
+  if (/\bassembly|\bstate representative|\brepresentative to the assembly/i.test(o)) return 'assembly'
+  if (level === 'federal') return 'congress'
+  if (level === 'state') return 'statewide'
+  return 'local'
+}
+
+/** First district number found in the district or office string, else null. */
+function districtNumberOf(district, office) {
+  for (const s of [district, office]) {
+    const m = String(s || '').match(/\b(?:district|dist\.?|ad|sd|cd)\s*#?\s*(\d{1,3})\b|\b(\d{1,3})(?:st|nd|rd|th)\s+(?:assembly|senate|congressional|district)/i)
+    if (m) return parseInt(m[1] || m[2], 10)
+  }
+  return null
+}
+
+/**
+ * Is this row inside `county`? Returns { ok, why }.
+ *   statewide           → never (use level mode for those)
+ *   senate/assembly/cd  → only if the district overlaps the county
+ *   local               → yes, unless the model named a DIFFERENT county
+ */
+function inCounty({ office, district, level, rowCounty }, county, map) {
+  if (!county) return { ok: true, why: null }
+  const overlaps = map[county]
+  const chamber = chamberOf(office, level)
+  if (chamber === 'statewide') return { ok: false, why: 'statewide office' }
+  if (chamber === 'local') {
+    const rc = String(rowCounty || '').replace(/\s+county$/i, '').trim().toLowerCase()
+    if (rc && rc !== county.toLowerCase()) return { ok: false, why: `named ${rowCounty}` }
+    return { ok: true, why: null }
+  }
+  if (!overlaps) return { ok: true, why: null }          // unknown county name — don't over-filter
+  const n = districtNumberOf(district, office)
+  if (n == null) return { ok: false, why: `${chamber} without a district number` }
+  const list = overlaps[chamber] || []
+  return list.includes(n)
+    ? { ok: true, why: null }
+    : { ok: false, why: `${chamber} district ${n} does not touch ${county} County` }
+}
+
 /** Case/space-insensitive key for de-duplication: "name|office". */
 function dedupeKey(name, office) {
   const n = sanitize(name, 150).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
@@ -137,7 +193,7 @@ function dedupeKey(name, office) {
  * or no source URL (an uncited name is a guess, not a discovery), de-dupes,
  * and caps at MAX_DISCOVERED.
  */
-function buildProspectRows(entries, { userId, query, citations = [] }) {
+function buildProspectRows(entries, { userId, query, citations = [], countyMap = COUNTY_DISTRICTS, rejected = [] }) {
   const seen = new Set()
   const out = []
   for (const e of entries || []) {
@@ -154,14 +210,26 @@ function buildProspectRows(entries, { userId, query, citations = [] }) {
     const party = normalizeParty(e.party)
     const level = normalizeLevel(e.level) || normalizeLevel(office) || query.level || null
     const confidence = /^(high|medium|low)$/i.test(String(e.confidence || '')) ? String(e.confidence).toLowerCase() : 'medium'
+    const district = stripMarkers(e.district).slice(0, 100) || query.districtName || null
+    const rowCounty = stripMarkers(e.county).slice(0, 60).replace(/\s+county$/i, '') || null
+
+    // Jurisdiction guard — the searched county (county mode, or level/race
+    // mode with a county chosen) must actually contain this race.
+    if (query.county) {
+      const verdict = inCounty({ office, district, level, rowCounty }, query.county, countyMap)
+      if (!verdict.ok) { rejected.push(`${name} (${office || '?'}): ${verdict.why}`); continue }
+    }
 
     out.push({
       created_by: userId,
       candidate_id: null,                       // siloed until "Add to My Candidates"
       name,
       office_name: office,
-      district_name: stripMarkers(e.district).slice(0, 100) || query.districtName || null,
-      county: stripMarkers(e.county).slice(0, 60).replace(/\s+county$/i, '') || query.county || null,
+      district_name: district,
+      // Local races: the searched county. District races: the searched county
+      // too (the district overlaps it — that is what the guard just proved).
+      // No county searched: whatever the model said, or null — never a guess.
+      county: query.county || rowCounty,
       level,
       election_date: /^\d{4}-\d{2}-\d{2}$/.test(String(e.election_date || '')) ? e.election_date : null,
       party,
@@ -206,12 +274,25 @@ const DISCOVERY_SYSTEM = [
   'Return ONLY a JSON array. No markdown fences, no prose before or after.',
 ].join(' ')
 
+/** "State Assembly Districts 35, 69, 85, 86, 87; State Senate Districts 12, 23, 29; Congressional District 7" */
+function districtClause(county) {
+  const m = COUNTY_DISTRICTS[county]
+  if (!m) return ''
+  const part = (label, arr) => (arr && arr.length ? `${label} ${arr.join(', ')}` : null)
+  return [part('State Assembly District(s)', m.assembly), part('State Senate District(s)', m.senate), part('U.S. Congressional District(s)', m.congress)]
+    .filter(Boolean).join('; ')
+}
+
 function discoveryPrompt(q) {
   let scope
   if (q.mode === 'county') {
-    scope = `All candidates running for ANY office in ${q.county} County, Wisconsin in the ${q.electionYear} election cycle — county board, sheriff, clerk, district attorney, treasurer, register of deeds, plus municipal (mayor, city council, village and town boards) and school board seats within the county, plus state Assembly and Senate districts covering the county.`
+    const dc = districtClause(q.county)
+    scope = `All candidates running for a seat that a voter in ${q.county} County, Wisconsin will see on the ballot in the ${q.electionYear} election cycle — EXCLUDING statewide offices (governor, attorney general, treasurer, secretary of state, U.S. Senate, Supreme Court).
+INCLUDE: ${q.county} County offices (county board supervisor, sheriff, clerk, district attorney, treasurer, register of deeds, county executive); municipal offices in cities, villages and towns located in ${q.county} County (mayor, council, alder, village/town board); school boards located in ${q.county} County${dc ? `; and ONLY these legislative districts, which overlap ${q.county} County: ${dc}` : ''}.
+EXCLUDE any Assembly, Senate or Congressional district not listed above, and any municipality or school district in a different county. If a candidate's district is not in the list, leave them out.`
   } else if (q.mode === 'level') {
-    scope = `All ${q.level}-level candidates running in Wisconsin in the ${q.electionYear} election cycle${q.county ? `, limited to ${q.county} County` : ''}.`
+    const dc = q.county ? districtClause(q.county) : ''
+    scope = `All ${q.level}-level candidates running in Wisconsin in the ${q.electionYear} election cycle${q.county ? `, limited to ${q.county} County${dc && (q.level === 'state' || q.level === 'federal') ? ` — that means ONLY ${dc}` : ''}` : ''}.`
   } else {
     scope = `All candidates running for ${q.officeName}${q.districtName ? ` (${q.districtName})` : ''}${q.county ? ` in ${q.county} County` : ''}, Wisconsin in the ${q.electionYear} election cycle.`
   }
@@ -416,13 +497,16 @@ exports.handler = async (event) => {
     const research = await runPerplexity(discoveryPrompt(query), user.id)
     if (research.error) return fail(502, research.error, STAGE_SEARCH)
     const entries = parseCandidateJson(research.text)
-    const rows = buildProspectRows(entries, { userId: user.id, query, citations: research.citations })
+    const rejected = []
+    const rows = buildProspectRows(entries, { userId: user.id, query, citations: research.citations, rejected })
+    if (rejected.length) console.warn(`[discover] jurisdiction guard dropped ${rejected.length}: ${rejected.slice(0, 8).join(' | ')}`)
     if (!rows.length) {
       // Say WHICH gate emptied the result — otherwise "nothing found" hides a
       // parser problem behind a search problem.
       const textLen = (research.text || '').length
       const why = !textLen ? 'the search returned no text'
         : !entries.length ? `the search returned text (${textLen} chars) but no parseable candidate list`
+        : rejected.length && rejected.length >= entries.length - 1 ? `${entries.length} name${entries.length === 1 ? '' : 's'} came back but none were actually in ${query.county} County (e.g. ${rejected[0]})`
         : `${entries.length} name${entries.length === 1 ? '' : 's'} came back but none had a citable source (${research.citations.length} citation${research.citations.length === 1 ? '' : 's'} available)`
       console.warn(`[discover] empty result — ${why}. Sample: ${String(research.text || '').slice(0, 300).replace(/\s+/g, ' ')}`)
       return fail(404, `No candidates found for that search — ${why}. Try a specific race or a different year.`, STAGE_SEARCH)
@@ -457,9 +541,10 @@ exports.handler = async (event) => {
     state.completed = fresh.length
     state.current = null
 
-    const message = skipped
-      ? `Found ${rows.length} candidates — ${fresh.length} new, ${skipped} already in your pipeline.`
-      : `Found ${rows.length} candidate${rows.length === 1 ? '' : 's'}.`
+    const bits = [`Found ${rows.length} candidate${rows.length === 1 ? '' : 's'}`]
+    if (skipped) bits.push(`${fresh.length} new, ${skipped} already in your pipeline`)
+    if (rejected.length) bits.push(`${rejected.length} outside ${query.county} County left out`)
+    const message = bits.length > 1 ? `${bits[0]} — ${bits.slice(1).join(' · ')}.` : `${bits[0]}.`
     await reportProgress(STAGE_SAVE, 'done', message)
     return { statusCode: 200, headers, body: JSON.stringify({ run_id: runId, found: rows.length, added: fresh.length, skipped }) }
   } catch (err) {
@@ -477,3 +562,6 @@ module.exports.buildProspectRows = buildProspectRows
 module.exports.MAX_DISCOVERED = MAX_DISCOVERED
 module.exports.resolveSource = resolveSource
 module.exports.stripMarkers = stripMarkers
+module.exports.chamberOf = chamberOf
+module.exports.districtNumberOf = districtNumberOf
+module.exports.inCounty = inCounty

@@ -319,6 +319,32 @@ console.log('V3 — discover-prospects-background pure helpers')
     { name: 'A B', office: 'Mayor', source_url: 'https://x.org/1' }, { name: 'a  b', office: 'MAYOR', source_url: 'https://x.org/2' },
   ], { userId: 'u', query: {}, citations: [] }).length === 1)
   t('cap is 50', d.MAX_DISCOVERED === 50)
+
+  // Jurisdiction guard — the Milwaukee bug: county search returned SD-17 and a Governor.
+  const { COUNTY_DISTRICTS } = require('../netlify/functions/_wi-county-districts.js')
+  t('county→district map covers all 72 counties', Object.keys(COUNTY_DISTRICTS).length === 72)
+  t('map: Marathon = AD 35/69/85/86/87, SD 12/23/29, CD 7',
+    COUNTY_DISTRICTS.Marathon.assembly.join() === '35,69,85,86,87' && COUNTY_DISTRICTS.Marathon.senate.join() === '12,23,29' && COUNTY_DISTRICTS.Marathon.congress.join() === '7')
+  t('chamber classification', d.chamberOf('State Senator') === 'senate' && d.chamberOf('State Representative') === 'assembly' &&
+    d.chamberOf('U.S. Representative') === 'congress' && d.chamberOf('Governor of Wisconsin') === 'statewide' && d.chamberOf('County Board Supervisor') === 'local')
+  t('district number parsing', d.districtNumberOf('District 17', null) === 17 && d.districtNumberOf(null, 'Senate District 3') === 3 &&
+    d.districtNumberOf('4th Congressional District', null) === 4 && d.districtNumberOf(null, 'County Sheriff') === null)
+  const rej = []
+  const kept = d.buildProspectRows([
+    { name: 'Corrine Hendrickson', office: 'State Senator', district: 'District 17', source_url: 'https://a.org/1' },
+    { name: 'Tom Tiffany', office: 'Governor of Wisconsin', source_url: 'https://a.org/2' },
+    { name: 'Tim Carpenter', office: 'State Senator', district: 'District 3', source_url: 'https://a.org/3' },
+    { name: 'Jane Local', office: 'Milwaukee County Board Supervisor', district: 'District 4', source_url: 'https://a.org/4' },
+    { name: 'Other County', office: 'Village Board Trustee', county: 'Waukesha', source_url: 'https://a.org/5' },
+    { name: 'No Number', office: 'State Representative', source_url: 'https://a.org/6' },
+    { name: 'Gwen Moore', office: 'U.S. Representative', district: '4th Congressional District', source_url: 'https://a.org/7' },
+  ], { userId: 'u', query: { mode: 'county', county: 'Milwaukee', electionYear: 2026 }, citations: [], rejected: rej })
+  t('county mode keeps only races that touch the county (SD-3, county board, CD-4)',
+    kept.map(r => r.name).join() === 'Tim Carpenter,Jane Local,Gwen Moore' && kept.every(r => r.county === 'Milwaukee'))
+  t('county mode rejects SD-17, statewide, other-county local, and district-less state rows with reasons',
+    rej.length === 4 && /district 17/.test(rej[0]) && /statewide/.test(rej[1]) && /Waukesha/.test(rej[2]) && /without a district/.test(rej[3]))
+  t('no county searched → county is what the model said, never the query',
+    d.buildProspectRows([{ name: 'A B', office: 'Mayor', county: 'Dane', source_url: 'https://a.org/9' }], { userId: 'u', query: { mode: 'level', level: 'municipal' }, citations: [] })[0].county === 'Dane')
 }
 
 console.log('V3 — enrich-prospects-background brief mode helpers')
