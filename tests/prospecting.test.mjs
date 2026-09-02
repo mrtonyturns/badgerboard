@@ -290,5 +290,58 @@ console.log('C1 — buildProspectCsv')
     csv.includes('Likely') && csv.includes('Verified'))
 }
 
+// ─── V3: AI discovery + brief enrichment (Prospecting rebuild, Sept 2026) ────
+console.log('V3 — discover-prospects-background pure helpers')
+{
+  const d = require('../netlify/functions/discover-prospects-background.js')
+  t('party normalizes every spelling the model uses',
+    d.normalizeParty('Rep') === 'Republican' && d.normalizeParty('Democratic') === 'Democrat' &&
+    d.normalizeParty('Ind.') === 'Independent' && d.normalizeParty('non-partisan') === 'Nonpartisan' &&
+    d.normalizeParty('Libertarian') === 'Other' && d.normalizeParty('??') === null)
+  t('level classifies by office name when the model omits it',
+    d.normalizeLevel('County Board Supervisor') === 'county' && d.normalizeLevel('State Assembly') === 'state' &&
+    d.normalizeLevel('Wausau Mayor') === 'municipal' && d.normalizeLevel('School Board') === 'school' &&
+    d.normalizeLevel('US House') === 'federal')
+  const cites = ['https://ballotpedia.org/a', 'https://news.example.com/b']
+  t('source refs resolve citation indexes AND raw URLs',
+    d.resolveSource('[2]', cites) === 'https://news.example.com/b' && d.resolveSource('1', cites) === 'https://ballotpedia.org/a' &&
+    d.resolveSource('https://x.org/p', cites) === 'https://x.org/p' && d.resolveSource('[9]', cites) === null)
+  t('inline markers are stripped from values', d.stripMarkers('Jane Doe [1][2]') === 'Jane Doe')
+  const prose = 'Found these [1]:\n```json\n[{"name":"Jane Doe [1]","office":"County Board Supervisor","source_url":"[1]"},{"name":"John Roe","office":"Mayor","source_url":"https://x.org/r"},{"name":"Nocite Guy","office":"Mayor"},{"name":"Cher","office":"Mayor","source_url":"[2]"},{"name":"Trunc'
+  const entries = d.parseCandidateJson(prose)
+  t('parser anchors on the object array (not a [1] in prose) and salvages a truncated array', entries.length === 4)
+  const rows = d.buildProspectRows(entries, { userId: 'u', query: { mode: 'county', county: 'Marathon', electionYear: 2026 }, citations: cites })
+  t('rows: uncited and single-token names dropped, index refs resolved, siloed (candidate_id null)',
+    rows.length === 2 && rows.every(r => r.candidate_id === null && r.discovery_source === 'ai_discovery') &&
+    rows[0].research_citations[0].url === 'https://ballotpedia.org/a' && rows[0].level === 'county' && rows[1].level === 'municipal')
+  t('discovery metadata rides in win_odds_factors.discovery (no migration)', rows[0].win_odds_factors.discovery.query.county === 'Marathon')
+  t('de-dupes on name+office', d.buildProspectRows([
+    { name: 'A B', office: 'Mayor', source_url: 'https://x.org/1' }, { name: 'a  b', office: 'MAYOR', source_url: 'https://x.org/2' },
+  ], { userId: 'u', query: {}, citations: [] }).length === 1)
+  t('cap is 50', d.MAX_DISCOVERED === 50)
+}
+
+console.log('V3 — enrich-prospects-background brief mode helpers')
+{
+  const m = require('../netlify/functions/enrich-prospects-background.js')
+  t('brief cap is 50, deep cap still 10', m.MAX_BRIEF_PER_RUN === 50 && m.MAX_PROSPECTS_PER_RUN === 10)
+  const txt = 'PARTY: Republican — https://ballotpedia.org/x\nEMAIL: jane@janefor.com — https://janefor.com/contact\nWIN_ODDS: 72\nRATIONALE: Incumbent in an R+12 district.'
+  const est = m.parseBriefEstimate(txt)
+  t('estimate parsed without requiring a citation', est.score === 72 && /R\+12/.test(est.rationale))
+  t('out-of-range or missing WIN_ODDS → null', m.parseBriefEstimate('WIN_ODDS: 140').score === null && m.parseBriefEstimate('').score === null)
+  t('bands match the deep model vocabulary', m.bandFor(72) === 'strong' && m.bandFor(50) === 'competitive' && m.bandFor(12) === 'longshot' && m.bandFor(null) === 'unknown')
+  t('cited fact lines still parse alongside the estimate', Object.keys(m.parseCitedFields(txt)).sort().join() === 'EMAIL,PARTY')
+}
+
+console.log('V3 — CSV labels the estimate honestly')
+{
+  const { buildProspectCsv, factorSummary, isEstimate } = await import('../src/lib/prospectCsv.js')
+  const row = { name: 'A B', win_odds_score: 63, win_odds_band: 'competitive', win_odds_factors: { model_version: 'ai_estimate_v1', estimate: true, rationale: 'Open seat, lean R.' } }
+  t('isEstimate detects brief rows', isEstimate(row) && !isEstimate({ win_odds_factors: { factors: [] } }))
+  t('factor summary carries the rationale', factorSummary(row) === 'AI estimate: Open seat, lean R.')
+  const csv = buildProspectCsv([row])
+  t('CSV says "AI estimate" in the confidence column', csv.includes('AI estimate'))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

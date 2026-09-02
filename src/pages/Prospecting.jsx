@@ -315,33 +315,53 @@ function ScoreCell({ row }) {
   const tint = BAND_TINT[band] || BAND_TINT.unknown
   const meta = row.win_odds_factors || {}
   const factors = Array.isArray(meta.factors) ? meta.factors : []
+  // v3 brief mode stores an explicitly-labelled AI ESTIMATE with a one-line
+  // rationale (model_version 'ai_estimate_*'). Legacy deep-mode rows carry the
+  // weighted-model factor breakdown instead.
+  const isEstimate = Boolean(meta.estimate) || /^ai_estimate/.test(String(meta.model_version || ''))
+  const hasDetail = isEstimate ? Boolean(meta.rationale) : factors.length > 0
 
   return (
     <div style={{ position: 'relative' }}>
       <button
         ref={btnRef}
         type="button" onClick={() => setOpen(o => !o)}
-        title="Why this score"
+        title={isEstimate ? 'AI estimate — click for the rationale' : 'Why this score'}
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 6, background: 'none',
-          border: 'none', padding: 0, cursor: factors.length ? 'pointer' : 'default', fontFamily: 'inherit',
+          border: 'none', padding: 0, cursor: hasDetail ? 'pointer' : 'default', fontFamily: 'inherit',
         }}
       >
         <span style={{ fontSize: 17, fontWeight: 800, color: score == null ? T.faint : T.ink }}>
           {score == null ? '—' : Math.round(score)}
         </span>
         <Pill c={tint.c} bg={tint.bg}>{band}</Pill>
-        {factors.length > 0 && <Info style={{ width: 12, height: 12, color: T.faint }} />}
+        {isEstimate && score != null && <span style={{ fontSize: 10, color: T.faint, fontWeight: 600 }}>AI est.</span>}
+        {hasDetail && <Info style={{ width: 12, height: 12, color: T.faint }} />}
       </button>
 
       <Popover open={open} onClose={() => setOpen(false)} width={380} anchorRef={btnRef}>
-        <div style={{ fontSize: 12.5, fontWeight: 800, color: T.ink, marginBottom: 2 }}>Why this score</div>
-        <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>
-          {meta.confidence != null
-            ? `Computed from ${Math.round(Number(meta.confidence) * 100)}% of the model — factors we could not measure are dropped, not guessed.`
-            : 'Transparent weighted model.'}
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: T.ink, marginBottom: 2 }}>
+          {isEstimate ? 'AI estimate — why this number' : 'Why this score'}
         </div>
-        {factors.length === 0 && <EmptyNote>Not scored yet.</EmptyNote>}
+        {isEstimate ? (
+          <>
+            <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>
+              An AI estimate from public reporting (incumbency, district lean, primary context, coverage) — not a
+              measured probability. Treat it as a first-pass sort, not a forecast.
+            </div>
+            {meta.rationale
+              ? <div style={{ fontSize: 12, color: T.ink2, lineHeight: 1.55 }}>{meta.rationale}</div>
+              : <EmptyNote>No rationale was returned.</EmptyNote>}
+          </>
+        ) : (
+          <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>
+            {meta.confidence != null
+              ? `Computed from ${Math.round(Number(meta.confidence) * 100)}% of the model — factors we could not measure are dropped, not guessed.`
+              : 'Transparent weighted model.'}
+          </div>
+        )}
+        {!isEstimate && factors.length === 0 && <EmptyNote>Not scored yet.</EmptyNote>}
         {factors.map(f => (
           <div key={f.key} style={{
             display: 'flex', gap: 10, alignItems: 'baseline', padding: '6px 0',
@@ -1633,87 +1653,99 @@ export default function Prospecting() {
               <table style={tableStyle}>
                 <thead>
                   <tr>
-                    {sortBtn('name', 'Prospect', 170)}
+                    {sortBtn('name', 'Candidate', 170)}
                     {sortBtn('office_name', 'Office')}
-                    {sortBtn('win_odds_score', 'Win odds', 150)}
-                    {sortBtn('affiliation', 'Affiliation', 130)}
-                    {sortBtn('website_state', 'Website', 130)}
-                    <th style={thStyle}>Socials</th>
-                    {sortBtn('agency', 'Agency', 140)}
+                    {sortBtn('affiliation', 'Party', 120)}
+                    {sortBtn('win_odds_score', 'Win odds', 160)}
                     {sortBtn('contact', 'Contact', 230)}
-                    {sortBtn('enriched_at', 'Enriched', 100)}
+                    {sortBtn('website_state', 'Website', 120)}
+                    {sortBtn('agency', 'Agency', 140)}
+                    <th style={{ ...thStyle, width: 170 }}>My Candidates</th>
                     <th style={{ ...thStyle, width: 40 }} />
                   </tr>
                 </thead>
                 <tbody>
                   {visibleResults.length === 0 && (
-                    <tr><td colSpan={10} style={{ padding: 28, textAlign: 'center' }}>
+                    <tr><td colSpan={9} style={{ padding: 28, textAlign: 'center' }}>
                       <EmptyNote>
-                        No enriched prospects match these filters
-                        {enrichedRows.length ? '.' : ' — run an enrichment from the Enrich tab first.'}
+                        No researched candidates match these filters
+                        {enrichedRows.length ? '.' : ' — find candidates on Discover and press Research first.'}
                       </EmptyNote>
                     </td></tr>
                   )}
-                  {visibleResults.map(p => (
-                    <tr key={p.id} className="pp-row" style={trStyle}>
-                      <td style={{ ...tdStyle, fontWeight: 700 }}>
-                        {p.name}
-                        {p.enrichment_status === 'partial' && (
-                          <div title={p.enrichment_error || ''} style={{ marginTop: 3 }}>
-                            <Pill c={T.amber} bg={T.warmBg}>partial</Pill>
-                          </div>
-                        )}
-                      </td>
-                      <td style={tdStyle}>
-                        {p.office_name || '—'}
-                        {p.district_name && <div style={{ color: T.muted, fontSize: 11 }}>{p.district_name}</div>}
-                      </td>
-                      <td style={{ ...tdStyle, overflow: 'visible' }}><ScoreCell row={p} /></td>
-                      <td style={tdStyle}>
-                        {p.affiliation || <span style={{ color: T.faint }}>unknown</span>}
-                        {p.affiliation_detail?.inferred && (
-                          <div title={p.affiliation_detail?.basis || ''} style={{ marginTop: 3 }}>
-                            <Pill c={T.amber} bg={T.warmBg}>inferred {p.affiliation_detail?.confidence ?? 0}%</Pill>
-                          </div>
-                        )}
-                      </td>
-                      <td style={tdStyle}>
-                        {p.website_state === 'yes' && p.website_url ? (
-                          <a href={p.website_url} target="_blank" rel="noopener noreferrer"
-                             style={{ fontSize: 11.5, color: T.red, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                            live site <ExternalLink style={{ width: 10, height: 10 }} />
-                          </a>
-                        ) : p.website_state === 'facebook_only' ? (
-                          <Pill c="#2563EB" bg="#E7F0FD">Facebook only</Pill>
-                        ) : p.website_state === 'no' ? (
-                          <Pill c={T.green} bg="#E6F5EC">no site</Pill>
-                        ) : <span style={{ color: T.faint }}>—</span>}
-                      </td>
-                      <td style={tdStyle}><SocialLinks socials={p.socials} /></td>
-                      <td style={{ ...tdStyle, overflow: 'visible' }}><AgencyCell row={p} /></td>
-                      <td style={tdStyle}><ContactCell row={p} /></td>
-                      <td style={{ ...tdStyle, color: T.muted, fontSize: 11.5 }}>{fmtDay(p.enriched_at)}</td>
-                      <td style={tdStyle}>
-                        <button onClick={() => removeProspect(p.id)} title="Remove"
-                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint }}>
-                          <Trash2 style={{ width: 13, height: 13 }} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {visibleResults.map(p => {
+                    const inMine = !!p.candidate_id
+                    const busy = adding.has(p.id)
+                    return (
+                      <tr key={p.id} className="pp-row" style={trStyle}>
+                        <td style={{ ...tdStyle, fontWeight: 700 }}>
+                          {p.name}
+                          {p.enrichment_status === 'partial' && (
+                            <div title={p.enrichment_error || ''} style={{ marginTop: 3 }}>
+                              <Pill c={T.amber} bg={T.warmBg}>partial</Pill>
+                            </div>
+                          )}
+                          {p.county && <div style={{ color: T.faint, fontSize: 11, fontWeight: 400 }}>{p.county} County</div>}
+                        </td>
+                        <td style={tdStyle}>
+                          {p.office_name || '—'}
+                          {p.district_name && <div style={{ color: T.muted, fontSize: 11 }}>{p.district_name}</div>}
+                        </td>
+                        <td style={tdStyle}>
+                          {p.affiliation || p.party || <span style={{ color: T.faint }}>unknown</span>}
+                          {p.affiliation_detail?.inferred && (
+                            <div title={p.affiliation_detail?.basis || ''} style={{ marginTop: 3 }}>
+                              <Pill c={T.amber} bg={T.warmBg}>inferred {p.affiliation_detail?.confidence ?? 0}%</Pill>
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ ...tdStyle, overflow: 'visible' }}><ScoreCell row={p} /></td>
+                        <td style={tdStyle}><ContactCell row={p} /></td>
+                        <td style={tdStyle}>
+                          {p.website_state === 'yes' && p.website_url ? (
+                            <a href={p.website_url} target="_blank" rel="noopener noreferrer"
+                               style={{ fontSize: 11.5, color: T.red, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                              live site <ExternalLink style={{ width: 10, height: 10 }} />
+                            </a>
+                          ) : p.website_state === 'facebook_only' ? (
+                            <Pill c="#2563EB" bg="#E7F0FD">Facebook only</Pill>
+                          ) : p.website_state === 'no' ? (
+                            <Pill c={T.green} bg="#E6F5EC">no site</Pill>
+                          ) : <span style={{ color: T.faint }}>—</span>}
+                          <div style={{ marginTop: 4 }}><SocialLinks socials={p.socials} /></div>
+                        </td>
+                        <td style={{ ...tdStyle, overflow: 'visible' }}><AgencyCell row={p} /></td>
+                        <td style={tdStyle}>
+                          {inMine
+                            ? <Pill c="#1F6F43" bg="#E6F5EC"><Check style={{ width: 11, height: 11, marginRight: 3 }} /> In My Candidates</Pill>
+                            : <Btn onClick={() => addToMyCandidates(p)} disabled={busy} style={{ fontSize: 11.5, padding: '5px 10px' }}>
+                                {busy ? <Spinner size={12} /> : <UserPlus style={{ width: 12, height: 12 }} />} Add to My Candidates
+                              </Btn>}
+                        </td>
+                        <td style={tdStyle}>
+                          <button onClick={() => removeProspect(p.id)} title="Remove"
+                                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint }}>
+                            <Trash2 style={{ width: 13, height: 13 }} />
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
           </div>
 
           <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.6, marginTop: 12, maxWidth: 820 }}>
-            <strong style={{ color: T.ink3 }}>Where this data comes from.</strong> Win odds are computed from your
-            own candidates and election-results data with a published weighted model — open any score to see the
-            factors. Websites are confirmed by fetching them. Contact details and agency signals come only from
-            candidate-published pages, their public social profiles, and cited news coverage. Wisconsin
-            campaign-finance (CFIS/WEC) records are deliberately not used for contact or vendor data pending a
-            legal review of Wis. Stat. §11.1304(12). Outreach you send from this list is a commercial message —
-            include a physical address and a working opt-out.
+            <strong style={{ color: T.ink3 }}>Where this data comes from.</strong> Candidates are found by live web
+            search and every row cites the page that names them. <strong style={{ color: T.ink3 }}>Win odds are an
+            AI estimate</strong> from public reporting (incumbency, district lean, primary context, coverage) — open
+            any score for the one-line rationale; treat it as a first-pass sort, not a forecast. Party is taken from a
+            cited page where one exists. Websites are confirmed by fetching them. Contact details and agency signals
+            come only from candidate-published pages, their public social profiles, and cited news coverage.
+            Wisconsin campaign-finance (CFIS/WEC) records are deliberately not used for contact or vendor data
+            pending a legal review of Wis. Stat. §11.1304(12). Outreach you send from this list is a commercial
+            message — include a physical address and a working opt-out.
           </div>
         </>
       )}
