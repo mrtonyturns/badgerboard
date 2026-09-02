@@ -821,6 +821,7 @@ export default function ElectionResultsAdmin({ showToast }) {
                           placeholder="Override status…"
                           className="w-44"
                           buttonClassName="text-xs text-gray-600"
+                          portal   // the contest card is overflow-hidden and would clip the panel
                         />
                         {contest.status_source === 'admin' && (
                           <button

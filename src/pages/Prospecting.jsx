@@ -50,6 +50,7 @@ import { buildProspectCsv, confidenceBand, csvFilename, factorSummary } from '..
 import { DB_PARTIES } from '../lib/party'
 import { WI_COUNTY_CENTROIDS } from '../lib/wiDistricts'
 import { T, cardStyle, Btn, Pill, Spinner, EmptyNote } from './profiler/shared.jsx'
+import { useDialog } from '../lib/useDialog'
 
 // Must match MAX_BRIEF_PER_RUN in enrich-prospects-background.js (mode 'brief').
 // The server enforces it; this is the number the UI promises.
@@ -747,6 +748,74 @@ function AddToCandidatesModal({ rows, userId, onClose, onDone }) {
   )
 }
 
+// ── Save-as-list modal ───────────────────────────────────────────────────────
+// Replaces the browser-native window.prompt() that used to name the list.
+// Same overlay + card pattern as AddToCandidatesModal; Escape/scroll-lock/
+// autofocus come from the shared useDialog contract. The parent's onSave
+// runs the unchanged createProspectingList flow with the entered name.
+function SaveListModal({ count, defaultName, onClose, onSave }) {
+  const [name, setName] = useState(defaultName)
+  const [saving, setSaving] = useState(false)
+  const inputRef = useRef(null)
+  useDialog(onClose, { initialFocusRef: inputRef })
+
+  const trimmed = name.trim()
+  const canSave = trimmed.length > 0 && !saving
+
+  const submit = async (e) => {
+    e?.preventDefault?.()
+    if (!canSave) return
+    setSaving(true)
+    try {
+      await onSave(trimmed)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={saving ? undefined : onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)' }} />
+      <form onSubmit={submit} style={{ ...cardStyle, position: 'relative', width: '100%', maxWidth: 440, display: 'flex', flexDirection: 'column', fontFamily: T.font }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottom: `1px solid ${T.divider}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <ListChecks style={{ width: 16, height: 16, color: T.red }} />
+            <span style={{ fontSize: 14, fontWeight: 800, color: T.ink }}>Save as prospecting list</span>
+          </div>
+          <button type="button" onClick={onClose} disabled={saving} aria-label="Close" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+            <X style={{ width: 16, height: 16, color: T.faint }} />
+          </button>
+        </div>
+
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <label htmlFor="save-list-name" style={{ fontSize: 11.5, fontWeight: 700, color: T.ink4 }}>List name</label>
+          <input
+            id="save-list-name"
+            ref={inputRef}
+            style={inputStyle}
+            value={name}
+            onChange={e => setName(e.target.value)}
+            onFocus={e => e.target.select()}
+            placeholder="Name this prospecting list"
+            disabled={saving}
+            autoComplete="off"
+          />
+          <div style={{ fontSize: 12.5, color: T.muted }}>
+            {count} prospect{count === 1 ? '' : 's'} will be saved.
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: 14, borderTop: `1px solid ${T.divider}` }}>
+          <Btn onClick={onClose} disabled={saving}>Cancel</Btn>
+          <Btn kind="primary" type="submit" disabled={!canSave}>
+            {saving ? <><Spinner size={14} color="#fff" /> Saving…</> : 'Save'}
+          </Btn>
+        </div>
+      </form>
+    </div>
+  )
+}
+
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function Prospecting() {
@@ -793,6 +862,7 @@ export default function Prospecting() {
   const [csvRows, setCsvRows] = useState([])
   const [csvName, setCsvName] = useState('')
   const [showAddModal, setShowAddModal] = useState(false)
+  const [showSaveListModal, setShowSaveListModal] = useState(false)
 
   // ── Data loading ───────────────────────────────────────────────────────────
   const loadProspects = useCallback(async () => {
@@ -1178,10 +1248,16 @@ export default function Prospecting() {
     }
   }
 
-  const saveAsList = async () => {
+  // "Save as list" opens an in-app modal (SaveListModal) instead of the old
+  // window.prompt(); the modal hands the entered name to confirmSaveAsList,
+  // which runs the original createProspectingList flow unchanged.
+  const saveAsList = () => {
     setError(''); setNotice('')
     if (!visibleResults.length) { setNotice('Nothing to save — adjust your filters.'); return }
-    const name = window.prompt('Name this prospecting list', `Enriched prospects — ${format(new Date(), 'MMM d, yyyy')}`)
+    setShowSaveListModal(true)
+  }
+
+  const confirmSaveAsList = async (name) => {
     if (!name) return
     const entries = visibleResults.map(p => ({
       name: p.name, office: p.office_name, district: p.district_name,
@@ -1204,8 +1280,9 @@ export default function Prospecting() {
     // createProspectingList resolves with { data, error } — it does NOT throw.
     // The old page treated any resolution as success and showed a saved list
     // that never existed.
-    if (err || !data) { setError(`Could not save the list: ${err?.message || 'the database rejected it'}`); return }
+    if (err || !data) { setError(`Could not save the list: ${err?.message || 'the database rejected it'}`); setShowSaveListModal(false); return }
     setNotice(`Saved “${data.name}” with ${entries.length} prospects.`)
+    setShowSaveListModal(false)
   }
 
   const removeProspect = async (id) => {
@@ -1772,6 +1849,15 @@ export default function Prospecting() {
           userId={user?.id}
           onClose={() => setShowAddModal(false)}
           onDone={async () => { setShowAddModal(false); await loadAll(); setTab('discover') }}
+        />
+      )}
+
+      {showSaveListModal && (
+        <SaveListModal
+          count={visibleResults.length}
+          defaultName={`Enriched prospects — ${format(new Date(), 'MMM d, yyyy')}`}
+          onClose={() => setShowSaveListModal(false)}
+          onSave={confirmSaveAsList}
         />
       )}
     </div>

@@ -1292,6 +1292,13 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
   const selTrialEndsAt = selectedUser?.trial_ends_at ? Date.parse(selectedUser.trial_ends_at) : null
   const selTrialActive = Boolean(selectedUser?.trial_plan && selTrialEndsAt && selTrialEndsAt > Date.now())
 
+  // Same signal as the "No active Stripe subscription" banner: admin-billing.js
+  // get_subscription returns { subscription: null } (no customer_id /
+  // subscription_id) when the account has nothing in Stripe. Cancel / Retry /
+  // Portal can only fail then ("Customer not found"), so they are disabled.
+  const hasStripe = Boolean(subscriptionData?.subscription_id || subscriptionData?.customer_id)
+  const noStripeTitle = hasStripe ? undefined : 'No Stripe subscription on this account'
+
   if (loading) {
     return <Spinner />
   }
@@ -1363,22 +1370,32 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
                 )}
               </div>
 
+              {/* Same signal as the banner above: admin-billing.js get_subscription
+                  returns { subscription: null } (no customer_id / subscription_id)
+                  when the account has nothing in Stripe, so these actions can only
+                  fail — disable them rather than surface "Customer not found". */}
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={handleCancelSubscription}
-                  className="px-3 py-2 bg-red-700 text-white text-sm rounded hover:bg-red-800 transition"
+                  disabled={!hasStripe}
+                  title={noStripeTitle}
+                  className="px-3 py-2 bg-red-700 text-white text-sm rounded hover:bg-red-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Cancel Subscription
                 </button>
                 <button
                   onClick={handleRetryPayment}
-                  className="px-3 py-2 bg-amber-600 text-white text-sm rounded hover:bg-amber-700 transition"
+                  disabled={!hasStripe}
+                  title={noStripeTitle}
+                  className="px-3 py-2 bg-amber-600 text-white text-sm rounded hover:bg-amber-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Retry Failed Payment
                 </button>
                 <button
                   onClick={handleOpenStripePortal}
-                  className="px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition"
+                  disabled={!hasStripe}
+                  title={noStripeTitle}
+                  className="px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Open Stripe Portal
                 </button>

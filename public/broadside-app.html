@@ -185,6 +185,54 @@ body.embedded .layout .plugin{max-width:none}
 .pill-select:hover{filter:brightness(1.15)}
 .pill-select option{color:#111;background:#f4f5f7}
 
+/* ---------- SEARCHABLE SELECT (app standard: type-to-filter dropdowns) ----------
+   The native <select> stays in the DOM (hidden) as the source of truth; the
+   trigger button reuses .pill-select styling and the panel matches the
+   console-dark profiler picker. */
+.ss-wrap{position:relative;display:flex;flex-direction:column;align-items:center;width:100%}
+select.ss-native{display:none!important}
+.ss-trigger{
+  position:relative;display:block;
+  padding-right:44px;padding-left:44px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.ss-trigger[aria-expanded="true"]{filter:brightness(1.15)}
+.ss-trigger:disabled{opacity:.5;cursor:not-allowed;filter:none}
+.ss-trigger:focus-visible{outline:2px solid var(--red-bright);outline-offset:2px}
+.ss-panel{
+  position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);
+  z-index:90;display:none;min-width:225px;max-width:min(320px,calc(100vw - 24px));
+  background:#101c31;border:1px solid #2a3a54;border-radius:12px;padding:8px;
+  box-shadow:0 14px 30px rgba(0,0,0,.5);text-align:left;color:#eef1f6;
+}
+.ss-panel.open{display:block;animation:fadein .15s ease}
+.ss-panel.up{top:auto;bottom:calc(100% + 6px)}
+/* .scene-body and .console are sibling stacking contexts (both z-index:2);
+   lift the body while a panel is open so it paints above the console strip */
+.scene-body:has(.ss-panel.open){z-index:5}
+.ss-search{
+  width:100%;font-family:var(--font);font-size:12px;font-weight:700;letter-spacing:.02em;
+  color:#eef1f6;background:
+    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="%238b98ad" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>') no-repeat 11px center,#16233c;
+  border:1px solid #2a3a54;border-radius:9px;padding:9px 10px 9px 32px;
+}
+.ss-search::placeholder{color:#8b98ad;font-weight:600}
+.ss-search:focus{outline:none;border-color:#c41e1e}
+.ss-list{list-style:none;margin:6px 0 0;padding:0;max-height:220px;overflow-y:auto}
+.ss-list::-webkit-scrollbar{width:6px}
+.ss-list::-webkit-scrollbar-thumb{background:#22314d;border-radius:3px}
+.ss-opt{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:9px 11px;border-radius:8px;font-size:12.5px;font-weight:600;color:#dfe5ee;
+  cursor:pointer;white-space:nowrap;
+}
+.ss-opt:hover,.ss-opt.active{background:#1d2c47}
+.ss-opt.selected{color:#fff}
+.ss-opt .ss-check{flex:none;width:14px;height:14px;color:var(--led-green);opacity:0}
+.ss-opt.selected .ss-check{opacity:1}
+.ss-opt.disabled{opacity:.4;cursor:not-allowed}
+.ss-empty{padding:10px 12px;font-size:11px;color:#8b98ad;font-style:italic}
+
 /* horizontal parameter slider */
 .slider-unit{width:230px;display:flex;flex-direction:column;align-items:center;gap:5px;margin-top:4px}
 .slider-scale{width:100%;display:flex;justify-content:space-between;align-items:baseline}
@@ -1724,7 +1772,10 @@ const getPressure=()=> +$('sldPress').value;
 
 /* ---- voice mode pill ---- */
 if(Voice.name!=='CARTESIA'){
-  log('SYSTEM','Cartesia API key / voice ID not set — using the browser voice as a fallback. Add your key to VOICE_CONFIG at the top of the script for full speed and quality.','sys');
+  /* Developer note only — never printed to the user-facing Session Console.
+     Inside Badger Board the host calls ControversyPrep.connect() right after
+     load and swaps in the proxied Cartesia voice, so this is expected. */
+  console.warn('[Broadside] Cartesia API key / voice ID not set — using the browser voice as a fallback until the host connects the voice proxy (or a key is added to VOICE_CONFIG).');
 }
 
 /* ---- SCOPE: rolling waveform in the dark circle ---- */
@@ -2404,6 +2455,163 @@ const TIPS=[
   ['#bargeWrap','<b>BARGE-IN</b> — start talking while the opponent is mid-sentence and they stop, like a real debate. Four or more words cuts them off.'],
   ['#stLag','<b>OPPO LAG</b> — average seconds between the end of your answer and the opponent\'s first spoken word. The fluidity metric.']
 ];
+/* ---- searchable selects (app standard) ----
+   makeSearchable(selectEl): hides the native <select> but keeps it in the DOM
+   as the source of truth — every existing `sel.value` read and 'change'
+   listener keeps working. Renders a pill trigger (label + chevron) that opens
+   a panel with a type-to-filter box and the option list. Keyboard: ↑ ↓ Enter
+   Esc; click-outside closes. Picking sets selectEl.value and dispatches a real
+   'change' event. Mirrors the select's `disabled` state and refreshes the
+   label on programmatic value changes ('change'/'input' from other code). */
+function makeSearchable(sel){
+  if(!sel||sel.tagName!=='SELECT'||sel.__ssTrigger) return sel;
+  const wrap=document.createElement('div'); wrap.className='ss-wrap';
+  const trig=document.createElement('button');
+  trig.type='button'; trig.className='pill-select ss-trigger';
+  trig.setAttribute('aria-haspopup','listbox'); trig.setAttribute('aria-expanded','false');
+  if(sel.id) trig.id=sel.id+'Trigger';
+  const panel=document.createElement('div'); panel.className='ss-panel';
+  const search=document.createElement('input');
+  search.type='text'; search.className='ss-search'; search.placeholder='Search…';
+  search.setAttribute('autocomplete','off'); search.setAttribute('aria-label','Search options');
+  const list=document.createElement('ul'); list.className='ss-list'; list.setAttribute('role','listbox');
+  panel.appendChild(search); panel.appendChild(list);
+  sel.parentNode.insertBefore(wrap,sel);
+  wrap.appendChild(sel); wrap.appendChild(trig); wrap.appendChild(panel);
+  sel.classList.add('ss-native'); sel.setAttribute('aria-hidden','true'); sel.tabIndex=-1;
+
+  const opts=()=>Array.from(sel.options);
+  const label=()=>{ const o=sel.options[sel.selectedIndex]; return o?o.text:''; };
+  const refresh=()=>{
+    trig.textContent=label()||'Select…';
+    trig.title=trig.textContent;
+    trig.disabled=!!sel.disabled;
+    if(sel.disabled&&isOpen()) close();
+  };
+  let shown=[], active=-1;
+  const isOpen=()=>panel.classList.contains('open');
+  const render=()=>{
+    const q=search.value.trim().toLowerCase();
+    shown=opts().filter(o=>!q||o.text.toLowerCase().includes(q)||String(o.value).toLowerCase().includes(q));
+    list.innerHTML='';
+    if(!shown.length){
+      const e=document.createElement('li'); e.className='ss-empty'; e.textContent='No matches'; list.appendChild(e);
+      active=-1; return;
+    }
+    const selIdx=shown.findIndex(o=>o.selected);
+    active=selIdx>=0?selIdx:0;
+    shown.forEach((o,i)=>{
+      const li=document.createElement('li');
+      li.className='ss-opt'+(o.selected?' selected':'')+(o.disabled?' disabled':'')+(i===active?' active':'');
+      li.setAttribute('role','option'); li.setAttribute('aria-selected',o.selected?'true':'false');
+      li.dataset.i=i;
+      const t=document.createElement('span'); t.textContent=o.text;
+      const c=document.createElement('span'); c.className='ss-check';
+      c.innerHTML='<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>';
+      li.appendChild(t); li.appendChild(c);
+      list.appendChild(li);
+    });
+    scrollActive();
+  };
+  const setActive=i=>{
+    if(!shown.length) return;
+    active=(i+shown.length)%shown.length;
+    list.querySelectorAll('.ss-opt').forEach((li,k)=>li.classList.toggle('active',k===active));
+    scrollActive();
+  };
+  function scrollActive(){
+    const li=list.querySelector('.ss-opt.active'); if(!li) return;
+    const top=li.offsetTop, bot=top+li.offsetHeight;
+    if(top<list.scrollTop) list.scrollTop=top;
+    else if(bot>list.scrollTop+list.clientHeight) list.scrollTop=bot-list.clientHeight;
+  }
+  const open=()=>{
+    if(sel.disabled||isOpen()) return;
+    document.querySelectorAll('.ss-panel.open').forEach(p=>{ if(p!==panel&&p.__ssClose) p.__ssClose(); });
+    search.value='';
+    panel.style.width=Math.max(trig.offsetWidth,225)+'px';
+    panel.classList.remove('up');
+    panel.classList.add('open'); trig.setAttribute('aria-expanded','true');
+    render();
+    // .plugin clips overflow — flip upward if the panel would be cut off below
+    try{
+      const clip=wrap.closest('.plugin')||document.documentElement;
+      const cb=clip.getBoundingClientRect().bottom, pb=panel.getBoundingClientRect().bottom;
+      const above=trig.getBoundingClientRect().top-clip.getBoundingClientRect().top;
+      if(pb>cb-8 && above>panel.offsetHeight+8) panel.classList.add('up');
+    }catch(_){}
+    requestAnimationFrame(()=>search.focus());
+  };
+  const close=(refocus)=>{
+    if(!isOpen()) return;
+    panel.classList.remove('open'); trig.setAttribute('aria-expanded','false');
+    if(refocus) trig.focus();
+  };
+  panel.__ssClose=close;
+  const pick=o=>{
+    if(!o||o.disabled) return;
+    const changed=sel.value!==o.value;
+    sel.value=o.value;
+    refresh();
+    close(true);
+    if(changed){
+      sel.dispatchEvent(new Event('input',{bubbles:true}));
+      sel.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+  };
+
+  trig.addEventListener('click',()=>{ isOpen()?close(true):open(); });
+  trig.addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'||e.key==='Enter'||e.key===' '){ e.preventDefault(); open(); }
+  });
+  search.addEventListener('input',render);
+  search.addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'){ e.preventDefault(); setActive(active+1); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); setActive(active-1); }
+    else if(e.key==='Home'){ e.preventDefault(); setActive(0); }
+    else if(e.key==='End'){ e.preventDefault(); setActive(shown.length-1); }
+    else if(e.key==='Enter'){ e.preventDefault(); if(active>=0) pick(shown[active]); }
+    else if(e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); close(true); }
+    else if(e.key==='Tab'){ close(false); }
+  });
+  list.addEventListener('mousemove',e=>{
+    const li=e.target.closest('.ss-opt'); if(!li) return;
+    const i=+li.dataset.i; if(i!==active) setActive(i);
+  });
+  list.addEventListener('mousedown',e=>e.preventDefault()); // keep focus in the search box
+  list.addEventListener('click',e=>{
+    const li=e.target.closest('.ss-opt'); if(!li) return;
+    pick(shown[+li.dataset.i]);
+  });
+  document.addEventListener('mousedown',e=>{ if(isOpen()&&!wrap.contains(e.target)) close(false); });
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&isOpen()) close(true); });
+  window.addEventListener('blur',()=>close(false));
+
+  // stay in sync with the native select when other code drives it
+  sel.addEventListener('change',refresh);
+  sel.addEventListener('input',refresh);
+  try{
+    new MutationObserver(muts=>{
+      let opt=false;
+      muts.forEach(m=>{ if(m.type==='childList') opt=true; });
+      if(opt&&isOpen()) render();
+      refresh();
+    }).observe(sel,{attributes:true,attributeFilter:['disabled'],childList:true,subtree:true});
+  }catch(_){}
+  trig.addEventListener('pointerenter',refresh); // catches silent `sel.value=` writes
+  trig.addEventListener('focus',refresh);
+
+  sel.__ssTrigger=trig; trig.__ssSelect=sel;
+  refresh();
+  return sel;
+}
+(function initSearchableSelects(){
+  const run=()=>['selMode','selPersona','selRace','selRole','selDepth','selOppoVoice']
+    .forEach(id=>{ const el=document.getElementById(id); if(el) makeSearchable(el); });
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',run);
+  else run();
+})();
+
 let coNodes=null;
 function hideCallout(){ if(coNodes){ coNodes.forEach(n=>n.remove()); coNodes=null; } }
 function showCallout(ev,html){
@@ -2445,7 +2653,8 @@ function showCallout(ev,html){
 const CALLOUT_DELAY=500;
 let coTimer=null;
 TIPS.forEach(([sel,html])=>{
-  document.querySelectorAll(sel).forEach(el=>{
+  document.querySelectorAll(sel).forEach(node=>{
+    const el=node.__ssTrigger||node; // searchable selects: hover the visible trigger, not the hidden <select>
     const arm=ev=>{
       clearTimeout(coTimer);
       const snap={clientX:ev.clientX,clientY:ev.clientY,currentTarget:el};
@@ -2547,7 +2756,7 @@ window.ControversyPrep={
     else if(cfg.voiceId) Voice.cfg.voiceId=cfg.voiceId;
     const sv=document.getElementById('stVoice'); if(sv) sv.textContent=Voice.name;
     const sb=document.getElementById('stBrain'); if(sb) sb.textContent=brainLabel();
-    try{ log('SYSTEM','Badger Board connected — opponent brain and Cartesia voice run through secure server proxies. Ignore any key-setup notes above.','sys'); }catch(_){}
+    try{ log('SYSTEM','Badger Board connected — opponent brain and Cartesia voice run through secure server proxies.','sys'); }catch(_){}
   },
   /* host app: populate the in-dock Profiler dossier picker (searchable).
      cfg = { items:[{id,title}], onPick:(id)=>void } */

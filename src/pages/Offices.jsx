@@ -116,6 +116,29 @@ const STATUS_CLS = {
 // ── Match GeoJSON feature to database offices ─────────────────────────────────
 // GeoJSON NAME values: "Congressional District 3", "State Senate District 12",
 //   "Assembly District 45", "Adams County", "Wausau city"
+// Resolve an office's district number. `district_number` is the canonical
+// column, but federal/state rows imported by hand (or via CSV) often leave it
+// NULL and carry the number only in `district_name` ("WI-7 (Northern WI…)",
+// "District 7") or in `name` ("U.S. House of Representatives — Wisconsin
+// District 7", "Wisconsin State Senate — District 12"). Without this fallback
+// the Congress/Senate/Assembly outlines reported "0 offices tracked" for
+// those rows. Returns NaN when no district number can be determined.
+function officeDistrictNum(o) {
+  if (o.district_number != null && String(o.district_number).trim() !== '') {
+    const n = parseInt(String(o.district_number).match(/\d+/)?.[0] ?? '', 10)
+    if (Number.isFinite(n)) return n
+  }
+  for (const field of [o.district_name, o.name]) {
+    if (!field) continue
+    // "WI-7", "CD-7", "SD 12", "AD 45", "District 7", "7th District"
+    const m = field.match(/\b(?:WI|CD|SD|AD)[-\s]?(\d{1,3})\b/i)
+           || field.match(/\bdistrict\s*#?\s*(\d{1,3})\b/i)
+           || field.match(/\b(\d{1,3})(?:st|nd|rd|th)\s+(?:congressional|senate|assembly|legislative)?\s*district\b/i)
+    if (m) return parseInt(m[1], 10)
+  }
+  return NaN
+}
+
 function matchOffices(district, allOffices) {
   if (!district || !allOffices.length) return []
   const { name, sublabel, layerKey } = district
@@ -123,10 +146,12 @@ function matchOffices(district, allOffices) {
 
   if (layerKey === 'congress' || layerKey === 'federal') {
     // U.S. House: match federal offices by district number (legacy 'federal'
-    // layer key also included statewide federal offices)
+    // layer key also included statewide federal offices). The number may live
+    // in district_number, district_name or name — see officeDistrictNum().
     return allOffices.filter(o => {
       if (o.level !== 'federal') return false
-      if (num && o.district_number != null) return parseInt(o.district_number) === num
+      const dn = officeDistrictNum(o)
+      if (num && Number.isFinite(dn)) return dn === num
       if (layerKey === 'congress') return num == null && !/senate|senator/i.test(o.name || '')
       return true
     })
@@ -135,7 +160,7 @@ function matchOffices(district, allOffices) {
   if (layerKey === 'ussenate') {
     // U.S. Senate is statewide — match federal offices with no district that
     // look like Senate seats (or any statewide federal office as fallback)
-    const statewide = allOffices.filter(o => o.level === 'federal' && o.district_number == null)
+    const statewide = allOffices.filter(o => o.level === 'federal' && !Number.isFinite(officeDistrictNum(o)))
     const senate = statewide.filter(o => /senate|senator/i.test(o.name || ''))
     return senate.length ? senate : statewide
   }
@@ -145,7 +170,7 @@ function matchOffices(district, allOffices) {
     const isSenate = layerKey === 'senate' || sublabel === 'State Senate District'
     return allOffices.filter(o => {
       if (o.level !== 'state') return false
-      if (parseInt(o.district_number) !== num) return false
+      if (officeDistrictNum(o) !== num) return false
       const n = (o.name || '').toLowerCase()
       return isSenate ? n.includes('senate') : (n.includes('assembly') || n.includes('representative') || !n.includes('senate'))
     })
