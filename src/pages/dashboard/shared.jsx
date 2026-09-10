@@ -232,6 +232,76 @@ export function DashboardShell({ children }) {
   )
 }
 
+// A blank "Loading your dashboard…" screen could sit on-page for up to ~10s
+// while the half-dozen parallel fetches settle. This mirrors the real layout
+// (stat row + two columns) with gray shimmer blocks so the wait reads as "the
+// dashboard is drawing itself" rather than "the page is broken". The text
+// itself is not deleted — it moves to a visually-hidden aria-live node so
+// screen readers still hear it.
+const shimmerBlock = (w, h, extra) => ({
+  width: w, height: h, borderRadius: 6, background: T.chip,
+  backgroundImage: `linear-gradient(90deg, ${T.chip} 25%, ${T.divider} 37%, ${T.chip} 63%)`,
+  backgroundSize: '400% 100%', animation: 'bbShimmer 1.4s ease infinite',
+  ...extra,
+})
+
+export function DashboardSkeleton() {
+  return (
+    <div aria-hidden="true">
+      <style>{`@keyframes bbShimmer { 0% { background-position: 100% 50% } 100% { background-position: 0 50% } }`}</style>
+
+      {/* header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 22, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={shimmerBlock(160, 22, { marginBottom: 10 })} />
+          <div style={shimmerBlock(280, 13)} />
+        </div>
+        <div style={shimmerBlock(140, 40, { borderRadius: 10 })} />
+      </div>
+
+      {/* stat row */}
+      <div style={{ ...cardStyle, display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', marginBottom: 18 }}>
+        {[0, 1, 2, 3].map(i => (
+          <div key={i} style={{ padding: '18px 22px', borderRight: i < 3 ? `1px solid ${T.divider}` : 'none' }}>
+            <div style={shimmerBlock('70%', 12, { marginBottom: 10 })} />
+            <div style={shimmerBlock('45%', 24)} />
+          </div>
+        ))}
+      </div>
+
+      {/* two columns */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.65fr 1fr', gap: 18, alignItems: 'start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minWidth: 0 }}>
+          {[150, 110, 130].map((h, i) => (
+            <div key={i} style={{ ...cardStyle, padding: '18px 20px', height: h }}>
+              <div style={shimmerBlock('40%', 13, { marginBottom: 16 })} />
+              <div style={shimmerBlock('92%', 10, { marginBottom: 9 })} />
+              <div style={shimmerBlock('78%', 10 )} />
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minWidth: 0 }}>
+          {[140, 140].map((h, i) => (
+            <div key={i} style={{ ...cardStyle, padding: '18px 20px', height: h }}>
+              <div style={shimmerBlock('55%', 13, { marginBottom: 16 })} />
+              <div style={shimmerBlock('95%', 10, { marginBottom: 9 })} />
+              <div style={shimmerBlock('70%', 10 )} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Visually hidden but still readable by assistive tech — the standard
+// "sr-only" clip-rect technique, no Tailwind dependency in these inline-token
+// pages.
+export const srOnly = {
+  position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
+  overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0,
+}
+
 export function Card({ children, style, className, ...rest }) {
   return (
     <div className={className} style={{ ...cardStyle, ...style }} {...rest}>

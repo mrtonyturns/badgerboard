@@ -42,7 +42,7 @@ import LoadingBar from './LoadingBar'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.37.0'
+const APP_VERSION = 'v1.38.0'
 
 // ─── z-index scale (v1.34.1 — audit fix B1) ──────────────────────────────────
 // One ladder for everything that floats, lowest to highest:
@@ -84,6 +84,15 @@ export const Z = {
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.38.0',
+    date: 'September 10, 2026',
+    changes: [
+      'Visual sweep fixes: profiler flag rows no longer overlap their sources, report footers render headings instead of raw markdown, and flag badges get clean separators',
+      'Dashboard shows a proper loading skeleton and a tighter activity feed with a show-all toggle',
+      'Admin: the signup trends chart shows real daily buckets with dates, and accounts without Stripe subscriptions display honest fallbacks instead of blanks',
+    ],
+  },
   {
     version: 'v1.37.0',
     date: 'September 9, 2026',

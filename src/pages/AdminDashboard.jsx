@@ -419,62 +419,73 @@ const PlatformHealthTab = ({ apiCall, showToast, onNavigate }) => {
   )
 }
 
-// Signup Chart Component (SVG-based)
-const SignupChart = ({ data }) => {
-  const validData = data.filter(d => d.count !== null && d.count !== undefined)
-  if (!validData.length) {
-    return <p className="text-gray-500 text-sm">No data</p>
+// ─── VSWEEP PURE HELPERS BEGIN ───
+/**
+ * Bucket signups into a full, contiguous N-day window ending today, honest
+ * zeros included. `getSignupTrends()` only returns rows for days that had at
+ * least one signup, so a quiet month handed the chart 3-4 sparse entries —
+ * every one of them scaled to a max of ~1-2 and painted as a full-height bar,
+ * with a single x-axis label because only those few dates existed at all.
+ * This fills the gaps client-side so the chart always has `days` real points.
+ */
+export function bucketSignupsByDay(trends, days = 30, today = new Date()) {
+  const byDate = new Map()
+  for (const t of Array.isArray(trends) ? trends : []) {
+    if (t && t.date) byDate.set(t.date, Number(t.count) || 0)
   }
+  const end = new Date(today)
+  end.setHours(0, 0, 0, 0)
+  const out = []
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(end)
+    d.setDate(d.getDate() - i)
+    const date = d.toISOString().split('T')[0]
+    out.push({ date, count: byDate.get(date) || 0 })
+  }
+  return out
+}
+// ─── VSWEEP PURE HELPERS END ───
 
-  const maxCount = Math.max(...validData.map(d => d.count), 1)
-  const barWidth = Math.max(15, 600 / validData.length)
-  const barSpacing = Math.max(2, (600 - barWidth * validData.length) / (validData.length + 1))
-  const chartHeight = 300
+// Signup Chart Component — HTML/CSS bars, same dependency-free pattern as the
+// AI Costs "Daily spend" chart below (AICostsTab). Height-scaled against the
+// TRUE 30-day max (min 1, so an all-zero window doesn't divide by zero), with
+// an honest 2px stub for a day with no signups rather than a 0px sliver.
+const SignupChart = ({ data }) => {
+  const series = bucketSignupsByDay(data)
+  const maxCount = Math.max(1, ...series.map(d => d.count))
+  const fmtDay = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  const mid = series[Math.floor((series.length - 1) / 2)]
 
   return (
-    <div className="overflow-x-auto">
-      <svg width={Math.max(600, barWidth * validData.length + barSpacing * (validData.length + 1))} height={chartHeight} className="mx-auto">
-        {/* Y-axis labels */}
-        {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
-          const y = chartHeight - 40 - ratio * (chartHeight - 80)
-          const label = Math.round(maxCount * ratio)
-          return (
-            <g key={`y-${i}`}>
-              <text x={30} y={y + 4} className="text-xs fill-gray-600" textAnchor="end">
-                {label}
-              </text>
-              <line x1={35} y1={y} x2={barSpacing + barWidth * validData.length + barSpacing} y2={y} stroke="#e5e7eb" strokeWidth={1} />
-            </g>
-          )
-        })}
-
-        {/* Bars */}
-        {validData.map((d, i) => {
-          const barHeight = ((d.count || 0) / maxCount) * (chartHeight - 80)
-          const x = barSpacing + i * (barWidth + barSpacing)
-          const y = chartHeight - 40 - barHeight
-
-          return (
-            <g key={i}>
-              <rect x={x} y={y} width={barWidth} height={barHeight} fill="#1a2744" rx={2} />
-              {i % 7 === 0 && (
-                <text
-                  x={x + barWidth / 2}
-                  y={chartHeight - 10}
-                  className="text-xs fill-gray-600"
-                  textAnchor="middle"
-                >
-                  {d.date ? new Date(d.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
-                </text>
-              )}
-            </g>
-          )
-        })}
-
-        {/* Axes */}
-        <line x1={35} y1={40} x2={35} y2={chartHeight - 40} stroke="#d1d5db" strokeWidth={2} />
-        <line x1={35} y1={chartHeight - 40} x2={barSpacing + barWidth * validData.length + barSpacing} y2={chartHeight - 40} stroke="#d1d5db" strokeWidth={2} />
-      </svg>
+    <div>
+      <div className="flex items-baseline justify-between text-[10px] font-bold uppercase tracking-wide text-gray-400 mb-1">
+        <span className="tabular-nums">{maxCount}</span>
+        <span>peak day</span>
+      </div>
+      <div className="h-40 pt-2">
+        <div className="flex items-end gap-[3px] h-full border-b-2 border-gray-200">
+          {series.map(d => (
+            <div
+              key={d.date}
+              className="flex-1 group relative flex flex-col justify-end h-full"
+              title={`${fmtDay(d.date)} · ${d.count} signup${d.count === 1 ? '' : 's'}`}
+            >
+              <div
+                className="bg-gradient-to-t from-[#1a2744] to-sky-600 rounded-t-md transition-all group-hover:from-[#22364f] group-hover:to-sky-400"
+                style={{ height: d.count > 0 ? `${Math.max(2, (d.count / maxCount) * 100)}%` : '2px' }}
+              />
+              <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:block bg-gray-900 text-white text-[10px] font-bold px-2 py-1 rounded-md whitespace-nowrap z-10">
+                {fmtDay(d.date)} · {d.count} signup{d.count === 1 ? '' : 's'}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex justify-between text-[10px] font-semibold text-gray-400 mt-1.5 tabular-nums">
+        <span>{fmtDay(series[0].date)}</span>
+        <span>{fmtDay(mid.date)}</span>
+        <span>{fmtDay(series[series.length - 1].date)}</span>
+      </div>
     </div>
   )
 }
@@ -1451,27 +1462,32 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Subscription Details</h3>
               {!subscriptionData.subscription_id && (
                 <p className="text-sm text-gray-500 mb-4">
-                  No active Stripe subscription — this account is on {selectedUser.plan && selectedUser.plan !== 'scout' ? `plan “${selectedUser.plan}” via admin/manual assignment` : 'the free Scout plan'}
+                  No Stripe subscription — this account is on {selectedUser.plan && selectedUser.plan !== 'scout' ? `plan “${selectedUser.plan}” via admin/manual assignment` : 'the free Scout plan'}
                   {selTrialActive ? ' with an active free trial' : ''}{selectedUser.beta_mode ? ' and has beta mode on' : ''}.
+                  {(selectedUser.plan_source === 'admin' || selectedUser.beta_mode) && (
+                    <span className="block mt-1 text-xs text-gray-400">Assigned manually — not billed via Stripe.</span>
+                  )}
                 </p>
               )}
               <div className="space-y-3 mb-6">
                 <div className="flex justify-between">
                   <span className="text-gray-600">Status</span>
-                  <span className={`font-medium ${subscriptionData.status === 'active' ? 'text-green-600' : 'text-amber-600'}`}>
-                    {subscriptionData.status || '—'}
+                  <span className={`font-medium ${subscriptionData.status === 'active' ? 'text-green-600' : subscriptionData.status ? 'text-amber-600' : 'text-gray-400'}`}>
+                    {subscriptionData.status || 'No Stripe subscription'}
                   </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Plan</span>
-                  <span className="font-medium text-gray-900">{subscriptionData.plan_name || 'N/A'}</span>
+                  <span className={`font-medium ${subscriptionData.plan_name ? 'text-gray-900' : 'text-gray-400'}`}>
+                    {subscriptionData.plan_name || '—'}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Next Billing</span>
-                  <span className="font-medium text-gray-900">
+                  <span className={`font-medium ${subscriptionData.current_period_end ? 'text-gray-900' : 'text-gray-400'}`}>
                     {subscriptionData.current_period_end
                       ? fmtDate(subscriptionData.current_period_end)
-                      : 'N/A'}
+                      : '—'}
                   </span>
                 </div>
                 {subscriptionData.cancel_at_period_end && (

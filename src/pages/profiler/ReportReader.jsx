@@ -233,7 +233,16 @@ function Block({ b, subject, onAsk }) {
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, margin: '2px 0 16px', maxWidth: `${MEASURE}ch` }}>
           {b.items.map((it, i) => (
-            <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'baseline' }}>
+            // align-items: flex-start, not baseline — the left column (`it.k`) is
+            // usually a short date/label but on the Verification Flags rows it's
+            // the claim itself, which wraps to several lines. Baseline alignment
+            // anchors the row on that label's FIRST line, so the sibling value
+            // column (source citation, in `it.sub` below) rendered at the same
+            // baseline instead of the row's real top — text from the two columns
+            // visually interleaved. Row height is content-driven either way; this
+            // just anchors both columns to the row's top so wrapped labels can
+            // never collide with the source column next to them.
+            <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
               <span style={{
                 flex: 'none', width: 92, fontSize: 11.5, fontWeight: 700, color: T.ink4,
                 fontVariantNumeric: 'tabular-nums', lineHeight: 1.55,

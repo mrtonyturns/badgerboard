@@ -1280,6 +1280,12 @@ export default function Dossiers() {
               {r.flags.riskLabel && (
                 <span style={{ fontSize: 11, fontWeight: 700, color: r.flags.riskColor, whiteSpace: 'nowrap', flex: 'none' }}>{r.flags.riskLabel}</span>
               )}
+              {/* A consistent " · " separator, not just the row's own flex gap —
+                  two chips with only a gap between them ("2 MED  1 to verify")
+                  read as a spacing bug, not two distinct values. */}
+              {r.flags.riskLabel && r.flags.verifyLabel && (
+                <span style={{ fontSize: 11, color: T.faint, flex: 'none' }} aria-hidden="true">·</span>
+              )}
               {r.flags.verifyLabel && (
                 <span
                   title={r.flags.verifyLabel}

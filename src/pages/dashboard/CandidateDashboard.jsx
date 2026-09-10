@@ -25,7 +25,7 @@ import {
   T, Card, CardHead, DashboardShell, DashboardHeader, NextRaceBlock,
   StatStrip, StatCell, WeeklyChip, OverdueChip, PartyPill, DigestItems,
   MilestoneRow, ElectionRows, EmptyState, CtaButton, TextLink, StatRow,
-  DistrictHeatMap, HeatLegend, LivePulseDot,
+  DistrictHeatMap, HeatLegend, LivePulseDot, DashboardSkeleton, srOnly,
   safeISO, fmtInt, fmtDate, daysUntil, isUpcoming, autoStatus, isMonitored,
   monitoringSlots, nextMonday, loadPopPoints, loadCountyPres,
   resolveDistrict, loadBoundary, countVotersInDistrict,
@@ -530,9 +530,13 @@ export default function CandidateDashboard() {
     return (
       <DashboardShell>
         <LoadingBar loading />
-        <div style={{ fontSize: 13, color: T.muted, padding: 40, textAlign: 'center' }}>
-          Loading your dashboard…
-        </div>
+        {/* Several fetches (candidates, milestones, elections, dossiers, voter
+            lists, district geometry) run before this page has anything to show
+            — a blank "Loading…" sentence used to be the whole screen for that
+            wait. The shimmer skeleton below mirrors the real layout; the
+            sentence itself stays, for screen readers, via aria-live. */}
+        <div aria-live="polite" style={srOnly}>Loading your dashboard…</div>
+        <DashboardSkeleton />
       </DashboardShell>
     )
   }

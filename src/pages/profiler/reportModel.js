@@ -419,6 +419,18 @@ export function flagSummary(content = '', verdicts = null) {
   }
 }
 
+// ─── VSWEEP PURE HELPERS BEGIN ───
+/**
+ * The FLAGS cell's chips in display order, never invented — an empty array
+ * means "None". Two chips concatenated with only their row's flex `gap`
+ * ("2 MED  1 to verify") read as a spacing bug rather than two values; callers
+ * join what this returns with a visible " · " between chips instead.
+ */
+export function flagChips(flags) {
+  return [flags?.riskLabel, flags?.verifyLabel].filter(Boolean)
+}
+// ─── VSWEEP PURE HELPERS END ───
+
 // ─── Block parsing ───────────────────────────────────────────────────────────
 
 const BULLET_RE   = /^([-*•]|\d+[.)])\s+(.*)$/
@@ -628,9 +640,18 @@ export function parseBlocks(md = '', sectionNum = null, verdicts = null) {
     }
 
     // ── Headings ─────────────────────────────────────────────────────────────
-    const head = line.match(/^(#{3,6})\s+(.*)$/)
+    // #{1,6}, not #{3,6}: the generator appends a verification-flags footer
+    // ("## ⚠️ VERIFICATION FLAGS (AI Quality Check)", and occasionally a
+    // Haiku-written "# FLAGS IDENTIFIED" inside it) after every section has
+    // already been parsed. Those lines only carry one or two hashes, so the
+    // narrower pattern let them fall through to the plain-paragraph branch
+    // below and render as literal "##"/"#" text instead of a heading.
+    const head = line.match(/^(#{1,6})\s+(.*)$/)
     if (head) {
       const title = head[2].trim()
+      // A leaked "## SECTION n" line (e.g. an unparsed continuation) is
+      // structural, not content — drop it silently rather than heading it.
+      if (/^SECTION\s+\d/i.test(title)) { i++; continue }
 
       // Sections 1 and 10 are feeds: "### [Title](url)" then "**Source** · Date"
       // then a one-line summary. They render as a dated label/value list.

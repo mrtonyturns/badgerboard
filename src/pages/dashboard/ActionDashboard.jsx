@@ -29,7 +29,7 @@ import {
   T, Card, CardHead, DashboardShell, DashboardHeader, NextRaceBlock,
   StatStrip, StatCell, WeeklyChip, PartyPill, StatusPill, Pill, PhaseDot, DueChip,
   DigestItems, ElectionRows, EmptyState, CtaButton, TextLink, LivePulseDot,
-  PartyAvatar,
+  PartyAvatar, DashboardSkeleton, srOnly,
   safeISO, fmtInt, fmtDate, daysUntil, isUpcoming, relativeTime, initialsOf, autoStatus,
   humanizeActivityVerb,
   countdownLabel, fmtDueDate, dueChipLabel,
@@ -41,6 +41,9 @@ import {
 // ── helpers ──────────────────────────────────────────────────────────────────
 // isThisWeek / latestDigestOf / weekDigestOf moved to shared.jsx so the two
 // dashboards cannot drift on what "this week's digest" means.
+
+// Recent activity's initial preview — see the "Show all activity" toggle below.
+const ACTIVITY_PREVIEW_COUNT = 4
 
 // Same office line as the rest of the app (lib/office.js) — this page's own
 // separator and its own "nothing linked" copy, which is all that ever differed.
@@ -257,6 +260,12 @@ export default function ActionDashboard() {
   const [prospects, setProspects] = useState([])
   const [voterLists, setVLists]   = useState([])
   const [activity, setActivity]   = useState([])
+  // The right rail (Election calendar + Recent activity) could run ~400px
+  // past the left column's (Needs attention + Prospecting) natural end, since
+  // activity kept rendering every fetched row while the left side was often
+  // short. Capped to a short preview with an in-place expand — state only, no
+  // extra fetch, since getRecentActivity(8) already bounds the source list.
+  const [showAllActivity, setShowAllActivity] = useState(false)
   const [profilesUsed, setUsed]   = useState(null)
   const [selId, setSelId]         = useState(null)
   // Authoritative count of THIS USER's candidates with monitoring switched on.
@@ -551,9 +560,13 @@ export default function ActionDashboard() {
     return (
       <DashboardShell>
         <LoadingBar loading />
-        <div style={{ fontSize: 13, color: T.muted, padding: 40, textAlign: 'center' }}>
-          Loading your dashboard…
-        </div>
+        {/* The fetch below is six parallel calls and can sit here for several
+            seconds — a blank "Loading…" sentence used to be the whole screen
+            for that whole time. A shimmer skeleton in the dashboard's own shape
+            reads as "drawing itself", not "broken"; the sentence itself still
+            exists for screen readers. */}
+        <div aria-live="polite" style={srOnly}>Loading your dashboard…</div>
+        <DashboardSkeleton />
       </DashboardShell>
     )
   }
@@ -971,25 +984,32 @@ export default function ActionDashboard() {
               sub="Actions logged on your own account — Badger Board does not record other seats' activity."
             />
             {activity.length ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
-                {activity.map(row => (
-                  <div key={row.id} style={{ display: 'flex', gap: 10 }}>
-                    <span style={{
-                      flex: 'none', width: 26, height: 26, borderRadius: '50%',
-                      background: T.red, color: '#fff', fontSize: 10, fontWeight: 700,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    }}>{initialsOf(user?.user_metadata?.display_name || user?.email || 'You')}</span>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 12.5, lineHeight: 1.4 }}>
-                        You {activityLine(row)}
-                      </div>
-                      <div style={{ fontSize: 10.5, color: T.faint, marginTop: 2 }}>
-                        {relativeTime(row.created_at)}
+              <>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+                  {(showAllActivity ? activity : activity.slice(0, ACTIVITY_PREVIEW_COUNT)).map(row => (
+                    <div key={row.id} style={{ display: 'flex', gap: 10 }}>
+                      <span style={{
+                        flex: 'none', width: 26, height: 26, borderRadius: '50%',
+                        background: T.red, color: '#fff', fontSize: 10, fontWeight: 700,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>{initialsOf(user?.user_metadata?.display_name || user?.email || 'You')}</span>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 12.5, lineHeight: 1.4 }}>
+                          You {activityLine(row)}
+                        </div>
+                        <div style={{ fontSize: 10.5, color: T.faint, marginTop: 2 }}>
+                          {relativeTime(row.created_at)}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+                {!showAllActivity && activity.length > ACTIVITY_PREVIEW_COUNT && (
+                  <TextLink onClick={() => setShowAllActivity(true)} style={{ marginTop: 12 }}>
+                    Show all activity ({activity.length}) →
+                  </TextLink>
+                )}
+              </>
             ) : (
               <EmptyState
                 title="No activity logged yet"
