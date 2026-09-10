@@ -102,11 +102,7 @@ export function extractDistrictColumns(row) {
 export function normalizeDistrictValue(v) {
   const s = cleanCell(v)
   if (!s) return ''
-  // v1.36.3: only an ordinal suffix + whitespace may follow the digits. The
-  // old trailing \D* swallowed lettered ward suffixes, so "Ward 3A" and
-  // "Ward 3B" both collapsed to "3" and distinct wards silently merged in the
-  // district picker and resident matcher.
-  const m = s.match(/^\D*?(\d+)(?:st|nd|rd|th)?\s*$/i)
+  const m = s.match(/^\D*?(\d+)(?:st|nd|rd|th)?\D*$/i)
   if (m) return String(parseInt(m[1], 10))
   return s
 }

@@ -33,8 +33,28 @@ import UpgradePrompt from '../components/UpgradePrompt'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserPlan, hasFeature, PLAN_CONFIG } from '../lib/tiers'
 import { ELECTION_TYPE_LABELS, ELECTION_TYPE_COLORS } from '../lib/campaignEnums'
-import { RESULTS_ENABLED } from '../lib/featureFlags'
-import SearchableSelect from '../components/SearchableSelect'
+
+// ─── R3B PURE HELPERS BEGIN ───────────────────────────────────────────────────
+// (no imports in this block — tests/r3b.test.mjs slices it out and imports it)
+// Byte-for-byte the pair in Elections.jsx: the Calendar tab here and the
+// Elections page are the same feature at two routes, and same-date elections
+// (the two Apr 7 2026 rows) have to come out in the same order on both.
+
+/** Calendar order: election date ascending, then name. */
+export const compareElectionsAsc = (a, b) => {
+  const ad = String(a?.election_date || ''), bd = String(b?.election_date || '')
+  if (ad !== bd) return ad < bd ? -1 : 1
+  return String(a?.name || '').localeCompare(String(b?.name || ''))
+}
+
+/** Past list: most recent first, then name (NOT a reversed ascending sort —
+ *  that would flip the name tiebreak too). */
+export const compareElectionsDesc = (a, b) => {
+  const ad = String(a?.election_date || ''), bd = String(b?.election_date || '')
+  if (ad !== bd) return ad < bd ? 1 : -1
+  return String(a?.name || '').localeCompare(String(b?.name || ''))
+}
+// ─── R3B PURE HELPERS END ─────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ElectionModal
@@ -88,8 +108,9 @@ function ElectionModalBody({ onClose, editing, onSave, saving }) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="label">Type *</label>
-              <SearchableSelect value={form.type} onChange={v => setForm(p => ({ ...p, type: v }))}
-                options={Object.entries(ELECTION_TYPE_LABELS).map(([v, l]) => ({ value: v, label: l }))} />
+              <select className="input" value={form.type} onChange={f('type')}>
+                {Object.entries(ELECTION_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
             </div>
             <div>
               <label className="label">Year *</label>
@@ -160,12 +181,10 @@ function ElectionRow({ election, onEdit, onDelete, deleting, onViewResults }) {
               </div>
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
-              {RESULTS_ENABLED && (
-                <button onClick={() => onViewResults(election.id)} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-brand-red/10 text-brand-red hover:bg-brand-red hover:text-white">
-                  <BarChart2 className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Results</span>
-                </button>
-              )}
+              <button onClick={() => onViewResults(election.id)} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-brand-red/10 text-brand-red hover:bg-brand-red hover:text-white">
+                <BarChart2 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Results</span>
+              </button>
               <button onClick={() => onEdit(election)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors">
                 <Edit2 className="w-4 h-4" />
               </button>
@@ -174,15 +193,20 @@ function ElectionRow({ election, onEdit, onDelete, deleting, onViewResults }) {
               </button>
             </div>
           </div>
+          {/* Fixed columns: Filing Deadline always occupies the first cell, so
+              Election Date stays in the second one and the cards scan down a
+              straight line. Cards with no deadline show an em dash. */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
-            {election.filing_deadline && (
-              <div>
-                <p className="text-xs text-gray-400 font-medium">Filing Deadline</p>
+            <div>
+              <p className="text-xs text-gray-400 font-medium">Filing Deadline</p>
+              {election.filing_deadline ? (
                 <p className={`text-sm font-semibold ${isPast(parseISO(election.filing_deadline)) ? 'text-gray-400' : 'text-brand-red'}`}>
                   {format(parseISO(election.filing_deadline), 'MMM d, yyyy')}
                 </p>
-              </div>
-            )}
+              ) : (
+                <p className="text-sm font-semibold text-gray-300">—</p>
+              )}
+            </div>
             <div>
               <p className="text-xs text-gray-400 font-medium">Election Date</p>
               <p className="text-sm font-semibold text-gray-900">{format(parseISO(election.election_date), 'EEEE, MMMM d, yyyy')}</p>
@@ -206,9 +230,7 @@ export default function GamePlan() {
   const [searchParams, setSearchParams] = useSearchParams()
   // Unknown ?tab= values fall back to milestones instead of a blank page.
   const rawTab = searchParams.get('tab')
-  // Results tab gated by RESULTS_ENABLED — ?tab=results falls back to milestones when hidden
-  const validTabs = RESULTS_ENABLED ? ['milestones', 'calendar', 'results'] : ['milestones', 'calendar']
-  const activeTab = validTabs.includes(rawTab) ? rawTab : 'milestones'
+  const activeTab = ['milestones', 'calendar', 'results'].includes(rawTab) ? rawTab : 'milestones'
 
   // ── Plan gate — Game Plan unlocks at Monitor (locked on Scout) ────────────
   const userPlan = getUserPlan(user)
@@ -345,9 +367,13 @@ export default function GamePlan() {
   const hasTodayElection = elections.some(e => isToday(parseISO(e.election_date)))
   const years            = [...new Set(elections.map(e => e.year))].sort()
   const filteredElect    = yearFilter ? elections.filter(e => String(e.year) === String(yearFilter)) : elections
-  const upcoming         = filteredElect.filter(e => isFuture(parseISO(e.election_date)) || isToday(parseISO(e.election_date)))
-  const past             = filteredElect.filter(e => isPast(parseISO(e.election_date)) && !isToday(parseISO(e.election_date)))
-                             .sort((a, b) => parseISO(b.election_date) - parseISO(a.election_date))
+  // Same buckets and the same comparators as the Elections page calendar.
+  const upcoming         = filteredElect
+                             .filter(e => isFuture(parseISO(e.election_date)) || isToday(parseISO(e.election_date)))
+                             .sort(compareElectionsAsc)
+  const past             = filteredElect
+                             .filter(e => isPast(parseISO(e.election_date)) && !isToday(parseISO(e.election_date)))
+                             .sort(compareElectionsDesc)
   // ── Default election for the Results tab ──────────────────────────────────
   // Bug fix: this used to fall straight to "most recent past election", which
   // on a fresh account is an election with no contest rows — the board then
@@ -461,7 +487,7 @@ export default function GamePlan() {
       {/* ══════════════════════════════════════════════════════════ */}
       {activeTab === 'calendar' && (
         <>
-          {RESULTS_ENABLED && hasTodayElection && (() => {
+          {hasTodayElection && (() => {
             const todayEl = elections.find(e => isToday(parseISO(e.election_date)))
             return (
               <button

@@ -104,10 +104,8 @@ const CandidateDetail = lazyRetry(() => import('./pages/CandidateDetail'))  // c
 const Prospecting = lazyRetry(() => import('./pages/Prospecting'))  // code-split: trims the initial bundle (M1)
 const Recruit = lazyRetry(() => import('./pages/Recruit'))  // code-split: Action-plan exclusive (v1.29)
 const VoterLists = lazyRetry(() => import('./pages/VoterLists'))  // code-split: trims the initial bundle (M1)
-// Door Knocking — re-enabled Sept 2026 (QA bug #2: the page shipped in the
-// bundle but had no route, so every link/bookmark 404'd). Admin-gated as it
-// was when parked; the page sells Scout users the upgrade in-page.
-const DoorKnocking = lazyRetry(() => import('./pages/DoorKnocking'))  // code-split: heavy Leaflet page
+// Door Knocking parked — restore import + route to re-enable
+// import DoorKnocking from './pages/DoorKnocking'
 const CampaignConnect = lazyRetry(() => import('./pages/CampaignConnect'))  // code-split: trims the initial bundle (M1)
 const Dossiers = lazyRetry(() => import('./pages/Dossiers'))  // code-split: trims the initial bundle (M1)
 import Settings from './pages/Settings'
@@ -256,11 +254,6 @@ const AppRoutes = () => {
         <Route path="elections" element={<Elections />} />
         <Route path="elections/results/:id" element={<ElectionResultsRedirect />} />
         <Route path="elections/results" element={<Navigate to="/elections?tab=results" replace />} />
-        {/* Friendly aliases: the Dashboard lives at "/" and Pricing at "/plans",
-            but /dashboard and /pricing are what people type and what old links
-            point at — send them along instead of 404ing. */}
-        <Route path="dashboard" element={<Navigate to="/" replace />} />
-        <Route path="pricing" element={<Navigate to="/plans" replace />} />
         <Route path="game-plan" element={<GamePlan />} />
         <Route path="candidates" element={<Candidates />} />
         <Route path="candidates/:id" element={<CandidateDetail />} />
@@ -270,7 +263,7 @@ const AppRoutes = () => {
             bouncing the user to the dashboard. */}
         <Route path="recruit" element={<Recruit />} />
         <Route path="voter-lists" element={<VoterLists />} />
-        <Route path="door-knocking" element={<AdminRoute><DoorKnocking /></AdminRoute>} />
+        {/* <Route path="door-knocking" element={<AdminRoute><DoorKnocking /></AdminRoute>} /> */}
         <Route path="dossiers" element={<Dossiers />} />
         <Route path="profiler" element={<Dossiers />} />
         {/* Compare is sold as a plan feature (tiers.js features.compare) and the

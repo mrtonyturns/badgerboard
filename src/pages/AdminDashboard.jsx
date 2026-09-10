@@ -83,7 +83,87 @@ export function relativeTime(iso, now = Date.now()) {
 }
 // ─── R2C PURE HELPERS END ───
 
+// ─── R3C PURE HELPERS BEGIN ───
+/**
+ * Automated QA runs seed throwaway accounts on the reserved .invalid TLD
+ * (RFC 2606) — sectest-…@badger-test.invalid, ftesta-…@badger-test.invalid.
+ * ~25 of them sat in the 43-account list and in the Total Users stat, so every
+ * number an admin read was wrong. Matching the TLD (not one hardcoded domain)
+ * catches future test domains too. Display-only: nothing is deleted, and the
+ * "Hide test accounts" toggle puts them back.
+ */
+export function isTestAccountEmail(email) {
+  const e = String(email || '').trim().toLowerCase()
+  const at = e.lastIndexOf('@')
+  if (at < 0) return false
+  const domain = e.slice(at + 1)
+  return domain === 'invalid' || domain.endsWith('.invalid')
+}
+
+/**
+ * One date format for the whole admin surface. Half the file printed
+ * `toLocaleDateString()` ("8/16/2026") while the charts and trend rows printed
+ * "Aug 16" — same page, two calendars. Everything now renders en-US
+ * "MMM d, yyyy". Unparseable/missing values render as an em dash rather than
+ * "Invalid Date".
+ */
+export function fmtDate(value, fallback = '—') {
+  if (value === null || value === undefined || value === '') return fallback
+  const d = value instanceof Date ? value : new Date(value)
+  if (!Number.isFinite(d.getTime())) return fallback
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+/**
+ * Display-layer tidy-up for announcement bodies. Rows already stored with
+ * double spaces, a run-on emoji ("🎉Rolling out…") or trailing whitespace kept
+ * rendering that way in every admin card. This normalizes what is PAINTED and
+ * never touches the stored row: tags are passed through untouched so the
+ * formatting HTML sanitizeAnnouncementHtml() allows still works.
+ */
+export function sanitizeAnnouncementDisplay(html) {
+  if (typeof html !== 'string' || !html) return ''
+  // one emoji + its variation-selector / ZWJ / skin-tone tail counts as ONE glyph
+  const EMOJI_RUN = /\p{Extended_Pictographic}(?:[\uFE0F\u200D\u{1F3FB}-\u{1F3FF}]|\p{Extended_Pictographic})*/gu
+  const out = html
+    .split(/(<[^>]*>)/)
+    .map((seg) => {
+      if (seg.startsWith('<')) return seg          // markup: leave alone
+      return seg
+        .replace(/&nbsp;|\u00A0/g, ' ')           // contenteditable's doubled-space artifact
+        .replace(/[ \t]{2,}/g, ' ')                // collapse runs of spaces
+        .replace(EMOJI_RUN, (run, offset, str) => {
+          const next = str[offset + run.length]
+          return next && next !== ' ' ? `${run} ` : run
+        })
+    })
+    .join('')
+  // trailing whitespace, including the <br> / &nbsp; padding editors leave behind
+  return out.replace(/(?:\s|&nbsp;|\u00A0|<br\s*\/?>)+$/gi, '')
+}
+// ─── R3C PURE HELPERS END ───
+
 const planLabel = (rawPlan) => planLabelFrom(rawPlan, PLAN_CONFIG, normalizePlan)
+
+/**
+ * Shared "Hide test accounts" switch. Three tabs read the same `users` payload
+ * (Platform Health stat, Account Management table, Billing accounts list), so
+ * each one carries this rather than silently dropping rows with no way back.
+ */
+const TestAccountToggle = ({ hidden, onChange, count, className = '' }) => {
+  if (!count) return null
+  return (
+    <label className={`flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none ${className}`}>
+      <input
+        type="checkbox"
+        checked={hidden}
+        onChange={(e) => onChange(e.target.checked)}
+        className="w-3.5 h-3.5 accent-red-700"
+      />
+      <span>Hide test accounts <span className="text-gray-400">({count})</span></span>
+    </label>
+  )
+}
 
 const AdminDashboard = () => {
   const { user, session } = useAuth()
@@ -98,16 +178,6 @@ const AdminDashboard = () => {
 
   const [activeTab, setActiveTab] = useState('health')
   const [toast, setToast] = useState(null)
-
-  // Tab switch → scroll to top. The app's <main> (Layout.jsx) is the scroll
-  // container, not the window, so scrolling to the bottom of AI Costs and then
-  // clicking Error Logs used to open the new tab with its toolbar above the fold.
-  // Mirrors scrollPageTop() in Dossiers.jsx; window fallback for safety.
-  useEffect(() => {
-    const main = document.querySelector('main')
-    if (main) main.scrollTo({ top: 0 })
-    window.scrollTo({ top: 0 })
-  }, [activeTab])
 
   const showToast = useCallback((message, type = 'success') => {
     setToast({ message, type })
@@ -240,9 +310,13 @@ const AdminDashboard = () => {
 
 // TAB 1: Platform Health
 const PlatformHealthTab = ({ apiCall, showToast, onNavigate }) => {
-  const [stats, setStats] = useState(null)
+  const [allUsers, setAllUsers] = useState([])
+  const [unresolvedErrors, setUnresolvedErrors] = useState(0)
   const [trends, setTrends] = useState(null)
   const [loading, setLoading] = useState(true)
+  // QA seeds ~25 @badger-test.invalid accounts; counting them made every stat
+  // on this tab wrong. Hidden by default, one click away from coming back.
+  const [hideTest, setHideTest] = useState(true)
 
   useEffect(() => {
     const fetch = async () => {
@@ -259,20 +333,8 @@ const PlatformHealthTab = ({ apiCall, showToast, onNavigate }) => {
         const trendsRes = Array.isArray(trendsRaw)  ? trendsRaw  : (trendsRaw?.trends || [])
         const errorsRes = Array.isArray(errorsRaw)  ? errorsRaw  : (errorsRaw?.logs   || [])
 
-        const pastDue = usersRes.filter((u) => u.payment_status === 'past_due').length
-        const unresolved = errorsRes.filter((e) => !e.resolved).length
-
-        setStats({
-          totalUsers: usersRes.length,
-          activeThisWeek: usersRes.filter((u) => {
-            const lastLogin = new Date(u.last_sign_in_at)
-            const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
-            return lastLogin > weekAgo
-          }).length,
-          pastDueAccounts: pastDue,
-          totalErrors: unresolved,
-        })
-
+        setAllUsers(usersRes)
+        setUnresolvedErrors(errorsRes.filter((e) => !e.resolved).length)
         setTrends(Array.isArray(trendsRes) ? trendsRes : [])
       } catch (err) {
         console.error(err)
@@ -289,15 +351,36 @@ const PlatformHealthTab = ({ apiCall, showToast, onNavigate }) => {
     return <Spinner />
   }
 
+  const testCount = allUsers.filter((u) => isTestAccountEmail(u.email)).length
+  const countedUsers = hideTest ? allUsers.filter((u) => !isTestAccountEmail(u.email)) : allUsers
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
+  const stats = {
+    totalUsers: countedUsers.length,
+    activeThisWeek: countedUsers.filter((u) => Date.parse(u.last_sign_in_at || '') > weekAgo).length,
+    pastDueAccounts: countedUsers.filter((u) => u.payment_status === 'past_due').length,
+    totalErrors: unresolvedErrors,
+  }
+
   return (
     <div className="space-y-8">
+      {testCount > 0 && (
+        <div className="flex justify-end -mb-4">
+          <TestAccountToggle hidden={hideTest} onChange={setHideTest} count={testCount} />
+        </div>
+      )}
+
       {/* Stat Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {[
-          { label: 'Total Users', value: stats?.totalUsers || 0, color: 'blue' },
-          { label: 'Active This Week', value: stats?.activeThisWeek || 0, color: 'green' },
-          { label: 'Past Due Accounts', value: stats?.pastDueAccounts || 0, color: 'amber' },
-          { label: 'Total Errors (Unresolved)', value: stats?.totalErrors || 0, color: 'red', link: 'errors' },
+          {
+            label: 'Total Users',
+            value: stats.totalUsers,
+            color: 'blue',
+            sub: hideTest && testCount > 0 ? `${allUsers.length} total · ${testCount} test hidden` : null,
+          },
+          { label: 'Active This Week', value: stats.activeThisWeek, color: 'green' },
+          { label: 'Past Due Accounts', value: stats.pastDueAccounts, color: 'amber' },
+          { label: 'Total Errors (Unresolved)', value: stats.totalErrors, color: 'red', link: 'errors' },
         ].map((stat, idx) => (
           <div
             key={idx}
@@ -311,6 +394,7 @@ const PlatformHealthTab = ({ apiCall, showToast, onNavigate }) => {
               <p className="text-3xl font-bold text-gray-900">{stat.value}</p>
               {stat.link && <span className="text-xs text-red-500 font-medium">View logs →</span>}
             </div>
+            {stat.sub && <p className="text-[11px] text-gray-400 mt-1">{stat.sub}</p>}
           </div>
         ))}
       </div>
@@ -336,102 +420,51 @@ const PlatformHealthTab = ({ apiCall, showToast, onNavigate }) => {
 }
 
 // Signup Chart Component (SVG-based)
-//
-// Y axis: integer-only, de-duplicated ticks on a "nice" max (step ≥ 1), so a
-// max of 2 renders 0/1/2 instead of the old "0, 1, 2, 2" from rounding
-// fractional ratios. X axis: ~5 evenly spaced date labels (first, last, and
-// a few between) regardless of series length. Bars sit inside a left gutter
-// so the first one no longer overlaps the Y-axis line.
-const niceStep = (rawStep) => {
-  // Snap a step to 1 / 2 / 5 × 10^n, never below 1 (signup counts are integers).
-  if (rawStep <= 1) return 1
-  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)))
-  const norm = rawStep / mag
-  const snapped = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10
-  return snapped * mag
-}
-
-const fmtChartDate = (raw) => {
-  if (!raw) return ''
-  // Date-only strings parse as UTC midnight and shift a day west of Greenwich;
-  // pin them to local noon.
-  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(raw)) ? new Date(`${raw}T12:00:00`) : new Date(raw)
-  return isNaN(d) ? String(raw) : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-}
-
 const SignupChart = ({ data }) => {
   const validData = data.filter(d => d.count !== null && d.count !== undefined)
   if (!validData.length) {
     return <p className="text-gray-500 text-sm">No data</p>
   }
 
-  const n = validData.length
-  const rawMax = Math.max(...validData.map(d => Number(d.count) || 0), 1)
-  const TARGET_TICKS = 4
-  const step = niceStep(rawMax / TARGET_TICKS)
-  const niceMax = Math.max(step, Math.ceil(rawMax / step) * step)
-  const yTicks = []
-  for (let v = 0; v <= niceMax; v += step) yTicks.push(v)
-
+  const maxCount = Math.max(...validData.map(d => d.count), 1)
+  const barWidth = Math.max(15, 600 / validData.length)
+  const barSpacing = Math.max(2, (600 - barWidth * validData.length) / (validData.length + 1))
   const chartHeight = 300
-  const AXIS_X   = 40                 // Y-axis line; tick labels right-align just left of it
-  const PAD_L    = 8                  // gutter between the axis and the first bar
-  const PAD_R    = 8
-  const TOP_Y    = 40
-  const BASE_Y   = chartHeight - 40
-  const plotH    = BASE_Y - TOP_Y
-  const plotW    = Math.max(600, 20 * n)   // grows for long series, scrolls horizontally
-  const slot     = plotW / n
-  const barWidth = Math.max(4, Math.min(28, slot * 0.7))
-  const plotLeft = AXIS_X + PAD_L
-  const plotRight = plotLeft + plotW
-  const svgWidth = plotRight + PAD_R
-
-  // ~5 evenly spaced X labels: first, last, and three between (deduped for
-  // short series).
-  const LABELS = Math.min(5, n)
-  const labelIdx = new Set(
-    Array.from({ length: LABELS }, (_, k) => Math.round(k * (n - 1) / Math.max(1, LABELS - 1)))
-  )
-
-  const yFor = (v) => BASE_Y - (v / niceMax) * plotH
 
   return (
     <div className="overflow-x-auto">
-      <svg width={svgWidth} height={chartHeight} className="mx-auto">
-        {/* Y-axis ticks + gridlines */}
-        {yTicks.map((v) => {
-          const y = yFor(v)
+      <svg width={Math.max(600, barWidth * validData.length + barSpacing * (validData.length + 1))} height={chartHeight} className="mx-auto">
+        {/* Y-axis labels */}
+        {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
+          const y = chartHeight - 40 - ratio * (chartHeight - 80)
+          const label = Math.round(maxCount * ratio)
           return (
-            <g key={`y-${v}`}>
-              <text x={AXIS_X - 6} y={y + 4} className="text-xs fill-gray-600" textAnchor="end">
-                {v}
+            <g key={`y-${i}`}>
+              <text x={30} y={y + 4} className="text-xs fill-gray-600" textAnchor="end">
+                {label}
               </text>
-              <line x1={AXIS_X} y1={y} x2={plotRight} y2={y} stroke="#e5e7eb" strokeWidth={1} />
+              <line x1={35} y1={y} x2={barSpacing + barWidth * validData.length + barSpacing} y2={y} stroke="#e5e7eb" strokeWidth={1} />
             </g>
           )
         })}
 
         {/* Bars */}
         {validData.map((d, i) => {
-          const count = Number(d.count) || 0
-          const barHeight = (count / niceMax) * plotH
-          const x = plotLeft + i * slot + (slot - barWidth) / 2
-          const y = BASE_Y - barHeight
+          const barHeight = ((d.count || 0) / maxCount) * (chartHeight - 80)
+          const x = barSpacing + i * (barWidth + barSpacing)
+          const y = chartHeight - 40 - barHeight
 
           return (
             <g key={i}>
-              <rect x={x} y={y} width={barWidth} height={barHeight} fill="#1a2744" rx={2}>
-                <title>{`${fmtChartDate(d.date)}: ${count}`}</title>
-              </rect>
-              {labelIdx.has(i) && (
+              <rect x={x} y={y} width={barWidth} height={barHeight} fill="#1a2744" rx={2} />
+              {i % 7 === 0 && (
                 <text
                   x={x + barWidth / 2}
                   y={chartHeight - 10}
                   className="text-xs fill-gray-600"
                   textAnchor="middle"
                 >
-                  {fmtChartDate(d.date)}
+                  {d.date ? new Date(d.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
                 </text>
               )}
             </g>
@@ -439,86 +472,18 @@ const SignupChart = ({ data }) => {
         })}
 
         {/* Axes */}
-        <line x1={AXIS_X} y1={TOP_Y} x2={AXIS_X} y2={BASE_Y} stroke="#d1d5db" strokeWidth={2} />
-        <line x1={AXIS_X} y1={BASE_Y} x2={plotRight} y2={BASE_Y} stroke="#d1d5db" strokeWidth={2} />
+        <line x1={35} y1={40} x2={35} y2={chartHeight - 40} stroke="#d1d5db" strokeWidth={2} />
+        <line x1={35} y1={chartHeight - 40} x2={barSpacing + barWidth * validData.length + barSpacing} y2={chartHeight - 40} stroke="#d1d5db" strokeWidth={2} />
       </svg>
     </div>
   )
-}
-
-// ── Activity-log labels ──────────────────────────────────────────────────────
-// activity_log rows carry { action, entity_type, entity_id, details JSON } —
-// there has never been a `page` column, which is why every row in "View
-// Activity" used to read "Unknown page". Build a readable label from what is
-// actually there: "Updated candidate — Jane Doe (3 fields)".
-const ENTITY_WORDS = {
-  candidate:        'candidate',
-  incumbent_record: 'record',
-  account:          'account',
-  milestone:        'milestone',
-  dossier:          'profile',
-  profile:          'profile',
-}
-const ACTION_VERBS = {
-  create:   'Created',
-  update:   'Updated',
-  delete:   'Deleted',
-  view:     'Viewed',
-  generate: 'Generated',
-}
-const ACTION_PHRASES = {
-  enable_monitoring:         'Enabled monitoring',
-  disable_monitoring:        'Disabled monitoring',
-  ai_lock:                   'Locked AI access',
-  ai_unlock:                 'Unlocked AI access',
-  password_changed:          'Changed password',
-  profile_updated:           'Updated profile',
-  calendar_feed_rotated:     'Rotated calendar feed URL',
-  ai_access_default_changed: 'Changed AI access default',
-  milestone_completed:       'Completed milestone',
-  milestone_reopened:        'Reopened milestone',
-}
-const humanize = (str) => String(str || '')
-  .replace(/[_-]+/g, ' ')
-  .trim()
-  .replace(/^\w/, c => c.toUpperCase())
-
-function activityLabel(a) {
-  const action = String(a?.action || '').toLowerCase()
-  const entity = String(a?.entity_type || '').toLowerCase()
-  if (!action && !entity) return 'Activity'
-  if (ACTION_PHRASES[action]) return ACTION_PHRASES[action]
-  const verb = ACTION_VERBS[action]
-  const noun = ENTITY_WORDS[entity] || (entity ? humanize(entity).toLowerCase() : '')
-  if (verb) return noun ? `${verb} ${noun}` : verb
-  // Unknown action string — fall back to the raw action, humanized. Never
-  // "Unknown page".
-  return humanize(action || entity)
-}
-
-function activityDetail(a) {
-  const d = (a?.details && typeof a.details === 'object') ? a.details : {}
-  const parts = []
-  const name = d.candidate_name || d.record_title || d.title || d.name
-  if (name) parts.push(String(name))
-  if (d.record_type) parts.push(humanize(d.record_type))
-  if (Array.isArray(d.fields_changed) && d.fields_changed.length) {
-    parts.push(`${d.fields_changed.length} field${d.fields_changed.length === 1 ? '' : 's'}: ${d.fields_changed.slice(0, 4).join(', ')}${d.fields_changed.length > 4 ? '…' : ''}`)
-  } else if (d.changed_count) {
-    parts.push(`${d.changed_count} field${d.changed_count === 1 ? '' : 's'}`)
-  }
-  if (d.ai_access_default !== undefined) parts.push(`→ ${String(d.ai_access_default)}`)
-  if (d.source) parts.push(`via ${d.source}`)
-  if (!parts.length && a?.entity_type && a?.entity_id) {
-    return `${humanize(a.entity_type)} ${String(a.entity_id).slice(0, 8)}`
-  }
-  return parts.join(' · ')
 }
 
 // TAB 2: Account Management
 const AccountManagementTab = ({ apiCall, showToast, user }) => {
   const [users, setUsers] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
+  const [hideTestAccounts, setHideTestAccounts] = useState(true)
   const [selected, setSelected] = useState(new Set())
   const [loading, setLoading] = useState(true)
   const [expandedActivity, setExpandedActivity] = useState(null)
@@ -577,9 +542,12 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
     fetch()
   }, [apiCall, showToast])
 
-  const filteredUsers = users.filter((u) =>
-    (u.email || '').toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  // ~25 QA accounts on the reserved .invalid TLD used to pad this table (and
+  // the select-all checkbox, and every bulk action) — hidden by default.
+  const testAccountCount = users.filter((u) => isTestAccountEmail(u.email)).length
+  const filteredUsers = users
+    .filter((u) => !(hideTestAccounts && isTestAccountEmail(u.email)))
+    .filter((u) => (u.email || '').toLowerCase().includes(searchQuery.toLowerCase()))
 
   const handleSelectAll = () => {
     if (selected.size === filteredUsers.length) {
@@ -726,7 +694,9 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
       {/* Action Glossary */}
       <div className="bg-white rounded-lg shadow p-4 mb-4">
         <h3 className="text-sm font-bold text-gray-700 mb-3">Action Icons Reference</h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+        {/* Seven entries in a rigid 3-up grid left two dead cells in the last
+            row. Flex-wrap lets the row end where the content ends. */}
+        <div className="flex flex-wrap gap-2">
           {[
             { icon: Edit2, label: 'Edit Email', desc: 'Change the user\'s login email address' },
             { icon: Key, label: 'Change Password', desc: 'Set a new password for the account' },
@@ -736,7 +706,7 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
             { icon: Activity, label: 'View Activity', desc: 'Show recent actions taken by this user' },
             { icon: StickyNote, label: 'Notes', desc: 'View or add internal admin notes for this user' },
           ].map(({ icon: Icon, label, desc }) => (
-            <div key={label} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg">
+            <div key={label} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg basis-full sm:basis-[calc(50%-0.25rem)] md:basis-[calc(33.333%-0.334rem)] grow">
               <Icon className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
               <div>
                 <p className="text-xs font-semibold text-gray-800">{label}</p>
@@ -755,9 +725,18 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
           placeholder="Search by email..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-700"
+          className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-navy/40"
         />
       </div>
+
+      {testAccountCount > 0 && (
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <TestAccountToggle hidden={hideTestAccounts} onChange={setHideTestAccounts} count={testAccountCount} />
+          <span className="text-xs text-gray-400">
+            Showing {filteredUsers.length} of {users.length} accounts
+          </span>
+        </div>
+      )}
 
       {/* Bulk Actions */}
       {selected.size > 0 && (
@@ -866,7 +845,7 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
                       {u.payment_status === 'past_due' ? 'Past Due' : u.payment_status === 'inactive' ? 'Cancelled' : 'Active'}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-gray-600">{new Date(u.created_at).toLocaleDateString()}</td>
+                  <td className="px-4 py-3 text-gray-600">{fmtDate(u.created_at)}</td>
                   {/* The API has always returned `last_sign_in_at` (Supabase admin
                       listUsers); this cell read `last_login`, a key that has never
                       existed in the payload, so all 43 accounts read "Never". */}
@@ -944,10 +923,8 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
                           <div className="space-y-2 max-h-64 overflow-y-auto">
                             {activityData[u.id].map((activity, i) => (
                               <div key={i} className="text-sm text-gray-700 bg-white p-3 rounded border border-gray-200">
-                                <div className="font-medium">{activityLabel(activity)}</div>
-                                {activityDetail(activity) && (
-                                  <div className="text-xs text-gray-500">{activityDetail(activity)}</div>
-                                )}
+                                <div className="font-medium">{activity.action || 'Unknown'}</div>
+                                <div className="text-xs text-gray-500">{activity.page || 'Unknown page'}</div>
                                 <div className="text-xs text-gray-500">
                                   {activity.created_at ? new Date(activity.created_at).toLocaleString() : 'Unknown time'}
                                 </div>
@@ -1017,7 +994,7 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
               value={deleteConfirmText}
               onChange={(e) => setDeleteConfirmText(e.target.value)}
               placeholder={modals.deleteAccount.email}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-600 mb-4"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-navy/40 mb-4"
             />
             <div className="flex gap-3 justify-end">
               <button
@@ -1061,7 +1038,7 @@ const EditEmailModal = ({ user, onSave, onClose }) => {
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-700 mb-4"
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-navy/40 mb-4"
         />
         <div className="flex gap-3 justify-end">
           <button
@@ -1106,7 +1083,7 @@ const ChangePasswordModal = ({ user, onSave, onClose }) => {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="New password (min 8 chars)"
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-700 pr-10"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-navy/40 pr-10"
           />
           <button
             onClick={() => setShowPassword(!showPassword)}
@@ -1172,7 +1149,7 @@ const NotesModal = ({ user, onAddNote, onClose }) => {
           value={noteText}
           onChange={(e) => setNoteText(e.target.value)}
           placeholder="Add a note..."
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-700 mb-4"
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-navy/40 mb-4"
           rows={3}
         />
 
@@ -1205,6 +1182,7 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
   const [subscriptionData, setSubscriptionData] = useState(null)
   const [paymentHistory, setPaymentHistory] = useState([])
   const [globalBeta, setGlobalBeta] = useState(null)   // null = loading
+  const [hideTestAccounts, setHideTestAccounts] = useState(true)
 
   const [modals, setModals] = useState({
     applyCredit: false,
@@ -1420,16 +1398,14 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
     }
   }
 
+  // Same .invalid test-account filter the Accounts table uses — the billing
+  // list is built from the identical `users` payload.
+  const testAccountCount = users.filter((u) => isTestAccountEmail(u.email)).length
+  const billingUsers = hideTestAccounts ? users.filter((u) => !isTestAccountEmail(u.email)) : users
+
   // Active trial info for the selected user (from Supabase metadata via users list)
   const selTrialEndsAt = selectedUser?.trial_ends_at ? Date.parse(selectedUser.trial_ends_at) : null
   const selTrialActive = Boolean(selectedUser?.trial_plan && selTrialEndsAt && selTrialEndsAt > Date.now())
-
-  // Same signal as the "No active Stripe subscription" banner: admin-billing.js
-  // get_subscription returns { subscription: null } (no customer_id /
-  // subscription_id) when the account has nothing in Stripe. Cancel / Retry /
-  // Portal can only fail then ("Customer not found"), so they are disabled.
-  const hasStripe = Boolean(subscriptionData?.subscription_id || subscriptionData?.customer_id)
-  const noStripeTitle = hasStripe ? undefined : 'No Stripe subscription on this account'
 
   if (loading) {
     return <Spinner />
@@ -1440,11 +1416,14 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
       {/* Users List */}
       <div className="lg:col-span-1">
         <div className="bg-white rounded-lg shadow overflow-hidden">
-          <div className="p-4 border-b border-gray-200 bg-gray-50">
+          <div className="p-4 border-b border-gray-200 bg-gray-50 space-y-2">
             <h3 className="font-semibold text-gray-900">Accounts</h3>
+            <TestAccountToggle hidden={hideTestAccounts} onChange={setHideTestAccounts} count={testAccountCount} />
           </div>
-          <div className="max-h-96 overflow-y-auto">
-            {users.map((u) => (
+          {/* pb-2: the scroll box ended flush with the last row, slicing its
+              plan line in half at the clip edge. */}
+          <div className="max-h-96 overflow-y-auto pb-2">
+            {billingUsers.map((u) => (
               <button
                 key={u.id}
                 onClick={() => handleSelectUser(u)}
@@ -1491,7 +1470,7 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
                   <span className="text-gray-600">Next Billing</span>
                   <span className="font-medium text-gray-900">
                     {subscriptionData.current_period_end
-                      ? new Date(subscriptionData.current_period_end).toLocaleDateString()
+                      ? fmtDate(subscriptionData.current_period_end)
                       : 'N/A'}
                   </span>
                 </div>
@@ -1502,32 +1481,22 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
                 )}
               </div>
 
-              {/* Same signal as the banner above: admin-billing.js get_subscription
-                  returns { subscription: null } (no customer_id / subscription_id)
-                  when the account has nothing in Stripe, so these actions can only
-                  fail — disable them rather than surface "Customer not found". */}
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={handleCancelSubscription}
-                  disabled={!hasStripe}
-                  title={noStripeTitle}
-                  className="px-3 py-2 bg-red-700 text-white text-sm rounded hover:bg-red-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-3 py-2 bg-red-700 text-white text-sm rounded hover:bg-red-800 transition"
                 >
                   Cancel Subscription
                 </button>
                 <button
                   onClick={handleRetryPayment}
-                  disabled={!hasStripe}
-                  title={noStripeTitle}
-                  className="px-3 py-2 bg-amber-600 text-white text-sm rounded hover:bg-amber-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-3 py-2 bg-amber-600 text-white text-sm rounded hover:bg-amber-700 transition"
                 >
                   Retry Failed Payment
                 </button>
                 <button
                   onClick={handleOpenStripePortal}
-                  disabled={!hasStripe}
-                  title={noStripeTitle}
-                  className="px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition"
                 >
                   Open Stripe Portal
                 </button>
@@ -1547,7 +1516,7 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
                   <p className="text-sm text-purple-900 font-medium">
                     Trial active: <strong>{selectedUser.trial_plan}</strong>
                     {selectedUser.trial_bracket ? ` (${selectedUser.trial_bracket})` : ''} — ends{' '}
-                    {new Date(selTrialEndsAt).toLocaleDateString()}{' '}
+                    {fmtDate(selTrialEndsAt)}{' '}
                     ({Math.max(1, Math.ceil((selTrialEndsAt - Date.now()) / 86400000))} days left)
                   </p>
                   <button
@@ -1561,35 +1530,31 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
               ) : (
                 <div className="space-y-3">
                   <div className="flex flex-wrap gap-3">
-                    <SearchableSelect
+                    <select
                       value={trialPlan}
-                      onChange={(v) => setTrialPlan(v)}
-                      options={[
-                        { value: 'c_monitor', label: 'Monitor (Candidate)' },
-                        { value: 'c_active', label: 'Active (Candidate)' },
-                        { value: 'c_campaign', label: 'Campaign (Candidate)' },
-                        { value: 'a_monitor', label: 'Monitor (Action)' },
-                        { value: 'a_active', label: 'Active (Action)' },
-                        { value: 'a_campaign', label: 'Campaign (Action)' },
-                      ]}
-                      className="min-w-[200px]"
-                      buttonClassName="text-sm"
-                    />
+                      onChange={(e) => setTrialPlan(e.target.value)}
+                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    >
+                      <option value="c_monitor">Monitor (Candidate)</option>
+                      <option value="c_active">Active (Candidate)</option>
+                      <option value="c_campaign">Campaign (Candidate)</option>
+                      <option value="a_monitor">Monitor (Action)</option>
+                      <option value="a_active">Active (Action)</option>
+                      <option value="a_campaign">Campaign (Action)</option>
+                    </select>
                     {trialPlan.startsWith('a_') && (
-                      <SearchableSelect
+                      <select
                         value={trialBracket}
-                        onChange={(v) => setTrialBracket(v)}
-                        options={[
-                          { value: 'b1', label: '1 candidate' },
-                          { value: 'b2_5', label: '2–5 candidates' },
-                          { value: 'b6', label: '6–10 candidates' },
-                          { value: 'b11', label: '11–25 candidates' },
-                          { value: 'b26', label: '26–50 candidates' },
-                          { value: 'b51', label: '51–100 candidates' },
-                        ]}
-                        className="min-w-[200px]"
-                        buttonClassName="text-sm"
-                      />
+                        onChange={(e) => setTrialBracket(e.target.value)}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      >
+                        <option value="b1">1 candidate</option>
+                        <option value="b2_5">2–5 candidates</option>
+                        <option value="b6">6–10 candidates</option>
+                        <option value="b11">11–25 candidates</option>
+                        <option value="b26">26–50 candidates</option>
+                        <option value="b51">51–100 candidates</option>
+                      </select>
                     )}
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -1674,7 +1639,7 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
                       {paymentHistory.map((payment, i) => (
                         <tr key={i} className="border-b border-gray-200">
                           <td className="px-3 py-2 text-gray-600">
-                            {new Date(payment.date).toLocaleDateString()}
+                            {fmtDate(payment.date)}
                           </td>
                           <td className="px-3 py-2 font-medium text-gray-900">${(payment.amount / 100).toFixed(2)}</td>
                           <td className="px-3 py-2">
@@ -1776,13 +1741,13 @@ const ApplyCreditModal = ({ onSave, onClose }) => {
           placeholder="Amount ($)"
           step="0.01"
           min="0"
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-700 mb-3"
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-navy/40 mb-3"
         />
         <textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           placeholder="Description (optional)"
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-700 mb-4"
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-navy/40 mb-4"
           rows={3}
         />
         <div className="flex gap-3 justify-end">
@@ -1903,13 +1868,15 @@ const ChangePlanModal = ({ currentPlan, currentBracket, onSave, onClose }) => {
         {isAction && (
           <div className="mb-5">
             <label className="block text-sm font-medium text-gray-700 mb-2">Candidate Bracket</label>
-            <SearchableSelect
+            <select
               value={bracket}
-              onChange={(v) => setBracket(v)}
-              options={BRACKET_OPTIONS.map(b => ({ value: b.key, label: b.label }))}
-              className="w-full"
-              buttonClassName="text-sm"
-            />
+              onChange={(e) => setBracket(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-navy/40"
+            >
+              {BRACKET_OPTIONS.map(b => (
+                <option key={b.key} value={b.key}>{b.label}</option>
+              ))}
+            </select>
           </div>
         )}
 
@@ -1942,33 +1909,15 @@ const ChangePlanModal = ({ currentPlan, currentBracket, onSave, onClose }) => {
 // Real metering from the ai_usage table: every AI call logs actual token
 // counts and computed cost. Shows where spend comes from (app section),
 // which provider it goes to, and which users drive it.
-// Every ai_usage.endpoint key → Title-case product name. Anything not listed
-// (new endpoints, one-offs) gets a capitalized fallback via endpointLabel()
-// so the list never mixes "polling" with "Profiler — AI profiles" again.
 const ENDPOINT_LABELS = {
-  'profiler':        'Profiler — AI profiles',
-  'dossier':         'Profiler — AI profiles',
-  'events':          'Events',
-  'district-intel':  'District Intelligence',
-  'broadside':       'Broadside',
-  'broadside-brain': 'Broadside',
-  'support-chat':    'Support Chat',
-  'campaign-intel':  'Campaign Intel & SWOT',
-  'prospecting':     'Prospecting',
-  'recruit':         'Recruit',
-  'polling':         'Polling',
-  'monitoring':      'Monitoring',
-  'candidates':      'Candidate Tools',
-}
-const endpointLabel = (key) => {
-  const k = String(key || '').trim().toLowerCase()
-  if (!k) return 'Other'
-  if (ENDPOINT_LABELS[k]) return ENDPOINT_LABELS[k]
-  if (k.startsWith('broadside')) return 'Broadside'
-  if (k.startsWith('profiler') || k.startsWith('dossier')) return 'Profiler — AI profiles'
-  // Unknown → "some-new_key" → "Some new key"
-  const words = k.replace(/[_-]+/g, ' ').trim()
-  return words.charAt(0).toUpperCase() + words.slice(1)
+  'profiler':       'Profiler — AI profiles',
+  'events':         'District Events research',
+  'district-intel': 'District Intelligence',
+  'broadside':      'Broadside sparring',
+  'support-chat':   'Support chat',
+  'campaign-intel': 'Campaign Intel & SWOT',
+  'prospecting':    'Prospecting & discovery',
+  'candidates':     'Candidate tools',
 }
 const PROVIDER_META = {
   anthropic:  { label: 'Anthropic (Claude)',    color: '#D97757' },
@@ -2102,7 +2051,7 @@ const AICostsTab = ({ apiCall, showToast }) => {
             {(data.by_endpoint || []).map(e => (
               <div key={e.key}>
                 <div className="flex items-baseline justify-between mb-1">
-                  <span className="text-sm font-bold text-gray-800">{endpointLabel(e.key)}</span>
+                  <span className="text-sm font-bold text-gray-800">{ENDPOINT_LABELS[e.key] || e.key}</span>
                   <span className="text-sm font-black text-gray-900 tabular-nums">{fmtUsd(e.cost)}</span>
                 </div>
                 <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
@@ -2196,7 +2145,7 @@ const AICostsTab = ({ apiCall, showToast }) => {
               ))}
               {t.system_cost_30d > 0 && (
                 <tr className="border-t border-gray-100 bg-gray-50/40">
-                  <td className="px-6 py-3 text-gray-500 italic">System — crons &amp; background jobs</td>
+                  <td className="px-6 py-3 text-gray-500 italic">System — crons and background jobs</td>
                   <td className="px-4 py-3" /><td className="px-4 py-3" />
                   <td className="px-6 py-3 text-right tabular-nums font-black text-gray-700">{fmtUsd(t.system_cost_30d)}</td>
                   <td className="px-4 py-3 text-right tabular-nums text-gray-500">{t.last_30d > 0 ? `${((t.system_cost_30d / t.last_30d) * 100).toFixed(1)}%` : '—'}</td>
@@ -2680,7 +2629,7 @@ const RichMessageEditor = ({ onChange, editorRef }) => {
         suppressContentEditableWarning
         onInput={() => onChange(editorRef.current?.innerHTML || '')}
         data-placeholder="Write your announcement… select text to bold, italicize, or underline it."
-        className="w-full min-h-[110px] px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-700 text-sm text-gray-800 leading-relaxed [&:empty]:before:content-[attr(data-placeholder)] [&:empty]:before:text-gray-400"
+        className="w-full min-h-[110px] px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-navy/40 text-sm text-gray-800 leading-relaxed [&:empty]:before:content-[attr(data-placeholder)] [&:empty]:before:text-gray-400"
       />
     </div>
   )
@@ -2810,17 +2759,16 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
 
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-2">Type</label>
-            <SearchableSelect
+            <select
               value={formData.type}
-              onChange={(v) => setFormData({ ...formData, type: v })}
-              options={[
-                { value: 'info', label: 'Info' },
-                { value: 'warning', label: 'Warning' },
-                { value: 'success', label: 'Success' },
-                { value: 'error', label: 'Error' },
-              ]}
-              className="w-full"
-            />
+              onChange={(e) => setFormData({ ...formData, type: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-navy/40"
+            >
+              <option value="info">Info</option>
+              <option value="warning">Warning</option>
+              <option value="success">Success</option>
+              <option value="error">Error</option>
+            </select>
           </div>
 
           <div className="mb-4">
@@ -2892,8 +2840,10 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
               </div>
             </div>
 
+            {/* Display-only tidy-up (double spaces, run-on emoji, trailing
+                whitespace). The stored row is never rewritten. */}
             <div className="text-gray-800 mb-4 text-sm leading-relaxed"
-              dangerouslySetInnerHTML={{ __html: sanitizeAnnouncementHtml(announcement.message) }} />
+              dangerouslySetInnerHTML={{ __html: sanitizeAnnouncementDisplay(sanitizeAnnouncementHtml(announcement.message)) }} />
 
             <div className="flex gap-2">
               <button
@@ -2948,28 +2898,36 @@ const ManualUserCreation = ({ billingCall, showToast }) => {
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1">Email</label>
           <input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})}
-            placeholder="user@example.com" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-700" />
+            placeholder="user@example.com" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-navy/40" />
         </div>
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1">Initial Password</label>
           <input type="password" value={form.password} onChange={e => setForm({...form, password: e.target.value})}
-            placeholder="Min. 8 characters" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-700" />
+            placeholder="Min. 8 characters" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-navy/40" />
         </div>
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1">Plan</label>
-          <SearchableSelect value={form.plan} onChange={v => setForm({...form, plan: v})}
-            groups={[
-              { label: '── Candidate Plans ──', options: PLAN_FAMILIES.candidate.map(p => ({ value: p.key, label: `${p.label} — ${p.price}` })) },
-              { label: '── Action Plans ──', options: PLAN_FAMILIES.action.map(p => ({ value: p.key, label: `${p.label} (Action) — ${p.price}` })) },
-            ]}
-            className="w-full" buttonClassName="text-sm" />
+          <select value={form.plan} onChange={e => setForm({...form, plan: e.target.value})}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-navy/40">
+            <optgroup label="── Candidate Plans ──">
+              {PLAN_FAMILIES.candidate.map(p => (
+                <option key={p.key} value={p.key}>{p.label} — {p.price}</option>
+              ))}
+            </optgroup>
+            <optgroup label="── Action Plans ──">
+              {PLAN_FAMILIES.action.map(p => (
+                <option key={p.key} value={p.key}>{p.label} (Action) — {p.price}</option>
+              ))}
+            </optgroup>
+          </select>
         </div>
         {isActionPlan && (
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1">Candidate Bracket</label>
-          <SearchableSelect value={form.bracket} onChange={v => setForm({...form, bracket: v})}
-            options={BRACKET_OPTIONS.map(b => ({ value: b.key, label: b.label }))}
-            className="w-full" buttonClassName="text-sm" />
+          <select value={form.bracket} onChange={e => setForm({...form, bracket: e.target.value})}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-navy/40">
+            {BRACKET_OPTIONS.map(b => <option key={b.key} value={b.key}>{b.label}</option>)}
+          </select>
         </div>
         )}
       </div>
@@ -3147,7 +3105,7 @@ function SecurityAuditTab({ session, showToast }) {
               </p>
               {lastRun && (
                 <p className="text-xs text-gray-400 mt-2">
-                  Last run: {lastRun.toLocaleTimeString()} on {lastRun.toLocaleDateString()}
+                  Last run: {lastRun.toLocaleTimeString()} on {fmtDate(lastRun)}
                 </p>
               )}
             </div>
@@ -3664,24 +3622,29 @@ const CouponsTab = ({ session, showToast }) => {
     }
   }
 
-  const handleDeactivate = async (pc) => {
-    if (!window.confirm(`Deactivate code "${pc.code}"? This cannot be undone.`)) return
+  // One toggle for both directions — manage-coupons.js accepts
+  // deactivate AND reactivate as of v1.37.0, so "cannot be undone" was
+  // retired along with the empty Actions cell on inactive rows.
+  const handleToggleActive = async (pc) => {
+    const action = pc.active ? 'deactivate' : 'reactivate'
+    if (pc.active && !window.confirm(`Deactivate code "${pc.code}"? You can reactivate it later.`)) return
     setDeactivating(pc.id)
     try {
-      const json = await couponCall({ action: 'deactivate', id: pc.id })
+      const json = await couponCall({ action, id: pc.id })
       if (json.success) {
-        showToast(`Code ${pc.code} deactivated`, 'success')
+        showToast(`Code ${pc.code} ${pc.active ? 'deactivated' : 'reactivated'}`, 'success')
         loadCodes()
       } else {
-        showToast(json.error || 'Failed to deactivate', 'error')
+        showToast(json.error || `Failed to ${action}`, 'error')
       }
     } catch (err) {
-      console.error('Failed to deactivate promo code:', err)
-      showToast('Network error — could not deactivate code', 'error')
+      console.error(`Failed to ${action} promo code:`, err)
+      showToast(`Network error — could not ${action} code`, 'error')
     } finally {
       setDeactivating(null)
     }
   }
+  const handleDeactivate = handleToggleActive
 
   const copyCode = (code, id) => {
     navigator.clipboard?.writeText(code)?.then(() => {
@@ -3705,7 +3668,13 @@ const CouponsTab = ({ session, showToast }) => {
         </h2>
         <p className="text-sm text-gray-500">
           Generate Stripe promo codes to give customers free or discounted access.
-          Codes work with the Stripe checkout on the <strong>Pricing</strong> page.
+          Codes work with the Stripe checkout on the{' '}
+          {/* was bolded plain text pointing at a page nobody could click through
+              to; /plans is the route, "Plans & Pricing" is what the nav calls it */}
+          <Link to="/plans" className="text-brand-red underline underline-offset-2 hover:opacity-80">
+            Plans &amp; Pricing
+          </Link>{' '}
+          page.
         </p>
       </div>
 
@@ -3790,9 +3759,9 @@ const CouponsTab = ({ session, showToast }) => {
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5">
               Duration
             </label>
-            <SearchableSelect value={form.duration} onChange={v => f('duration')({ target: { value: v } })}
-              options={DURATION_OPTS.map(o => ({ value: o.value, label: o.label }))}
-              className="w-full max-w-sm" />
+            <select value={form.duration} onChange={f('duration')} className="input-field w-full max-w-sm">
+              {DURATION_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
             {form.duration === 'repeating' && (
               <div className="mt-2 flex items-center gap-2">
                 <input
@@ -3885,7 +3854,7 @@ const CouponsTab = ({ session, showToast }) => {
               <span>Discount: <strong>{lastCreated.discountLabel}</strong></span>
               <span>Duration: <strong>{lastCreated.duration}</strong></span>
               {lastCreated.maxRedemptions && <span>Max uses: <strong>{lastCreated.maxRedemptions}</strong></span>}
-              {lastCreated.expiresAt && <span>Expires: <strong>{new Date(lastCreated.expiresAt).toLocaleDateString()}</strong></span>}
+              {lastCreated.expiresAt && <span>Expires: <strong>{fmtDate(lastCreated.expiresAt)}</strong></span>}
             </div>
           </div>
         )}
@@ -3966,7 +3935,7 @@ const CouponsTab = ({ session, showToast }) => {
                     </td>
                     <td className="py-3 pr-4 text-gray-600 text-xs">
                       {pc.expiresAt
-                        ? new Date(pc.expiresAt).toLocaleDateString()
+                        ? fmtDate(pc.expiresAt)
                         : <span className="text-gray-400">Never</span>
                       }
                     </td>
@@ -3982,7 +3951,7 @@ const CouponsTab = ({ session, showToast }) => {
                       )}
                     </td>
                     <td className="py-3">
-                      {pc.active && (
+                      {pc.active ? (
                         <button
                           onClick={() => handleDeactivate(pc)}
                           disabled={deactivating === pc.id}
@@ -3993,6 +3962,18 @@ const CouponsTab = ({ session, showToast }) => {
                             : <X className="w-3.5 h-3.5" />
                           }
                           Deactivate
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleToggleActive(pc)}
+                          disabled={deactivating === pc.id}
+                          className="flex items-center gap-1 text-xs text-green-700 hover:text-green-900 font-medium disabled:opacity-50 transition-colors"
+                        >
+                          {deactivating === pc.id
+                            ? <div className="w-3.5 h-3.5 border-2 border-green-300 border-t-green-600 rounded-full animate-spin" />
+                            : <RefreshCw className="w-3.5 h-3.5" />
+                          }
+                          Reactivate
                         </button>
                       )}
                     </td>

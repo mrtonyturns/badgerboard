@@ -5,7 +5,7 @@ import { supabase, getCandidates, getOffices, getElections, createCandidate, del
 import { useAuth } from '../contexts/AuthContext'
 import { getUserTier, getUserPlanType, getMonitoringSlotMax, canMonitorCandidates, monitoringUnlockLabel, hasFeature, SCOUT_CANDIDATE_LIMIT, featureUnlockLabel } from '../lib/tiers'
 import { WebOnlyCta, NATIVE_PLAN_NOTE } from '../components/UpgradeCta'
-import LeafletMapView, { candidateHasLocation } from '../components/LeafletMapView'
+import LeafletMapView from '../components/LeafletMapView'
 import SearchableSelect from '../components/SearchableSelect'
 import MapErrorBoundary from '../components/MapErrorBoundary'
 import LoadingBar from '../components/LoadingBar'
@@ -130,6 +130,31 @@ const statusColor = (s) => ({
   withdrawn:      'bg-gray-100 text-gray-400',
 }[s] || 'bg-gray-100 text-gray-600')
 
+// ─── R3B PURE HELPERS BEGIN ───────────────────────────────────────────────────
+// (no imports in this block — tests/r3b.test.mjs slices it out and imports it)
+
+// Avatar initials. The list used to render `name[0]`, so four different B-names
+// all showed a single "B"; every other avatar in the app (dashboard/shared.jsx's
+// initialsOf) uses first + last initial. Same rule, restated here so this page
+// doesn't have to pull in the dashboard module (leaflet + supabase).
+export const candidateInitials = (name) => {
+  const words = String(name || '').trim().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return '?'
+  const first = words[0].charAt(0)
+  const last  = words.length > 1 ? words[words.length - 1].charAt(0) : ''
+  return (first + last).toUpperCase() || '?'
+}
+
+// Level-group headers are only informative when they actually divide the list.
+// With one group — or with every row landing in the 'other' fallback bucket —
+// the header is just a lone "Other 27" band above the whole table, so skip it.
+export const shouldShowGroupHeaders = (levelKeys) => {
+  const keys = (levelKeys || []).filter(Boolean)
+  if (keys.length <= 1) return false
+  return !keys.every(k => k === 'other')
+}
+// ─── R3B PURE HELPERS END ─────────────────────────────────────────────────────
+
 const defaultForm = {
   name: '', party: '', office_id: '', election_id: '', status: 'exploring',
   email: '', phone: '', website: '', campaign_address: '', campaign_city: '',
@@ -195,14 +220,8 @@ export default function Candidates() {
 
   const [viewMode, setViewMode] = useState(() => restoredMapCtx?.viewMode === 'map' ? 'map' : 'table')
   const [mapEverShown, setMapEverShown] = useState(() => restoredMapCtx?.viewMode === 'map')
-  // Pre-v1.19.1 sessions may have persisted the legacy 'federal' / 'state'
-  // layer keys, which no longer exist in LeafletMapView's DISTRICT_LAYERS —
-  // map them onto the split layers so a restored toggle still draws something.
-  const LEGACY_LAYER_KEYS = { federal: 'congress', state: 'assembly' }
-  const [activeLayer, setActiveLayer] = useState(() => {
-    const k = typeof restoredMapCtx?.activeLayer === 'string' ? restoredMapCtx.activeLayer : ''
-    return LEGACY_LAYER_KEYS[k] || k
-  })
+  const [activeLayer, setActiveLayer] = useState(() =>
+    typeof restoredMapCtx?.activeLayer === 'string' ? restoredMapCtx.activeLayer : '')
   // A restored selection must still look like a district (a `name` to parse a
   // district number out of and a `layerKey` to branch on). A stale or truncated
   // payload used to restore `{}`, and the first render then called
@@ -234,10 +253,12 @@ export default function Candidates() {
     writeMapCtx(CANDIDATES_MAP_CTX_KEY, { activeLayer, viewMode, selectedDistrict, view: mapView })
   }, [activeLayer, viewMode, selectedDistrict, mapView])
 
-  // Layer keys must match LeafletMapView's DISTRICT_LAYERS. v1.19.1 split
-  // 'federal' into Congress / U.S. Senate and 'state' into State Senate /
-  // Assembly (same toggles as Offices.jsx) — the old 'federal' / 'state' keys
-  // matched no layer config, so those toggles drew nothing.
+  // The map component's selectable layers (LeafletMapView's DISTRICT_LAYERS) were
+  // split in v1.19.1 into congress / ussenate / senate / assembly / county /
+  // municipal. This list still asked for the pre-split 'federal' and 'state'
+  // keys, which match no layer — so those two chips lit up and drew nothing, and
+  // the labels disagreed with both the map legend and the identical chip row on
+  // the Offices page. Same keys, labels and colors as Offices.jsx now.
   const LAYER_BUTTONS = [
     { key: 'congress',  label: 'Congress',     activeCls: 'bg-blue-600 text-white border-blue-600',     dotColor: '#1d4ed8' },
     { key: 'ussenate',  label: 'U.S. Senate',  activeCls: 'bg-cyan-700 text-white border-cyan-700',     dotColor: '#0e7490' },
@@ -246,13 +267,6 @@ export default function Candidates() {
     { key: 'county',    label: 'County',       activeCls: 'bg-purple-600 text-white border-purple-600', dotColor: '#7c3aed' },
     { key: 'municipal', label: 'Municipal',    activeCls: 'bg-green-600 text-white border-green-600',   dotColor: '#16a34a' },
   ]
-
-  // Candidates the map can't place (no office / district / county). The map
-  // no longer plots these at a synthetic centroid position — surface the
-  // count above the map instead so nobody is silently missing.
-  const unplottedCount = viewMode === 'map'
-    ? candidates.filter(c => !candidateHasLocation(c)).length
-    : 0
 
   // Candidates visible in the selected district
   const panelCandidates = selectedDistrict ? (() => {
@@ -264,21 +278,22 @@ export default function Candidates() {
     return candidates.filter(c => {
       const o = c.office
       if (!o) return false
-      // Mirrors matchOffices() in Offices.jsx. 'federal' / 'state' are the
-      // legacy pre-split keys and can still arrive via a restored session.
+      // Layer keys after the v1.19.1 split (congress/ussenate/senate/assembly);
+      // the pre-split 'federal'/'state' keys still arrive from a restored
+      // sessionStorage payload, so both spellings are handled.
       if (layerKey === 'congress' || layerKey === 'federal') {
         if (o.level !== 'federal') return false
-        if (num && o.district_number != null) return parseInt(o.district_number) === num
-        if (layerKey === 'congress') return !num && !/senate|senator/i.test(o.name || '')
-        return true
+        if (num) return parseInt(o.district_number) === num
+        // U.S. House layer, no district number in the feature name: exclude Senate seats
+        return layerKey === 'federal' || !/senate|senator/i.test(o.name || '')
       }
       if (layerKey === 'ussenate') {
         return o.level === 'federal' && o.district_number == null && /senate|senator/i.test(o.name || '')
       }
       if (layerKey === 'senate' || layerKey === 'assembly' || layerKey === 'state') {
-        if (!num || o.level !== 'state' || parseInt(o.district_number) !== num) return false
-        const isSenate = layerKey === 'senate' || sublabel === 'State Senate District'
+        if (o.level !== 'state' || parseInt(o.district_number) !== num) return false
         const n = (o.name || '').toLowerCase()
+        const isSenate = layerKey === 'senate' || sublabel === 'State Senate District'
         return isSenate ? n.includes('senate') : !n.includes('senate')
       }
       if (layerKey === 'county') {
@@ -470,6 +485,11 @@ export default function Candidates() {
 
   const levelOrder = ['federal', 'state', 'county', 'municipal', 'other']
   const levelLabels = { federal: 'Federal', state: 'State', county: 'County', municipal: 'Municipal', other: 'Other' }
+  // One group (or an all-'other' list) means the header labels nothing — see
+  // shouldShowGroupHeaders above.
+  const showGroupHeaders = shouldShowGroupHeaders(
+    levelOrder.filter(l => grouped[l]?.length > 0)
+  )
 
   const handleAutofill = async () => {
     if (!form.name) return
@@ -952,19 +972,6 @@ export default function Candidates() {
             </div>
           )}
 
-          {/* Candidates with no resolvable location are not plotted — say so */}
-          {viewMode === 'map' && unplottedCount > 0 && (
-            <div className="flex flex-wrap items-center gap-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-              <span>
-                {unplottedCount} candidate{unplottedCount === 1 ? ' isn\'t' : 's aren\'t'} shown on the map — {unplottedCount === 1 ? 'it has' : 'they have'} no office or district yet.
-              </span>
-              <button type="button" onClick={() => switchView('table')}
-                className="font-semibold underline underline-offset-2 hover:text-amber-900">
-                View in list
-              </button>
-            </div>
-          )}
-
           {/* Map view with district side panel */}
           {mapEverShown && (
             <div style={{ display: viewMode === 'map' ? 'block' : 'none', position: 'relative' }}
@@ -1004,9 +1011,9 @@ export default function Candidates() {
                     const themes = {
                       congress:{bg:'#dbeafe',color:'#1e40af'}, federal:{bg:'#dbeafe',color:'#1e40af'},
                       ussenate:{bg:'#cffafe',color:'#155e75'},
-                      senate:{bg:'#fee2e2',color:'#991b1b'}, state:{bg:'#fee2e2',color:'#991b1b'},
+                      senate:{bg:'#fee2e2',color:'#991b1b'},  state:{bg:'#fee2e2',color:'#991b1b'},
                       assembly:{bg:'#ffedd5',color:'#9a3412'},
-                      county:{bg:'#ede9fe',color:'#5b21b6'}, municipal:{bg:'#dcfce7',color:'#14532d'},
+                      county:{bg:'#ede9fe',color:'#5b21b6'},  municipal:{bg:'#dcfce7',color:'#14532d'},
                     }
                     const t = themes[selectedDistrict.layerKey] || themes.county
                     return (
@@ -1070,11 +1077,13 @@ export default function Candidates() {
             if (!group || group.length === 0) return null
             return (
               <div key={level}>
+                {showGroupHeaders && (
                 <div className="flex items-center gap-2 mb-3">
                   <span className="text-sm font-bold text-gray-700">{levelLabels[level]}</span>
                   <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">{group.length}</span>
                   <div className="flex-1 h-px bg-gray-200" />
                 </div>
+                )}
                 <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                   <table className="w-full">
                     <thead className="bg-gray-50 border-b border-gray-200">
@@ -1092,8 +1101,8 @@ export default function Candidates() {
                         <tr key={c.id} className={`table-row ${i % 2 === 0 ? '' : 'bg-gray-50/50'}`}>
                           <td className="table-cell">
                             <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 rounded-full bg-brand-red/10 text-brand-red flex items-center justify-center text-sm font-bold flex-shrink-0">
-                                {(c.name || '?')[0]}
+                              <div className="w-8 h-8 rounded-full bg-brand-red/10 text-brand-red flex items-center justify-center text-xs font-bold flex-shrink-0 tracking-tight">
+                                {candidateInitials(c.name)}
                               </div>
                               <div>
                                 <Link to={`/candidates/${c.id}`} className="font-semibold text-gray-900 hover:text-brand-red transition-colors">
@@ -1295,16 +1304,16 @@ export default function Candidates() {
               {discoverMode === 'level' && (
                 <div>
                   <label className="label">Government Level *</label>
-                  <SearchableSelect
+                  <select
+                    className="input"
                     value={discoverLevel}
-                    onChange={setDiscoverLevel}
-                    options={[
-                      { value: 'federal', label: 'Federal' },
-                      { value: 'state', label: 'State' },
-                      { value: 'county', label: 'County' },
-                      { value: 'municipal', label: 'Municipal' },
-                    ]}
-                  />
+                    onChange={e => setDiscoverLevel(e.target.value)}
+                  >
+                    <option value="federal">Federal</option>
+                    <option value="state">State</option>
+                    <option value="county">County</option>
+                    <option value="municipal">Municipal</option>
+                  </select>
                 </div>
               )}
 
@@ -1458,8 +1467,9 @@ export default function Candidates() {
                       </div>
                       <div>
                         <label className="label">Status</label>
-                        <SearchableSelect value={form.status} onChange={v => f('status')({ target: { value: v } })}
-                          options={STATUSES.map(s => ({ value: s, label: statusLabel(s) }))} />
+                        <select className="input" value={form.status} onChange={f('status')}>
+                          {STATUSES.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
+                        </select>
                       </div>
                     </div>
                     <div>

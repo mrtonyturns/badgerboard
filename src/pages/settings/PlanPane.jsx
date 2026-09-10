@@ -252,11 +252,12 @@ export default function PlanPane({
         <div className="st-planhdr" style={{
           position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'flex-start',
           gap: 14, padding: '20px 24px 18px',
-          background: 'linear-gradient(120deg,#0D1526 0%,#1A2440 100%)',
+          background: `linear-gradient(120deg,${T.navy} 0%,#1A2440 100%)`,
         }}>
+          {/* rgb(139,0,0) = the brand red token, so the glow tracks T.red */}
           <div aria-hidden="true" style={{
             position: 'absolute', bottom: -90, left: '34%', width: 200, height: 200, borderRadius: '50%',
-            background: 'radial-gradient(circle, rgba(165,28,36,.4) 0%, rgba(165,28,36,0) 70%)',
+            background: 'radial-gradient(circle, rgba(139,0,0,.4) 0%, rgba(139,0,0,0) 70%)',
           }} />
           <div style={{ position: 'relative', flex: 1, minWidth: 210 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>

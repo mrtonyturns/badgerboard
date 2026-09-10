@@ -1,5 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react'
-import { supabase } from '../lib/supabase'
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react'
 
 // ─── Dossier Status Context ───────────────────────────────────────────────────
 // Provides global state for dossier generation progress so the header status
@@ -13,15 +12,6 @@ import { supabase } from '../lib/supabase'
 // State is persisted to sessionStorage so it survives page refreshes within the
 // same browser session. The 'generating' phase is restored visually after a
 // refresh (showing the spinner) so the user knows a dossier is still in progress.
-//
-// Detection strategy:
-//   Primary:  Supabase Realtime channel — fires the instant a new dossier row is
-//             inserted.  Reliable, zero polling overhead, immune to timestamp skew.
-//             This is the fix for the "spinner never shows Ready" bug — the old
-//             approach relied on polling in Dossiers.jsx which could miss the new
-//             row if getDossiers returned null data or there was clock skew.
-//   Fallback: 15-second polling loop that runs alongside Realtime in case the
-//             websocket isn't available (e.g. corporate network firewall).
 
 const STORAGE_KEY = 'badgerboard_dossier_status'
 // Matches GENERATION_MAX_WAIT_MS in Dossiers.jsx and the background function's
@@ -104,92 +94,6 @@ export function DossierStatusProvider({ children }) {
     setState(INITIAL_STATE)
   }, [])
 
-  // ── Realtime detection + fallback polling ────────────────────────────────
-  // Subscribe to INSERT events on the dossiers table while phase=generating.
-  // Fires setReady() the instant the background function saves the row —
-  // regardless of which page the user is on, and regardless of whether the
-  // polling in Dossiers.jsx has timed out or missed the row.
-  const firedRef     = useRef(false)  // idempotent guard
-  const channelRef   = useRef(null)
-  const fallbackRef  = useRef(null)
-
-  useEffect(() => {
-    if (state.phase !== 'generating' || !state.candidateId) return
-
-    firedRef.current = false
-    const { candidateId, candidateName, startedAt } = state
-
-    const markReady = (id, rawTitle) => {
-      if (firedRef.current) return
-      firedRef.current = true
-      const name = rawTitle
-        ? rawTitle.replace(/^Political Profile\s*[—–-]\s*/i, '').trim() || candidateName
-        : candidateName
-      setReady({ id, candidateName: name })
-    }
-
-    // ── Primary: Supabase Realtime ───────────────────────────────────────
-    const ch = supabase
-      .channel(`dossier-ready-${candidateId}`)
-      .on(
-        'postgres_changes',
-        {
-          event:  'INSERT',
-          schema: 'public',
-          table:  'dossiers',
-          filter: `candidate_id=eq.${candidateId}`,
-        },
-        ({ new: row }) => {
-          // Guard: ignore a row that predates this generation run
-          const rowTime = row.generated_at || row.created_at || ''
-          if (startedAt && rowTime && rowTime < startedAt) return
-          markReady(row.id, row.title)
-        }
-      )
-      .subscribe()
-    channelRef.current = ch
-
-    // ── Fallback: poll every 15s in case websocket is blocked ────────────
-    const deadline = startedAt
-      ? new Date(startedAt).getTime() + MAX_GENERATING_AGE_MS
-      : Date.now() + MAX_GENERATING_AGE_MS
-
-    const poll = async () => {
-      if (firedRef.current) return
-      if (Date.now() >= deadline) { clearStatus(); return }
-
-      try {
-        const { data: { user } } = await supabase.auth.getUser()
-        if (user) {
-          let q = supabase
-            .from('dossiers')
-            .select('id, generated_at, created_at, title')
-            .eq('candidate_id', candidateId)
-            .eq('generated_by', user.id)
-            .order('created_at', { ascending: false })
-            .limit(1)
-          if (startedAt) q = q.gte('created_at', startedAt)
-          const { data } = await q
-          if (data?.length) { markReady(data[0].id, data[0].title); return }
-        }
-      } catch { /* transient — retry next tick */ }
-
-      if (!firedRef.current) {
-        fallbackRef.current = setTimeout(poll, 15000)
-      }
-    }
-
-    // Start fallback after 15s so Realtime gets first shot
-    fallbackRef.current = setTimeout(poll, 15000)
-
-    return () => {
-      if (channelRef.current) { supabase.removeChannel(channelRef.current); channelRef.current = null }
-      if (fallbackRef.current) { clearTimeout(fallbackRef.current); fallbackRef.current = null }
-      firedRef.current = false
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.phase, state.candidateId])
-
   return (
     <DossierStatusContext.Provider value={{ ...state, startGeneration, setReady, clearStatus }}>
       {children}
@@ -202,14 +106,14 @@ export function useDossierStatus() {
   // Safe fallback when used outside provider (shouldn't happen in prod)
   if (!ctx) {
     return {
-      phase:           'idle',
-      candidateName:   '',
-      candidateId:     null,
-      readyDossier:    null,
-      startedAt:       null,
+      phase:          'idle',
+      candidateName:  '',
+      candidateId:    null,
+      readyDossier:   null,
+      startedAt:      null,
       startGeneration: () => {},
-      setReady:        () => {},
-      clearStatus:     () => {},
+      setReady:       () => {},
+      clearStatus:    () => {},
     }
   }
   return ctx

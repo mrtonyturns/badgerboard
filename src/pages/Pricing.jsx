@@ -6,7 +6,6 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { isNativeApp } from '../lib/native'
-import SearchableSelect from '../components/SearchableSelect'
 import {
   CANDIDATE_PLAN_CONFIG, ACTION_PLAN_CONFIG,
   CANDIDATE_PLAN_ORDER, ACTION_PLAN_ORDER,
@@ -152,7 +151,11 @@ function FeatureMatrix({ groups, colConfigs, navigate, user }) {
                                 </span>
                               )}
                               {val === false && (
-                                <span className="text-gray-200 text-base font-light select-none">—</span>
+                                /* the highlighted column sits on a gray band — gray-200
+                                   dashes vanished into it */
+                                <span className={`text-base font-light select-none ${
+                                  isHighlighted ? 'text-gray-500' : 'text-gray-300'
+                                }`}>—</span>
                               )}
                               {typeof val === 'string' && (
                                 <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-md ${
@@ -314,7 +317,7 @@ const FAQS = [
   },
   {
     q: 'What is an active candidate?',
-    a: 'An active candidate is someone flagged for continuous monitoring. They appear on your dashboard, count toward your bracket on the Action Plan, and on eligible tiers receive a fresh AI profile every Monday. Candidate Plan has fixed active candidate slots (0, 1, or 3 depending on tier).',
+    a: 'An active candidate is someone flagged for continuous monitoring. They appear on your dashboard, count toward your bracket on the Action Plan, and on eligible tiers receive a fresh AI profile every Friday. Candidate Plan has fixed active candidate slots (0, 1, or 3 depending on tier).',
   },
   {
     q: 'How many candidates can I monitor on the Action Plan?',
@@ -427,7 +430,7 @@ export default function Pricing() {
           </div>
           <h1 className="text-xl font-black text-gray-900 mb-2">Plans aren&apos;t available in the app</h1>
           <p className="text-sm text-gray-600 leading-relaxed">
-            Subscriptions and plan changes are managed from your account on the BadgerBoard website. Everything included in your plan works right here in the app.
+            Subscriptions and plan changes are managed from your account on the Badger Board website. Everything included in your plan works right here in the app.
           </p>
         </div>
       </div>
@@ -903,13 +906,18 @@ export default function Pricing() {
             {/* Bracket selector */}
             <div className="flex items-center gap-2 flex-shrink-0">
               <span className="text-sm text-gray-500">Active candidates:</span>
-              <SearchableSelect
-                value={bracket}
-                onChange={setBracket}
-                options={bracketList.map(b => ({ value: b.key, label: b.label }))}
-                className="w-44"
-                buttonClassName="text-sm font-medium text-gray-900 py-1.5"
-              />
+              <div className="relative">
+                <select
+                  value={bracket}
+                  onChange={e => setBracket(e.target.value)}
+                  className="appearance-none text-sm font-medium text-gray-900 border border-gray-200 bg-white rounded-lg px-3 py-1.5 pr-8 focus:outline-none focus:ring-2 focus:ring-gray-200 cursor-pointer"
+                >
+                  {bracketList.map(b => (
+                    <option key={b.key} value={b.key}>{b.label}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+              </div>
             </div>
           </div>
 

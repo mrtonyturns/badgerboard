@@ -356,7 +356,7 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
           >
             <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 3 }}>Confirm your password</div>
             <div style={{ fontSize: 11.5, color: T.muted, lineHeight: 1.5, marginBottom: 11 }}>
-              Enter your BadgerBoard account password to give AI features access to these notes and documents again.
+              Enter your Badger Board account password to give AI features access to these notes and documents again.
             </div>
             <input
               type="password"
@@ -502,7 +502,7 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
           {files.length === 0 ? (
             <EmptyState
               title="No documents attached"
-              body="Leases, filings, opposition mailers, position drafts — anything the team needs on hand. Files stay in your BadgerBoard storage."
+              body="Leases, filings, opposition mailers, position drafts — anything the team needs on hand. Files stay in your Badger Board storage."
             />
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', marginTop: 10 }}>

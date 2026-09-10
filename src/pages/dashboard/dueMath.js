@@ -88,41 +88,6 @@ export const dueChipLabel = (d, now = new Date()) => {
   return `due in ${n}d`
 }
 
-// ── gp_tasks → milestone shape ───────────────────────────────────────────────
-// The dashboards were written against the legacy game_plan_milestones table
-// (title / phase / status / due_date). The Todo page replaced that with
-// gp_tasks (content / section_id / completed / completed_at / due_date), and
-// the legacy table is no longer written, so the dashboards read gp_tasks and
-// adapt each row here. `status` is derived from `completed` — the ONLY
-// completion flag the task board writes — so a completed task can never be
-// counted open or overdue. `phase` is the campaign phase key when the task's
-// section is one of the six migrated phase sections; `phase_label` is always
-// the section name so custom sections still get a readable label.
-const PHASE_KEY_BY_LABEL = {
-  'planning': 'planning', 'filing': 'filing', 'voter contact': 'voter_contact',
-  'fundraising': 'fundraising', 'gotv': 'gotv', 'election day': 'election_day',
-}
-
-export const taskToMilestone = (t, sectionsById = {}) => {
-  const section = t.section_id ? sectionsById[t.section_id] : null
-  const name = section?.name || ''
-  return {
-    id: t.id,
-    title: t.content,
-    due_date: t.due_date,
-    status: t.completed ? 'complete' : (t.priority <= 2 ? 'in_progress' : 'not_started'),
-    updated_at: t.completed ? (t.completed_at || t.updated_at) : t.updated_at,
-    phase: PHASE_KEY_BY_LABEL[name.trim().toLowerCase()],
-    phase_label: name || null,
-    project_id: t.project_id,
-    completed: Boolean(t.completed),
-    completed_at: t.completed_at || null,
-  }
-}
-
-/** Sort key for "next up": dated tasks first by due date, undated last. */
-export const byDueDate = (a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999')
-
 // Mirrors the milestone status rule in GamePlan.jsx (`autoStatus`) so the
 // dashboard and the Game Plan page agree on what "overdue" means.
 export const autoStatus = (m) => {

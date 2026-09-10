@@ -5,13 +5,11 @@
 // edit/save flow is the one that already exists: the page owns `editing` and
 // `form`, this view renders inputs when editing and read rows when not.
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React from 'react'
 import SearchableSelect from '../../components/SearchableSelect'
-import { getOfficeOptions, getElections } from '../../lib/supabase'
 import { candidateStatusLabel } from '../../lib/campaignEnums'
 import { DB_PARTIES } from '../../lib/party'
 import { hasFindings } from '../../lib/profileContent'
-import { officeLine } from '../../lib/office'
 import { T, Card, EmptyState, fmtDate } from './shared'
 
 // The party picker must offer exactly what `candidates.party` accepts — this
@@ -82,76 +80,12 @@ function EditRow({ k, children }) {
 
 const money = (v) => (v == null || v === '' ? null : `$${Number(v).toLocaleString()}`)
 
-// ── Office / Election pickers ────────────────────────────────────────────────
-// The header says "No office linked — set one under Profile Data", but this
-// form never had an Office or Election field, so there was nowhere to set one.
-// Same pickers as the Candidates page's add/edit modal; the office list is
-// ~7,400 rows so it is fetched lazily (first time the form opens) with only
-// the label columns, and grouped by level so the search stays navigable.
-const LEVEL_ORDER = ['federal', 'state', 'county', 'municipal']
-const LEVEL_LABEL = { federal: 'Federal', state: 'State', county: 'County', municipal: 'Municipal' }
-
-/** "State Representative — Assembly District 87 (Marathon)" */
-export function officeOptionLabel(o) {
-  const base = officeLine(o, { empty: '' })
-  const place = o?.county || o?.city
-  return place && !String(base).includes(place) ? `${base} (${place})` : base
-}
-
-/** "Fall General Election 2026 — Nov 3, 2026" */
-export function electionOptionLabel(e) {
-  const when = e?.election_date ? fmtDate(e.election_date, 'MMM d, yyyy') : ''
-  return when ? `${e.name} — ${when}` : (e?.name || '')
-}
-
-export function groupOfficeOptions(offices) {
-  const byLevel = new Map()
-  for (const o of offices || []) {
-    const lvl = o.level || 'other'
-    if (!byLevel.has(lvl)) byLevel.set(lvl, [])
-    byLevel.get(lvl).push({ value: o.id, label: officeOptionLabel(o) })
-  }
-  const levels = [...byLevel.keys()].sort((a, b) => {
-    const ia = LEVEL_ORDER.indexOf(a), ib = LEVEL_ORDER.indexOf(b)
-    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib)
-  })
-  return levels.map(l => ({ label: LEVEL_LABEL[l] || l, options: byLevel.get(l) }))
-}
-
-function useReferenceOptions(active) {
-  const [offices, setOffices] = useState(null)
-  const [elections, setElections] = useState(null)
-  useEffect(() => {
-    if (!active || offices) return
-    let alive = true
-    Promise.all([getOfficeOptions(), getElections()]).then(([o, e]) => {
-      if (!alive) return
-      setOffices(o.data || [])
-      setElections(e.data || [])
-    })
-    return () => { alive = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active])
-  return { offices, elections }
-}
-
 export default function ProfileData({ candidate, editing, form, setForm, timestamps }) {
   const f = (key) => (e) => {
     const val = e.target.type === 'checkbox' ? e.target.checked : e.target.value
     setForm(p => ({ ...p, [key]: val }))
   }
   const c = editing ? form : candidate
-  const { offices, elections } = useReferenceOptions(editing)
-  const officeGroups = useMemo(() => {
-    const groups = groupOfficeOptions(offices)
-    // Keep the currently linked office selectable even before the list lands.
-    if (!offices && candidate?.office?.id) return [{ label: null, options: [{ value: candidate.office.id, label: officeOptionLabel(candidate.office) }] }]
-    return groups
-  }, [offices, candidate?.office])
-  const electionOptions = useMemo(() => {
-    if (!elections) return candidate?.election?.id ? [{ value: candidate.election.id, label: electionOptionLabel(candidate.election) }] : []
-    return elections.map(e => ({ value: e.id, label: electionOptionLabel(e) }))
-  }, [elections, candidate?.election])
 
   const emails = (c.email || '').split(',').map(e => e.trim()).filter(Boolean)
   const emailRows = editing
@@ -264,29 +198,9 @@ export default function ProfileData({ candidate, editing, form, setForm, timesta
               />
             </EditRow>
             <EditRow k="Status">
-              <SearchableSelect
-                value={form.status || ''}
-                onChange={v => setForm(p => ({ ...p, status: v }))}
-                options={STATUSES.map(s => ({ value: s, label: candidateStatusLabel(s) }))}
-              />
-            </EditRow>
-            <EditRow k="Office">
-              <SearchableSelect
-                value={form.office_id || ''}
-                onChange={v => setForm(p => ({ ...p, office_id: v || null }))}
-                groups={[{ label: null, options: [{ value: '', label: 'No office' }] }, ...officeGroups]}
-                placeholder={offices ? 'Select office…' : 'Loading offices…'}
-                searchPlaceholder="Search offices…"
-              />
-            </EditRow>
-            <EditRow k="Election">
-              <SearchableSelect
-                value={form.election_id || ''}
-                onChange={v => setForm(p => ({ ...p, election_id: v || null }))}
-                options={[{ value: '', label: 'No election' }, ...electionOptions]}
-                placeholder={elections ? 'Select election…' : 'Loading elections…'}
-                searchPlaceholder="Search elections…"
-              />
+              <select style={inputStyle} value={form.status || ''} onChange={f('status')}>
+                {STATUSES.map(s => <option key={s} value={s}>{candidateStatusLabel(s)}</option>)}
+              </select>
             </EditRow>
             <EditRow k="Committee"><input style={inputStyle} value={form.campaign_committee || ''} onChange={f('campaign_committee')} /></EditRow>
             <EditRow k="Campaign manager"><input style={inputStyle} value={form.campaign_manager || ''} onChange={f('campaign_manager')} /></EditRow>
@@ -297,8 +211,10 @@ export default function ProfileData({ candidate, editing, form, setForm, timesta
             <Row k="Name" v={candidate.name} />
             <Row k="Party" v={candidate.party} />
             <Row k="Status" v={candidateStatusLabel(candidate.status)} />
-            <Row k="Office" v={candidate.office ? officeOptionLabel(candidate.office) : null} />
-            <Row k="Election" v={candidate.election ? electionOptionLabel(candidate.election) : null} />
+            <Row k="Office" v={candidate.office
+              ? [candidate.office.name, candidate.office.district_name].filter(Boolean).join(' — ')
+              : null} />
+            <Row k="Election" v={candidate.election?.name} />
             <Row k="Committee" v={candidate.campaign_committee} />
             <Row k="Campaign manager" v={candidate.campaign_manager} />
             <Row k="Treasurer" v={candidate.treasurer} />

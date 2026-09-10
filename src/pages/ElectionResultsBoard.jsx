@@ -323,9 +323,17 @@ function CandidateRow({ cand, totalVotes, isWinner, declared, isNonpartisan, lea
             )}
           </div>
           <div className="flex items-center gap-2">
-            <div className="flex-1 h-2.5 bg-gray-100 rounded-full overflow-hidden">
+            {/* One meaning per colour: the bar is ALWAYS the candidate's party
+                colour (PARTY above is keyed by partyGroup(), same vocabulary as
+                lib/party.js). Recolouring the winner's bar green put a green bar
+                above a red one in an all-Republican race and made party unreadable.
+                The win is carried by the trophy, the WINNER badge and the heavier
+                outlined track below. */}
+            <div className={`flex-1 bg-gray-100 rounded-full overflow-hidden ${
+              won ? 'h-3 ring-1 ring-gray-900/20' : 'h-2.5'
+            }`}>
               <div
-                className={`h-full rounded-full transition-all duration-1000 ${isWinner && declared ? 'bg-green-500' : style.bar}`}
+                className={`h-full rounded-full transition-all duration-1000 ${style.bar}`}
                 style={{ width: `${widthPct}%` }}
               />
             </div>
@@ -930,7 +938,10 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
           {lastSync && (
             <span className="text-xs text-gray-400 flex items-center gap-1">
               <Clock className="w-3 h-3" />
-              Updated {format(lastSync, 'h:mm:ss a')}
+              {/* Same stamp format the race cards use — the header used to read
+                  "Updated 2:13:03 AM" (no date, seconds) beside cards saying
+                  "Aug 12, 3:08 PM". */}
+              Updated {fmtStamp(lastSync)}
             </span>
           )}
           {/* Last fetch failed — the numbers above are the last good ones. */}
@@ -1161,7 +1172,10 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
                   <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
                 </button>
                 {open && (
-                  <div className="grid sm:grid-cols-1 lg:grid-cols-2 gap-3">
+                  /* items-start: grid items stretch by default, so a two-candidate
+                     card was stretched to the height of a twelve-candidate
+                     sibling and carried 120–230px of dead space. */
+                  <div className="grid sm:grid-cols-1 lg:grid-cols-2 gap-3 items-start">
                     {typeContests.map(c => (
                       <RaceCard
                         key={c.id}

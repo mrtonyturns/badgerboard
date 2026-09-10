@@ -1,5 +1,4 @@
-// Elections.jsx — Calendar + live results in one page (Results gated by RESULTS_ENABLED;
-// the page header/subtitle is owned by Layout.jsx PAGE_HEADERS and follows the same flag)
+// Elections.jsx — Calendar + live results in one page
 // Two tabs: Calendar (upcoming/past) | Results (live board for selected election)
 // Clicking "View Results" on any card switches to Results tab with that election loaded.
 
@@ -21,8 +20,6 @@ import { useAuth } from '../contexts/AuthContext'
 import ElectionResultsBoard from './ElectionResultsBoard'
 import LoadingBar from '../components/LoadingBar'
 import { useDialog } from '../lib/useDialog'
-import { RESULTS_ENABLED } from '../lib/featureFlags'
-import SearchableSelect from '../components/SearchableSelect'
 
 // Escape + scroll-lock for this page's add/edit dialog. Mounted only while the
 // dialog is open, so the hook's effect is scoped to its lifetime.
@@ -48,6 +45,28 @@ const TYPE_COLORS = {
   special:        { bg: 'bg-yellow-500', light: 'bg-yellow-100 text-yellow-800', border: 'border-yellow-300' },
 }
 
+// ─── R3B PURE HELPERS BEGIN ───────────────────────────────────────────────────
+// (no imports in this block — tests/r3b.test.mjs slices it out and imports it)
+// The identical pair is duplicated in GamePlan.jsx, whose Calendar tab is the
+// same feature at a second route: the two Apr 7 2026 elections used to come out
+// in different orders because neither page had a tiebreak after the date.
+
+/** Calendar order: election date ascending, then name. */
+export const compareElectionsAsc = (a, b) => {
+  const ad = String(a?.election_date || ''), bd = String(b?.election_date || '')
+  if (ad !== bd) return ad < bd ? -1 : 1
+  return String(a?.name || '').localeCompare(String(b?.name || ''))
+}
+
+/** Past list: most recent first, then name (NOT a reversed ascending sort —
+ *  that would flip the name tiebreak too). */
+export const compareElectionsDesc = (a, b) => {
+  const ad = String(a?.election_date || ''), bd = String(b?.election_date || '')
+  if (ad !== bd) return ad < bd ? 1 : -1
+  return String(a?.name || '').localeCompare(String(b?.name || ''))
+}
+// ─── R3B PURE HELPERS END ─────────────────────────────────────────────────────
+
 const defaultForm = {
   name: '', election_date: '', filing_deadline: '', type: 'general',
   year: new Date().getFullYear(), notes: '',
@@ -65,9 +84,7 @@ export default function Elections() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Tab state — driven by ?tab=results&election=<id> so it survives refresh
-  // Results tab gated by RESULTS_ENABLED (featureFlags.js) — ?tab=results falls back to calendar
-  const _rawTab          = searchParams.get('tab') || 'calendar'
-  const activeTab        = (_rawTab === 'results' && !RESULTS_ENABLED) ? 'calendar' : _rawTab
+  const activeTab        = searchParams.get('tab') || 'calendar'
   // Guard against "null" / "undefined" strings that end up in the URL if id was missing
   const _rawElection     = searchParams.get('election')
   const selectedResultsId = (_rawElection && _rawElection !== 'null' && _rawElection !== 'undefined')
@@ -170,8 +187,17 @@ export default function Elections() {
   const currentYear = new Date().getFullYear()
   const years       = [...new Set(elections.map(e => e.year))].sort().filter(y => Number(y) >= currentYear)
   const filtered    = yearFilter ? elections.filter(e => String(e.year) === String(yearFilter)) : elections
-  const upcoming    = filtered.filter(e => isFuture(safeISO(e.election_date)))
-  const past        = filtered.filter(e => isPast(safeISO(e.election_date)))
+  // Same buckets and the same sort as the Game Plan calendar tab: today's
+  // election is Upcoming (it used to fall into Past here, so the identical
+  // calendar showed a gray "Past" badge on one route and the red "Upcoming"
+  // badge on the other), and same-date elections order by name instead of by
+  // whatever order the rows arrived in.
+  const upcoming    = filtered
+    .filter(e => isFuture(safeISO(e.election_date)) || isToday(safeISO(e.election_date)))
+    .sort(compareElectionsAsc)
+  const past        = filtered
+    .filter(e => isPast(safeISO(e.election_date)) && !isToday(safeISO(e.election_date)))
+    .sort(compareElectionsDesc)
 
   // Elections a visitor may be shown in the Results tab strip.
   const publicElections = useMemo(
@@ -308,16 +334,14 @@ export default function Elections() {
 
               {/* Action buttons */}
               <div className="flex items-center gap-1 flex-shrink-0">
-                {RESULTS_ENABLED && (
-                  <button
-                    onClick={() => goToResults(election.id)}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-brand-red/10 text-brand-red hover:bg-brand-red hover:text-white"
-                    title="View results"
-                  >
-                    <BarChart2 className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Results</span>
-                  </button>
-                )}
+                <button
+                  onClick={() => goToResults(election.id)}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-brand-red/10 text-brand-red hover:bg-brand-red hover:text-white"
+                  title="View results"
+                >
+                  <BarChart2 className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Results</span>
+                </button>
                 {isAdmin && (
                   <>
                     <button onClick={() => openEdit(election)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors">
@@ -335,15 +359,20 @@ export default function Elections() {
               </div>
             </div>
 
+            {/* Fixed columns: Filing Deadline always occupies the first cell, so
+                Election Date stays in the second one and the cards scan down a
+                straight line. Cards with no deadline show an em dash. */}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
-              {election.filing_deadline && (
-                <div>
-                  <p className="text-xs text-gray-400 font-medium">Filing Deadline</p>
+              <div>
+                <p className="text-xs text-gray-400 font-medium">Filing Deadline</p>
+                {election.filing_deadline ? (
                   <p className={`text-sm font-semibold ${isPast(parseISO(election.filing_deadline)) ? 'text-gray-400' : 'text-brand-red'}`}>
                     {format(parseISO(election.filing_deadline), 'MMM d, yyyy')}
                   </p>
-                </div>
-              )}
+                ) : (
+                  <p className="text-sm font-semibold text-gray-300">—</p>
+                )}
+              </div>
               <div>
                 <p className="text-xs text-gray-400 font-medium">Election Date</p>
                 <p className="text-sm font-semibold text-gray-900">
@@ -372,7 +401,7 @@ export default function Elections() {
       <div className="flex flex-col sm:flex-row sm:items-center gap-4">
         {activeTab === 'calendar' && isAdmin && (
           <button onClick={openAdd} className="btn-primary sm:ml-auto flex items-center gap-2">
-            <Plus className="w-4 h-4" /> Add Election
+            <Plus className="w-4 h-4" /> Add election
           </button>
         )}
       </div>
@@ -399,25 +428,23 @@ export default function Elections() {
           <CalendarDays className="w-4 h-4" />
           Calendar
         </button>
-        {RESULTS_ENABLED && (
-          <button
-            onClick={() => goToResults(resolvedResultsId)}
-            className={`flex items-center gap-2 px-5 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
-              activeTab === 'results'
-                ? 'border-brand-red text-brand-red'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            <BarChart2 className="w-4 h-4" />
-            Results
-            {hasTodayElection(elections) && (
-              <span className="relative flex h-2 w-2 ml-0.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
-              </span>
-            )}
-          </button>
-        )}
+        <button
+          onClick={() => goToResults(resolvedResultsId)}
+          className={`flex items-center gap-2 px-5 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
+            activeTab === 'results'
+              ? 'border-brand-red text-brand-red'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+          }`}
+        >
+          <BarChart2 className="w-4 h-4" />
+          Results
+          {hasTodayElection(elections) && (
+            <span className="relative flex h-2 w-2 ml-0.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+            </span>
+          )}
+        </button>
       </div>
 
       {/* ══════════════════════════════════════════════════════════ */}
@@ -426,7 +453,7 @@ export default function Elections() {
       {activeTab === 'calendar' && (
         <>
           {/* Election night banner — quick jump to results */}
-          {RESULTS_ENABLED && hasTodayElection(elections) && (() => {
+          {hasTodayElection(elections) && (() => {
             const todayEl = elections.find(e => isToday(safeISO(e.election_date)))
             return (
               <button
@@ -494,7 +521,7 @@ export default function Elections() {
                     <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">{past.length}</span>
                   </div>
                   <div className="space-y-3">
-                    {past.slice().reverse().map(e => <ElectionRow key={e.id} election={e} />)}
+                    {past.map(e => <ElectionRow key={e.id} election={e} />)}
                   </div>
                 </div>
               )}
@@ -502,7 +529,7 @@ export default function Elections() {
                 <div className="text-center py-16">
                   <CalendarDays className="w-12 h-12 text-gray-200 mx-auto mb-3" />
                   <p className="text-gray-400 font-medium">No elections found</p>
-                  {isAdmin && <button onClick={openAdd} className="btn-primary text-sm mt-4">Add First Election</button>}
+                  {isAdmin && <button onClick={openAdd} className="btn-primary text-sm mt-4">Add first election</button>}
                 </div>
               )}
             </div>
@@ -557,7 +584,7 @@ export default function Elections() {
           <div className="fixed inset-0 bg-black/50" onClick={() => setShowModal(false)} />
           <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg">
             <div className="flex items-center justify-between p-6 border-b border-gray-100">
-              <h2 className="text-lg font-bold text-gray-900">{editing ? 'Edit Election' : 'Add Election'}</h2>
+              <h2 className="text-lg font-bold text-gray-900">{editing ? 'Edit election' : 'Add election'}</h2>
               <button onClick={() => setShowModal(false)}><X className="w-5 h-5 text-gray-400" /></button>
             </div>
             <form onSubmit={handleSave} className="p-6 space-y-4">
@@ -578,8 +605,9 @@ export default function Elections() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="label">Type *</label>
-                  <SearchableSelect value={form.type} onChange={v => setForm({...form, type: v})}
-                    options={Object.entries(TYPE_LABELS).map(([val, label]) => ({ value: val, label }))} />
+                  <select className="input" value={form.type} onChange={e => setForm({...form, type: e.target.value})}>
+                    {Object.entries(TYPE_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
+                  </select>
                 </div>
                 <div>
                   <label className="label">Year *</label>
@@ -593,7 +621,7 @@ export default function Elections() {
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setShowModal(false)} className="btn-secondary flex-1">Cancel</button>
                 <button type="submit" className="btn-primary flex-1" disabled={saving}>
-                  {saving ? 'Saving...' : (editing ? 'Save Changes' : 'Add Election')}
+                  {saving ? 'Saving…' : (editing ? 'Save changes' : 'Add election')}
                 </button>
               </div>
             </form>

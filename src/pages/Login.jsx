@@ -309,7 +309,7 @@ export default function Login() {
               {mode === 'signup' && (
                 <label className="flex items-start gap-3 cursor-pointer mt-1">
                   <input type="checkbox"
-                    className="mt-0.5 w-4 h-4 rounded border-gray-300 text-brand-red focus:ring-brand-red cursor-pointer flex-shrink-0"
+                    className="mt-0.5 w-4 h-4 rounded border-gray-300 text-brand-red focus:ring-brand-navy/40 cursor-pointer flex-shrink-0"
                     checked={agreedToTos} onChange={e => setAgreedToTos(e.target.checked)} />
                   <span className="text-xs text-gray-500 leading-relaxed">
                     I agree to the{' '}

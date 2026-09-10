@@ -14,28 +14,6 @@
 // deliberately, not inherited by a `for (const key of Object.keys(row))` loop.
 // That is why COLUMNS below is an explicit allowlist.
 
-import { normalizePartyForDb } from './party.js'
-
-// ─── Display normalizers (shared by the results table and its sort) ─────────
-// The AI brief returns party as whatever the source page said — 'Democrat',
-// 'Democratic', 'Democratic Party', 'GOP' — and district as either 'District 21'
-// or a bare '7'. The table renders and SORTS through these two so one party
-// never splits into two groups and one column never shows two shapes.
-
-/** 'Democratic' / 'Democratic Party' / 'GOP' → the canonical DB spelling; unknown text passes through. */
-export function displayParty(raw) {
-  const s = String(raw ?? '').trim()
-  if (!s) return ''
-  return normalizePartyForDb(s) ?? s
-}
-
-/** A bare number ('7', '07') → 'District 7'; anything else unchanged. */
-export function displayDistrict(raw) {
-  const s = String(raw ?? '').trim()
-  if (!s) return ''
-  return /^\d+$/.test(s) ? `District ${Number(s)}` : s
-}
-
 /** RFC-4180 field escaping: quote when needed, double any inner quotes. */
 export function csvEscape(value) {
   if (value === null || value === undefined) return ''
@@ -54,21 +32,8 @@ const factorsOf = (row) => {
   return Array.isArray(f.factors) ? f.factors : []
 }
 
-/** True when win odds came from the v3 AI estimate rather than the weighted model. */
-export const isEstimate = (row) => {
-  const f = (row && typeof row.win_odds_factors === 'object' && row.win_odds_factors) || {}
-  return Boolean(f.estimate) || /^ai_estimate/.test(String(f.model_version || ''))
-}
-
-/**
- * The WHY, in one cell. Deep mode: "Incumbency 25 pts · District lean 18.8 pts".
- * Brief mode (v3): the AI estimate's one-line rationale.
- */
+/** "Incumbency 25 pts · District lean 18.8 pts" — the WHY, in one cell. */
 export function factorSummary(row) {
-  if (isEstimate(row)) {
-    const r = row?.win_odds_factors?.rationale
-    return r ? `AI estimate: ${r}` : 'AI estimate'
-  }
   return factorsOf(row)
     .filter(f => f.available)
     .map(f => `${f.label} ${f.points ?? 0} pts`)
@@ -112,7 +77,6 @@ export const COLUMNS = [
   ['Win odds',            r => (r.win_odds_score == null ? '' : r.win_odds_score)],
   ['Win odds band',       r => r.win_odds_band],
   ['Win odds confidence', r => {
-    if (isEstimate(r)) return r.win_odds_score == null ? '' : 'AI estimate'
     const c = r.win_odds_factors?.confidence
     return c == null ? '' : `${Math.round(Number(c) * 100)}%`
   }],

@@ -131,8 +131,23 @@ export default function Settings() {
 
   const goPane = (id) => {
     navigate(id === DEFAULT_PANE ? '/settings' : `/settings/${id}`)
-    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
   }
+
+  // Land at the top of every pane.
+  //
+  // This used to be a `window.scrollTo` inside goPane, which did nothing: the
+  // page does not scroll the window, it scrolls Layout.jsx's <main> (the only
+  // element with overflow-y-auto). Switching from the bottom of a long pane
+  // (Plan & billing, Your account) dropped you into the middle of the next one.
+  // Same helper the Profiler uses — src/pages/Dossiers.jsx → scrollPageTop().
+  //
+  // Keyed on `pane`, not on the click, so deep links (the account menu's
+  // Plan & billing / Security items) and the chip row land at the top too.
+  useEffect(() => {
+    const main = document.querySelector('main')
+    if (main && main.scrollHeight > main.clientHeight) main.scrollTo({ top: 0 })
+    else if (typeof window !== 'undefined') window.scrollTo({ top: 0 })
+  }, [pane])
 
   // ── Plan facts ──────────────────────────────────────────────────────────────
   const profileLimit = getEffectiveProfileLimit(user)
@@ -560,7 +575,7 @@ export default function Settings() {
       <div style={{
         position: 'relative', overflow: 'hidden', borderRadius: 18, padding: '22px 26px',
         marginBottom: 20, boxShadow: '0 12px 30px rgba(13,21,38,.18)',
-        background: 'linear-gradient(135deg, #0D1526 0%, #16203A 58%, #263255 100%)',
+        background: `linear-gradient(135deg, ${T.navy} 0%, #16203A 58%, #263255 100%)`,
       }}>
         <div style={{
           position: 'relative', display: 'flex', flexDirection: 'column',

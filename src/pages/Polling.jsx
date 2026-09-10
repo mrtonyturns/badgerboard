@@ -66,6 +66,42 @@ const readRecent = (uid) => {
   } catch (_) { return [] }
 }
 
+// ─── R3B PURE HELPERS BEGIN ───────────────────────────────────────────────────
+// (no imports in this block — tests/r3b.test.mjs slices it out and imports it)
+
+/** 'https://www.ballotpedia.org/Foo?x=1' → 'ballotpedia.org' */
+export const sourceHost = (u) =>
+  String(u || '').replace(/^https?:\/\/(www\.)?/i, '').split(/[/?#]/)[0].toLowerCase()
+
+/**
+ * The Sources list is written by the research model, which titles a citation
+ * with its domain whenever it has nothing better — so four different
+ * Ballotpedia pages rendered as four identical "ballotpedia.org" rows.
+ *
+ * Dedupe by URL, then collapse rows that share a display label (a real page
+ * title, or the bare domain when that is all there is) into ONE row carrying a
+ * count. Returns [{ label, url, host, count, titled }] in first-seen order;
+ * `url` is the first URL of the group, which is what the row links to.
+ */
+export function dedupeSources(sources) {
+  const byUrl = new Map()
+  for (const s of sources || []) {
+    const url = String((s && s.url) || s || '').trim()
+    if (!url) continue
+    if (!byUrl.has(url)) byUrl.set(url, { url, title: String((s && s.title) || '').trim() })
+  }
+  const groups = new Map()
+  for (const { url, title } of byUrl.values()) {
+    const host = sourceHost(url)
+    const titled = !!title && title.toLowerCase() !== host
+    const key = titled ? `t:${title.toLowerCase()}` : `h:${host}`
+    if (!groups.has(key)) groups.set(key, { label: titled ? title : host, url, host, count: 0, titled })
+    groups.get(key).count++
+  }
+  return [...groups.values()]
+}
+// ─── R3B PURE HELPERS END ─────────────────────────────────────────────────────
+
 const AiTag = () => (
   <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase tracking-wider bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">
     <Sparkles style={{ width: 9, height: 9 }} /> AI-Estimated
@@ -685,11 +721,17 @@ export default function Polling() {
             <div className="card">
               <h2 className="text-sm font-bold text-gray-900 mb-3">Sources</h2>
               <div className="space-y-1.5">
-                {snapshot.sources.map((s, i) => (
-                  <a key={i} href={s.url} target="_blank" rel="noreferrer"
-                    className="flex items-center gap-2 text-xs text-brand-navy hover:underline truncate">
+                {dedupeSources(snapshot.sources).map((s) => (
+                  <a key={s.label} href={s.url} target="_blank" rel="noreferrer"
+                    title={s.count > 1 ? `${s.count} pages cited from ${s.host} — opens the first` : s.url}
+                    className="flex items-center gap-2 text-xs text-brand-navy hover:underline">
                     <ExternalLink className="w-3 h-3 flex-shrink-0 text-gray-400" />
-                    <span className="truncate">{s.title || s.url}</span>
+                    <span className="truncate">{s.label}</span>
+                    {s.count > 1 && (
+                      <span className="flex-shrink-0 text-[10px] font-semibold text-gray-500 bg-gray-100 rounded-full px-1.5 py-px">
+                        {s.count} pages
+                      </span>
+                    )}
                   </a>
                 ))}
               </div>

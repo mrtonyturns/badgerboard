@@ -143,30 +143,6 @@ export function dateBadgeParts(dateStr) {
   if (Number.isNaN(d.getTime())) return null
   return { month: d.toLocaleDateString('en-US', { month: 'short' }), day: String(d.getDate()) }
 }
-
-/** Today's LOCAL calendar date as 'YYYY-MM-DD' (not UTC — a 9 PM CDT view must not roll over). */
-export function localTodayIso(now = new Date()) {
-  const pad = (n) => String(n).padStart(2, '0')
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
-}
-
-/**
- * Is this cached event still worth showing? The research function only drops
- * past events at SEARCH time; the cache row then lives for weeks, so the
- * client must re-apply the cutoff on every render. Compares by calendar day
- * (an event ending today is still "upcoming"). Events are stored with
- * `date_start` / optional `date_end` as 'YYYY-MM-DD'; anything that doesn't
- * parse as a date is KEPT rather than silently hidden.
- */
-export function isUpcomingEvent(e, todayIso = localTodayIso()) {
-  const raw = e?.date_end || e?.date_start
-  if (!raw) return true
-  const m = String(raw).match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (!m) return true
-  const iso = `${m[1]}-${m[2]}-${m[3]}`
-  if (Number.isNaN(new Date(`${iso}T12:00:00`).getTime())) return true
-  return iso >= todayIso
-}
 // ─── R2C PURE HELPERS END ───
 
 // Escape + scroll-lock for this page's dialogs. Mounted only while the dialog
@@ -403,24 +379,16 @@ export default function Events() {
     })()
   }, [target?.key, readCache, readProgress, watchRun])
 
-  // Drop events that have already happened. The cache row can be weeks old,
-  // so the server's search-time cutoff is not enough — re-apply it per render.
-  const upcoming = useMemo(() => {
-    if (!events) return []
-    const today = localTodayIso()
-    return events.filter(e => isUpcomingEvent(e, today))
-  }, [events])
-  const staleCache = Boolean(events?.length) && upcoming.length === 0
-
   const filtered = useMemo(() => {
-    if (filter === 'all') return upcoming
-    return upcoming.filter(e => {
+    if (!events) return []
+    if (filter === 'all') return events
+    return events.filter(e => {
       const l = e.lean?.label || 'nonpartisan'
       if (filter === 'conservative') return l.includes('conservative')
       if (filter === 'liberal') return l.includes('liberal')
       return l === 'nonpartisan'
     })
-  }, [upcoming, filter])
+  }, [events, filter])
 
   // ── add-to-calendar flow ────────────────────────────────────────────────────
   const pushToFeed = async (ev) => {
@@ -665,22 +633,7 @@ export default function Events() {
       {events && filtered.length === 0 && (
         <div className="card py-12 text-center">
           <Sparkles className="w-7 h-7 text-gray-300 mx-auto mb-2" />
-          {staleCache ? (
-            <>
-              <p className="text-sm font-bold text-gray-500">No upcoming events</p>
-              <p className="text-xs text-gray-400 font-semibold mt-1.5 max-w-md mx-auto leading-relaxed">
-                The last search for {target?.name || 'this area'}
-                {fetchedAt ? ` (${new Date(fetchedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})` : ''} only
-                found events that have already happened. Run a new search to see what&rsquo;s coming up.
-              </p>
-              <button onClick={() => loadEvents(true)} disabled={loading || !target}
-                className="mt-4 inline-flex items-center gap-2 bg-brand-red text-white text-sm font-extrabold px-5 py-2.5 rounded-xl hover:bg-red-800 disabled:opacity-50 transition-colors">
-                <Sparkles className="w-4 h-4" /> Search for new events
-              </button>
-            </>
-          ) : (
-            <p className="text-sm font-bold text-gray-500">No {filter !== 'all' ? filter + ' ' : ''}events found</p>
-          )}
+          <p className="text-sm font-bold text-gray-500">No {filter !== 'all' ? filter + ' ' : ''}events found</p>
         </div>
       )}
 
@@ -725,7 +678,7 @@ export default function Events() {
                 } : {})}
                 className={`bg-white rounded-2xl overflow-hidden border-2 transition-all shadow-sm hover:shadow-lg hover:-translate-y-0.5 flex flex-col ${
                   selectMode
-                    ? `cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-red ${isSelected ? 'border-brand-red ring-2 ring-brand-red/30' : 'border-gray-200 hover:border-brand-red/50'}`
+                    ? `cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-navy ${isSelected ? 'border-brand-red ring-2 ring-brand-red/30' : 'border-gray-200 hover:border-brand-red/50'}`
                     : 'border-transparent hover:border-brand-red'
                 }`}>
                 <div className="h-28 flex-shrink-0 relative flex items-center justify-center" style={ev.image

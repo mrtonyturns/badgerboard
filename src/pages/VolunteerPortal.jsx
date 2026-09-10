@@ -1,4 +1,3 @@
-/* global Notification */
 /**
  * VolunteerPortal.jsx
  * Mobile-first portal for campaign volunteers.
@@ -17,7 +16,6 @@ import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { isNativeApp, API_ORIGIN } from '../lib/native'
-import SearchableSelect from '../components/SearchableSelect'
 import {
   Home, DoorOpen, MessageCircle, User, Bell, Send,
   CheckCircle, XCircle, Clock, MapPin, Phone, Mail,
@@ -200,7 +198,7 @@ function LoginScreen({ onLogin }) {
                 onChange={e => setEmail(e.target.value)}
                 placeholder="you@email.com"
                 required
-                className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/30 text-sm focus:outline-none focus:ring-2 focus:ring-red-500/50 focus:border-red-500/50"
+                className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/30 text-sm focus:outline-none focus:ring-2 focus:ring-brand-navy/40 focus:border-red-500/50"
               />
             </div>
 
@@ -414,7 +412,7 @@ function DoorsTab({ volunteer }) {
           value={address}
           onChange={e => setAddress(e.target.value)}
           placeholder="123 Main St"
-          className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3.5 text-white placeholder-white/30 text-base focus:outline-none focus:ring-2 focus:ring-red-500/50"
+          className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3.5 text-white placeholder-white/30 text-base focus:outline-none focus:ring-2 focus:ring-brand-navy/40"
         />
       </div>
 
@@ -487,7 +485,7 @@ function DoorsTab({ volunteer }) {
           onChange={e => setNotes(e.target.value)}
           placeholder="Any details about this conversation..."
           rows={2}
-          className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/30 text-sm focus:outline-none focus:ring-2 focus:ring-red-500/50 resize-none"
+          className="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/30 text-sm focus:outline-none focus:ring-2 focus:ring-brand-navy/40 resize-none"
         />
       </div>
 
@@ -595,7 +593,7 @@ function ChatTab({ volunteer, messages, onSend }) {
           }}
           placeholder="Message the team..."
           rows={1}
-          className="flex-1 bg-white/10 border border-white/20 rounded-xl px-4 py-2.5 text-white placeholder-white/30 text-sm focus:outline-none focus:ring-2 focus:ring-red-500/50 resize-none"
+          className="flex-1 bg-white/10 border border-white/20 rounded-xl px-4 py-2.5 text-white placeholder-white/30 text-sm focus:outline-none focus:ring-2 focus:ring-brand-navy/40 resize-none"
         />
         <button
           onClick={handleSend}
@@ -858,7 +856,7 @@ export function VolunteerManager({ listId, session }) {
                 required value={form.name}
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                 placeholder="Jane Smith"
-                className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-red-500/50"
+                className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-brand-navy/40"
               />
             </div>
             <div>
@@ -867,7 +865,7 @@ export function VolunteerManager({ listId, session }) {
                 required type="email" value={form.email}
                 onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
                 placeholder="jane@email.com"
-                className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-red-500/50"
+                className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-brand-navy/40"
               />
             </div>
             <div>
@@ -876,21 +874,19 @@ export function VolunteerManager({ listId, session }) {
                 value={form.phone}
                 onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
                 placeholder="715-555-0100"
-                className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-red-500/50"
+                className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-brand-navy/40"
               />
             </div>
             <div>
               <label className="text-white/50 text-xs mb-1 block">Role</label>
-              <SearchableSelect
+              <select
                 value={form.role}
-                onChange={v => setForm(f => ({ ...f, role: v }))}
-                options={[
-                  { value: 'canvasser', label: 'Canvasser' },
-                  { value: 'captain', label: 'Captain' },
-                ]}
-                className="w-full"
-                buttonClassName="bg-[#1a2236] border-white/20 text-white text-sm focus:ring-1 focus:ring-red-500/50"
-              />
+                onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
+                className="w-full bg-[#1a2236] border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-brand-navy/40"
+              >
+                <option value="canvasser">Canvasser</option>
+                <option value="captain">Captain</option>
+              </select>
             </div>
           </div>
           <div className="flex gap-2">
@@ -928,18 +924,16 @@ export function VolunteerManager({ listId, session }) {
             className="w-full bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-blue-500/50 resize-none"
           />
           <div className="flex gap-2 items-center">
-            <SearchableSelect
+            <select
               value={notifForm.type}
-              onChange={v => setNotif(f => ({ ...f, type: v }))}
-              options={[
-                { value: 'info', label: 'Info' },
-                { value: 'success', label: 'Success' },
-                { value: 'warning', label: 'Warning' },
-                { value: 'urgent', label: 'Urgent' },
-              ]}
-              className="w-36"
-              buttonClassName="bg-[#1a2236] border-white/20 text-white text-sm"
-            />
+              onChange={e => setNotif(f => ({ ...f, type: e.target.value }))}
+              className="bg-[#1a2236] border border-white/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none"
+            >
+              <option value="info">Info</option>
+              <option value="success">Success</option>
+              <option value="warning">Warning</option>
+              <option value="urgent">Urgent</option>
+            </select>
             <button
               type="submit" disabled={saving}
               className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium py-2 rounded-lg text-sm transition-colors"

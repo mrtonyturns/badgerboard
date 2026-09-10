@@ -49,7 +49,9 @@ t('tailwind tokens match the Z scale',
 // The chat widget must no longer live in the 9998/9999 band it used to occupy.
 const chatWidget = layout.slice(layout.indexOf('function SupportChatWidget'))
 t('chat panel + FAB use Z.CHAT', (chatWidget.match(/zIndex: Z\.CHAT/g) || []).length === 2)
-t('chat widget no longer uses 9998/9999', !/999[89]/.test(chatWidget))
+// v1.37.0: match actual style usage, not any occurrence — an R3 comment
+// below the widget legitimately mentions "z-9999 = Z.TOAST".
+t('chat widget no longer uses 9998/9999', !/zIndex:\s*999[89]/.test(chatWidget))
 t('mobile drawer uses the z-drawer token', /fixed inset-0 z-drawer/.test(layout))
 t('no element still renders at the old z-[9990]', !/className="[^"]*z-\[9990\]/.test(layout))
 

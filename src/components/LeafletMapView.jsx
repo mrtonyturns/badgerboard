@@ -11,7 +11,13 @@ import {
 } from '../lib/wiDistricts'
 import { loadPlaceDemographics, placeKey, displayName, fmtNum, fmtMoney, fmtPct } from '../lib/placeDemographics'
 import { partyMapHex } from '../lib/party'
-import { candidateStatusLabel } from '../lib/campaignEnums'
+
+// Wisconsin's bounding box, taken from the bundled statewide polygon
+// (/geodata/wi-statewide.geojson — the union of the 33 senate districts, islands
+// included). The old default of center [44.5,-89.5] @ z7 framed a square window
+// around the centroid, so on a wide container half the frame was Ontario and
+// Lake Huron. fitBounds() on these corners frames the state itself at any size.
+const WI_BOUNDS = [[42.49, -92.89], [47.09, -86.80]]
 
 // Alias to the centroid maps — all values computed from the real GeoJSON boundary files
 const WI_COUNTY_COORDS  = WI_COUNTY_CENTROIDS
@@ -58,27 +64,11 @@ function getOfficeFallbackCoords(office, index) {
       const c = WI_COUNTY_COORDS[countyKey]
       if (c) return [c[0] + jitter(index) * 0.08, c[1] + jitter(index + 7) * 0.08]
     }
-    // No county on a county/municipal office → no resolvable location.
-    // (Previously dropped these at the WI centroid with jitter, which drew
-    // phantom pins in the middle of the state.)
-    return null
+    // Fall back to WI centroid with jitter spread
+    return [WI_CENTROID[0] + jitter(index) * 0.7, WI_CENTROID[1] + jitter(index + 17) * 0.7]
   }
 
   return null
-}
-
-/**
- * True when a candidate can be placed on the map from real data (county
- * centroid, district centroid, or a statewide office). Exported so the
- * Candidates page can tell the user how many candidates are NOT plotted
- * using exactly the same rules the marker layer uses.
- */
-export function candidateHasLocation(c) {
-  const o = c?.office
-  if (!o) return false
-  const countyKey = (o.county || '').replace(/ county$/i, '').trim()
-  if (WI_COUNTY_COORDS[o.county] || (countyKey && WI_COUNTY_COORDS[countyKey])) return true
-  return getOfficeFallbackCoords(o, 0) !== null
 }
 
 // Dot colors come from lib/party.js — every party spelling maps to one hex.
@@ -140,6 +130,7 @@ function bboxCentroid(geometry) {
 const DISTRICT_LAYERS = {
   congress: {
     color: '#1d4ed8',
+    label: 'Congress',
     sources: [{
       url: '/geodata/wi-congressional-simplified.geojson',
       style:      { color: '#1d4ed8', weight: 2,   opacity: 0.85, fillOpacity: 0.15, fillColor: '#1d4ed8' },
@@ -150,6 +141,7 @@ const DISTRICT_LAYERS = {
   },
   ussenate: {
     color: '#0e7490',
+    label: 'U.S. Senate',
     sources: [{
       // v1.23.7: clean dissolved statewide polygon (union of the 33 senate
       // districts, islands kept, zero interior slivers). The old
@@ -164,6 +156,7 @@ const DISTRICT_LAYERS = {
   },
   senate: {
     color: '#dc2626',
+    label: 'State Senate',
     sources: [{
       url: '/geodata/wi-state-senate-simplified.geojson',
       style:      { color: '#dc2626', weight: 2,   opacity: 0.8,  fillOpacity: 0.12, fillColor: '#dc2626' },
@@ -174,6 +167,7 @@ const DISTRICT_LAYERS = {
   },
   assembly: {
     color: '#ea580c',
+    label: 'Assembly',
     sources: [{
       url: '/geodata/wi-state-assembly-simplified.geojson',
       style:      { color: '#ea580c', weight: 1.5, opacity: 0.8,  fillOpacity: 0.10, fillColor: '#ea580c' },
@@ -184,6 +178,7 @@ const DISTRICT_LAYERS = {
   },
   county: {
     color: '#7c3aed',
+    label: 'County',
     sources: [{
       url: '/geodata/wi-counties-simplified.geojson',
       style:      { color: '#7c3aed', weight: 1.5, opacity: 0.8,  fillOpacity: 0.07, fillColor: '#7c3aed' },
@@ -194,6 +189,7 @@ const DISTRICT_LAYERS = {
   },
   municipal: {
     color: '#16a34a',
+    label: 'Municipal',
     sources: [{
       url: '/geodata/wi-municipal-simplified.geojson',
       style:      { color: '#16a34a', weight: 1,   opacity: 0.75, fillOpacity: 0.12, fillColor: '#16a34a' },
@@ -324,14 +320,33 @@ export default function LeafletMapView({
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
 
-    const initCenter = Array.isArray(initialView?.center) ? initialView.center : [44.5, -89.5]
+    const hasInitialView = Array.isArray(initialView?.center) && typeof initialView?.zoom === 'number'
+    const initCenter = Array.isArray(initialView?.center) ? initialView.center : WI_CENTROID
     const initZoom   = typeof initialView?.zoom === 'number' ? initialView.zoom : 7
-    const map = L.map(containerRef.current, { center: initCenter, zoom: initZoom })
+    // Attribution is added by hand (not via the default control) so it can carry
+    // no "Leaflet" prefix and wrap instead of being clipped mid-word — Leaflet's
+    // own CSS gives the control `white-space: nowrap`, which cut the credit down
+    // to "© OpenStreet" on narrow map panes. Added before the tile layer so the
+    // layer's attribution string registers with it.
+    const map = L.map(containerRef.current, { center: initCenter, zoom: initZoom, attributionControl: false })
+    const attributionCtl = L.control.attribution({ prefix: false }).addTo(map)
+    try {
+      const ac = attributionCtl.getContainer()
+      ac.style.whiteSpace = 'normal'
+      ac.style.maxWidth = 'calc(100% - 12px)'
+      ac.style.lineHeight = '1.35'
+    } catch (_) {}
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       maxZoom: 18,
     }).addTo(map)
+
+    // No caller-supplied view → frame Wisconsin rather than a fixed-zoom square
+    // centred on the state (which showed Ontario/Lake Huron on wide containers).
+    if (!hasInitialView) {
+      try { map.fitBounds(WI_BOUNDS, { padding: [12, 12] }) } catch (_) {}
+    }
 
     markerLayer.current.addTo(map)
     mapRef.current = map
@@ -364,7 +379,14 @@ export default function LeafletMapView({
     map.on('moveend zoomend', emitViewChange)
     map._bbViewChangeTimer = () => { if (viewChangeTimer) clearTimeout(viewChangeTimer) }
 
-    requestAnimationFrame(() => requestAnimationFrame(() => map.invalidateSize()))
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      map.invalidateSize()
+      // The first fitBounds ran against the pre-layout container size; redo it
+      // once the real size is known (only when we own the framing).
+      if (!hasInitialView) {
+        try { map.fitBounds(WI_BOUNDS, { padding: [12, 12] }) } catch (_) {}
+      }
+    }))
 
     // Keep the map sized to its container — handles table→map view toggles and
     // responsive layout changes where the container was hidden or resized.
@@ -416,18 +438,18 @@ export default function LeafletMapView({
     ;(candidates || []).forEach((c, i) => {
       let coords = WI_COUNTY_COORDS[c.office?.county]
       if (!coords && c.office) coords = getOfficeFallbackCoords(c.office, i)
-      // Candidates with no office / district / county have no real location.
-      // They used to be dropped at the WI centroid with an index-based offset,
-      // which drew a straight diagonal line of phantom pins across the state.
-      // Skip them — the Candidates page shows a "N not shown" notice instead
-      // (see candidateHasLocation above).
-      if (!coords) return
+      // Fallback: place unresolved candidates at WI centroid with jitter so they
+      // still appear on the map rather than being silently dropped.
+      if (!coords) {
+        const jFn = (seed) => ((seed * 7919 + i * 1237) % 1000 - 500) / 2000
+        coords = [WI_CENTROID[0] + jFn(i), WI_CENTROID[1] + jFn(i + 99)]
+      }
       L.marker(coords, { icon: dotIcon(partyColor(c.party)) })
         .bindPopup(
           `<b>${c.name}</b>` +
           (c.party        ? `<br><small>${c.party}</small>` : '') +
           (c.office?.name ? `<br><small>${c.office.name}</small>` : '') +
-          (c.status       ? `<br><small style="color:#888">${candidateStatusLabel(c.status)}</small>` : '')
+          (c.status       ? `<br><small style="color:#888">${c.status.replace(/_/g,' ')}</small>` : '')
         ).addTo(layer)
     })
 
@@ -492,7 +514,10 @@ export default function LeafletMapView({
 
       const capturedLayer = activeLayer
       groups.forEach(({ coords, count, level, names }) => {
-        const color = levelColor(level)
+        // Dots only ever render for the active layer, so take that layer's color —
+        // otherwise a U.S. Senate view drew federal-blue dots on a cyan boundary
+        // and under a cyan legend swatch. levelColor stays as the fallback.
+        const color = DISTRICT_LAYERS[activeLayer]?.color || levelColor(level)
         const icon  = count > 1 ? countBadgeIcon(color, count) : dotIcon(color)
         const popup = count === 1
           ? `<b>${names[0]}</b><br><small>${level}</small>`
@@ -682,9 +707,15 @@ export default function LeafletMapView({
   }, [activeLayer, layerReloadKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Legend ─────────────────────────────────────────────────────────────────
+  // Office mode: the legend used to list the four pre-v1.19.1 levels
+  // (Federal/State/County/Municipal) while the page's own chips offered six
+  // layers (Congress, U.S. Senate, State Senate, Assembly, County, Municipal) —
+  // two different vocabularies for the same control. It now lists exactly the
+  // layers this component can draw, in DISTRICT_LAYERS order, with the active
+  // one emphasized. Candidate mode keeps the party legend (dots are party-colored).
   const isOfficeMode = !!(offices && offices.length > 0)
   const legend = isOfficeMode
-    ? [['Federal','#1d4ed8'],['State','#dc2626'],['County','#7c3aed'],['Municipal','#16a34a']]
+    ? Object.entries(DISTRICT_LAYERS).map(([key, cfg]) => [cfg.label || key, cfg.color, key])
     : [['Republican', partyMapHex('Republican')], ['Democrat', partyMapHex('Democrat')],
        ['Independent', partyMapHex('Independent')], ['Other', partyMapHex(null)]]
 
@@ -727,12 +758,15 @@ export default function LeafletMapView({
         background:'white', borderRadius:8, padding:'8px 12px',
         boxShadow:'0 1px 6px rgba(0,0,0,0.15)', fontSize:12, pointerEvents:'none',
       }}>
-        {legend.map(([label, color]) => (
-          <div key={label} style={{ display:'flex', alignItems:'center', gap:6, marginBottom:3 }}>
-            <div style={{ width:10, height:10, borderRadius:'50%', background:color, flexShrink:0 }} />
-            <span style={{ color:'#444' }}>{label}</span>
-          </div>
-        ))}
+        {legend.map(([label, color, key]) => {
+          const dim = isOfficeMode && activeLayer && key !== activeLayer
+          return (
+            <div key={label} style={{ display:'flex', alignItems:'center', gap:6, marginBottom:3, opacity: dim ? 0.45 : 1 }}>
+              <div style={{ width:10, height:10, borderRadius:'50%', background:color, flexShrink:0 }} />
+              <span style={{ color:'#444', fontWeight: (isOfficeMode && key === activeLayer) ? 700 : 400 }}>{label}</span>
+            </div>
+          )
+        })}
       </div>
 
       {/* Hover lightbox — municipal polygons with a demographics entry, shown after

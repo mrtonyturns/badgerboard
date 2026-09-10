@@ -114,36 +114,6 @@ export function stripThinking(text = '') {
 
 const stripBadges = (t) => String(t || '').replace(BADGE_G, '').replace(/\s{2,}/g, ' ').trim()
 
-/**
- * Drop bold runs that carry no words. The generator's template leaves
- * artifacts like a bolded lone slash, `**[X/Live]**`, `**[TOKEN]**` and — once
- * a badge has been removed from inside the run — a bolded "/ violations". A bold run whose
- * content is only a bracket token or punctuation is removed outright; one that
- * merely starts or ends with separator junk keeps its words. A lone `**` left
- * dangling at the end is dropped too, so it never prints as literal asterisks.
- * Applied at RENDER time only (inlineHtml), never inside plainText — claim
- * keys are hashed from plainText and must not move when the cleanup improves.
- */
-export function stripEmptyBold(text = '') {
-  return String(text || '')
-    // **[X/Live]** / **[TOKEN]** — a bare bracket token in bold (not a link).
-    .replace(/\*\*\s*\[[^\]\n]*\]\s*\*\*(?!\()/g, '')
-    // a bold run of nothing but punctuation / whitespace — no letters or digits.
-    .replace(/\*\*[^\w*\n]*\*\*/g, '')
-    // bold '/ violations' → bold 'violations' ; bold 'foo /' → bold 'foo'
-    .replace(/(?<=^|\s)\*\*\s*[/|·•]+\s*(?=\S)/g, '**')
-    .replace(/(?<=\S)\s*[/|·•]+\s*\*\*/g, '**')
-    // an unpaired ** left on a line (odd count) — drop the last one
-    .split('\n')
-    .map(l => {
-      const n = (l.match(/\*\*/g) || []).length
-      if (n % 2 === 0) return l
-      const at = l.lastIndexOf('**')
-      return (l.slice(0, at) + l.slice(at + 2)).replace(/[ \t]+$/, '')
-    })
-    .join('\n')
-}
-
 // The master prompt puts a section-level confidence tag on its own line right
 // under every "## SECTION n" heading (`**[HIGH]**`, `**[RESEARCH REQUIRED]**`).
 // That line is a header, not a claim — counting it would inflate every metric
@@ -170,7 +140,7 @@ export function plainText(t = '') {
  * by the block, not inline.
  */
 export function inlineHtml(text) {
-  const escaped = escapeHtml(stripEmptyBold(stripBadges(text)))
+  const escaped = escapeHtml(stripBadges(text))
   const html = escaped
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
       '<a href="$2" target="_blank" rel="noopener noreferrer" style="color:#18181B;text-decoration:underline;text-underline-offset:2px">$1</a>')
@@ -235,7 +205,7 @@ export function parseFlaggedClaims(content = '') {
     if (sectionMatch) { currentSection = `section-${sectionMatch[1]}`; return }
     // A line that is nothing but a tag is the section-level confidence header.
     if (/^\s*\*\*\[[A-Za-z][A-Za-z _/]*\]\*\*\s*$/.test(line)) return
-    if (/\*\*\[(VERIFY|RESEARCH[ _]REQUIRED|LIKELY|UNCONFIRMED)\]\*\*/i.test(line)) {
+    if (/\*\*\[(VERIFY|RESEARCH REQUIRED|LIKELY)\]\*\*/i.test(line)) {
       // The list marker is dropped BEFORE the key is taken, and the confidence
       // badge is left intact for normalizeClaim to strip, so this key matches
       // the one parseBlocks puts on the same claim inside the reader.
@@ -250,7 +220,7 @@ export function parseFlaggedClaims(content = '') {
           sectionId: currentSection,
           text:      clean.slice(0, 300),
           key:       claimKey(bare),
-          badge:     /RESEARCH[ _]REQUIRED|UNCONFIRMED/i.test(line) ? 'RESEARCH REQUIRED' : /VERIFY/i.test(line) ? 'Verify' : 'Likely',
+          badge:     /RESEARCH REQUIRED/i.test(line) ? 'RESEARCH REQUIRED' : /VERIFY/i.test(line) ? 'Verify' : 'Likely',
         })
       }
     }
@@ -258,36 +228,6 @@ export function parseFlaggedClaims(content = '') {
 
   const seen = new Set()
   return flagged.filter(f => { if (seen.has(f.id)) return false; seen.add(f.id); return true })
-}
-
-/**
- * The ONE "needs verification" number. Every surface that states how many
- * claims still want a source — the reader's stat card, the "Review flagged
- * claims (n)" button, the claim-reviewer drawer and the library row — derives
- * it from this same parseFlaggedClaims() list, so they cannot disagree.
- * (sourcingStats counts badges, not claims: a line with two weak badges, or a
- * flagged line too short to review, would make the two drift.)
- *   total    all flagged claims in the report
- *   open     claims with no team verdict, or ruled "unsure"
- *   settled  claims ruled valid or false
- *   material open claims tagged RESEARCH REQUIRED / UNCONFIRMED
- *   minor    open claims tagged VERIFY / LIKELY
- */
-export function flaggedStats(content = '', verdicts = null) {
-  const claims = parseFlaggedClaims(content)
-  const open = claims.filter(c => {
-    const v = verdictOf(verdicts, c.key)
-    return !v || v.verdict === 'unsure'
-  })
-  const material = open.filter(c => c.badge === 'RESEARCH REQUIRED').length
-  return {
-    claims,
-    total:    claims.length,
-    open:     open.length,
-    settled:  claims.length - open.length,
-    material,
-    minor:    open.length - material,
-  }
 }
 
 // ─── Honest metrics ──────────────────────────────────────────────────────────
@@ -464,7 +404,12 @@ export function riskStats(content = '') {
  */
 export function flagSummary(content = '', verdicts = null) {
   const risk   = riskStats(content)
-  const { open: verify, settled } = flaggedStats(content, verdicts)
+  const claims = parseFlaggedClaims(content)
+  const verify = claims.filter(c => {
+    const v = verdictOf(verdicts, c.key)
+    return !v || v.verdict === 'unsure'
+  }).length
+  const settled = claims.length - verify
   return {
     riskLabel:   risk.top ? `${risk.topCount} ${risk.top === 'MEDIUM' ? 'MED' : risk.top}` : '',
     riskColor:   risk.top ? SEV_COLOR[risk.top] : '#71717A',
@@ -679,18 +624,6 @@ export function parseBlocks(md = '', sectionNum = null, verdicts = null) {
       }
       pushPair(atk[1].trim(), defense, weakLine([line, defenseLine]))
       i = defense ? j : i + 1
-      continue
-    }
-
-    // ── Top-level headings inside a section body ─────────────────────────────
-    // "## ⚠️ VERIFICATION FLAGS (AI Quality Check)" (appended by the QA pass)
-    // and "# FLAGS IDENTIFIED" survive parseSections because they are not
-    // "## SECTION n". They are sub-headings here, never paragraphs.
-    const topHead = line.match(/^#{1,2}\s+(.*)$/)
-    if (topHead) {
-      const text = plainText(topHead[1])
-      if (text) blocks.push({ kind: 'head', text })
-      i++
       continue
     }
 
@@ -1018,12 +951,8 @@ export function buildReport(content = '', sections = [], verdicts = null) {
     // has ruled valid or false. A verdict never adds to the sourced side of the
     // ratio — it only stops the section asking to be verified.
     const pending = Math.max(0, stats.weak - tally.resolvedWeak)
-    // The "n to verify" label counts CLAIMS (the parseFlaggedClaims unit every
-    // other surface uses), not badges — so the section labels sum to the
-    // stat card, the reviewer drawer and the library row.
-    const toVerify = flaggedStats(md, verdicts).open
     const meta   = stats.total
-      ? `${plural(stats.total, 'claim')}${toVerify ? ` · ${toVerify} to verify` : ''}`
+      ? `${plural(stats.total, 'claim')}${pending ? ` · ${pending} to verify` : ''}`
       : items ? plural(items, 'item') : ''
 
     totals.valid += tally.valid

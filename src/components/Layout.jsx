@@ -1,18 +1,17 @@
-import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, Suspense } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation, Link } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, CalendarDays, Target, Users, ListChecks,
   FileText, Settings, LogOut, Menu, X, ChevronRight,
   User, CreditCard, Shield, ChevronDown, Tag, UserCheck,
   ShieldCheck, Sparkles, Check, Scale, MessageCircle, Send, ExternalLink, Users2, Swords, BarChart2, FlaskConical,
-  UserPlus, MapPin,
+  UserPlus,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import BluejackLogo from './BluejackLogo'
 import BadgerBoardLogo from './BadgerBoardLogo'
 import { getUserTier, getTierConfig, isBetaActive, getUserPlanType } from '../lib/tiers'
 import { isNativeApp } from '../lib/native'
-import { RESULTS_ENABLED } from '../lib/featureFlags'
 
 // ── Offline banner ─────────────────────────────────────────────────────────────
 // Shown while the device has no connection. Reads (recently viewed data) are
@@ -39,10 +38,11 @@ function OfflineBanner() {
   )
 }
 import NotificationCenter from './NotificationCenter'
+import LoadingBar from './LoadingBar'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.36.0'
+const APP_VERSION = 'v1.37.0'
 
 // ─── z-index scale (v1.34.1 — audit fix B1) ──────────────────────────────────
 // One ladder for everything that floats, lowest to highest:
@@ -84,6 +84,15 @@ export const Z = {
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.37.0',
+    date: 'August 16, 2026',
+    changes: [
+      'UI repair round 3: one brand red and navy everywhere, Geist typography app-wide, consistent focus rings, and your profile photo in the top bar',
+      'Maps open framed on Wisconsin with working layer chips, results bars use party colors with a clear winner treatment, and the elections calendar matches on both pages',
+      'Admin polish: test accounts hidden by default, coupons can be reactivated, consistent dates, and dozens of small copy and alignment fixes across the app',
+    ],
+  },
   {
     version: 'v1.36.0',
     date: 'August 16, 2026',
@@ -538,12 +547,9 @@ const NAV_SECTIONS = [
   ] },
   { key: 'campaign', label: 'Campaign', icon: CalendarDays, items: [
     { to: '/game-plan?tab=calendar', icon: CalendarDays, label: 'Calendar', q: { path: '/game-plan', tab: 'calendar' } },
-    // Results nav item gated by RESULTS_ENABLED (featureFlags.js) — hidden from every account
-    ...(RESULTS_ENABLED ? [{ to: '/game-plan?tab=results', icon: BarChart2, label: 'Results', q: { path: '/game-plan', tab: 'results' } }] : []),
+    { to: '/game-plan?tab=results',  icon: BarChart2,    label: 'Results',  q: { path: '/game-plan', tab: 'results' } },
     { to: '/events',      icon: CalendarDays, label: 'Events', badge: 'New' },
     { to: '/voter-lists', icon: UserCheck,    label: 'Voter Lists' },
-    // Door Knocking is admin-only while it's being finished (route is AdminRoute-gated in App.jsx)
-    { to: '/door-knocking', icon: MapPin, label: 'Door Knocking', adminOnly: true, badge: 'Beta' },
   ] },
   { key: 'connect', label: 'Campaign Connect', icon: Users2, paidOnly: true, direct: { to: '/campaign-connect' } },
   // v1.29: Action is a real tab strip now — Recruit joins Prospecting. Both are
@@ -595,9 +601,7 @@ function itemBasePath(item) {
 function sectionForLocation(pathname, tab) {
   if (pathname === '/') return NAV_SECTIONS[0]
   if (pathname === '/game-plan' || pathname.startsWith('/game-plan/')) {
-    // With Results hidden (RESULTS_ENABLED false) ?tab=results is just the
-    // task board — otherwise Campaign AND the Todo NavLink both light up.
-    return (tab === 'calendar' || (RESULTS_ENABLED && tab === 'results'))
+    return (tab === 'calendar' || tab === 'results')
       ? NAV_SECTIONS.find(x => x.key === 'campaign')
       : NAV_SECTIONS.find(x => x.key === 'todo')
   }
@@ -910,6 +914,41 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, isActionPlan, isP
   )
 })
 
+// ─── Account avatar ───────────────────────────────────────────────────────────
+// Settings → Your account stores the uploaded photo as a small inline data URL
+// in user_metadata.avatar_url (src/pages/settings/AccountPane.jsx:271-282). The
+// top bar and the account menu used to ignore it and always draw initials, so a
+// user who had uploaded a photo saw it in Settings and nowhere else.
+// Initials stay as the fallback: no photo, or a data URL the browser can't
+// decode (onError flips back to them).
+function AccountAvatar({ user, size = 32, className = '' }) {
+  const src = user?.user_metadata?.avatar_url || ''
+  const [broken, setBroken] = useState(false)
+  useEffect(() => { setBroken(false) }, [src])
+
+  const initial = user?.user_metadata?.display_name?.[0]?.toUpperCase()
+    ?? user?.email?.[0]?.toUpperCase()
+    ?? 'U'
+  const box = `bg-brand-red rounded-full flex items-center justify-center text-white font-bold flex-shrink-0 overflow-hidden ${className}`
+
+  if (src && !broken) {
+    return (
+      <img
+        src={src}
+        alt=""
+        onError={() => setBroken(true)}
+        className={`${box} object-cover`}
+        style={{ width: size, height: size }}
+      />
+    )
+  }
+  return (
+    <div className={box} style={{ width: size, height: size, fontSize: Math.round(size * 0.44) }}>
+      {initial}
+    </div>
+  )
+}
+
 // ─── Dossier Status Indicator ─────────────────────────────────────────────────
 function DossierStatusIndicator() {
   const { phase, candidateName, readyDossier, clearStatus } = useDossierStatus()
@@ -984,6 +1023,14 @@ function DossierStatusIndicator() {
 // ─── Support Chat Widget ──────────────────────────────────────────────────────
 const CHAT_API = '/.netlify/functions/support-chat'
 
+// The widget is styled with inline styles (it deliberately owns its own look),
+// so it needs the brand tokens as literals. These are the SAME two values as
+// tailwind.config.js `brand.red` / `brand.navy` — the widget used to run on
+// #dc2626 and #1e3a5f, which is two of the four reds and three navies the UI
+// audit found. Keep these in step with the Tailwind tokens.
+const BRAND_RED  = '#8B0000'
+const BRAND_NAVY = '#0A1628'
+
 function SupportChatWidget() {
   const { session }             = useAuth()
   const [open, setOpen]         = useState(false)
@@ -1055,8 +1102,8 @@ function SupportChatWidget() {
           }}
         >
           {/* Header */}
-          <div style={{ background: '#1e3a5f', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-            <div style={{ width: 32, height: 32, background: '#dc2626', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <div style={{ background: BRAND_NAVY, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+            <div style={{ width: 32, height: 32, background: BRAND_RED, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
               <MessageCircle style={{ width: 16, height: 16, color: '#fff' }} />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -1090,7 +1137,7 @@ function SupportChatWidget() {
                   maxWidth: '82%',
                   padding: '8px 12px',
                   borderRadius: msg.role === 'user' ? '12px 12px 3px 12px' : '12px 12px 12px 3px',
-                  background: msg.role === 'user' ? '#dc2626' : '#f3f4f6',
+                  background: msg.role === 'user' ? BRAND_RED : '#f3f4f6',
                   color: msg.role === 'user' ? '#fff' : '#111827',
                   fontSize: 13,
                   lineHeight: 1.5,
@@ -1123,7 +1170,9 @@ function SupportChatWidget() {
               disabled={loading}
               style={{
                 flex: 1, border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px',
-                fontSize: 13, outline: 'none', background: loading ? '#f9fafb' : '#fff',
+                // No inline `outline: none`: it would beat the app-wide focus
+                // ring in src/index.css and leave this field unfocusable-looking.
+                fontSize: 13, background: loading ? '#f9fafb' : '#fff',
                 color: '#111827',
               }}
             />
@@ -1131,7 +1180,7 @@ function SupportChatWidget() {
               type="submit"
               disabled={!input.trim() || loading}
               style={{
-                background: input.trim() && !loading ? '#dc2626' : '#e5e7eb',
+                background: input.trim() && !loading ? BRAND_RED : '#e5e7eb',
                 border: 'none', borderRadius: 8, padding: '8px 12px', cursor: input.trim() && !loading ? 'pointer' : 'not-allowed',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background .15s', flexShrink: 0,
               }}
@@ -1148,13 +1197,13 @@ function SupportChatWidget() {
         title="Support chat"
         style={{
           position: 'fixed', bottom: 20, right: 20, width: 52, height: 52,
-          borderRadius: '50%', background: '#1e3a5f',
-          boxShadow: '0 4px 20px rgba(30,58,95,0.4)', border: '2px solid rgba(255,255,255,0.15)',
+          borderRadius: '50%', background: BRAND_NAVY,
+          boxShadow: '0 4px 20px rgba(10,22,40,0.4)', border: '2px solid rgba(255,255,255,0.15)',
           cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
           zIndex: Z.CHAT, transition: 'transform .15s, box-shadow .15s',
         }}
-        onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.08)'; e.currentTarget.style.boxShadow = '0 6px 24px rgba(30,58,95,0.5)' }}
-        onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 4px 20px rgba(30,58,95,0.4)' }}
+        onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.08)'; e.currentTarget.style.boxShadow = '0 6px 24px rgba(10,22,40,0.5)' }}
+        onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 4px 20px rgba(10,22,40,0.4)' }}
       >
         {open
           ? <X style={{ width: 20, height: 20, color: '#fff' }} />
@@ -1179,7 +1228,7 @@ function SectionTabs({ items, pathname, tab }) {
   const isItemActive = (item) => {
     if (item.q) return (pathname === item.q.path || pathname.startsWith(item.q.path + '/')) && tab === item.q.tab
     const base = item.to.split('?')[0]
-    if (base === '/game-plan') return pathname.startsWith('/game-plan') && tab !== 'calendar' && !(RESULTS_ENABLED && tab === 'results')
+    if (base === '/game-plan') return pathname.startsWith('/game-plan') && tab !== 'calendar' && tab !== 'results'
     // /dossiers and /profiler are the same page on two routes (see App.jsx).
     if (base === '/profiler') return pathname.startsWith('/profiler') || pathname.startsWith('/dossiers')
     return pathname === base || pathname.startsWith(base + '/')
@@ -1244,34 +1293,30 @@ export default function Layout() {
   // so pages start their content immediately — no duplicated headers.
   const PAGE_HEADERS = [
     { match: /^\/offices/,          title: 'Offices & Districts',    sub: 'All political offices tracked across Wisconsin' },
-    { match: /^\/elections/,        title: 'Elections',              sub: RESULTS_ENABLED ? 'Wisconsin election calendar & live results' : 'Wisconsin election calendar' },
+    { match: /^\/elections/,        title: 'Elections',              sub: 'Wisconsin election calendar & live results' },
     { match: /^\/places/,           title: 'City demographics',      sub: 'Census profile & comparisons' },
     { match: /^\/game-plan\?.*tab=calendar/, title: 'Calendar',       sub: 'Election calendar & key dates', useSearch: true },
-    // Results header gated by RESULTS_ENABLED (featureFlags.js) — with the
-    // feature off, /game-plan?tab=results falls through to the Todo entry.
-    ...(RESULTS_ENABLED ? [{ match: /^\/game-plan\?.*tab=results/,  title: 'Results',        sub: 'Election night results', useSearch: true }] : []),
+    { match: /^\/game-plan\?.*tab=results/,  title: 'Results',        sub: 'Election night results', useSearch: true },
     { match: /^\/game-plan/,        title: 'Todo',                   sub: 'Campaign tasks & priorities' },
     { match: /^\/candidates\/.+/,  title: 'Candidates',             sub: 'Candidate profile' },
     { match: /^\/candidates/,       title: 'Candidates',             sub: 'All tracked candidates across Wisconsin' },
     { match: /^\/prospecting/,      title: 'Prospecting Lists',      sub: 'AI-powered candidate prospecting for political marketing outreach' },
     { match: /^\/recruit/,          title: 'Recruit',                sub: 'Find and vet candidate prospects for local seats from your voter list' },
     { match: /^\/voter-lists/,      title: 'Voter Lists',            sub: 'Upload voter CSV files, map addresses, and build targeted prospect lists' },
-    { match: /^\/door-knocking/,    title: 'Door Knocking',          sub: 'Canvassing campaigns, walk lists, shifts and surveys' },
     { match: /^\/(dossiers|profiler)/, title: 'Profiler',            sub: 'AI-generated 14-section political intelligence reports' },
     { match: /^\/compare/,          title: 'Candidate Comparison',   sub: 'Side-by-side intelligence on two candidates', badge: 'Beta' },
     { match: /^\/events/,           title: 'District Events',        sub: 'Community events where your campaign should show up' },
     { match: /^\/campaign-connect/, title: 'Campaign Connect',       sub: 'Two accounts, one campaign' },
-    { match: /^\/broadside/,        title: 'Broadside',              sub: 'Take the hit before it\u2019s real', badge: 'Beta' },
+    // No sub for Broadside: the embedded module renders its own
+    // "Take the hit before it's real" heading \u2014 printing it twice read
+    // as a bug in the Aug-16 audit (R3 item).
+    { match: /^\/broadside/,        title: 'Broadside',              badge: 'Beta' },
     { match: /^\/polling/,          title: 'Polling',                sub: 'AI-estimated district opinion snapshots', badge: 'Beta' },
     { match: /^\/settings/,         title: 'Settings',               sub: 'Manage your profile, billing, and account security' },
     // No /plans entry: Pricing renders standalone (outside Layout), so this
     // header could never match.
     { match: /^\/admin/,            title: 'Admin Panel',            sub: 'Platform health, accounts, billing & controls' },
     { match: /^\/$/,                title: 'Intelligence Dashboard', sub: 'Wisconsin statewide political tracking' },
-    // Fallback: the catch-all NotFound route (App.jsx path="*") renders inside
-    // Layout, and without this the top bar was simply blank on a dead link.
-    // Must stay LAST — every real page above matches first.
-    { match: /.*/,                  title: 'Page not found',         sub: 'That link doesn’t go anywhere' },
   ]
   const pageHeader = PAGE_HEADERS.find(h => h.match.test(pathname + search)) || null
   const navigate           = useNavigate()
@@ -1381,8 +1426,11 @@ export default function Layout() {
             <div className="min-w-0 flex items-baseline gap-3">
               <h1 className="text-lg md:text-xl font-bold text-gray-900 whitespace-nowrap flex items-center gap-2">
                 {pageHeader.title}
+                {/* Neutral chip, not a purple pill: purple appears nowhere else
+                    in a red/navy app, and a solid saturated badge shouted louder
+                    than the page title it labels. */}
                 {pageHeader.badge && (
-                  <span className="text-[9px] font-extrabold uppercase tracking-wider bg-purple-600 text-white px-1.5 py-0.5 rounded-full">{pageHeader.badge}</span>
+                  <span className="text-[9px] font-extrabold uppercase tracking-wider bg-brand-navy/10 text-brand-navy border border-brand-navy/15 px-1.5 py-0.5 rounded-full">{pageHeader.badge}</span>
                 )}
               </h1>
               <p className="hidden lg:block text-xs text-gray-400 truncate">{pageHeader.sub}</p>
@@ -1403,9 +1451,7 @@ export default function Layout() {
                 onClick={() => setProfileOpen(o => !o)}
                 className="flex items-center gap-1.5 rounded-xl hover:bg-gray-100 pl-1 pr-2 py-1 transition-colors"
               >
-                <div className="w-8 h-8 bg-brand-red rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-                  {user?.user_metadata?.display_name?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? 'U'}
-                </div>
+                <AccountAvatar user={user} size={32} />
                 <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-150 ${profileOpen ? 'rotate-180' : ''}`} />
               </button>
 
@@ -1414,9 +1460,7 @@ export default function Layout() {
                   {/* User info header */}
                   <div className="px-4 py-3 border-b border-gray-100">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-brand-red rounded-full flex items-center justify-center text-white text-base font-bold flex-shrink-0">
-                        {user?.user_metadata?.display_name?.[0]?.toUpperCase() ?? user?.email?.[0]?.toUpperCase() ?? 'U'}
-                      </div>
+                      <AccountAvatar user={user} size={40} />
                       <div className="min-w-0">
                         <p className="text-sm font-semibold text-gray-900 truncate">
                           {user?.user_metadata?.display_name || user?.email?.split('@')[0] || 'User'}
@@ -1433,7 +1477,13 @@ export default function Layout() {
                     </div>
                   </div>
 
-                  {/* Menu items */}
+                  {/* Menu items — these are the Settings rail's own pane names
+                      (Settings.jsx NAV_GROUPS), not three different ones. The
+                      menu used to say "My Profile" / "Billing & Plan" for panes
+                      labelled "Your account" / "Plan & billing", so the screen
+                      you landed on never matched the item you clicked. Links go
+                      straight to the pane routes; the legacy #billing/#security
+                      hashes still work, they just cost an extra redirect. */}
                   <div className="py-1">
                     <Link
                       to="/settings"
@@ -1441,18 +1491,18 @@ export default function Layout() {
                       className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
                     >
                       <User className="w-4 h-4 text-gray-400" />
-                      My Profile
+                      Your account
                     </Link>
                     <Link
-                      to="/settings#billing"
+                      to="/settings/plan"
                       onClick={() => setProfileOpen(false)}
                       className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
                     >
                       <CreditCard className="w-4 h-4 text-gray-400" />
-                      Billing &amp; Plan
+                      Plan &amp; billing
                     </Link>
                     <Link
-                      to="/settings#security"
+                      to="/settings/security"
                       onClick={() => setProfileOpen(false)}
                       className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
                     >
@@ -1487,11 +1537,19 @@ export default function Layout() {
         {/* Offline indicator */}
         <OfflineBanner />
 
-        {/* Page content */}
+        {/* Page content.
+            Route transitions used to fall through to App.jsx's outer Suspense
+            fallback, which swapped the whole content area for a bordered
+            spinner box — a partial red outline where the page had been. Inside
+            the app chrome the wait is announced the same way every in-page
+            fetch announces one: the thin brand-red LoadingBar across the very
+            top (LoadingBar.jsx, z-9999 = Z.TOAST). Nothing else moves. */}
         <main className={`flex-1 relative ${fullBleed ? 'overflow-hidden' : 'overflow-y-auto'}`}>
           <PaymentLockOverlay>
             <div className={fullBleed ? 'h-full' : 'px-4 pt-2 pb-4 md:px-6 md:pb-6 lg:px-8 lg:pb-8 lg:pt-2'}>
-              <Outlet />
+              <Suspense fallback={<LoadingBar loading />}>
+                <Outlet />
+              </Suspense>
             </div>
           </PaymentLockOverlay>
         </main>

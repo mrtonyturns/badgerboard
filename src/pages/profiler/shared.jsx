@@ -25,10 +25,15 @@ export const T = {
   ink4:    '#52525B',
   muted:   '#6B6B73',   // darker than #71717A — safe on white
   faint:   '#71717A',   // the lightest grey allowed on white
-  red:     '#A51C24',
+  // Brand accent = tailwind.config.js `brand.red` / `brand.navy`, exactly. The
+  // redesign shipped its own slightly different red and navy, which is how the
+  // UI audit found four brand reds and three navies across the app.
+  // `redDark` is the hover shade and `redHot` the danger/alert shade — both are
+  // semantic, not the accent, and are deliberately left alone.
+  red:     '#8B0000',
   redDark: '#7E141B',
   redHot:  '#B91C1C',
-  navy:    '#0D1526',
+  navy:    '#0A1628',
   green:   '#15803D',
   amber:   '#B45309',
   amberBar:'#D9A036',
@@ -64,7 +69,10 @@ export function ProfilerStyles() {
       .pf-btn  { transition: background .15s ease, border-color .15s ease }
       .pf-doc a { color: ${T.ink}; text-decoration: underline; text-underline-offset: 2px }
       .pf-doc a:hover { color: ${T.red} }
-      .pf-input:focus { border-color: #D6D6D2; outline: none }
+      /* Keeps the field's own darker border on focus, but no longer suppresses
+         the outline: the one app-wide focus ring (src/index.css, 2px brand navy
+         on :focus-visible) is what marks focus everywhere now. */
+      .pf-input:focus { border-color: #D6D6D2 }
       @media (max-width: 1100px) {
         .pf-rail    { display: none !important }
         .pf-doccols { grid-template-columns: 1fr !important }

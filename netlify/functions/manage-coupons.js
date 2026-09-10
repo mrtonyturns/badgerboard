@@ -171,18 +171,21 @@ export const handler = async (event) => {
     }
   }
 
-  // ── DEACTIVATE ───────────────────────────────────────────────────────────────
-  if (action === 'deactivate') {
+  // ── DEACTIVATE / REACTIVATE ─────────────────────────────────────────────────
+  // One symmetric toggle (v1.37.0, UI audit R3 — inactive codes previously had
+  // no way back on without opening the Stripe dashboard).
+  if (action === 'deactivate' || action === 'reactivate') {
     const promoCodeId = sanitize(body.id, 100)
     if (!promoCodeId) {
       return { statusCode: 400, body: JSON.stringify({ error: 'Promo code ID required' }) }
     }
+    const active = action === 'reactivate'
     try {
-      await stripe.promotionCodes.update(promoCodeId, { active: false })
-      console.log(`Admin ${admin.email} deactivated promo code ${promoCodeId}`)
+      await stripe.promotionCodes.update(promoCodeId, { active })
+      console.log(`Admin ${admin.email} ${active ? 'reactivated' : 'deactivated'} promo code ${promoCodeId}`)
       return { statusCode: 200, body: JSON.stringify({ success: true }) }
     } catch (err) {
-      console.error('manage-coupons deactivate error:', err.message)
+      console.error(`manage-coupons ${action} error:`, err.message)
       return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
     }
   }

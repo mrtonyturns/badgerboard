@@ -17,7 +17,6 @@ const GROK_MODEL         = 'grok-4.3'  // latest Grok — Responses API w/ serve
 const { ADMIN_EMAILS } = require('./_config')
 const { sendEmail, getNotificationPrefs } = require('./_email')
 const { fetchOfficialRecords } = require('./_official-records')
-const { extractWeaknesses } = require('./_weaknesses')
 
 // ─── Plans that may access full Section 6 ────────────────────────────────────
 const SECTION6_TIERS = ['campaign', 'agency']
@@ -699,42 +698,6 @@ async function applyCandidateUpdates(candidateId, currentCandidate, updates) {
     }
   } catch (e) {
     console.error(`[dossier-bg] Candidate update error: ${e.message}`)
-  }
-}
-
-// ─── Key weaknesses → candidates.weaknesses ──────────────────────────────────
-// The Opposition tab's "Key weaknesses" cards read candidates.weaknesses. That
-// column used to be filled client-side by Dossiers.jsx after its polling loop
-// saw the new row — which stopped happening in the Profiler redesign, and whose
-// parser captured schema labels ("**Background Narrative:**") as weaknesses.
-// Runs here, on the final stored content, so a run that finishes while nobody
-// is watching still lands its weaknesses. Only overwrites when the profile
-// actually yields something (a Scout-gated Section 6 yields nothing).
-async function syncCandidateWeaknesses(candidateId, content, updatedBy) {
-  if (!candidateId || !content || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return
-  const weaknesses = extractWeaknesses(content)
-  if (weaknesses.length === 0) { console.log('[dossier-bg] No key weaknesses extracted'); return }
-  const headers = {
-    apikey: SUPABASE_SERVICE_KEY,
-    Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-    'Content-Type': 'application/json',
-  }
-  try {
-    const cur = await fetch(`${SUPABASE_URL}/rest/v1/candidates?id=eq.${candidateId}&select=section_timestamps`, { headers })
-    const existingTs = cur.ok ? ((await cur.json())?.[0]?.section_timestamps || {}) : {}
-    const stamp = { updated_at: new Date().toISOString(), updated_by: updatedBy || 'Profile AI' }
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/candidates?id=eq.${candidateId}`, {
-      method: 'PATCH',
-      headers: { ...headers, Prefer: 'return=minimal' },
-      body: JSON.stringify({
-        weaknesses,
-        section_timestamps: { ...existingTs, opposition: stamp, weaknesses: stamp },
-      }),
-    })
-    if (res.ok) console.log(`[dossier-bg] Candidate ${candidateId} weaknesses synced (${weaknesses.length})`)
-    else console.error(`[dossier-bg] Weakness sync failed: ${res.status} ${(await res.text()).slice(0, 200)}`)
-  } catch (e) {
-    console.error(`[dossier-bg] Weakness sync error: ${e.message}`)
   }
 }
 
@@ -1925,7 +1888,6 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     // ─── Weekly digest: what changed vs the previous profile ────────────────
     // Powers the Monday monitoring email and the in-app "What's new" card.
     if (savedDossierId && candidate_id) {
-      await syncCandidateWeaknesses(candidate_id, content, user?.email || null)
       await buildWeeklyDigest(savedDossierId, candidate_id, content, safe.name, user_id)
       await buildRefreshDiff(savedDossierId, candidate_id, content)
       await reportStage(candidate_id, 4, 'done')

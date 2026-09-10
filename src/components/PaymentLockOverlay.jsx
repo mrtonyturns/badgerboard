@@ -76,7 +76,7 @@ export default function PaymentLockOverlay({ children }) {
 
               {isNativeApp ? (
                 <p className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-xl p-3.5">
-                  Subscriptions can&apos;t be managed in the app. Sign in to your account on the BadgerBoard website to resubscribe.
+                  Subscriptions can&apos;t be managed in the app. Sign in to your account on the Badger Board website to resubscribe.
                 </p>
               ) : (
                 <>
@@ -119,7 +119,7 @@ export default function PaymentLockOverlay({ children }) {
 
               {isNativeApp ? (
                 <p className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-xl p-3.5">
-                  Payment methods can&apos;t be updated in the app. Sign in to your account on the BadgerBoard website to resolve this.
+                  Payment methods can&apos;t be updated in the app. Sign in to your account on the Badger Board website to resolve this.
                 </p>
               ) : (
                 <button

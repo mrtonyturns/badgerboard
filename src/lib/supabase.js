@@ -46,7 +46,7 @@ const fetchOffices = async (filters = {}) => {
   while (true) {
     let query = supabase
       .from('offices')
-      .select(filters.columns || '*')
+      .select('*')
       .order('level')
       .order('name')
       .range(offset, offset + PAGE - 1)
@@ -63,12 +63,6 @@ const fetchOffices = async (filters = {}) => {
   }
   return { data: all, error: null }
 }
-
-// Picker-sized office list: only the columns a label needs. The full table is
-// ~7,400 rows, so pulling `*` (notes, timestamps, …) just to fill a dropdown
-// moved far more than it had to.
-export const OFFICE_OPTION_COLUMNS = 'id,name,level,office_type,district_number,district_name,county,city'
-export const getOfficeOptions = async () => getOffices({ columns: OFFICE_OPTION_COLUMNS })
 
 export const getOffice = async (id) =>
   supabase.from('offices').select('*').eq('id', id).single()
@@ -755,29 +749,6 @@ export const getCompletedTasks = async (ownerId = null, limit = 200) => {
     supabase.from('gp_tasks').select('*').eq('owner_id', owner)
       .eq('completed', true).is('parent_id', null)
       .order('completed_at', { ascending: false }).limit(limit))
-}
-
-// Dashboard read of the plans behind <TaskBoard />: every plan the user can
-// open (own + active Campaign Connect links), each with ALL of its top-level
-// tasks — open and completed — plus the plan's sections. This is the same
-// gp_tasks source the Todo page renders, so the dashboards' "X of N",
-// next-up and overdue figures agree with it. Subtasks are excluded on purpose:
-// the board counts top-level tasks and the completed log is top-level only.
-export const getGamePlanSnapshots = async () => {
-  const { data: owners } = await getTaskPlanOwners()
-  if (!owners?.length) return { data: [], error: new Error('Not authenticated') }
-  const snaps = await Promise.all(owners.map(async (owner) => {
-    const [t, s] = await Promise.all([
-      withOffline(`gp_tasks_all:${owner.id}`, () =>
-        supabase.from('gp_tasks').select('*').eq('owner_id', owner.id)
-          .is('parent_id', null)
-          .order('due_date', { ascending: true, nullsFirst: false })
-          .order('sort_order').order('created_at')),
-      getTaskSections(owner.id),
-    ])
-    return { owner, tasks: t.data || [], sections: s.data || [], error: t.error || s.error || null }
-  }))
-  return { data: snaps, error: snaps.find(x => x.error)?.error || null }
 }
 
 export const createTask = async (data, ownerId = null) => {

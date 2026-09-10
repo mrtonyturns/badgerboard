@@ -20,8 +20,13 @@ export default {
           'text-muted': '#6B7280',
         }
       },
+      // ── Typography (v1.37) ────────────────────────────────────────────────
+      // Geist first, app-wide. The Settings and Profiler redesigns already set
+      // `'Geist','Inter',system-ui` on their own shells, so the app shipped two
+      // typefaces side by side. Geist is loaded in index.html next to Inter, so
+      // this is a token change only — Inter stays as the first fallback.
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
+        sans: ['Geist', 'Inter', 'system-ui', 'sans-serif'],
       },
       // ── z-index scale (v1.34.1) ──────────────────────────────────────────
       // One documented ladder for everything that floats:

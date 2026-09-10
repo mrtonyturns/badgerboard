@@ -1,5 +1,6 @@
 import React from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { useAuth } from '../contexts/AuthContext'
 import BluejackLogo from '../components/BluejackLogo'
 import BadgerBoardLogo from '../components/BadgerBoardLogo'
 
@@ -15,6 +16,19 @@ function Section({ title, children }) {
 }
 
 export default function Terms() {
+  const navigate = useNavigate()
+  const { user } = useAuth()
+
+  // /terms is linked from BOTH the signup form and the in-app footer, so the
+  // old hardcoded link to /login sent signed-in readers back to a screen they
+  // had already passed. Go back to wherever they came from; fall back to the
+  // app root when signed in and the login page when not (direct hits, new tab).
+  const goBack = (e) => {
+    e.preventDefault()
+    if (window.history.length > 1) navigate(-1)
+    else navigate(user ? '/' : '/login')
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Top stripe */}
@@ -32,9 +46,13 @@ export default function Terms() {
             <BadgerBoardLogo width={100} />
           </div>
         </div>
-        <Link to="/login" className="text-white/60 hover:text-white text-sm transition-colors">
-          ← Back to sign in
-        </Link>
+        <button
+          type="button"
+          onClick={goBack}
+          className="text-white/60 hover:text-white text-sm transition-colors"
+        >
+          ← Back
+        </button>
       </header>
 
       {/* Content */}
@@ -88,7 +106,7 @@ export default function Terms() {
 
           <Section title="4. Subscription Plans and Billing">
             <p>
-              Access to certain features of the Service requires a paid subscription. Subscription tiers, pricing, and included features are described on the platform's Settings page and are subject to change upon reasonable notice. All fees are stated in U.S. Dollars and are non-refundable except as required by applicable law or expressly stated in these Terms.
+              Access to certain features of the Service requires a paid subscription. Subscription tiers, pricing, and included features are described on the platform's <Link to="/plans" className="text-brand-red underline underline-offset-2 hover:opacity-80">Plans &amp; Pricing</Link> page and are subject to change upon reasonable notice. All fees are stated in U.S. Dollars and are non-refundable except as required by applicable law or expressly stated in these Terms.
             </p>
             <p>
               Subscriptions automatically renew on a monthly basis unless cancelled before the renewal date. You authorize us to charge your payment method on file at the beginning of each billing cycle. Failure to pay may result in suspension or termination of your account.
@@ -195,9 +213,13 @@ export default function Terms() {
             <p>© {new Date().getFullYear()} The Bluejack Group. All rights reserved.</p>
             <p>Badger Board · Wisconsin Political Intelligence Platform</p>
             <p className="mt-2">
-              <Link to="/login" className="text-brand-red hover:opacity-80 underline underline-offset-2">
-                Return to sign in
-              </Link>
+              <button
+                type="button"
+                onClick={goBack}
+                className="text-brand-red hover:opacity-80 underline underline-offset-2"
+              >
+                ← Back
+              </button>
             </p>
           </div>
         </div>

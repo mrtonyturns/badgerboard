@@ -12,7 +12,9 @@ import { parseCsvRows } from '../../lib/csv'
 import { normalizePartyForDb } from '../../lib/party'
 
 export const BULK_COLUMNS = [
-  { key: 'name',             req: 'Required',    reqColor: '#A51C24', note: 'Full name as it appears publicly' },
+  // "Required" is a validation marker, so it uses the app's danger red
+  // (T.redHot) — not the brand accent, which is #8B0000 everywhere now.
+  { key: 'name',             req: 'Required',    reqColor: '#B91C1C', note: 'Full name as it appears publicly' },
   { key: 'research_context', req: 'Recommended', reqColor: '#B45309', note: 'City, employer, profession — anything that identifies the right person' },
   { key: 'office',           req: 'Optional',    reqColor: '#52525B', note: 'Office sought, e.g. State Assembly' },
   { key: 'district',         req: 'Optional',    reqColor: '#52525B', note: 'District number, blank for at-large or nonpartisan seats' },

@@ -9,20 +9,29 @@ import { isNativeApp } from '../lib/native'
  * Props:
  *   feature      {string}   — name of the locked feature, e.g. "Prospecting"
  *   hook         {string}   — value-anchor line shown under the lock icon
- *   plan         {string}   — recommended plan name, e.g. "Campaign"
- *   price        {string}   — price string, e.g. "from $69/mo"
+ *   plan         {string}   — recommended plan name, e.g. "Campaign". PASS IT:
+ *                             the generic fallback is deliberately vague.
+ *   price        {string}   — price string, e.g. "from $79/mo". OPTIONAL — when
+ *                             it is missing no price is shown at all.
  *   benefits     {string[]} — 3-4 bullets of what they unlock
  *   compact      {bool}     — slim inline version (no icon, no hook, smaller padding)
+ *
+ * There are no plan/price defaults any more. They used to be `Campaign` and
+ * `from $69/mo` — a founder-era rate that has not been sold since v1.18 — so a
+ * call site that forgot a prop quoted a price that no longer exists. Every call
+ * site in the app passes both explicitly; anything that doesn't now gets copy
+ * that promises nothing specific instead of the wrong number.
  */
 export default function UpgradePrompt({
   feature  = 'This Feature',
   hook     = 'Research firms charge $500–$2,000 per candidate profile. You\'re one click from unlimited intelligence.',
-  plan     = 'Campaign',
-  price    = 'from $69/mo',
+  plan     = 'a higher plan',
+  price,
   benefits = [],
   compact  = false,
 }) {
   const navigate = useNavigate()
+  const priceLabel = typeof price === 'string' && price.trim() ? price.trim() : null
 
   // ── Native app (App Store / Play Store) version ────────────────────────────
   // Store rules don't allow linking to external purchase flows for digital
@@ -45,7 +54,7 @@ export default function UpgradePrompt({
             {feature} isn&apos;t included in your current plan
           </p>
           <p className={compact ? 'text-xs text-gray-500' : 'text-sm text-gray-600 max-w-sm mx-auto'}>
-            Plan changes aren&apos;t available in the app. You can manage your plan from your account on the BadgerBoard website.
+            Plan changes aren&apos;t available in the app. You can manage your plan from your account on the Badger Board website.
           </p>
         </div>
       </div>
@@ -61,7 +70,9 @@ export default function UpgradePrompt({
           </div>
           <div className="min-w-0">
             <p className="text-sm font-bold text-gray-900 truncate">{feature} — Upgrade Required</p>
-            <p className="text-xs text-gray-500 truncate">Available on {plan} ({price})</p>
+            <p className="text-xs text-gray-500 truncate">
+              Available on {plan}{priceLabel ? ` (${priceLabel})` : ''}
+            </p>
           </div>
         </div>
         <button
@@ -91,10 +102,10 @@ export default function UpgradePrompt({
         {hook}
       </p>
 
-      {/* Price callout */}
+      {/* Price callout — only when a price was actually passed in */}
       <p className="text-xs text-gray-400 mb-6">
-        Unlock everything on <strong className="text-gray-700">{plan}</strong> — starting at{' '}
-        <strong className="text-brand-red">{price}</strong>
+        Unlock everything on <strong className="text-gray-700">{plan}</strong>
+        {priceLabel && <> — starting at <strong className="text-brand-red">{priceLabel}</strong></>}
       </p>
 
       {/* Benefits list */}
@@ -115,7 +126,7 @@ export default function UpgradePrompt({
         className="inline-flex items-center gap-2 bg-brand-red hover:bg-red-700 text-white font-bold px-8 py-3 rounded-xl text-sm transition-all shadow-md hover:shadow-lg mb-3"
       >
         <Sparkles className="w-4 h-4" />
-        Upgrade to {plan} — {price}
+        Upgrade to {plan}{priceLabel ? ` — ${priceLabel}` : ''}
       </button>
 
       {/* Trust line */}

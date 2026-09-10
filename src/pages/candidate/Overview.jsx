@@ -109,7 +109,9 @@ function RefreshBars({ refreshes }) {
         aria-label="Items surfaced per weekly refresh">
         <line x1="0" y1="60" x2="240" y2="60" stroke={T.border} strokeWidth="1" />
         {refreshes.map((r, i) => {
-          const h = Math.max(4, (r.count / max) * 52)
+          // Zero weeks get a 2px baseline stub (not the old 4px gray pill,
+          // which read as a broken render next to a full-height bar).
+          const h = r.count === 0 ? 2 : Math.max(4, (r.count / max) * 52)
           return (
             <rect
               key={r.id}
@@ -117,8 +119,8 @@ function RefreshBars({ refreshes }) {
               y={60 - h}
               width={barW}
               height={h}
-              rx="3"
-              fill={i === refreshes.length - 1 ? T.red : '#E4DFDA'}
+              rx={r.count === 0 ? 1 : 3}
+              fill={i === refreshes.length - 1 ? T.red : r.count === 0 ? T.border : '#E4DFDA'}
             >
               <title>{`${fmtDate(r.generated_at)} — ${r.count} item${r.count === 1 ? '' : 's'}`}</title>
             </rect>

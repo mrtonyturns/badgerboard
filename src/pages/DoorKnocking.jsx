@@ -26,7 +26,6 @@ import {
 } from '../lib/supabase'
 import { queueKnock, pendingCount, flushQueue } from '../lib/offlineQueue'
 import { VolunteerManager } from './VolunteerPortal'
-import SearchableSelect from '../components/SearchableSelect'
 
 // ─── Empty defaults — door knocking requires real DB candidates ───────────────
 // There is NO static fallback candidate list.  Every user sees only their own
@@ -1166,12 +1165,10 @@ function TeamMobile({ listId }) {
             </div>
             <div style={{ display:'flex', gap:8, marginBottom:8 }}>
               <input value={invitePhone} onChange={e=>setInvitePhone(e.target.value)} placeholder="Phone (optional)" style={{ flex:2, padding:'7px 10px', border:'1px solid #E5E7EB', borderRadius:7, fontSize:13, outline:'none' }}/>
-              <SearchableSelect value={inviteRole} onChange={v=>setInviteRole(v)}
-                options={[
-                  { value: 'volunteer', label: 'Volunteer' },
-                  { value: 'captain', label: 'Captain' },
-                ]}
-                className="flex-1" buttonClassName="text-[13px]" />
+              <select value={inviteRole} onChange={e=>setInviteRole(e.target.value)} style={{ flex:1, padding:'7px 10px', border:'1px solid #E5E7EB', borderRadius:7, fontSize:13, outline:'none' }}>
+                <option value="volunteer">Volunteer</option>
+                <option value="captain">Captain</option>
+              </select>
             </div>
             <div style={{ display:'flex', gap:8, alignItems:'center' }}>
               <button onClick={sendInvite} disabled={sending || !inviteName.trim()}
@@ -1940,11 +1937,15 @@ function ShiftsTab({ listId }) {
                   </td>
                   <td style={{ padding:'10px 14px', borderBottom:'1px solid #f3f4f6', fontSize:11, color:'#6B7280', maxWidth:160 }}>{s.notes || '—'}</td>
                   <td style={{ padding:'10px 14px', borderBottom:'1px solid #f3f4f6' }}>
-                    <SearchableSelect value={s.status} onChange={v => handleStatusChange(s.id, v)}
-                      options={['scheduled','active','completed','cancelled'].map(v => (
-                        { value: v, label: v.charAt(0).toUpperCase() + v.slice(1) }
+                    <select value={s.status} onChange={e => handleStatusChange(s.id, e.target.value)}
+                      style={{ padding:'3px 8px', borderRadius:5, fontSize:11, fontWeight:700,
+                        background: statusColors[s.status]?.bg || '#f3f4f6',
+                        color: statusColors[s.status]?.c || '#374151',
+                        border:'none', cursor:'pointer', outline:'none' }}>
+                      {['scheduled','active','completed','cancelled'].map(v => (
+                        <option key={v} value={v}>{v.charAt(0).toUpperCase() + v.slice(1)}</option>
                       ))}
-                      className="min-w-[130px]" buttonClassName="text-[11px] font-bold py-1" />
+                    </select>
                   </td>
                   <td style={{ padding:'10px 14px', borderBottom:'1px solid #f3f4f6' }}>
                     <button onClick={() => handleDelete(s.id)}
@@ -2473,11 +2474,12 @@ function SurveyQuestionsModal({ candidate, onClose, onSaved }) {
                     style={{ width:'100%', padding:'6px 9px', border:'1px solid #D1D5DB', borderRadius:6, fontSize:12, outline:'none', boxSizing:'border-box' }}
                   />
                 </div>
-                <SearchableSelect
+                <select
                   value={q.type}
-                  onChange={v => updateQ(q.id, 'type', v)}
-                  options={Q_TYPES.map(t => ({ value: t.val, label: t.label }))}
-                  className="min-w-[130px]" buttonClassName="text-[11px]" />
+                  onChange={e => updateQ(q.id, 'type', e.target.value)}
+                  style={{ padding:'6px 8px', border:'1px solid #D1D5DB', borderRadius:6, fontSize:11, outline:'none', background:'#fff' }}>
+                  {Q_TYPES.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
+                </select>
                 <button onClick={() => removeQ(q.id)} style={{ background:'none', border:'none', cursor:'pointer', color:'#EF4444', padding:'4px 2px', flexShrink:0 }}>
                   <Trash2 size={14}/>
                 </button>
@@ -2796,13 +2798,15 @@ export default function DoorKnocking() {
               Loading your candidates…
             </div>
           ) : candidateList.length > 0 ? (
-            <SearchableSelect
+            <select
               value={candKey}
-              onChange={v => handleCandChange(v)}
-              options={candidateList.map(c => ({ value: c.id, label: `${c.name} — ${c.label}` }))}
-              className="min-w-[240px]"
-              buttonClassName="text-[13px] font-semibold"
-            />
+              onChange={e => handleCandChange(e.target.value)}
+              style={{ padding:'6px 12px', border:'2px solid #E5E7EB', borderRadius:8, fontSize:13, fontWeight:600, outline:'none', background:'#fff', cursor:'pointer', minWidth:240 }}
+            >
+              {candidateList.map(c => (
+                <option key={c.id} value={c.id}>{c.name} — {c.label}</option>
+              ))}
+            </select>
           ) : (
             <span style={{ fontSize:12, color:'#9CA3AF', fontStyle:'italic' }}>No candidates yet — add one below</span>
           )}
@@ -2928,22 +2932,21 @@ export default function DoorKnocking() {
               {allDbCandidates.length === 0 ? (
                 <p style={{ fontSize:12, color:'#6B7280', margin:0 }}>No candidates found in the database.</p>
               ) : (
-                <SearchableSelect
+                <select
                   value={newCampId}
-                  onChange={v => { setNewCampId(v); setNewCampError('') }}
-                  options={[
-                    { value: '', label: 'Select a candidate…' },
-                    ...allDbCandidates
-                      .filter(c => !candidateList.find(cl => cl.id === c.id))
-                      .map(c => ({
-                        value: c.id,
-                        label: `${c.name}${c.office?.name ? ` — ${c.office.name}` : ''}`,
-                      })),
-                  ]}
-                  placeholder="Select a candidate…"
-                  className="w-full"
-                  buttonClassName="text-[13px]"
-                />
+                  onChange={e => { setNewCampId(e.target.value); setNewCampError('') }}
+                  style={{ width:'100%', padding:'8px 10px', border:'1px solid #D1D5DB', borderRadius:8, fontSize:13, outline:'none', background:'#fff' }}
+                >
+                  <option value="">Select a candidate…</option>
+                  {allDbCandidates
+                    .filter(c => !candidateList.find(cl => cl.id === c.id))
+                    .map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}{c.office?.name ? ` — ${c.office.name}` : ''}
+                      </option>
+                    ))
+                  }
+                </select>
               )}
             </div>
 

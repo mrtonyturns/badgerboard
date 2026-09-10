@@ -25,7 +25,6 @@ import { recurrenceLabel, nextOccurrence } from '../lib/recurrence.js'
 import SearchableSelect from './SearchableSelect'
 import { parseQuickAdd } from '../lib/quickAdd'
 import LoadingBar from './LoadingBar'
-import { useDialog } from '../lib/useDialog'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -268,10 +267,6 @@ function TaskDetailModal({ task, tasks, projects, sections, labels, onClose, onS
   const [newSub, setNewSub]           = useState('')
   const [saving, setSaving]           = useState(false)
 
-  // Escape closes WITHOUT saving (edits are only written by the Save button),
-  // same contract as every other dialog in the app (src/lib/useDialog.js).
-  useDialog(onClose)
-
   const subtasks = tasks.filter(t => t.parent_id === task.id)
   const projectSections = sections.filter(s => s.project_id === projectId)
 
@@ -361,17 +356,14 @@ function TaskDetailModal({ task, tasks, projects, sections, labels, onClose, onS
               className="mt-1 w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
             <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mt-3">Repeat</label>
             <div className="flex gap-2 mt-1">
-              <SearchableSelect value={recFreq} onChange={setRecFreq}
-                options={[
-                  { value: '', label: "Doesn't repeat" },
-                  { value: 'daily', label: 'Daily' },
-                  { value: 'weekly', label: `Weekly${dueDate ? ` (${new Date(dueDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' })}s)` : ''}` },
-                  { value: 'monthly', label: 'Monthly' },
-                  { value: 'yearly', label: 'Yearly' },
-                ]}
-                placeholder="Doesn't repeat"
-                className="flex-1"
-                buttonClassName="text-sm" />
+              <select value={recFreq} onChange={(e) => setRecFreq(e.target.value)}
+                className="flex-1 text-sm border border-gray-200 rounded-lg px-2.5 py-2 bg-white">
+                <option value="">Doesn't repeat</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly{dueDate ? ` (${new Date(dueDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' })}s)` : ''}</option>
+                <option value="monthly">Monthly</option>
+                <option value="yearly">Yearly</option>
+              </select>
               {recFreq && (
                 <input type="number" min="1" max="52" value={recInterval}
                   onChange={(e) => setRecInterval(e.target.value)}
@@ -474,7 +466,6 @@ function ProjectModal({ editing, onClose, onSave }) {
   const [color, setColor]       = useState(editing?.color || PROJECT_COLORS[0])
   const [favorite, setFavorite] = useState(editing?.is_favorite || false)
   const [saving, setSaving]     = useState(false)
-  useDialog(onClose)
 
   const save = async () => {
     if (!name.trim()) return
@@ -522,7 +513,6 @@ function TemplateModal({ onClose, onGenerate }) {
   const [electionId, setElectionId] = useState('')
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
-  useDialog(onClose)
 
   useEffect(() => {
     getElections().then(({ data }) => {
@@ -1378,8 +1368,8 @@ function CompletedView({ completed, projects, onToggle, onDelete }) {
               <div key={t.id} className="group flex items-center gap-2.5 px-3 py-2 border-b border-gray-100 last:border-b-0">
                 <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm text-gray-400 line-through truncate">{t.content}</p>
-                  <p className="text-[10px] text-gray-300">
+                  <p className="text-sm text-gray-600 line-through truncate">{t.content}</p>
+                  <p className="text-[10px] text-gray-400">
                     {t.completed_at && format(parseISO(t.completed_at), 'MMM d, h:mm a')}
                     {project && ` · ${project.name}`}
                   </p>
@@ -1508,8 +1498,12 @@ function ProjectView({ project, sections, topTasks, subsByParent, projects, layo
         </div>
       ) : (
         /* ── Board layout ── */
-        <div className="flex gap-4 overflow-x-auto pb-4 items-start">
-          {groups.map(({ section, items }) => (
+        /* pr-4: without end padding the scroller stops flush against the last
+           column, cutting its hover delete icon in half. */
+        <div className="flex gap-4 overflow-x-auto pb-4 pr-4 items-start">
+          {/* The unsectioned column is only meaningful when something is in it —
+              the list layout already hid it when empty, the board did not. */}
+          {groups.filter(g => g.section || g.items.length > 0).map(({ section, items }) => (
             <div key={section?.id || '__none'}
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => { e.preventDefault(); moveToSection(section?.id || null, project.id) }}

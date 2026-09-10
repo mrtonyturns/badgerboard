@@ -287,7 +287,7 @@ export default function CalendarsPane({ user }) {
                           flex: 1, minWidth: 200, boxSizing: 'border-box', lineHeight: 1.35,
                           border: `1px solid ${T.field}`, borderRadius: 10, padding: '10px 13px',
                           fontSize: 12, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                          color: T.ink3, background: '#fff', outline: 'none',
+                          color: T.ink3, background: '#fff',
                         }}
                       />
                       <Btn onClick={copy} disabled={!feedUrl}>{copied ? 'Copied' : 'Copy'}</Btn>

@@ -141,46 +141,24 @@ export const AuthProvider = ({ children }) => {
   // read is treated as OFF; a missing row still means ON, because that is the
   // documented "migration not yet run" state and the query succeeds with data
   // === null.
-  // v1.36.1: retry before failing closed. A single transient read failure
-  // (network blip, cold Supabase connection) used to instantly drop every
-  // beta-flagged account to Scout — which made Prospecting AND Recruit flip
-  // to an upgrade wall simultaneously. Three attempts with backoff means only
-  // a *persistently* unreadable switch downgrades anyone; the security posture
-  // (fail closed, never fail open) is unchanged.
   const [globalBetaEnabled, setGlobalBetaState] = useState(true)
   useEffect(() => {
     if (!user) return
     let cancelled = false
-    const RETRY_DELAYS = [2000, 5000]   // attempt 1 immediate, then 2s, then 5s
-
-    const readSwitch = async () => {
-      for (let attempt = 0; ; attempt++) {
-        const { data, error } = await supabase
-          .from('app_settings')
-          .select('value')
-          .eq('key', 'beta_mode_enabled')
-          .maybeSingle()
+    supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'beta_mode_enabled')
+      .maybeSingle()
+      .then(({ data, error }) => {
         if (cancelled) return
-        if (!error) {
-          // Missing row (data === null) still means ON — documented
-          // "migration not yet run" state.
-          const enabled = data?.value !== 'off'
-          setGlobalBetaEnabled(enabled)   // tiers.js module-level flag (drives resolver)
-          setGlobalBetaState(enabled)     // context state (drives admin UI)
-          return
+        if (error) {
+          console.warn('[Auth] beta switch unreadable — defaulting beta OFF:', error.message)
         }
-        if (attempt >= RETRY_DELAYS.length) {
-          console.warn('[Auth] beta switch unreadable after retries — defaulting beta OFF:', error.message)
-          setGlobalBetaEnabled(false)
-          setGlobalBetaState(false)
-          return
-        }
-        console.warn(`[Auth] beta switch read failed (attempt ${attempt + 1}) — retrying:`, error.message)
-        await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]))
-        if (cancelled) return
-      }
-    }
-    readSwitch()
+        const enabled = error ? false : data?.value !== 'off'
+        setGlobalBetaEnabled(enabled)   // tiers.js module-level flag (drives resolver)
+        setGlobalBetaState(enabled)     // context state (drives admin UI)
+      })
     return () => { cancelled = true }
   }, [user])
 

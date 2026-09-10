@@ -1,24 +1,19 @@
 // src/pages/Prospecting.jsx
-// ─── Prospecting v3 — find the field → brief → export ────────────────────────
+// ─── Prospecting v2 — discover → enrich → score → export ─────────────────────
 //
-// v3 (Sept 2026) turns Prospecting into what an agency / PAC / NGO actually
-// needs: open it cold, pick a county, an office level, or a specific race, and
-// get back EVERY candidate AI can find — each with party, an AI-estimated
-// chance of winning, and whatever contact info is publicly posted. Candidates
-// stay SILOED in Prospecting (prospect_profiles.candidate_id = null) until the
-// user presses "Add to My Candidates" on that row.
+// Replaces the old three-mode list builder (manual / AI / CSV) with the pipeline
+// from PROSPECTING-redesign-gameplan.md §6. The list builder is no longer the
+// product; it is the LAST step of one.
 //
-//   DISCOVER  search form → discover-prospects-background (Perplexity live web
-//             search, cited rows only) → the discovered field, with a per-row
-//             Add to My Candidates button. CSV import stays as a secondary path.
-//   ENRICH    enrich-prospects-background in mode 'brief' — one call per
-//             candidate, up to 50 per run, live server-side progress
-//   RESULTS   party · AI win-odds estimate (labelled) · email · phone · website ·
-//             agency flag · Add to My Candidates
-//   EXPORT    full CSV, or save as a prospecting list
-//
-// The v2 "filter your own candidates" Discover is gone — it was the wrong
-// product for the audience (0 candidates on a cold open = a dead end).
+//   DISCOVER  filter your candidates DB (+ upcoming-election filters, + CSV
+//             import) and queue prospects
+//   ENRICH    run enrich-prospects-background on up to 10 at a time, with live
+//             server-side progress (a background function's status codes are
+//             discarded by Netlify, so progress lives in a table we poll)
+//   RESULTS   sortable table: win odds with a "why this score" breakdown,
+//             affiliation, verified website, socials, agency-detected badge with
+//             evidence links, contact info with per-field source + confidence
+//   EXPORT    full CSV of every enriched field, or save as a prospecting list
 //
 // COMPLIANCE (owner directive): nothing here reads WEC/CFIS campaign-finance
 // data. Contact info comes from candidate-published pages and cited coverage;
@@ -30,55 +25,36 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-
+import { useNavigate } from 'react-router-dom'
 import { format } from 'date-fns'
 import {
-  Search, Download, X, AlertCircle, Upload, Globe,
+  Search, Plus, Download, X, AlertCircle, Upload, Globe,
   RefreshCw, ExternalLink, ShieldAlert, ShieldCheck, ListChecks, Trash2,
   Sparkles, Mail, Phone, UserPlus, ArrowUp, ArrowDown, Info, Facebook,
-  Instagram, Linkedin, Twitter, Music2, Copy, ChevronDown, Check,
+  Instagram, Linkedin, Twitter, Music2, Copy, ChevronDown,
 } from 'lucide-react'
 import {
-  getCandidates, createCandidate, createProspectingList, supabase,
+  getCandidates, getElections, createCandidate, createProspectingList, supabase,
 } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserTier, hasFeature } from '../lib/tiers'
 import UpgradePrompt from '../components/UpgradePrompt'
-import SearchableSelect from '../components/SearchableSelect'
 import { parseCsvRows } from '../lib/csv'
-import { buildProspectCsv, confidenceBand, csvFilename, factorSummary, displayParty, displayDistrict } from '../lib/prospectCsv'
+import { buildProspectCsv, confidenceBand, csvFilename, factorSummary } from '../lib/prospectCsv'
 import { DB_PARTIES } from '../lib/party'
-import { WI_COUNTY_CENTROIDS } from '../lib/wiDistricts'
 import { T, cardStyle, Btn, Pill, Spinner, EmptyNote } from './profiler/shared.jsx'
-import { useDialog } from '../lib/useDialog'
 
-// Must match MAX_BRIEF_PER_RUN in enrich-prospects-background.js (mode 'brief').
-// The server enforces it; this is the number the UI promises.
-const MAX_BATCH = 50
+// Must match MAX_PROSPECTS_PER_RUN in enrich-prospects-background.js. The server
+// enforces it; this is the number the UI promises.
+const MAX_BATCH = 10
 
-// Stage labels mirror STAGE_* in the background functions. Brief enrichment
-// reports stages 1 (search) and 4 (save); discovery reports the same two.
+// Stage labels mirror STAGE_* in the background function.
 const PHASE_LABELS = [
-  'Researching public sources…',
-  'Researching public sources…',
-  'Verifying websites and contact info…',
-  'Saving results…',
+  'Scoring from your own election data…',
+  'Researching public sources (cited only)…',
+  'Verifying websites, socials and agency signals…',
+  'Saving enriched prospects…',
 ]
-const DISCOVER_LABELS = [
-  'Searching the web for candidates…',
-  'Searching the web for candidates…',
-  'Searching the web for candidates…',
-  'Saving discovered candidates…',
-]
-
-const WI_COUNTIES = Object.keys(WI_COUNTY_CENTROIDS).sort()
-const DISCOVER_MODES = [
-  { v: 'county', l: 'Whole county' },
-  { v: 'level',  l: 'Office level' },
-  { v: 'race',   l: 'Specific race' },
-]
-const THIS_YEAR = new Date().getFullYear()
-const YEAR_OPTIONS = [THIS_YEAR, THIS_YEAR + 1, THIS_YEAR + 2]
 const POLL_MS            = 3000
 const MAX_WAIT_MS        = 12 * 60 * 1000
 const HEARTBEAT_STALE_MS = 3 * 60 * 1000
@@ -128,14 +104,16 @@ export function prospectCounts(rows) {
 }
 // ─── R2B PURE HELPERS END ────────────────────────────────────────────────────
 
-// Office levels the discovery search understands (mirrors ALLOWED_LEVELS in
-// discover-prospects-background.js). DB_PARTIES (lib/party.js) is the
-// `candidates.party` CHECK — Add to My Candidates only writes a party the
-// column will accept.
+// The party filter offers what the DB can actually hold (lib/party.js
+// DB_PARTIES = the `candidates.party` CHECK). The hand-kept list this replaces
+// was two values short, so prospects saved as 'Constitution' or 'Working
+// Families' could never be filtered to. The "All parties" blank option is
+// rendered separately below, as before.
+const PARTY_OPTIONS  = DB_PARTIES
+const STATUS_OPTIONS = ['exploring', 'declared', 'primary_winner', 'general', 'elected']
 const LEVEL_OPTIONS  = [
-  { v: 'county', l: 'County offices' }, { v: 'municipal', l: 'Municipal (city / village / town)' },
-  { v: 'school', l: 'School board' }, { v: 'state', l: 'State legislature & statewide' },
-  { v: 'federal', l: 'Federal' },
+  { v: '', l: 'All levels' }, { v: 'federal', l: 'Federal' }, { v: 'state', l: 'State' },
+  { v: 'county', l: 'County' }, { v: 'municipal', l: 'Municipal' },
 ]
 
 const BAND_TINT = {
@@ -154,23 +132,6 @@ const fmtDay = (d) => {
   return Number.isFinite(t) ? format(new Date(t), 'MMM d, yyyy') : '—'
 }
 const lower = (s) => String(s ?? '').toLowerCase()
-
-// v1.36.2: a REAL v4 UUID in every environment. The old fallback
-// (`${Date.now()}`.padEnd(36,'0')) was not a UUID; the server 400-rejected it
-// AFTER Netlify had already answered 202, so the client cleared the queue and
-// polled a progress row that would never exist for the full 12-minute window.
-// crypto.randomUUID is missing in insecure contexts (plain-HTTP LAN testing)
-// and some older WebViews; crypto.getRandomValues is universal.
-function makeRunId() {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
-  const bytes = new Uint8Array(16)
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes)
-  else for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256)
-  bytes[6] = (bytes[6] & 0x0f) | 0x40   // version 4
-  bytes[8] = (bytes[8] & 0x3f) | 0x80   // variant 10xx
-  const h = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('')
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
-}
 
 // ── Small primitives ──────────────────────────────────────────────────────────
 
@@ -317,53 +278,33 @@ function ScoreCell({ row }) {
   const tint = BAND_TINT[band] || BAND_TINT.unknown
   const meta = row.win_odds_factors || {}
   const factors = Array.isArray(meta.factors) ? meta.factors : []
-  // v3 brief mode stores an explicitly-labelled AI ESTIMATE with a one-line
-  // rationale (model_version 'ai_estimate_*'). Legacy deep-mode rows carry the
-  // weighted-model factor breakdown instead.
-  const isEstimate = Boolean(meta.estimate) || /^ai_estimate/.test(String(meta.model_version || ''))
-  const hasDetail = isEstimate ? Boolean(meta.rationale) : factors.length > 0
 
   return (
     <div style={{ position: 'relative' }}>
       <button
         ref={btnRef}
         type="button" onClick={() => setOpen(o => !o)}
-        title={isEstimate ? 'AI estimate — click for the rationale' : 'Why this score'}
+        title="Why this score"
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 6, background: 'none',
-          border: 'none', padding: 0, cursor: hasDetail ? 'pointer' : 'default', fontFamily: 'inherit',
+          border: 'none', padding: 0, cursor: factors.length ? 'pointer' : 'default', fontFamily: 'inherit',
         }}
       >
         <span style={{ fontSize: 17, fontWeight: 800, color: score == null ? T.faint : T.ink }}>
           {score == null ? '—' : Math.round(score)}
         </span>
         <Pill c={tint.c} bg={tint.bg}>{band}</Pill>
-        {isEstimate && score != null && <span style={{ fontSize: 10, color: T.faint, fontWeight: 600, whiteSpace: 'nowrap' }}>AI est.</span>}
-        {hasDetail && <Info style={{ width: 12, height: 12, color: T.faint }} />}
+        {factors.length > 0 && <Info style={{ width: 12, height: 12, color: T.faint }} />}
       </button>
 
       <Popover open={open} onClose={() => setOpen(false)} width={380} anchorRef={btnRef}>
-        <div style={{ fontSize: 12.5, fontWeight: 800, color: T.ink, marginBottom: 2 }}>
-          {isEstimate ? 'AI estimate — why this number' : 'Why this score'}
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: T.ink, marginBottom: 2 }}>Why this score</div>
+        <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>
+          {meta.confidence != null
+            ? `Computed from ${Math.round(Number(meta.confidence) * 100)}% of the model — factors we could not measure are dropped, not guessed.`
+            : 'Transparent weighted model.'}
         </div>
-        {isEstimate ? (
-          <>
-            <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>
-              An AI estimate from public reporting (incumbency, district lean, primary context, coverage) — not a
-              measured probability. Treat it as a first-pass sort, not a forecast.
-            </div>
-            {meta.rationale
-              ? <div style={{ fontSize: 12, color: T.ink2, lineHeight: 1.55 }}>{meta.rationale}</div>
-              : <EmptyNote>No rationale was returned.</EmptyNote>}
-          </>
-        ) : (
-          <div style={{ fontSize: 11, color: T.muted, marginBottom: 10 }}>
-            {meta.confidence != null
-              ? `Computed from ${Math.round(Number(meta.confidence) * 100)}% of the model — factors we could not measure are dropped, not guessed.`
-              : 'Transparent weighted model.'}
-          </div>
-        )}
-        {!isEstimate && factors.length === 0 && <EmptyNote>Not scored yet.</EmptyNote>}
+        {factors.length === 0 && <EmptyNote>Not scored yet.</EmptyNote>}
         {factors.map(f => (
           <div key={f.key} style={{
             display: 'flex', gap: 10, alignItems: 'baseline', padding: '6px 0',
@@ -540,15 +481,13 @@ function ContactCell({ row }) {
     const href = kind === 'phone' ? telHref(item.value) : `mailto:${item.value}`
     const actAsLink = kind === 'email' || (IS_TOUCH_DEVICE && href)
     return (
-      // The address is the point of the row: it wraps rather than clipping to
-      // "info@yeefor…" — the pills and icons after it never shrink.
-      <div key={item.value} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 0', borderBottom: `1px solid ${T.border}`, flexWrap: 'wrap' }}>
+      <div key={item.value} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '6px 0', borderBottom: `1px solid ${T.border}` }}>
         {actAsLink ? (
           <a href={href} aria-label={`${kind === 'phone' ? 'Call' : 'Email'} ${row.name} at ${item.value}, ${confidenceBand(item.confidence)} ${item.confidence ?? 0}% confidence, source ${item.source || 'unknown'}`}
-            style={{ fontSize: 12, color: T.ink, textDecoration: 'none', fontWeight: 600, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'left' }}>{item.value}</a>
+            style={{ fontSize: 12, color: T.ink, textDecoration: 'none', fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</a>
         ) : (
           <button onClick={() => copy(item.value)} aria-label={`Copy ${item.value}`}
-            style={{ background: 'none', border: 'none', padding: 0, fontSize: 12, color: T.ink, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'left' }}>{item.value}</button>
+            style={{ background: 'none', border: 'none', padding: 0, fontSize: 12, color: T.ink, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</button>
         )}
         <BandPill confidence={item.confidence} />
         <span style={{ fontSize: 10, color: T.faint }}>{(item.source || '').replace(/_/g, ' ')}</span>
@@ -627,7 +566,7 @@ function ContactCell({ row }) {
         <div style={{ fontSize: 11, fontWeight: 700, color: T.ink4, letterSpacing: .4, marginBottom: 6 }}>PHONE NUMBERS</div>
         {phones.map(p => popRow(p, 'phone'))}
       </Popover>
-      <Popover open={open === 'emails'} onClose={() => setOpen(null)} width={360} anchorRef={emailBtnRef}>
+      <Popover open={open === 'emails'} onClose={() => setOpen(null)} width={320} anchorRef={emailBtnRef}>
         <div style={{ fontSize: 11, fontWeight: 700, color: T.ink4, letterSpacing: .4, marginBottom: 6 }}>EMAIL ADDRESSES</div>
         {emails.map(e => popRow(e, 'email'))}
       </Popover>
@@ -640,7 +579,7 @@ function ContactCell({ row }) {
 // because createCandidate() resolves with { data, error } instead of throwing —
 // a failed insert was reported as a success. It now counts REAL successes and
 // surfaces the first failure.
-function AddToCandidatesModal({ rows, userId, onClose, onDone }) {
+function AddToCandidatesModal({ rows, onClose, onDone }) {
   const [selected, setSelected] = useState(() => new Set(rows.map((_, i) => i)))
   const [saving, setSaving] = useState(false)
   const [result, setResult] = useState(null)   // { added, failed, firstError }
@@ -651,38 +590,29 @@ function AddToCandidatesModal({ rows, userId, onClose, onDone }) {
     return next
   })
 
-  // v3: CSV rows become SILOED prospects (candidate_id null), same as AI
-  // discovery — they only reach My Candidates via the per-row button.
   const handleAdd = async () => {
     setSaving(true)
-    const payload = [...selected].map(i => {
-      const p = rows[i]
-      // Same shape buildContact() writes server-side, so ContactCell renders it.
-      const contact = {
-        emails: p.email ? [{ value: p.email, source: 'csv_import', source_url: null, confidence: 90 }] : [],
-        phones: p.phone ? [{ value: p.phone, source: 'csv_import', source_url: null, confidence: 90 }] : [],
-        source: (p.email || p.phone) ? 'csv_import' : null,
-        confidence: (p.email || p.phone) ? 90 : 0,
-      }
-      return {
-        created_by: userId,
-        candidate_id: null,
-        name: p.name || 'Unknown',
-        contact,
-        discovery_source: 'csv_import',
-        win_odds_factors: { discovery: { note: p.note || null } },
-        enrichment_status: 'pending',
-      }
-    })
     let added = 0, failed = 0, firstError = null
-    try {
-      const { data, error } = await supabase.from('prospect_profiles').insert(payload).select('id')
-      added = Array.isArray(data) ? data.length : 0
-      failed = payload.length - added
-      if (error) firstError = error.message
-    } catch (e) {
-      failed = payload.length
-      firstError = e.message
+    for (const i of selected) {
+      const p = rows[i]
+      try {
+        const { data, error } = await createCandidate({
+          name:   p.name || 'Unknown',
+          email:  p.email || null,
+          phone:  p.phone || null,
+          status: 'exploring',
+          notes:  p.note || null,
+        })
+        if (error || !data) {
+          failed++
+          if (!firstError) firstError = error?.message || 'The database rejected the row.'
+        } else {
+          added++
+        }
+      } catch (e) {
+        failed++
+        if (!firstError) firstError = e.message
+      }
     }
     setResult({ added, failed, firstError })
     setSaving(false)
@@ -695,7 +625,7 @@ function AddToCandidatesModal({ rows, userId, onClose, onDone }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottom: `1px solid ${T.divider}` }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <UserPlus style={{ width: 16, height: 16, color: T.red }} />
-            <span style={{ fontSize: 14, fontWeight: 800, color: T.ink }}>Add imported rows to Prospecting</span>
+            <span style={{ fontSize: 14, fontWeight: 800, color: T.ink }}>Add imported rows to Candidates</span>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
             <X style={{ width: 16, height: 16, color: T.faint }} />
@@ -705,7 +635,7 @@ function AddToCandidatesModal({ rows, userId, onClose, onDone }) {
         {result ? (
           <div style={{ padding: 28, textAlign: 'center' }}>
             <div style={{ fontSize: 16, fontWeight: 800, color: T.ink, marginBottom: 6 }}>
-              {result.added} prospect{result.added === 1 ? '' : 's'} added
+              {result.added} candidate{result.added === 1 ? '' : 's'} added
             </div>
             {result.failed > 0 && (
               <div style={{ fontSize: 12.5, color: T.amber, lineHeight: 1.6, marginBottom: 10 }}>
@@ -714,7 +644,7 @@ function AddToCandidatesModal({ rows, userId, onClose, onDone }) {
               </div>
             )}
             <div style={{ fontSize: 12.5, color: T.muted, marginBottom: 16 }}>
-              They now appear in Discover, ready to research. Use “Add to My Candidates” on any row you want in your Candidates list.
+              They now appear in Discover with “Exploring” status, ready to queue for enrichment.
             </div>
             <Btn kind="primary" onClick={onDone}>Back to Discover</Btn>
           </div>
@@ -740,7 +670,7 @@ function AddToCandidatesModal({ rows, userId, onClose, onDone }) {
             </div>
             <div style={{ padding: 14, borderTop: `1px solid ${T.divider}` }}>
               <Btn kind="primary" onClick={handleAdd} disabled={saving || selected.size === 0} style={{ width: '100%' }}>
-                {saving ? <><Spinner size={14} color="#fff" /> Adding…</> : <>Add {selected.size} to Prospecting</>}
+                {saving ? <><Spinner size={14} color="#fff" /> Adding…</> : <>Add {selected.size} to Candidates</>}
               </Btn>
             </div>
           </>
@@ -750,77 +680,10 @@ function AddToCandidatesModal({ rows, userId, onClose, onDone }) {
   )
 }
 
-// ── Save-as-list modal ───────────────────────────────────────────────────────
-// Replaces the browser-native window.prompt() that used to name the list.
-// Same overlay + card pattern as AddToCandidatesModal; Escape/scroll-lock/
-// autofocus come from the shared useDialog contract. The parent's onSave
-// runs the unchanged createProspectingList flow with the entered name.
-function SaveListModal({ count, defaultName, onClose, onSave }) {
-  const [name, setName] = useState(defaultName)
-  const [saving, setSaving] = useState(false)
-  const inputRef = useRef(null)
-  useDialog(onClose, { initialFocusRef: inputRef })
-
-  const trimmed = name.trim()
-  const canSave = trimmed.length > 0 && !saving
-
-  const submit = async (e) => {
-    e?.preventDefault?.()
-    if (!canSave) return
-    setSaving(true)
-    try {
-      await onSave(trimmed)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-      <div onClick={saving ? undefined : onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)' }} />
-      <form onSubmit={submit} style={{ ...cardStyle, position: 'relative', width: '100%', maxWidth: 440, display: 'flex', flexDirection: 'column', fontFamily: T.font }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottom: `1px solid ${T.divider}` }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <ListChecks style={{ width: 16, height: 16, color: T.red }} />
-            <span style={{ fontSize: 14, fontWeight: 800, color: T.ink }}>Save as prospecting list</span>
-          </div>
-          <button type="button" onClick={onClose} disabled={saving} aria-label="Close" style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-            <X style={{ width: 16, height: 16, color: T.faint }} />
-          </button>
-        </div>
-
-        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <label htmlFor="save-list-name" style={{ fontSize: 11.5, fontWeight: 700, color: T.ink4 }}>List name</label>
-          <input
-            id="save-list-name"
-            ref={inputRef}
-            style={inputStyle}
-            value={name}
-            onChange={e => setName(e.target.value)}
-            onFocus={e => e.target.select()}
-            placeholder="Name this prospecting list"
-            disabled={saving}
-            autoComplete="off"
-          />
-          <div style={{ fontSize: 12.5, color: T.muted }}>
-            {count} prospect{count === 1 ? '' : 's'} will be saved.
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: 14, borderTop: `1px solid ${T.divider}` }}>
-          <Btn onClick={onClose} disabled={saving}>Cancel</Btn>
-          <Btn kind="primary" type="submit" disabled={!canSave}>
-            {saving ? <><Spinner size={14} color="#fff" /> Saving…</> : 'Save'}
-          </Btn>
-        </div>
-      </form>
-    </div>
-  )
-}
-
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function Prospecting() {
+  const navigate = useNavigate()
   const { user } = useAuth()
   const userTier = getUserTier(user)
 
@@ -830,26 +693,23 @@ export default function Prospecting() {
   const [notice, setNotice] = useState('')
   const [schemaMissing, setSchemaMissing] = useState(false)
 
-  // My Candidates — kept only for the name-match guard on "Add to My Candidates".
   const [candidates, setCandidates] = useState([])
+  const [elections, setElections] = useState([])
   const [prospects, setProspects] = useState([])
 
-  // Discover — AI search form (v3)
-  const [dMode, setDMode] = useState('county')
-  const [dCounty, setDCounty] = useState('')
-  const [dLevel, setDLevel] = useState('county')
-  const [dOffice, setDOffice] = useState('')
-  const [dDistrict, setDDistrict] = useState('')
-  const [dYear, setDYear] = useState(THIS_YEAR)
-  const [dq, setDq] = useState('')                    // filter the discovered field
+  // Discover filters
+  const [q, setQ] = useState('')
+  const [level, setLevel] = useState('')
+  const [party, setParty] = useState('')
+  const [statuses, setStatuses] = useState(['exploring', 'declared'])
+  const [electionId, setElectionId] = useState('')
+  const [upcomingOnly, setUpcomingOnly] = useState(true)
   const [picked, setPicked] = useState(() => new Set())
-  const [adding, setAdding] = useState(() => new Set())  // prospect ids mid-"Add to My Candidates"
 
   // Enrich queue
   const [queued, setQueued] = useState(() => new Set())
-  const [run, setRun] = useState(null)   // { runId, kind, stage, status, total, completed, failed, message }
+  const [run, setRun] = useState(null)   // { runId, stage, status, total, completed, failed, message }
   const runAlive = useRef(false)
-  const runKindRef = useRef('brief')     // 'discover' | 'brief' — where pollRun lands on done
 
   // Results filters
   const [rq, setRq] = useState('')
@@ -864,7 +724,6 @@ export default function Prospecting() {
   const [csvRows, setCsvRows] = useState([])
   const [csvName, setCsvName] = useState('')
   const [showAddModal, setShowAddModal] = useState(false)
-  const [showSaveListModal, setShowSaveListModal] = useState(false)
 
   // ── Data loading ───────────────────────────────────────────────────────────
   const loadProspects = useCallback(async () => {
@@ -886,12 +745,9 @@ export default function Prospecting() {
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      // Supabase query builders resolve with { data, error } and never throw —
-      // discarding `error` here used to render an empty Discover tab with no
-      // message when the candidates or elections query failed (v1.36.1 fix).
-      const candRes = await getCandidates({})
-      if (candRes.error) throw new Error(`Couldn't load candidates: ${candRes.error.message}`)
-      setCandidates(candRes.data || [])
+      const [{ data: c }, { data: e }] = await Promise.all([getCandidates({}), getElections()])
+      setCandidates(c || [])
+      setElections(e || [])
       await loadProspects()
     } catch (e) {
       setError(e.message || 'Could not load your prospecting data.')
@@ -902,157 +758,82 @@ export default function Prospecting() {
   useEffect(() => { loadAll() }, [loadAll])
   useEffect(() => () => { runAlive.current = false }, [])
 
-  // ── Resume an in-flight enrichment run after navigation/refresh ────────────
-  // v1.36.2: the page says "you can leave and come back" — now it's true.
-  // Polling used to die on unmount and nothing on mount looked for a running
-  // run, so returning users saw no progress bar and stale statuses. On mount,
-  // find the newest RLS-scoped progress row still marked running with a fresh
-  // heartbeat and re-attach the poller to it.
-  const resumedRef = useRef(false)
-  useEffect(() => {
-    if (resumedRef.current) return
-    resumedRef.current = true
-    ;(async () => {
-      try {
-        const { data } = await supabase
-          .from('prospecting_enrichment_progress')
-          .select('run_id,stage,status,message,total,completed,failed,current_name,started_at,updated_at')
-          .eq('status', 'running')
-          .order('updated_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
-        if (!data?.run_id) return
-        // Only resume a run that's still heartbeating — a long-dead "running"
-        // row is a crashed run, not something to re-attach a spinner to.
-        if (freshMs(data.updated_at) > HEARTBEAT_STALE_MS) return
-        setRun({ runId: data.run_id, ...data })
-        runAlive.current = true
-        await pollRun(data.run_id, Date.now())
-      } catch { /* resume is best-effort — a failure just means no progress bar */ }
-      finally { runAlive.current = false }
-    })()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // ── Discover ───────────────────────────────────────────────────────────────
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const upcomingElections = useMemo(
+    () => (elections || []).filter(e => !e.election_date || e.election_date >= today),
+    [elections, today]
+  )
 
-  // ── Discover (v3: AI search → the field) ───────────────────────────────────
-  // The discovered field = every prospect not yet researched. Discovery,
-  // CSV import and (legacy) candidate queueing all land here.
+  const queuedCandidateIds = useMemo(
+    () => new Set(prospects.map(p => p.candidate_id).filter(Boolean)),
+    [prospects]
+  )
+
+  // The Discover badge reports the prospect's REAL state (prospectStatus), not
+  // the mere existence of a prospect row — which is why an already-enriched
+  // candidate used to sit under a "queued" pill while the header said 0 queued.
+  const prospectByCandidateId = useMemo(() => {
+    const m = new Map()
+    for (const p of prospects) if (p.candidate_id) m.set(p.candidate_id, p)
+    return m
+  }, [prospects])
+
   const discoverRows = useMemo(() => {
-    const needle = lower(dq).trim()
-    return prospects.filter(p => {
-      if (!isQueuedProspect(p)) return false
-      if (!needle) return true
-      const hay = `${p.name || ''} ${p.office_name || ''} ${p.district_name || ''} ${p.county || ''} ${p.party || ''}`
-      return lower(hay).includes(needle)
+    const needle = lower(q).trim()
+    return (candidates || []).filter(c => {
+      if (level && c.office?.level !== level) return false
+      if (party && c.party !== party) return false
+      if (statuses.length && !statuses.includes(c.status)) return false
+      if (electionId && c.election_id !== electionId) return false
+      if (upcomingOnly) {
+        const d = c.election?.election_date
+        if (!d || d < today) return false
+      }
+      if (needle) {
+        const hay = `${c.name || ''} ${c.office?.name || ''} ${c.office?.district_name || ''} ${c.office?.county || ''}`
+        if (!lower(hay).includes(needle)) return false
+      }
+      return true
     })
-  }, [prospects, dq])
+  }, [candidates, q, level, party, statuses, electionId, upcomingOnly, today])
 
-  const discoverReady = dMode === 'county' ? !!dCounty : dMode === 'level' ? !!dLevel : !!dOffice.trim()
-
-  const runDiscovery = async () => {
+  const addToQueue = async () => {
     setError(''); setNotice('')
     if (schemaMissing) { setError('The prospecting tables have not been migrated yet.'); return }
-    if (!discoverReady) return
-    const runId = makeRunId()
-    const startedAt = Date.now()
-    runKindRef.current = 'discover'
-    setRun({ runId, kind: 'discover', stage: 1, status: 'running', total: 0, completed: 0, failed: 0 })
-    runAlive.current = true
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      const body = { run_id: runId, mode: dMode, electionYear: dYear }
-      if (dMode === 'county') body.county = dCounty
-      if (dMode === 'level') { body.level = dLevel; if (dCounty) body.county = dCounty }
-      if (dMode === 'race') { body.officeName = dOffice.trim(); body.districtName = dDistrict.trim() || undefined; if (dCounty) body.county = dCounty }
-      const res = await fetch('/.netlify/functions/discover-prospects-background', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-        },
-        body: JSON.stringify(body),
-      })
-      if (res.status !== 202 && !res.ok) {
-        let detail = ''
-        try { detail = (await res.json())?.error || '' } catch { /* non-JSON */ }
-        throw new Error(detail || 'Could not start the candidate search — try again.')
-      }
-      await pollRun(runId, startedAt)
-    } catch (e) {
-      setError(e.message)
-      setRun(null)
-    } finally {
-      runAlive.current = false
+    const chosen = discoverRows.filter(c => picked.has(c.id))
+    const fresh = chosen.filter(c => !queuedCandidateIds.has(c.id))
+    const skipped = chosen.length - fresh.length
+    if (!fresh.length) {
+      setNotice(skipped ? `All ${skipped} selected prospect${skipped === 1 ? ' is' : 's are'} already in the queue.` : 'Select at least one candidate first.')
+      return
     }
-  }
-
-  // ── Add to My Candidates (per row) ─────────────────────────────────────────
-  // The ONLY path from Prospecting into the Candidates table. Name-match guard
-  // links to an existing candidate instead of creating a duplicate.
-  const candidateByName = useMemo(() => {
-    const m = new Map()
-    for (const c of candidates) m.set(lower(c.name).replace(/\s+/g, ' ').trim(), c)
-    return m
-  }, [candidates])
-
-  const addToMyCandidates = async (p) => {
-    if (adding.has(p.id) || p.candidate_id) return
-    setAdding(prev => new Set(prev).add(p.id))
-    setError('')
-    try {
-      const key = lower(p.name).replace(/\s+/g, ' ').trim()
-      let cand = candidateByName.get(key) || null
-      if (!cand) {
-        const disc = p.win_odds_factors?.discovery || {}
-        const email = (p.contact?.emails || []).length ? bestOf(p.contact.emails).value : null
-        const phone = (p.contact?.phones || []).length ? bestOf(p.contact.phones).value : null
-        const partyOk = DB_PARTIES.includes(p.affiliation) ? p.affiliation : DB_PARTIES.includes(p.party) ? p.party : null
-        const status = /declared|filed|on_ballot|incumbent/i.test(String(disc.status || '')) ? 'declared' : 'exploring'
-        const noteBits = [
-          'Added from Prospecting',
-          p.office_name ? `Office: ${p.office_name}${p.district_name ? ` (${p.district_name})` : ''}` : null,
-          p.county ? `County: ${p.county}` : null,
-          disc.source_url ? `Source: ${disc.source_url}` : null,
-        ].filter(Boolean)
-        const { data, error: cErr } = await createCandidate({
-          name: p.name,
-          party: partyOk,
-          status,
-          website: p.website_url || null,
-          email, phone,
-          notes: noteBits.join(' · '),
-        })
-        if (cErr || !data) throw new Error(cErr?.message || 'Could not create the candidate.')
-        cand = data
-        setCandidates(prev => [cand, ...prev])
-      }
-      const { error: lErr } = await supabase
-        .from('prospect_profiles')
-        .update({ candidate_id: cand.id })
-        .eq('id', p.id)
-      if (lErr) {
-        // Unique (created_by, candidate_id): this candidate is already linked to
-        // another prospect row — still counts as "in My Candidates".
-        if (!/duplicate|unique/i.test(lErr.message || '')) throw new Error(lErr.message)
-      }
-      setProspects(prev => prev.map(x => (x.id === p.id ? { ...x, candidate_id: cand.id } : x)))
-      setNotice(`${p.name} is now in My Candidates.`)
-    } catch (e) {
-      setError(`Couldn't add ${p.name}: ${e.message}`)
-    } finally {
-      setAdding(prev => { const next = new Set(prev); next.delete(p.id); return next })
-    }
-  }
-
-  // Research the whole discovered field (or the picked subset) — brief mode.
-  // Defined after startEnrichment below; hoisted via function declaration.
-  function researchDiscovered(ids) {
-    const chosen = (ids && ids.length ? ids : discoverRows.map(p => p.id)).slice(0, MAX_BATCH)
-    if (!chosen.length) { setNotice('Nothing to research yet — run a search first.'); return }
-    setQueued(new Set(chosen))
+    const rows = fresh.map(c => ({
+      created_by: user?.id,
+      candidate_id: c.id,
+      name: c.name,
+      office_name: c.office?.name || null,
+      district_name: c.office?.district_name || null,
+      county: c.office?.county || null,
+      level: c.office?.level || null,
+      election_id: c.election_id || null,
+      election_date: c.election?.election_date || null,
+      party: c.party || null,
+      discovery_source: 'candidates_db',
+      enrichment_status: 'pending',
+    }))
+    const { data, error: err } = await supabase.from('prospect_profiles').insert(rows).select()
+    // Count REAL inserts. A partial failure must not report a clean success.
+    const added = Array.isArray(data) ? data.length : 0
+    if (err && added === 0) { setError(`Could not queue prospects: ${err.message}`); return }
+    setProspects(prev => [...(data || []), ...prev])
     setPicked(new Set())
+    setNotice(
+      `${added} prospect${added === 1 ? '' : 's'} queued for enrichment` +
+      `${skipped ? ` · ${skipped} already queued` : ''}` +
+      `${err ? ` · some rows failed: ${err.message}` : ''}`
+    )
     setTab('enrich')
-    startEnrichment(chosen)
   }
 
   // ── CSV import (uses the shared, quoted-field-safe parser) ─────────────────
@@ -1067,15 +848,8 @@ export default function Prospecting() {
         const rows = parseCsvRows(e.target.result)
         if (rows.length < 2) { setError('That CSV has no data rows.'); return }
         const headers = rows[0].map(h => lower(h).trim())
-        // v1.36.3: exact header match wins before substring fallback — pure
-        // `includes` used to grab "county name" or "office name" as the name
-        // column whenever it appeared first, importing garbage names.
-        const find = (...names) => {
-          const exact = headers.findIndex(h => names.includes(h))
-          if (exact >= 0) return exact
-          return headers.findIndex(h => names.some(n => h.includes(n)))
-        }
-        const iName = find('name', 'full name', 'full_name', 'candidate name', 'candidate')
+        const find = (...names) => headers.findIndex(h => names.some(n => h.includes(n)))
+        const iName = find('name', 'full name', 'candidate')
         const iEmail = find('email', 'e-mail')
         const iPhone = find('phone', 'mobile', 'cell')
         if (iName < 0) { setError('That CSV has no recognisable name column.'); return }
@@ -1124,14 +898,10 @@ export default function Prospecting() {
           return
         }
         if (data.status === 'done') {
-          const isDiscover = runKindRef.current === 'discover'
-          setNotice(data.message || (isDiscover
-            ? `Found ${data.completed} candidate${data.completed === 1 ? '' : 's'}.`
-            : `Researched ${data.completed} of ${data.total} candidates.`))
+          setNotice(data.message || `Enriched ${data.completed} of ${data.total} prospects.`)
           setRun(null)
           await loadProspects()
-          // Discovery lands back on the field; research lands on Results.
-          setTab(isDiscover ? 'discover' : 'results')
+          setTab('results')
           return
         }
         if (freshMs(data.updated_at) > HEARTBEAT_STALE_MS) {
@@ -1150,14 +920,15 @@ export default function Prospecting() {
     }
   }, [loadProspects])
 
-  const startEnrichment = async (idsOverride) => {
+  const startEnrichment = async () => {
     setError(''); setNotice('')
-    const ids = (Array.isArray(idsOverride) ? idsOverride : [...queued]).slice(0, MAX_BATCH)
-    if (!ids.length) { setNotice('Select at least one candidate to research.'); return }
-    const runId = makeRunId()
+    const ids = [...queued].slice(0, MAX_BATCH)
+    if (!ids.length) { setNotice('Select at least one queued prospect.'); return }
+    const runId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}`.padEnd(36, '0')
     const startedAt = Date.now()
-    runKindRef.current = 'brief'
-    setRun({ runId, kind: 'brief', stage: 1, status: 'running', total: ids.length, completed: 0, failed: 0 })
+    setRun({ runId, stage: 1, status: 'running', total: ids.length, completed: 0, failed: 0 })
     runAlive.current = true
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -1167,9 +938,7 @@ export default function Prospecting() {
           'Content-Type': 'application/json',
           ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         },
-        // v3: one-shot brief per candidate (party, AI win-odds estimate,
-        // contact, agency flag). Server cap 50 — see MAX_BRIEF_PER_RUN.
-        body: JSON.stringify({ run_id: runId, prospect_ids: ids, mode: 'brief' }),
+        body: JSON.stringify({ run_id: runId, prospect_ids: ids }),
       })
       // Netlify answers a background invocation with 202 before the handler runs —
       // anything else here is a genuine dispatch failure.
@@ -1211,8 +980,7 @@ export default function Prospecting() {
         case 'win_odds_score': return row.win_odds_score == null ? null : Number(row.win_odds_score)
         case 'name':           return lower(row.name)
         case 'office_name':    return lower(row.office_name)
-        // Sort on the DISPLAYED spelling — 'Democrat' and 'Democratic' are one group.
-        case 'affiliation':    return lower(displayParty(row.affiliation || row.party))
+        case 'affiliation':    return lower(row.affiliation)
         case 'website_state':  return lower(row.website_state)
         case 'agency':         return row.agency_signals?.detected ? 1 : 0
         case 'contact':        return (row.contact?.emails?.length || 0) + (row.contact?.phones?.length || 0)
@@ -1251,16 +1019,10 @@ export default function Prospecting() {
     }
   }
 
-  // "Save as list" opens an in-app modal (SaveListModal) instead of the old
-  // window.prompt(); the modal hands the entered name to confirmSaveAsList,
-  // which runs the original createProspectingList flow unchanged.
-  const saveAsList = () => {
+  const saveAsList = async () => {
     setError(''); setNotice('')
     if (!visibleResults.length) { setNotice('Nothing to save — adjust your filters.'); return }
-    setShowSaveListModal(true)
-  }
-
-  const confirmSaveAsList = async (name) => {
+    const name = window.prompt('Name this prospecting list', `Enriched prospects — ${format(new Date(), 'MMM d, yyyy')}`)
     if (!name) return
     const entries = visibleResults.map(p => ({
       name: p.name, office: p.office_name, district: p.district_name,
@@ -1283,9 +1045,8 @@ export default function Prospecting() {
     // createProspectingList resolves with { data, error } — it does NOT throw.
     // The old page treated any resolution as success and showed a saved list
     // that never existed.
-    if (err || !data) { setError(`Could not save the list: ${err?.message || 'the database rejected it'}`); setShowSaveListModal(false); return }
+    if (err || !data) { setError(`Could not save the list: ${err?.message || 'the database rejected it'}`); return }
     setNotice(`Saved “${data.name}” with ${entries.length} prospects.`)
-    setShowSaveListModal(false)
   }
 
   const removeProspect = async (id) => {
@@ -1350,7 +1111,7 @@ export default function Prospecting() {
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: '-.2px' }}>Prospecting</div>
           <div style={{ fontSize: 12.5, color: T.muted, marginTop: 3 }}>
-            Find the field → research → export. {counts.enriched} researched · {counts.queued} to research
+            Discover → enrich → score → export. {counts.enriched} enriched · {counts.queued} queued
             {counts.failed ? ` (${counts.failed} failed)` : ''}
           </div>
         </div>
@@ -1369,25 +1130,15 @@ export default function Prospecting() {
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
         {[
-          ['discover', `Discover (${counts.queued})`],
-          ['enrich', `Research (${counts.queued})`],
+          ['discover', `Discover (${discoverRows.length})`],
+          ['enrich', `Enrich (${counts.queued})`],
           ['results', `Results (${counts.enriched})`],
         ].map(([key, label]) => (
           <Chip key={key} active={tab === key} onClick={() => setTab(key)}>{label}</Chip>
         ))}
       </div>
 
-      {error && (
-        <Banner kind="error" onClose={() => setError('')}>
-          {error}{' '}
-          <button
-            onClick={() => { setError(''); loadAll() }}
-            style={{ textDecoration: 'underline', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0 }}
-          >
-            Retry
-          </button>
-        </Banner>
-      )}
+      {error && <Banner kind="error" onClose={() => setError('')}>{error}</Banner>}
       {notice && <Banner kind="ok" onClose={() => setNotice('')}>{notice}</Banner>}
       {schemaMissing && (
         <Banner kind="warn">
@@ -1403,115 +1154,67 @@ export default function Prospecting() {
         </div>
       )}
 
-      {/* ── DISCOVER (v3: AI search) ─────────────────────────────────────── */}
+      {/* ── DISCOVER ─────────────────────────────────────────────────────── */}
       {!loading && tab === 'discover' && (
         <>
-          {/* Search form */}
           <div style={{ ...cardStyle, padding: 16, marginBottom: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <Sparkles style={{ width: 15, height: 15, color: T.red }} />
-              <div style={{ fontSize: 13.5, fontWeight: 800 }}>Find every candidate in a race</div>
-              <span style={{ fontSize: 11.5, color: T.muted }}>— live web search, cited sources only</span>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+              <Field label="Search">
+                <div style={{ position: 'relative' }}>
+                  <Search style={{ width: 13, height: 13, color: T.faint, position: 'absolute', left: 9, top: 10 }} />
+                  <input style={{ ...inputStyle, paddingLeft: 27 }} value={q} onChange={e => setQ(e.target.value)} placeholder="Name, office, county…" />
+                </div>
+              </Field>
+              <Field label="Office level">
+                <select style={inputStyle} value={level} onChange={e => setLevel(e.target.value)}>
+                  {LEVEL_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+                </select>
+              </Field>
+              <Field label="Party">
+                <select style={inputStyle} value={party} onChange={e => setParty(e.target.value)}>
+                  <option value="">All parties</option>
+                  {PARTY_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </Field>
+              <Field label="Election">
+                <select style={inputStyle} value={electionId} onChange={e => setElectionId(e.target.value)}>
+                  <option value="">{upcomingOnly ? 'All upcoming elections' : 'All elections'}</option>
+                  {(upcomingOnly ? upcomingElections : elections).map(e => (
+                    <option key={e.id} value={e.id}>{e.name}{e.election_date ? ` — ${fmtDay(e.election_date)}` : ''}</option>
+                  ))}
+                </select>
+              </Field>
             </div>
 
-            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 12 }}>
-              {DISCOVER_MODES.map(m => (
-                <Chip key={m.v} active={dMode === m.v} onClick={() => setDMode(m.v)}>{m.l}</Chip>
+            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 12, alignItems: 'center' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: T.ink4, marginRight: 2 }}>STATUS</span>
+              {STATUS_OPTIONS.map(s => (
+                <Chip
+                  key={s} active={statuses.includes(s)}
+                  onClick={() => setStatuses(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s])}
+                >{s.replace(/_/g, ' ')}</Chip>
               ))}
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-              {dMode === 'race' && (
-                <>
-                  <Field label="Office" style={{ gridColumn: 'span 2' }}>
-                    <input style={inputStyle} value={dOffice} onChange={e => setDOffice(e.target.value)}
-                           placeholder="e.g. Marathon County Board Supervisor, Wausau Mayor, Assembly District 85" />
-                  </Field>
-                  <Field label="District (optional)">
-                    <input style={inputStyle} value={dDistrict} onChange={e => setDDistrict(e.target.value)} placeholder="e.g. District 12" />
-                  </Field>
-                </>
-              )}
-              {dMode === 'level' && (
-                <Field label="Office level">
-                  <SearchableSelect
-                    value={dLevel}
-                    onChange={setDLevel}
-                    options={LEVEL_OPTIONS.map(o => ({ value: o.v, label: o.l }))}
-                    placeholder="Pick a level…"
-                  />
-                </Field>
-              )}
-              <Field label={dMode === 'county' ? 'County' : 'County (optional)'}>
-                <SearchableSelect
-                  value={dCounty}
-                  onChange={setDCounty}
-                  options={[
-                    { value: '', label: dMode === 'county' ? 'Pick a county…' : 'All of Wisconsin' },
-                    ...WI_COUNTIES.map(c => ({ value: c, label: `${c} County` })),
-                  ]}
-                  placeholder={dMode === 'county' ? 'Pick a county…' : 'All of Wisconsin'}
-                  searchPlaceholder="Type a county…"
-                />
-              </Field>
-              <Field label="Election year">
-                <SearchableSelect
-                  value={dYear}
-                  onChange={v => setDYear(Number(v))}
-                  options={YEAR_OPTIONS.map(y => ({ value: y, label: String(y) }))}
-                />
-              </Field>
+              <span style={{ width: 10 }} />
+              <Chip active={upcomingOnly} onClick={() => setUpcomingOnly(v => !v)} title="Only candidates in an election that hasn't happened yet">
+                Upcoming elections only
+              </Chip>
             </div>
 
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 14, paddingTop: 12, borderTop: `1px solid ${T.divider}` }}>
-              <Btn kind="primary" onClick={runDiscovery} disabled={!discoverReady || !!run || schemaMissing}>
-                {run?.kind === 'discover'
-                  ? <><Spinner size={13} color="#fff" /> Searching…</>
-                  : <><Search style={{ width: 13, height: 13 }} /> Find candidates</>}
+              <Btn kind="primary" onClick={addToQueue} disabled={!picked.size || schemaMissing}>
+                <Plus style={{ width: 13, height: 13 }} /> Queue {picked.size || ''} for enrichment
               </Btn>
-              <EmptyNote style={{ fontSize: 11.5 }}>
-                Up to {MAX_BATCH} per search · ~1 credit. Anyone already in your pipeline is skipped.
-              </EmptyNote>
+              <Btn onClick={() => setPicked(new Set(discoverRows.map(c => c.id)))} disabled={!discoverRows.length}>Select all {discoverRows.length}</Btn>
+              <Btn kind="quiet" onClick={() => setPicked(new Set())} disabled={!picked.size}>Clear</Btn>
               <span style={{ flex: 1 }} />
-              <Btn kind="quiet" onClick={() => fileRef.current?.click()} title="Import a CSV of names as prospects">
-                <Upload style={{ width: 13, height: 13 }} /> Import a list
+              <Btn onClick={() => fileRef.current?.click()} title="Import a CSV of names into your candidates">
+                <Upload style={{ width: 13, height: 13 }} /> Import CSV
               </Btn>
               <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={handleCsvFile} style={{ display: 'none' }} />
             </div>
             {csvName && !showAddModal && (
               <div style={{ fontSize: 11.5, color: T.muted, marginTop: 8 }}>Last import: {csvName} ({csvRows.length} rows)</div>
             )}
-          </div>
-
-          {/* Discovery progress */}
-          {run?.kind === 'discover' && (
-            <div style={{ ...cardStyle, padding: 16, marginBottom: 14 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <Spinner />
-                <div style={{ fontSize: 12.5, fontWeight: 700 }}>{DISCOVER_LABELS[stage - 1]}</div>
-                {run.current_name && <span style={{ fontSize: 11.5, color: T.muted }}>· {run.current_name}</span>}
-              </div>
-              <div style={{ fontSize: 11, color: T.faint, marginTop: 8, lineHeight: 1.55 }}>
-                Usually 20–60 seconds. Runs on the server — you can leave this page and come back.
-              </div>
-            </div>
-          )}
-
-          {/* The discovered field */}
-          <div style={{ ...cardStyle, padding: 16, marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Btn kind="primary" onClick={() => researchDiscovered(picked.size ? [...picked] : null)} disabled={!discoverRows.length || !!run || schemaMissing}>
-              <Sparkles style={{ width: 13, height: 13 }} />
-              {picked.size ? `Research ${Math.min(picked.size, MAX_BATCH)} selected` : `Research all ${Math.min(discoverRows.length, MAX_BATCH)}`}
-            </Btn>
-            <Btn onClick={() => setPicked(new Set(discoverRows.slice(0, MAX_BATCH).map(p => p.id)))} disabled={!discoverRows.length}>
-              Select all
-            </Btn>
-            <Btn kind="quiet" onClick={() => setPicked(new Set())} disabled={!picked.size}>Clear</Btn>
-            <span style={{ flex: 1 }} />
-            <div style={{ position: 'relative', minWidth: 220 }}>
-              <Search style={{ width: 13, height: 13, color: T.faint, position: 'absolute', left: 9, top: 10 }} />
-              <input style={{ ...inputStyle, paddingLeft: 27 }} value={dq} onChange={e => setDq(e.target.value)} placeholder="Filter the field…" />
-            </div>
           </div>
 
           <div style={{ ...cardStyle, overflow: 'hidden' }}>
@@ -1523,76 +1226,50 @@ export default function Prospecting() {
                     <th style={thStyle}>Candidate</th>
                     <th style={thStyle}>Office</th>
                     <th style={thStyle}>Party</th>
-                    <th style={thStyle}>County</th>
-                    <th style={thStyle}>Source</th>
-                    <th style={{ ...thStyle, width: 170 }}>My Candidates</th>
-                    <th style={{ ...thStyle, width: 40 }} />
+                    <th style={thStyle}>Status</th>
+                    <th style={thStyle}>Election</th>
+                    <th style={{ ...thStyle, width: 110 }}>Pipeline</th>
                   </tr>
                 </thead>
                 <tbody>
                   {discoverRows.length === 0 && (
-                    <tr><td colSpan={8} style={{ padding: 28, textAlign: 'center' }}>
+                    <tr><td colSpan={7} style={{ padding: 28, textAlign: 'center' }}>
                       <EmptyNote>
-                        {prospects.some(isQueuedProspect)
-                          ? 'No one in the field matches that filter.'
-                          : 'Nothing here yet. Pick a county, level, or race above and press Find candidates.'}
+                        No candidates match these filters. Widen the status chips, turn off
+                        “upcoming elections only”, or import a CSV.
                       </EmptyNote>
                     </td></tr>
                   )}
-                  {discoverRows.map(p => {
-                    const disc = p.win_odds_factors?.discovery || {}
-                    const src = disc.source_url || p.research_citations?.[0]?.url || null
-                    const partyLabel = displayParty(p.affiliation || p.party)
-                    const inMine = !!p.candidate_id
-                    const busy = adding.has(p.id)
+                  {discoverRows.map(c => {
+                    const already = queuedCandidateIds.has(c.id)
+                    const state   = already ? prospectStatus(prospectByCandidateId.get(c.id)) : null
                     return (
-                      <tr key={p.id} className="pp-row" style={trStyle}>
+                      <tr key={c.id} className="pp-row" style={trStyle}>
                         <td style={tdStyle}>
                           <input
                             type="checkbox"
-                            checked={picked.has(p.id)}
-                            disabled={!!run}
+                            checked={picked.has(c.id)}
+                            disabled={already}
                             onChange={() => setPicked(prev => {
                               const next = new Set(prev)
-                              if (next.has(p.id)) next.delete(p.id); else next.add(p.id)
+                              if (next.has(c.id)) next.delete(c.id); else next.add(c.id)
                               return next
                             })}
                           />
                         </td>
-                        <td style={{ ...tdStyle, fontWeight: 700 }}>
-                          {p.name}
-                          {prospectStatus(p) === 'failed' && (
-                            <span title={p.enrichment_error || ''} style={{ marginLeft: 6 }}><Pill c="#9F1239" bg="#FDF1F1">failed</Pill></span>
-                          )}
-                          {disc.confidence === 'low' && (
-                            <span title="The discovering page was not conclusive — verify before outreach" style={{ marginLeft: 6 }}><Pill>low confidence</Pill></span>
-                          )}
-                        </td>
+                        <td style={{ ...tdStyle, fontWeight: 700 }}>{c.name}</td>
                         <td style={tdStyle}>
-                          {p.office_name || '—'}
-                          {p.district_name && <span style={{ color: T.muted }}> · {displayDistrict(p.district_name)}</span>}
+                          {c.office?.name || '—'}
+                          {c.office?.district_name && <span style={{ color: T.muted }}> · {c.office.district_name}</span>}
                         </td>
-                        <td style={tdStyle}>{partyLabel || <span style={{ color: T.faint }}>—</span>}</td>
-                        <td style={tdStyle}>{p.county || <span style={{ color: T.faint }}>—</span>}</td>
+                        <td style={tdStyle}>{c.party || <span style={{ color: T.faint }}>—</span>}</td>
+                        <td style={{ ...tdStyle, textTransform: 'capitalize' }}>{String(c.status || '').replace(/_/g, ' ')}</td>
+                        <td style={tdStyle}>{c.election?.name || '—'}</td>
                         <td style={tdStyle}>
-                          {src
-                            ? <a href={src} target="_blank" rel="noopener noreferrer" style={{ color: T.red, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                                {p.discovery_source === 'csv_import' ? 'CSV' : 'source'} <ExternalLink style={{ width: 11, height: 11 }} />
-                              </a>
-                            : <span style={{ color: T.faint }}>{p.discovery_source === 'csv_import' ? 'CSV import' : '—'}</span>}
-                        </td>
-                        <td style={tdStyle}>
-                          {inMine
-                            ? <Pill c="#1F6F43" bg="#E6F5EC"><Check style={{ width: 11, height: 11, marginRight: 3 }} /> In My Candidates</Pill>
-                            : <Btn onClick={() => addToMyCandidates(p)} disabled={busy} style={{ fontSize: 11.5, padding: '5px 10px' }}>
-                                {busy ? <Spinner size={12} /> : <UserPlus style={{ width: 12, height: 12 }} />} Add to My Candidates
-                              </Btn>}
-                        </td>
-                        <td style={tdStyle}>
-                          <button onClick={() => removeProspect(p.id)} title="Remove from Prospecting"
-                                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint }}>
-                            <Trash2 style={{ width: 13, height: 13 }} />
-                          </button>
+                          {state === 'enriched' ? <Pill c="#1F6F43" bg="#E6F5EC">enriched</Pill>
+                            : state === 'failed' ? <Pill c="#9F1239" bg="#FDF1F1">failed</Pill>
+                            : state === 'queued' ? <Pill>queued</Pill>
+                            : <span style={{ color: T.faint }}>—</span>}
                         </td>
                       </tr>
                     )
@@ -1611,7 +1288,7 @@ export default function Prospecting() {
             <div style={{ ...cardStyle, padding: 16, marginBottom: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
                 <Spinner />
-                <div style={{ fontSize: 12.5, fontWeight: 700 }}>{(run.kind === 'discover' ? DISCOVER_LABELS : PHASE_LABELS)[stage - 1]}</div>
+                <div style={{ fontSize: 12.5, fontWeight: 700 }}>{PHASE_LABELS[stage - 1]}</div>
                 <span style={{ flex: 1 }} />
                 <div style={{ fontSize: 12, color: T.muted }}>
                   {run.completed || 0} / {run.total || 0} done{run.failed ? ` · ${run.failed} failed` : ''}
@@ -1627,22 +1304,22 @@ export default function Prospecting() {
                 }} />
               </div>
               <div style={{ fontSize: 11, color: T.faint, marginTop: 8, lineHeight: 1.55 }}>
-                Research runs on the server — you can leave this page and come back.
+                Enrichment runs on the server — you can leave this page and come back.
               </div>
             </div>
           )}
 
           <div style={{ ...cardStyle, padding: 16, marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Btn kind="primary" onClick={() => startEnrichment()} disabled={!!run || !queued.size}>
-              <Sparkles style={{ width: 13, height: 13 }} /> Research {Math.min(queued.size, MAX_BATCH) || ''} candidate{queued.size === 1 ? '' : 's'}
+            <Btn kind="primary" onClick={startEnrichment} disabled={!!run || !queued.size}>
+              <Sparkles style={{ width: 13, height: 13 }} /> Enrich {Math.min(queued.size, MAX_BATCH) || ''} prospect{queued.size === 1 ? '' : 's'}
             </Btn>
             <Btn onClick={() => setQueued(new Set(queueRows.slice(0, MAX_BATCH).map(p => p.id)))} disabled={!queueRows.length || !!run}>
-              Select all {Math.min(MAX_BATCH, queueRows.length)}
+              Select first {Math.min(MAX_BATCH, queueRows.length)}
             </Btn>
             <Btn kind="quiet" onClick={() => setQueued(new Set())} disabled={!queued.size}>Clear</Btn>
             <span style={{ flex: 1 }} />
             <EmptyNote style={{ fontSize: 11.5 }}>
-              One brief pass per candidate · up to {MAX_BATCH} per run · ~1 credit each.
+              Up to {MAX_BATCH} prospects per run (the server enforces the same cap).
             </EmptyNote>
           </div>
 
@@ -1662,7 +1339,7 @@ export default function Prospecting() {
                 <tbody>
                   {queueRows.length === 0 && (
                     <tr><td colSpan={6} style={{ padding: 28, textAlign: 'center' }}>
-                      <EmptyNote>Nothing to research. Find candidates on the Discover tab first.</EmptyNote>
+                      <EmptyNote>Nothing queued. Pick candidates on the Discover tab first.</EmptyNote>
                     </td></tr>
                   )}
                   {queueRows.map(p => {
@@ -1680,7 +1357,7 @@ export default function Prospecting() {
                           />
                         </td>
                         <td style={{ ...tdStyle, fontWeight: 700 }}>{p.name}</td>
-                        <td style={tdStyle}>{p.office_name || '—'}{p.district_name ? ` · ${displayDistrict(p.district_name)}` : ''}</td>
+                        <td style={tdStyle}>{p.office_name || '—'}{p.district_name ? ` · ${p.district_name}` : ''}</td>
                         <td style={tdStyle}>{fmtDay(p.discovered_at || p.created_at)}</td>
                         <td style={tdStyle}>
                           {prospectStatus(p) === 'failed'
@@ -1719,16 +1396,12 @@ export default function Prospecting() {
                        onChange={e => setMinScore(Number(e.target.value))} style={{ width: '100%', accentColor: T.red }} />
               </Field>
               <Field label="Website">
-                <SearchableSelect
-                  value={websiteFilter}
-                  onChange={setWebsiteFilter}
-                  options={[
-                    { value: 'all', label: 'Any' },
-                    { value: 'yes', label: 'Has a live site' },
-                    { value: 'facebook_only', label: 'Facebook only' },
-                    { value: 'no', label: 'No web presence' },
-                  ]}
-                />
+                <select style={inputStyle} value={websiteFilter} onChange={e => setWebsiteFilter(e.target.value)}>
+                  <option value="all">Any</option>
+                  <option value="yes">Has a live site</option>
+                  <option value="facebook_only">Facebook only</option>
+                  <option value="no">No web presence</option>
+                </select>
               </Field>
               <Field label="Focus">
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -1749,99 +1422,87 @@ export default function Prospecting() {
               <table style={tableStyle}>
                 <thead>
                   <tr>
-                    {sortBtn('name', 'Candidate', 170)}
+                    {sortBtn('name', 'Prospect', 170)}
                     {sortBtn('office_name', 'Office')}
-                    {sortBtn('affiliation', 'Party', 120)}
-                    {sortBtn('win_odds_score', 'Win odds', 190)}
-                    {sortBtn('contact', 'Contact', 230)}
-                    {sortBtn('website_state', 'Website', 120)}
+                    {sortBtn('win_odds_score', 'Win odds', 150)}
+                    {sortBtn('affiliation', 'Affiliation', 130)}
+                    {sortBtn('website_state', 'Website', 130)}
+                    <th style={thStyle}>Socials</th>
                     {sortBtn('agency', 'Agency', 140)}
-                    <th style={{ ...thStyle, width: 170 }}>My Candidates</th>
+                    {sortBtn('contact', 'Contact', 230)}
+                    {sortBtn('enriched_at', 'Enriched', 100)}
                     <th style={{ ...thStyle, width: 40 }} />
                   </tr>
                 </thead>
                 <tbody>
                   {visibleResults.length === 0 && (
-                    <tr><td colSpan={9} style={{ padding: 28, textAlign: 'center' }}>
+                    <tr><td colSpan={10} style={{ padding: 28, textAlign: 'center' }}>
                       <EmptyNote>
-                        No researched candidates match these filters
-                        {enrichedRows.length ? '.' : ' — find candidates on Discover and press Research first.'}
+                        No enriched prospects match these filters
+                        {enrichedRows.length ? '.' : ' — run an enrichment from the Enrich tab first.'}
                       </EmptyNote>
                     </td></tr>
                   )}
-                  {visibleResults.map(p => {
-                    const inMine = !!p.candidate_id
-                    const busy = adding.has(p.id)
-                    return (
-                      <tr key={p.id} className="pp-row" style={trStyle}>
-                        <td style={{ ...tdStyle, fontWeight: 700 }}>
-                          {p.name}
-                          {p.enrichment_status === 'partial' && (
-                            <div title={p.enrichment_error || ''} style={{ marginTop: 3 }}>
-                              <Pill c={T.amber} bg={T.warmBg}>partial</Pill>
-                            </div>
-                          )}
-                          {p.county && <div style={{ color: T.faint, fontSize: 11, fontWeight: 400 }}>{p.county} County</div>}
-                        </td>
-                        <td style={tdStyle}>
-                          {p.office_name || '—'}
-                          {p.district_name && <div style={{ color: T.muted, fontSize: 11 }}>{displayDistrict(p.district_name)}</div>}
-                        </td>
-                        <td style={tdStyle}>
-                          {displayParty(p.affiliation || p.party) || <span style={{ color: T.faint }}>unknown</span>}
-                          {p.affiliation_detail?.inferred && (
-                            <div title={p.affiliation_detail?.basis || ''} style={{ marginTop: 3 }}>
-                              <Pill c={T.amber} bg={T.warmBg}>inferred {p.affiliation_detail?.confidence ?? 0}%</Pill>
-                            </div>
-                          )}
-                        </td>
-                        <td style={{ ...tdStyle, overflow: 'visible' }}><ScoreCell row={p} /></td>
-                        <td style={tdStyle}><ContactCell row={p} /></td>
-                        <td style={tdStyle}>
-                          {p.website_state === 'yes' && p.website_url ? (
-                            <a href={p.website_url} target="_blank" rel="noopener noreferrer"
-                               style={{ fontSize: 11.5, color: T.red, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                              live site <ExternalLink style={{ width: 10, height: 10 }} />
-                            </a>
-                          ) : p.website_state === 'facebook_only' ? (
-                            <Pill c="#2563EB" bg="#E7F0FD">Facebook only</Pill>
-                          ) : p.website_state === 'no' ? (
-                            <Pill c={T.green} bg="#E6F5EC">no site</Pill>
-                          ) : <span style={{ color: T.faint }}>—</span>}
-                          <div style={{ marginTop: 4 }}><SocialLinks socials={p.socials} /></div>
-                        </td>
-                        <td style={{ ...tdStyle, overflow: 'visible' }}><AgencyCell row={p} /></td>
-                        <td style={tdStyle}>
-                          {inMine
-                            ? <Pill c="#1F6F43" bg="#E6F5EC"><Check style={{ width: 11, height: 11, marginRight: 3 }} /> In My Candidates</Pill>
-                            : <Btn onClick={() => addToMyCandidates(p)} disabled={busy} style={{ fontSize: 11.5, padding: '5px 10px' }}>
-                                {busy ? <Spinner size={12} /> : <UserPlus style={{ width: 12, height: 12 }} />} Add to My Candidates
-                              </Btn>}
-                        </td>
-                        <td style={tdStyle}>
-                          <button onClick={() => removeProspect(p.id)} title="Remove"
-                                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint }}>
-                            <Trash2 style={{ width: 13, height: 13 }} />
-                          </button>
-                        </td>
-                      </tr>
-                    )
-                  })}
+                  {visibleResults.map(p => (
+                    <tr key={p.id} className="pp-row" style={trStyle}>
+                      <td style={{ ...tdStyle, fontWeight: 700 }}>
+                        {p.name}
+                        {p.enrichment_status === 'partial' && (
+                          <div title={p.enrichment_error || ''} style={{ marginTop: 3 }}>
+                            <Pill c={T.amber} bg={T.warmBg}>partial</Pill>
+                          </div>
+                        )}
+                      </td>
+                      <td style={tdStyle}>
+                        {p.office_name || '—'}
+                        {p.district_name && <div style={{ color: T.muted, fontSize: 11 }}>{p.district_name}</div>}
+                      </td>
+                      <td style={{ ...tdStyle, overflow: 'visible' }}><ScoreCell row={p} /></td>
+                      <td style={tdStyle}>
+                        {p.affiliation || <span style={{ color: T.faint }}>unknown</span>}
+                        {p.affiliation_detail?.inferred && (
+                          <div title={p.affiliation_detail?.basis || ''} style={{ marginTop: 3 }}>
+                            <Pill c={T.amber} bg={T.warmBg}>inferred {p.affiliation_detail?.confidence ?? 0}%</Pill>
+                          </div>
+                        )}
+                      </td>
+                      <td style={tdStyle}>
+                        {p.website_state === 'yes' && p.website_url ? (
+                          <a href={p.website_url} target="_blank" rel="noopener noreferrer"
+                             style={{ fontSize: 11.5, color: T.red, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            live site <ExternalLink style={{ width: 10, height: 10 }} />
+                          </a>
+                        ) : p.website_state === 'facebook_only' ? (
+                          <Pill c="#2563EB" bg="#E7F0FD">Facebook only</Pill>
+                        ) : p.website_state === 'no' ? (
+                          <Pill c={T.green} bg="#E6F5EC">no site</Pill>
+                        ) : <span style={{ color: T.faint }}>—</span>}
+                      </td>
+                      <td style={tdStyle}><SocialLinks socials={p.socials} /></td>
+                      <td style={{ ...tdStyle, overflow: 'visible' }}><AgencyCell row={p} /></td>
+                      <td style={tdStyle}><ContactCell row={p} /></td>
+                      <td style={{ ...tdStyle, color: T.muted, fontSize: 11.5 }}>{fmtDay(p.enriched_at)}</td>
+                      <td style={tdStyle}>
+                        <button onClick={() => removeProspect(p.id)} title="Remove"
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint }}>
+                          <Trash2 style={{ width: 13, height: 13 }} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           </div>
 
           <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.6, marginTop: 12, maxWidth: 820 }}>
-            <strong style={{ color: T.ink3 }}>Where this data comes from.</strong> Candidates are found by live web
-            search and every row cites the page that names them. <strong style={{ color: T.ink3 }}>Win odds are an
-            AI estimate</strong> from public reporting (incumbency, district lean, primary context, coverage) — open
-            any score for the one-line rationale; treat it as a first-pass sort, not a forecast. Party is taken from a
-            cited page where one exists. Websites are confirmed by fetching them. Contact details and agency signals
-            come only from candidate-published pages, their public social profiles, and cited news coverage.
-            Wisconsin campaign-finance (CFIS/WEC) records are deliberately not used for contact or vendor data
-            pending a legal review of Wis. Stat. §11.1304(12). Outreach you send from this list is a commercial
-            message — include a physical address and a working opt-out.
+            <strong style={{ color: T.ink3 }}>Where this data comes from.</strong> Win odds are computed from your
+            own candidates and election-results data with a published weighted model — open any score to see the
+            factors. Websites are confirmed by fetching them. Contact details and agency signals come only from
+            candidate-published pages, their public social profiles, and cited news coverage. Wisconsin
+            campaign-finance (CFIS/WEC) records are deliberately not used for contact or vendor data pending a
+            legal review of Wis. Stat. §11.1304(12). Outreach you send from this list is a commercial message —
+            include a physical address and a working opt-out.
           </div>
         </>
       )}
@@ -1849,18 +1510,8 @@ export default function Prospecting() {
       {showAddModal && (
         <AddToCandidatesModal
           rows={csvRows}
-          userId={user?.id}
           onClose={() => setShowAddModal(false)}
           onDone={async () => { setShowAddModal(false); await loadAll(); setTab('discover') }}
-        />
-      )}
-
-      {showSaveListModal && (
-        <SaveListModal
-          count={visibleResults.length}
-          defaultName={`Enriched prospects — ${format(new Date(), 'MMM d, yyyy')}`}
-          onClose={() => setShowSaveListModal(false)}
-          onSave={confirmSaveAsList}
         />
       )}
     </div>

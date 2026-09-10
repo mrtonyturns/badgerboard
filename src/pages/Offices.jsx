@@ -9,7 +9,6 @@ import LeafletMapView from '../components/LeafletMapView'
 import MapErrorBoundary from '../components/MapErrorBoundary'
 import DistrictDashboard, { districtKeyFor } from '../components/DistrictDashboard'
 import LoadingBar from '../components/LoadingBar'
-import SearchableSelect from '../components/SearchableSelect'
 import CityDemographicsPanel, { usePlaceLookup } from '../components/CityDemographicsPanel'
 import { placePath } from '../lib/placeDemographics'
 import { partyGroup } from '../lib/party'
@@ -116,29 +115,6 @@ const STATUS_CLS = {
 // ── Match GeoJSON feature to database offices ─────────────────────────────────
 // GeoJSON NAME values: "Congressional District 3", "State Senate District 12",
 //   "Assembly District 45", "Adams County", "Wausau city"
-// Resolve an office's district number. `district_number` is the canonical
-// column, but federal/state rows imported by hand (or via CSV) often leave it
-// NULL and carry the number only in `district_name` ("WI-7 (Northern WI…)",
-// "District 7") or in `name` ("U.S. House of Representatives — Wisconsin
-// District 7", "Wisconsin State Senate — District 12"). Without this fallback
-// the Congress/Senate/Assembly outlines reported "0 offices tracked" for
-// those rows. Returns NaN when no district number can be determined.
-function officeDistrictNum(o) {
-  if (o.district_number != null && String(o.district_number).trim() !== '') {
-    const n = parseInt(String(o.district_number).match(/\d+/)?.[0] ?? '', 10)
-    if (Number.isFinite(n)) return n
-  }
-  for (const field of [o.district_name, o.name]) {
-    if (!field) continue
-    // "WI-7", "CD-7", "SD 12", "AD 45", "District 7", "7th District"
-    const m = field.match(/\b(?:WI|CD|SD|AD)[-\s]?(\d{1,3})\b/i)
-           || field.match(/\bdistrict\s*#?\s*(\d{1,3})\b/i)
-           || field.match(/\b(\d{1,3})(?:st|nd|rd|th)\s+(?:congressional|senate|assembly|legislative)?\s*district\b/i)
-    if (m) return parseInt(m[1], 10)
-  }
-  return NaN
-}
-
 function matchOffices(district, allOffices) {
   if (!district || !allOffices.length) return []
   const { name, sublabel, layerKey } = district
@@ -146,12 +122,10 @@ function matchOffices(district, allOffices) {
 
   if (layerKey === 'congress' || layerKey === 'federal') {
     // U.S. House: match federal offices by district number (legacy 'federal'
-    // layer key also included statewide federal offices). The number may live
-    // in district_number, district_name or name — see officeDistrictNum().
+    // layer key also included statewide federal offices)
     return allOffices.filter(o => {
       if (o.level !== 'federal') return false
-      const dn = officeDistrictNum(o)
-      if (num && Number.isFinite(dn)) return dn === num
+      if (num && o.district_number != null) return parseInt(o.district_number) === num
       if (layerKey === 'congress') return num == null && !/senate|senator/i.test(o.name || '')
       return true
     })
@@ -160,7 +134,7 @@ function matchOffices(district, allOffices) {
   if (layerKey === 'ussenate') {
     // U.S. Senate is statewide — match federal offices with no district that
     // look like Senate seats (or any statewide federal office as fallback)
-    const statewide = allOffices.filter(o => o.level === 'federal' && !Number.isFinite(officeDistrictNum(o)))
+    const statewide = allOffices.filter(o => o.level === 'federal' && o.district_number == null)
     const senate = statewide.filter(o => /senate|senator/i.test(o.name || ''))
     return senate.length ? senate : statewide
   }
@@ -170,7 +144,7 @@ function matchOffices(district, allOffices) {
     const isSenate = layerKey === 'senate' || sublabel === 'State Senate District'
     return allOffices.filter(o => {
       if (o.level !== 'state') return false
-      if (officeDistrictNum(o) !== num) return false
+      if (parseInt(o.district_number) !== num) return false
       const n = (o.name || '').toLowerCase()
       return isSenate ? n.includes('senate') : (n.includes('assembly') || n.includes('representative') || !n.includes('senate'))
     })
@@ -560,18 +534,14 @@ export default function Offices() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input className="input pl-9" placeholder="Search offices..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-          <SearchableSelect
-            className="sm:w-44"
-            value={levelFilter}
-            onChange={v => setLevelFilter(v)}
-            options={[{ value: '', label: 'All Levels' }, ...LEVELS.slice(1).map(l => ({ value: l, label: LEVEL_LABELS[l] }))]}
-            placeholder="All Levels" />
-          <SearchableSelect
-            className="sm:w-44"
-            value={typeFilter}
-            onChange={v => setTypeFilter(v)}
-            options={[{ value: '', label: 'All Types' }, ...TYPES.slice(1).map(t => ({ value: t, label: TYPE_LABELS[t] }))]}
-            placeholder="All Types" />
+          <select className="input sm:w-44" value={levelFilter} onChange={e => setLevelFilter(e.target.value)}>
+            <option value="">All Levels</option>
+            {LEVELS.slice(1).map(l => <option key={l} value={l}>{LEVEL_LABELS[l]}</option>)}
+          </select>
+          <select className="input sm:w-44" value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
+            <option value="">All Types</option>
+            {TYPES.slice(1).map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
+          </select>
         </div>
         <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-100">
           {/* The first load pages through ~3,200 rows (8 requests). Showing the
@@ -737,17 +707,15 @@ export default function Offices() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="label">Level *</label>
-                  <SearchableSelect
-                    value={form.level}
-                    onChange={v => setForm({...form, level:v})}
-                    options={LEVELS.slice(1).map(l => ({ value: l, label: LEVEL_LABELS[l] }))} />
+                  <select className="input" value={form.level} onChange={e => setForm({...form, level:e.target.value})}>
+                    {LEVELS.slice(1).map(l => <option key={l} value={l}>{LEVEL_LABELS[l]}</option>)}
+                  </select>
                 </div>
                 <div>
                   <label className="label">Type *</label>
-                  <SearchableSelect
-                    value={form.office_type}
-                    onChange={v => setForm({...form, office_type:v})}
-                    options={TYPES.slice(1).map(t => ({ value: t, label: TYPE_LABELS[t] }))} />
+                  <select className="input" value={form.office_type} onChange={e => setForm({...form, office_type:e.target.value})}>
+                    {TYPES.slice(1).map(t => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
+                  </select>
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

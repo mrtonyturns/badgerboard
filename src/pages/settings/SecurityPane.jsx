@@ -15,7 +15,7 @@ import { Eye, EyeOff } from 'lucide-react'
 import { supabase, getRecentActivity, logActivity } from '../../lib/supabase'
 import { scorePassword, PASSWORD_MIN_LENGTH, PASSWORD_MIN_SCORE } from '../../lib/password'
 import {
-  Card, CardBody, Row, Field, Btn, Pill, Note, Msg, Spinner, StubPill, T,
+  Card, CardBody, Row, Field, Btn, Pill, Note, Msg, Spinner, StubPill, T, humanizeVerb,
 } from './shared'
 
 // The minimum length and the scorer both come from lib/password.js now — this
@@ -54,9 +54,11 @@ const SECURITY_ACTIONS = new Set([
 const isSecurityAction = (a = '') =>
   SECURITY_ACTIONS.has(a) || a.startsWith('ai_') || a.includes('share')
 
+// The label used to be the raw column with its first letter pushed up, so this
+// feed read "Ai unlock · Brady Penfield". humanizeVerb (settings/shared.jsx) is
+// the one place those verbs are turned into English.
 const humanize = (row) => {
-  const base = String(row.action || '').replace(/_/g, ' ').trim()
-  const label = base ? base.charAt(0).toUpperCase() + base.slice(1) : 'Account activity'
+  const label = humanizeVerb(row.action)
   const name  = row.details?.candidate_name || row.details?.name
   return name ? `${label} · ${name}` : label
 }

@@ -60,15 +60,9 @@ const HAIKU_MODEL = 'claude-haiku-4-5-20251001'   // cheap classification/struct
 const PPLX_MODEL  = 'sonar-pro'                   // extractor with citations
 
 // ── Caps & budgets ───────────────────────────────────────────────────────────
-const MAX_PROSPECTS_PER_RUN = 10        // hard cap per invocation, DEEP mode (spend control)
-// v3 BRIEF mode (Prospecting rebuild): one Perplexity call per prospect, no
-// Haiku pass, no own-data scoring — so the field can be run whole. 50 per run,
-// 3 in flight at a time, so a full county fits inside the background budget.
-const MAX_BRIEF_PER_RUN     = 50
-const BRIEF_CONCURRENCY     = 3
+const MAX_PROSPECTS_PER_RUN = 10        // hard cap per invocation (spend control)
 const RUN_BUDGET_MS         = 11 * 60 * 1000  // background limit is 15 min; leave headroom to save
 const PER_PROSPECT_MIN_MS   = 35 * 1000 // never START a prospect with less than this left
-const PER_BRIEF_MIN_MS      = 20 * 1000 // brief prospects are cheaper — smaller floor
 const SITE_TIMEOUT_MS       = 2000      // website existence check (per spec)
 const PPLX_TIMEOUT_MS       = 30 * 1000
 const HAIKU_TIMEOUT_MS      = 25 * 1000
@@ -581,7 +575,7 @@ PHONE: a campaign phone number published the same way
 AGENCY_EVIDENCE: any evidence the campaign already works with a paid consultant, agency, or campaign manager — a "Paid for by" disclaimer naming a firm, a website footer credit naming a design/digital shop, a staff or team page listing a Campaign Manager or Communications Director, a Meta Ad Library entry naming the paid sponsor, or news coverage naming their consultant. One line per piece of evidence, each with its URL.`
 }
 
-async function runPerplexity(prompt, userId, { system = RESEARCH_SYSTEM, maxTokens = 900 } = {}) {
+async function runPerplexity(prompt, userId) {
   if (!PERPLEXITY_API_KEY) return { text: null, error: 'PERPLEXITY_API_KEY is not set' }
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), PPLX_TIMEOUT_MS)
@@ -593,9 +587,9 @@ async function runPerplexity(prompt, userId, { system = RESEARCH_SYSTEM, maxToke
       body: JSON.stringify({
         model: PPLX_MODEL,
         temperature: 0,
-        max_tokens: maxTokens,
+        max_tokens: 900,
         messages: [
-          { role: 'system', content: system },
+          { role: 'system', content: RESEARCH_SYSTEM },
           { role: 'user', content: prompt },
         ],
       }),
@@ -847,143 +841,6 @@ async function enrichOne({ profile, candidate, userId, runId, onStage = () => {}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BRIEF MODE (Prospecting v3) — one shot per candidate
-// ─────────────────────────────────────────────────────────────────────────────
-// The agency/PAC use case: "find the field, tell me party, odds, and how to
-// reach them." One Perplexity call per prospect returns cited facts (party,
-// email, phone, website, agency evidence) PLUS one explicitly-labelled ESTIMATE
-// (win odds 0–100 with a one-line rationale). The estimate is the only field
-// allowed without a citation, and it is stored as model_version 'ai_estimate'
-// so the UI can label it honestly. Nothing here reads CFIS/WEC finance data.
-
-const BRIEF_SYSTEM = [
-  'You are a Wisconsin political research assistant working for a marketing agency that is deciding which candidates to contact.',
-  'Use live web search. For FACT lines (PARTY, EMAIL, PHONE, CAMPAIGN_WEBSITE, AGENCY_EVIDENCE) report only what a specific public page states and put that page\'s URL on the same line. Omit a fact line entirely if you cannot cite it — never write "unknown" or guess a URL.',
-  'WIN_ODDS is different: it is YOUR ESTIMATE, 0–100, of the chance this candidate wins their race. Base it on incumbency, district partisan lean, primary/general context, fundraising or endorsements reported in news, and opposition strength. Always give a number. Follow it with one RATIONALE line (one sentence, may cite URLs).',
-  'FORMAT: one item per line, exactly `FIELD: value — https://source-url` for facts, `WIN_ODDS: <number>` and `RATIONALE: <sentence>` for the estimate. No prose, no bullets, no preamble.',
-  'COMPLIANCE: do NOT use Wisconsin campaign-finance filings (CFIS, campaignfinance.wi.gov, WEC finance reports) as a source for contact information or vendor payments. Skip those sources.',
-].join(' ')
-
-function briefPrompt(p) {
-  const where = [p.district_name, p.county ? `${p.county} County` : '', 'Wisconsin'].filter(Boolean).join(', ')
-  const when = p.election_date ? ` Election date: ${p.election_date}.` : ''
-  return `Candidate: ${p.name}. Office sought: ${p.office_name || 'unknown office'}${where ? ` (${where})` : ''}.${when}${p.party ? ` Party on file: ${p.party}.` : ''}
-
-Report these lines:
-PARTY: the party they are running under — https://source
-CAMPAIGN_WEBSITE: their own campaign site (not Ballotpedia, not a news article) — https://source
-EMAIL: a contact email published on their campaign site or quoted in news — https://source
-PHONE: a campaign phone published the same way — https://source
-AGENCY_EVIDENCE: any sign they already use a paid consultant/agency/campaign manager ("paid for by" naming a firm, footer design credit, staff page, Meta Ad Library sponsor, news naming a consultant) — https://source
-WIN_ODDS: your 0–100 estimate
-RATIONALE: one sentence on why`
-}
-
-/** Pull WIN_ODDS / RATIONALE (uncited by design) out of the brief response. */
-function parseBriefEstimate(text) {
-  let score = null
-  let rationale = null
-  for (const raw of String(text || '').split(/\r?\n/)) {
-    const line = raw.replace(/^[-*\s]+/, '').trim()
-    let m = line.match(/^WIN_ODDS\s*[:\-]\s*(\d{1,3})/i)
-    if (m) { const n = parseInt(m[1], 10); if (n >= 0 && n <= 100) score = n; continue }
-    m = line.match(/^RATIONALE\s*[:\-]\s*(.+)$/i)
-    if (m) rationale = sanitize(m[1], 400)
-  }
-  return { score, rationale }
-}
-
-/** Score → band, same vocabulary the deep model uses (see _win-odds.js). */
-function bandFor(score) {
-  if (score == null) return 'unknown'
-  if (score >= 65) return 'strong'
-  if (score >= 40) return 'competitive'
-  return 'longshot'
-}
-
-async function briefOne({ profile, userId, runId }) {
-  const name = sanitize(profile.name, 150)
-  const research = await runPerplexity(briefPrompt(profile), userId, { system: BRIEF_SYSTEM, maxTokens: 700 })
-  const fields = parseCitedFields(research.text)
-  const est = parseBriefEstimate(research.text)
-
-  const citations = []
-  const addCite = (label, url) => {
-    const u = normalizeUrl(url)
-    if (u && !citations.some(c => c.url === u)) citations.push({ label: sanitize(label, 60), url: u })
-  }
-  for (const [k, list] of Object.entries(fields)) for (const f of list) addCite(k, f.source_url)
-  // Carry discovery citations forward (the row's origin page).
-  for (const c of Array.isArray(profile.research_citations) ? profile.research_citations : []) addCite(c.label, c.url)
-
-  // Website: claim → cheap verification (2s) so has_website is honest.
-  const claimedSite = normalizeUrl(fields.CAMPAIGN_WEBSITE?.[0]?.value)
-    || normalizeUrl(fields.CAMPAIGN_WEBSITE?.[0]?.source_url)
-    || normalizeUrl(profile.website_url)
-  const site = claimedSite ? await verifyWebsite(claimedSite) : { ok: false, status: null, url: null, html: '' }
-  const socials = extractSocialsFromHtml(site.html, site.url || claimedSite || '')
-
-  const agencyText = (fields.AGENCY_EVIDENCE || []).map(f => `${f.value} ${f.source_url}`).join('\n')
-  const agency = detectAgencySignals({ html: site.html, url: site.url || claimedSite || '', researchText: agencyText })
-  agency.checked_at = new Date().toISOString()
-  agency.cfis_checked = false
-
-  const siteContacts = site.ok ? extractContactsFromHtml(site.html) : { emails: [], phones: [] }
-  const contact = buildContact({
-    site: siteContacts,
-    siteUrl: site.url || claimedSite || '',
-    research: {
-      emails: (fields.EMAIL || []).map(f => ({ value: f.value, source_url: f.source_url, confidence: 65 })),
-      phones: (fields.PHONE || []).map(f => ({ value: f.value, source_url: f.source_url, confidence: 65 })),
-    },
-    db: {},
-  })
-
-  const citedParty = sanitize((fields.PARTY || [])[0]?.value, 40)
-  const party = citedParty || sanitize(profile.party, 40) || null
-  const partySource = citedParty ? (fields.PARTY[0].source_url || null) : null
-
-  // Preserve discovery metadata that rides in win_odds_factors.discovery.
-  const prior = (profile.win_odds_factors && typeof profile.win_odds_factors === 'object') ? profile.win_odds_factors : {}
-
-  return {
-    patch: {
-      win_odds_score: est.score,
-      win_odds_band: bandFor(est.score),
-      win_odds_factors: {
-        ...(prior.discovery ? { discovery: prior.discovery } : {}),
-        model_version: 'ai_estimate_v1',
-        estimate: true,
-        rationale: est.rationale,
-        confidence: est.score == null ? 0 : 50,
-      },
-      affiliation: party,
-      affiliation_detail: {
-        inferred: false,
-        confidence: citedParty ? 85 : (profile.party ? 65 : 0),
-        basis: citedParty ? 'Party stated on a cited public page' : (profile.party ? 'Party from discovery' : 'No party evidence found'),
-        source: citedParty ? 'cited_research' : (profile.party ? 'ai_discovery' : null),
-        source_url: partySource,
-      },
-      has_website: site.ok,
-      website_url: site.ok ? site.url : (claimedSite || null),
-      website_state: websiteState({ verified: site.ok, hasFacebook: Boolean(socials.facebook) }),
-      website_verified_at: site.ok ? new Date().toISOString() : null,
-      website_status: site.status ?? null,
-      socials,
-      agency_signals: agency,
-      contact,
-      research_citations: citations.slice(0, 25),
-      enriched_at: new Date().toISOString(),
-      enrichment_status: research.error ? 'partial' : 'enriched',
-      enrichment_error: research.error ? sanitize(research.error, 300) : null,
-      last_run_id: runId,
-    },
-    softError: research.error || null,
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Handler
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1089,11 +946,6 @@ exports.handler = async (event) => {
     return limited
   }
 
-  // ── Mode: 'brief' (v3 one-shot, cap 50, concurrent) or default deep ──────
-  const brief = sanitize(body.mode, 10).toLowerCase() === 'brief'
-  const cap = brief ? MAX_BRIEF_PER_RUN : MAX_PROSPECTS_PER_RUN
-  const minMs = brief ? PER_BRIEF_MIN_MS : PER_PROSPECT_MIN_MS
-
   // ── Resolve the batch ─────────────────────────────────────────────────────
   const prospectIds = (Array.isArray(body.prospect_ids) ? body.prospect_ids : [])
     .map(id => sanitize(id, 64)).filter(id => UUID_RE.test(id))
@@ -1106,7 +958,7 @@ exports.handler = async (event) => {
   let profiles = []
   if (prospectIds.length) {
     const rows = await sbJson(
-      `prospect_profiles?id=in.(${prospectIds.slice(0, cap * 2).join(',')})` +
+      `prospect_profiles?id=in.(${prospectIds.slice(0, MAX_PROSPECTS_PER_RUN * 3).join(',')})` +
       `&created_by=eq.${user.id}&select=*`
     )
     if (Array.isArray(rows)) profiles = rows
@@ -1155,78 +1007,10 @@ exports.handler = async (event) => {
   }
 
   // Hard cap per run — the client shows the same number, this enforces it.
-  const batch = profiles.slice(0, cap)
+  const batch = profiles.slice(0, MAX_PROSPECTS_PER_RUN)
   state.total = batch.length
-  await reportProgress(brief ? STAGE_SEARCH : STAGE_SCORE, 'running')
+  await reportProgress(STAGE_SCORE, 'running')
 
-  // Shared save/fail bookkeeping for both modes.
-  const saveOne = async (profile, patch, softError) => {
-    const res = await sbFetch(
-      `prospect_profiles?id=eq.${profile.id}&created_by=eq.${user.id}`,
-      { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(patch) }
-    )
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '')
-      throw new Error(`save failed (${res.status}) ${detail.slice(0, 120)}`)
-    }
-    state.completed += 1
-    if (softError) console.warn(`[enrich] ${profile.name}: partial — ${softError}`)
-  }
-  const recordFailure = async (profile, e) => {
-    state.failed += 1
-    console.error(`[enrich] ${profile.name} failed:`, e.message)
-    try {
-      await sbFetch(`prospect_profiles?id=eq.${profile.id}&created_by=eq.${user.id}`, {
-        method: 'PATCH',
-        headers: { Prefer: 'return=minimal' },
-        body: JSON.stringify({ enrichment_status: 'error', enrichment_error: sanitize(e.message, 300), last_run_id: runId }),
-      })
-    } catch { /* best effort */ }
-  }
-
-  // ── BRIEF MODE: concurrent worker pool, one call per prospect ─────────────
-  if (brief) {
-    try {
-      let next = 0
-      let deferred = 0
-      const worker = async () => {
-        for (;;) {
-          if (next >= batch.length) return
-          if (Date.now() > deadline - minMs) { deferred += batch.length - next; next = batch.length; return }
-          const profile = batch[next++]
-          state.current = profile.name
-          await reportProgress(STAGE_SEARCH, 'running')
-          try {
-            const { patch, softError } = await briefOne({ profile, userId: user.id, runId })
-            await saveOne(profile, patch, softError)
-          } catch (e) {
-            await recordFailure(profile, e)
-          }
-          await reportProgress(STAGE_SAVE, 'running')
-        }
-      }
-      await Promise.all(Array.from({ length: Math.min(BRIEF_CONCURRENCY, batch.length) }, worker))
-      state.current = null
-
-      const message = deferred
-        ? `Briefed ${state.completed} of ${state.total}. ${deferred} ran out of time and are still queued — run them again.`
-        : null
-      if (state.completed === 0 && state.failed > 0) {
-        return fail(502, 'Research could not complete for any of the selected candidates. They are still queued.', STAGE_SAVE)
-      }
-      await reportProgress(STAGE_SAVE, 'done', message)
-      return {
-        statusCode: 200, headers,
-        body: JSON.stringify({ run_id: runId, mode: 'brief', total: state.total, completed: state.completed, failed: state.failed, deferred }),
-      }
-    } catch (err) {
-      console.error('[enrich/brief] unhandled error:', err?.stack || err?.message || err)
-      await reportProgress(state.stage, 'error', 'Something went wrong during research. Partial results were saved.')
-      return { statusCode: 500, headers, body: JSON.stringify({ error: 'Enrichment failed' }) }
-    }
-  }
-
-  // ── DEEP MODE (v2, unchanged) ─────────────────────────────────────────────
   try {
     // Candidate context for the whole batch in one query.
     const linked = batch.map(p => p.candidate_id).filter(Boolean)
@@ -1241,7 +1025,7 @@ exports.handler = async (event) => {
 
     let deferred = 0
     for (const profile of batch) {
-      if (Date.now() > deadline - minMs) {
+      if (Date.now() > deadline - PER_PROSPECT_MIN_MS) {
         deferred = batch.length - state.completed - state.failed
         console.warn(`[enrich] run budget exhausted — ${deferred} prospect(s) deferred`)
         break
@@ -1259,10 +1043,31 @@ exports.handler = async (event) => {
           onStage: (s) => reportProgress(s, 'running'),
         })
         await reportProgress(STAGE_SAVE, 'running')
-        await saveOne(profile, patch, softError)
+        const res = await sbFetch(
+          `prospect_profiles?id=eq.${profile.id}&created_by=eq.${user.id}`,
+          { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(patch) }
+        )
+        if (!res.ok) {
+          const detail = await res.text().catch(() => '')
+          throw new Error(`save failed (${res.status}) ${detail.slice(0, 120)}`)
+        }
+        state.completed += 1
+        if (softError) console.warn(`[enrich] ${profile.name}: partial — ${softError}`)
       } catch (e) {
+        state.failed += 1
+        console.error(`[enrich] ${profile.name} failed:`, e.message)
         // Record the failure ON the row too, so the results table can show it.
-        await recordFailure(profile, e)
+        try {
+          await sbFetch(`prospect_profiles?id=eq.${profile.id}&created_by=eq.${user.id}`, {
+            method: 'PATCH',
+            headers: { Prefer: 'return=minimal' },
+            body: JSON.stringify({
+              enrichment_status: 'error',
+              enrichment_error: sanitize(e.message, 300),
+              last_run_id: runId,
+            }),
+          })
+        } catch { /* best effort */ }
       }
       // Publish the new completed/failed counts before moving on.
       state.current = null
@@ -1302,7 +1107,4 @@ module.exports.websiteState = websiteState
 module.exports.buildContact = buildContact
 module.exports.parseCitedFields = parseCitedFields
 module.exports.MAX_PROSPECTS_PER_RUN = MAX_PROSPECTS_PER_RUN
-module.exports.MAX_BRIEF_PER_RUN = MAX_BRIEF_PER_RUN
-module.exports.parseBriefEstimate = parseBriefEstimate
-module.exports.bandFor = bandFor
 module.exports.STAGES = { STAGE_SCORE, STAGE_SEARCH, STAGE_VERIFY, STAGE_SAVE }

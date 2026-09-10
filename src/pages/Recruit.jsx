@@ -24,7 +24,6 @@ import {
 import {
   getVoterLists, getOffices, supabase,
   getRecruitmentSearches, createRecruitmentSearch, updateRecruitmentSearch,
-  deleteRecruitmentSearch,
   getRecruitmentProspects, createRecruitmentProspects, getRecruitmentProgress,
 } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
@@ -35,7 +34,6 @@ import {
   isUnknownProspect, isRetryableProspect,
 } from '../lib/recruit'
 import UpgradePrompt from '../components/UpgradePrompt'
-import SearchableSelect from '../components/SearchableSelect'
 import { T, cardStyle, Btn, Pill, Spinner, EmptyNote, ProfilerShell } from './profiler/shared'
 
 // Mirrors the stage constants in netlify/functions/recruit-research-background.js
@@ -74,7 +72,7 @@ const VOTER_LOAD_CAP = 50000
 async function loadListVoters(listId, { onProgress, cancelled } = {}) {
   let all = []
   for (let offset = 0; offset < VOTER_LOAD_CAP; offset += VOTER_PAGE) {
-    if (cancelled?.()) return { data: all, error: null, truncated: false, partial: true }
+    if (cancelled?.()) return { data: all, error: null, truncated: false }
     const size = Math.min(VOTER_PAGE, VOTER_LOAD_CAP - offset)
     const { data, error } = await supabase
       .from('voters')
@@ -83,17 +81,14 @@ async function loadListVoters(listId, { onProgress, cancelled } = {}) {
       .order('last_name')
       .order('id')
       .range(offset, offset + size - 1)
-    // v1.36.3: a mid-paging error returns what we have, flagged PARTIAL — the
-    // UI used to show the error banner AND "N residents loaded — the whole
-    // list" over an incomplete list at the same time.
-    if (error) return { data: all, error, truncated: false, partial: true }
-    if (!data?.length) return { data: all, error: null, truncated: false, partial: false }
+    if (error) return { data: all, error, truncated: false }
+    if (!data?.length) return { data: all, error: null, truncated: false }
     all = all.concat(data)
     onProgress?.(all.length)
-    if (data.length < size) return { data: all, error: null, truncated: false, partial: false }
+    if (data.length < size) return { data: all, error: null, truncated: false }
   }
   // Filled the cap exactly — there may be more rows we deliberately did not read.
-  return { data: all, error: null, truncated: true, partial: false }
+  return { data: all, error: null, truncated: true }
 }
 
 const DISCLAIMER =
@@ -153,6 +148,12 @@ function StepCard({ n, title, sub, children, done }) {
   )
 }
 
+const selectStyle = {
+  width: '100%', minHeight: 40, padding: '9px 12px', borderRadius: 10,
+  border: `1px solid ${T.field}`, background: '#fff', color: T.ink,
+  fontSize: 12, fontFamily: 'inherit',
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Recruit() {
@@ -163,7 +164,6 @@ export default function Recruit() {
   const [listId, setListId]       = useState('')
   const [voters, setVoters]       = useState([])
   const [votersTruncated, setVotersTruncated] = useState(false)
-  const [votersPartial, setVotersPartial]     = useState(false)  // load errored mid-paging
   const [votersLoaded, setVotersLoaded]       = useState(0)   // paging progress
   const [loadingVoters, setLoadingVoters] = useState(false)
   const [offices, setOffices]     = useState([])
@@ -212,14 +212,13 @@ export default function Recruit() {
 
   // ── Load the voters of the chosen list ─────────────────────────────────────
   useEffect(() => {
-    if (!listId) { setVoters([]); setVotersTruncated(false); setVotersPartial(false); setVotersLoaded(0); return }
+    if (!listId) { setVoters([]); setVotersTruncated(false); setVotersLoaded(0); return }
     let cancelled = false
     setLoadingVoters(true)
     setVotersTruncated(false)
-    setVotersPartial(false)
     setVotersLoaded(0)
     ;(async () => {
-      const { data, error: e, truncated, partial } = await loadListVoters(listId, {
+      const { data, error: e, truncated } = await loadListVoters(listId, {
         cancelled: () => cancelled,
         onProgress: (n) => { if (!cancelled) setVotersLoaded(n) },
       })
@@ -227,7 +226,6 @@ export default function Recruit() {
       if (e) setError(e.message)
       setVoters(data || [])
       setVotersTruncated(Boolean(truncated))
-      setVotersPartial(Boolean(partial))
       setLoadingVoters(false)
     })()
     return () => { cancelled = true }
@@ -275,24 +273,12 @@ export default function Recruit() {
     return data || []
   }, [])
 
-  // `prevUpdatedAt` fences out the progress row left behind by an EARLIER run of
+  // `runStartedAt` fences out the progress row left behind by an EARLIER run of
   // the same search — without it a second "Research" press would read the old
   // row's status:'done' and return before the new run had written anything.
-  //
-  // v1.36.2 (clock-skew fix): fencing and staleness no longer compare server
-  // timestamps against the user's clock. The old fence (`updated_at >= client
-  // Date.now() - 5s`) made every genuine run report "never started" on any
-  // machine whose clock ran a minute fast. Now:
-  //   • fence:     server-vs-server — the row is from THIS run iff its
-  //                updated_at is strictly newer than the row that existed
-  //                before we fired the run (or there was no prior row).
-  //   • staleness: local-vs-local — how long has it been, on OUR clock, since
-  //                we last saw updated_at ADVANCE. No cross-clock math at all.
-  const watchRun = useCallback(async (searchId, alive, prevUpdatedAt) => {
+  const watchRun = useCallback(async (searchId, alive, runStartedAt) => {
     let sawProgress = false
-    const startedAt = Date.now()               // local, compared only to local
-    let lastBeatValue = prevUpdatedAt || null  // last server timestamp we saw
-    let lastBeatLocal = Date.now()             // local time when it last advanced
+    const startedAt = runStartedAt || Date.now()
     for (;;) {
       await new Promise(r => setTimeout(r, POLL_MS))
       if (!alive()) return
@@ -306,17 +292,10 @@ export default function Recruit() {
         await loadProspects(searchId)
         throw new Error('This is taking longer than expected. The run is still going in the background — come back in a minute and press Refresh.')
       }
-      const progTime = prog?.updated_at ? new Date(prog.updated_at).getTime() : null
-      const fromThisRun = progTime != null &&
-        (!prevUpdatedAt || progTime > new Date(prevUpdatedAt).getTime())
+      const fromThisRun = prog && new Date(prog.updated_at).getTime() >= startedAt - 5000
       if (prog && fromThisRun) {
         setProgress(prog)
-        // Heartbeat advanced? Reset the local staleness clock.
-        if (prog.updated_at !== lastBeatValue) {
-          lastBeatValue = prog.updated_at
-          lastBeatLocal = Date.now()
-        }
-        const fresh = Date.now() - lastBeatLocal < HEARTBEAT_STALE_MS
+        const fresh = Date.now() - new Date(prog.updated_at).getTime() < HEARTBEAT_STALE_MS
         if (prog.status === 'error') { await loadProspects(searchId); throw new Error(prog.message || 'Research failed — try again.') }
         if (prog.status === 'done')  { await loadProspects(searchId); setPhase(''); return }
         if (fresh) { sawProgress = true; setPhase(PHASE_LABELS[prog.stage] || 'Researching…') }
@@ -392,13 +371,7 @@ export default function Recruit() {
       }))
       for (let i = 0; i < rows.length; i += 200) {
         const { error: pErr } = await createRecruitmentProspects(rows.slice(i, i + 200))
-        if (pErr) {
-          // v1.36.3: a failed chunk used to strand a half-populated search in
-          // the list; re-pressing Create then made a duplicate. Delete the
-          // orphan (prospect rows cascade) so the user can simply retry.
-          await deleteRecruitmentSearch(search.id)   // resolves {error}, never throws
-          throw new Error(`Could not save all residents (${pErr.message}). The partial search was removed — try again.`)
-        }
+        if (pErr) throw pErr
       }
       setActiveSearch(search)
       setSearches(prev => [search, ...prev])
@@ -415,11 +388,8 @@ export default function Recruit() {
     setBusy(true); setError(null); setPhase(PHASE_LABELS[1]); setProgress(null)
     const gen = ++pollGenRef.current
     const alive = () => pollGenRef.current === gen
+    const runStartedAt = Date.now()
     try {
-      // Snapshot the PRIOR run's progress row (if any) so watchRun can fence
-      // server-timestamp-vs-server-timestamp — see the watchRun comment.
-      const { data: prevProg } = await getRecruitmentProgress(activeSearch.id)
-      const prevUpdatedAt = prevProg?.updated_at || null
       // Attestation is recorded BEFORE the run — the background function
       // refuses to research a search that isn't attested.
       if (!activeSearch.attested_use) {
@@ -435,7 +405,7 @@ export default function Recruit() {
         body: JSON.stringify({ search_id: activeSearch.id }),
       })
       if (res.status !== 202 && !res.ok) throw new Error('Could not start prospect research — try again.')
-      await watchRun(activeSearch.id, alive, prevUpdatedAt)
+      await watchRun(activeSearch.id, alive, runStartedAt)
     } catch (e) {
       if (alive()) { setError(e.message); setPhase('') }
     } finally {
@@ -479,36 +449,21 @@ export default function Recruit() {
       'research_error', 'researched_at', 'model_version',
     ]
     const header = [...cols, 'evidence'].join(',')
-    // v1.36.3: neutralize spreadsheet formula injection — AI-derived text
-    // beginning with = + - @ (or tab/CR) executes as a formula in Excel.
-    // A leading apostrophe makes Excel render it as literal text.
-    const cell = (v) => {
-      let s = String(v ?? '')
-      if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`
-      return `"${s.replace(/"/g, '""')}"`
-    }
+    const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
     const rows = view.map(p => [
       ...cols.map(c => cell(p[c])),
       cell((p.evidence || []).map(e => `${e.title || ''} <${e.url}>`).join('; ')),
     ].join(','))
     const blob = new Blob([[header, ...rows].join('\n')], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = url
+    a.href = URL.createObjectURL(blob)
     a.download = `recruit_prospects_${format(new Date(), 'yyyy-MM-dd')}.csv`
     a.click()
-    // Revoke on a delay so the click's navigation grabs the blob first.
-    setTimeout(() => URL.revokeObjectURL(url), 10000)
   }
 
   const openSearch = async (s) => {
     setActiveSearch(s)
     setPhase(''); setProgress(null); setError(null)
-    // v1.36.3: the attestation checkbox reflects THIS search's recorded state,
-    // never the previous search's checkbox. Without this reset, opening a
-    // second search showed the box pre-checked and runResearch recorded
-    // attested_use: true without the user actually attesting.
-    setAttested(!!s.attested_use)
     await loadProspects(s.id)
   }
 
@@ -589,28 +544,22 @@ export default function Recruit() {
               </Link>
             </div>
           ) : (
-            <SearchableSelect
-              value={listId}
-              onChange={v => setListId(v)}
-              options={[
-                { value: '', label: officesLoaded ? 'Select a list…' : 'Loading your voter lists…' },
-                ...lists.map(l => ({ value: l.id, label: `${l.name} · ${l.total_count || 0} rows` })),
-              ]}
-              placeholder={officesLoaded ? 'Select a list…' : 'Loading your voter lists…'} />
+            <select style={selectStyle} value={listId} onChange={e => setListId(e.target.value)}
+              aria-label="Voter list">
+              <option value="">{officesLoaded ? 'Select a list…' : 'Loading your voter lists…'}</option>
+              {lists.map(l => (
+                <option key={l.id} value={l.id}>{l.name} · {l.total_count || 0} rows</option>
+              ))}
+            </select>
           )}
           {loadingVoters && (
             <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: T.muted }}>
               <Spinner size={13} /> Loading residents…{votersLoaded ? ` ${votersLoaded.toLocaleString()} so far` : ''}
             </div>
           )}
-          {!loadingVoters && listId && !votersTruncated && !votersPartial && (
+          {!loadingVoters && listId && !votersTruncated && (
             <div style={{ marginTop: 10, fontSize: 11, color: T.muted }}>
               {voters.length.toLocaleString()} residents loaded — the whole list.
-            </div>
-          )}
-          {!loadingVoters && listId && votersPartial && (
-            <div style={{ marginTop: 10, fontSize: 11, color: '#b45309' }}>
-              Only {voters.length.toLocaleString()} residents loaded before the list stopped loading — matching below is incomplete. Re-select the list to retry.
             </div>
           )}
           {/* Truncation is never silent: it changes which people Recruit can
@@ -695,14 +644,12 @@ export default function Recruit() {
               </div>
             ) : (
               <>
-                <SearchableSelect
-                  value={districtValue}
-                  onChange={v => setDistrictValue(v)}
-                  options={[
-                    { value: '', label: 'Select…' },
-                    ...districtOptions.map(d => ({ value: d.value, label: `${typeMeta.districtLabel} ${d.value} · ${d.count} residents` })),
-                  ]}
-                  placeholder="Select…" />
+                <select style={selectStyle} value={districtValue} onChange={e => setDistrictValue(e.target.value)}>
+                  <option value="">Select…</option>
+                  {districtOptions.map(d => (
+                    <option key={d.value} value={d.value}>{typeMeta.districtLabel} {d.value} · {d.count} residents</option>
+                  ))}
+                </select>
                 <div style={{ marginTop: 8, fontSize: 10.5, color: T.faint, display: 'flex', alignItems: 'center', gap: 5 }}>
                   <MapPin style={{ width: 12, height: 12 }} />
                   Matched from the list&apos;s own column — no geocoding.

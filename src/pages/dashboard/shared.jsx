@@ -17,7 +17,6 @@ import { safeISO } from '../../lib/date'
 // Date arithmetic lives in ./dueMath (a JSX-free module the tests can import).
 import {
   daysUntil, isUpcoming, autoStatus, countdownLabel, fmtDueDate, dueChipLabel,
-  taskToMilestone, byDueDate,
 } from './dueMath'
 import { officeLine } from '../../lib/office'
 import { pointInGeometry } from '../../lib/geo'
@@ -41,10 +40,10 @@ export const T = {
   ink3:    '#52525B',
   muted:   '#71717A',
   faint:   '#A1A19A',
-  red:     '#A51C24',
+  red:     '#8B0000',
   redDark: '#7E141B',
   redHot:  '#B91C1C',
-  navy:    '#0D1526',
+  navy:    '#0A1628',
   hover:   '#FAFAF9',
   chip:    '#F1F1EF',
   warmBg:  '#FDF6F0',
@@ -66,10 +65,21 @@ export function DashboardStyles() {
   return (
     <style>{`
       @keyframes bbLivePulse { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
-      .bb-carousel { scrollbar-width: thin; scrollbar-color: #E4E4E1 transparent }
-      .bb-carousel::-webkit-scrollbar { height: 6px }
-      .bb-carousel::-webkit-scrollbar-track { background: transparent }
-      .bb-carousel::-webkit-scrollbar-thumb { background: #E4E4E1; border-radius: 99px }
+      /* Carousel: the permanent grey scrollbar plus a card sliced off flush at
+         the container edge read as a clipping bug rather than as "scroll me".
+         Scrollbar hidden (scrolling itself untouched), last card faded out at
+         the right edge, cards snapped to the left edge. .bb-carousel--end drops
+         the fade when there is nothing further to scroll to. */
+      .bb-carousel {
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+        scroll-snap-type: x proximity;
+        -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 48px), transparent 100%);
+        mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 48px), transparent 100%);
+      }
+      .bb-carousel::-webkit-scrollbar { display: none }
+      .bb-carousel > * { scroll-snap-align: start }
+      .bb-carousel--end { -webkit-mask-image: none; mask-image: none }
       .bb-row:hover { background: ${T.hover} }
       .bb-link { color: ${T.muted}; text-decoration: none }
       .bb-link:hover { color: ${T.ink2} }
@@ -99,7 +109,7 @@ export const fmtDate = (d, pattern = 'MMM d') => {
 // dueChipLabel all live in ./dueMath now — see the countdown-parity note there.
 // Re-exported because the candidate views import them (and everything else in
 // this module) from ./shared.
-export { daysUntil, isUpcoming, autoStatus, countdownLabel, fmtDueDate, dueChipLabel, taskToMilestone, byDueDate }
+export { daysUntil, isUpcoming, autoStatus, countdownLabel, fmtDueDate, dueChipLabel }
 
 export const relativeTime = (d) => {
   const t = safeISO(d)
@@ -121,6 +131,31 @@ export const initialsOf = (name) =>
     .slice(0, 2)
     .map(w => w.charAt(0).toUpperCase())
     .join('') || '?'
+
+// ─── R3B PURE HELPERS BEGIN ───────────────────────────────────────────────────
+// (no imports in this block — tests/r3b.test.mjs slices it out and imports it)
+
+/**
+ * Audit-log action → the phrase the Recent activity feed reads out loud.
+ * The feed renders "You " + this, so the phrases are past-tense and lowercase.
+ * Unmapped actions used to fall through raw ("You ai unlock — Brady Penfield");
+ * they now at least get their underscores stripped and a capital.
+ */
+export const ACTIVITY_VERBS = {
+  ai_unlock: 'unlocked AI access',
+  ai_lock: 'locked AI access',
+  profile_updated: 'updated profile',
+  login: 'signed in',
+}
+
+export function humanizeActivityVerb(action) {
+  const key = String(action || '').trim()
+  if (!key) return 'Activity'
+  if (ACTIVITY_VERBS[key]) return ACTIVITY_VERBS[key]
+  const words = key.replace(/[_-]+/g, ' ').trim()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+// ─── R3B PURE HELPERS END ─────────────────────────────────────────────────────
 
 // First name for the greeting: signup captures first_name/display_name into
 // user_metadata (see AuthContext.signUp). Falls back to the email local part.
@@ -282,7 +317,7 @@ export function DueChip({ milestone }) {
     <span style={{
       fontSize: 10.5, fontWeight: 600, color: s.c, background: s.bg,
       border: `1px solid ${s.br}`, borderRadius: 99, padding: '3px 10px', whiteSpace: 'nowrap',
-    }}>{fmtDueDate(milestone.due_date)}</span>
+    }}>{fmtDate(milestone.due_date)}</span>
   )
 }
 
@@ -562,7 +597,7 @@ export function MilestoneRow({ milestone, onToggle, busy }) {
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{milestone.title}</div>
         <div style={{ fontSize: 11, color: T.faint, marginTop: 1 }}>
-          {milestone.phase_label || phase?.label || 'Unassigned'}
+          {phase?.label || 'Unassigned'}
         </div>
       </div>
       <DueChip milestone={milestone} />

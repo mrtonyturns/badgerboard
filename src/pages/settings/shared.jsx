@@ -33,12 +33,15 @@ export const T = {
   ink4:    '#52525B',
   muted:   '#6B6B73',   // darker than #71717A — safe on white
   faint:   '#71717A',   // the lightest grey allowed on white
-  red:     '#A51C24',
+  // Brand accent = tailwind.config.js `brand.red` / `brand.navy`, exactly — same
+  // change as profiler/shared.jsx (see the note there). redDark (hover), redHot
+  // (danger) and the redBr/redBg error tints are semantic and unchanged.
+  red:     '#8B0000',
   redDark: '#7E141B',
   redHot:  '#B91C1C',
   redBr:   '#FBD5D5',
   redBg:   '#FEF2F2',
-  navy:    '#0D1526',
+  navy:    '#0A1628',
   green:   '#15803D',
   greenBg: '#E6F5EC',
   amber:   '#B45309',
@@ -68,6 +71,47 @@ export { plural }
 /** Money, always grouped: $3,990 — never $3990. */
 export const money = (n) => `$${Number(n).toLocaleString('en-US')}`
 
+// ─── R3A PURE HELPERS BEGIN ──────────────────────────────────────────────────
+
+// Activity-log verbs → something a person reads.
+//
+// The feeds rendered the raw column: "Ai unlock · Brady Penfield", "Profile
+// updated", "Password changed" — database verbs with the first letter pushed
+// up. Both keys are accepted for every verb, because the log is written with
+// underscores (`logActivity('ai_unlock', …)`) and read back in places that have
+// already de-underscored it.
+//
+// Anything not listed falls through to the old sentence-case, so a verb added
+// later still renders — just less gracefully. Add it here when you add it.
+const ACTIVITY_VERBS = {
+  ai_unlock:                'Unlocked AI access',
+  ai_lock:                  'Locked AI access',
+  ai_access_default_changed:'Changed the AI access default',
+  profile_updated:          'Updated profile',
+  login:                    'Signed in',
+  logout:                   'Signed out',
+  password_changed:         'Changed password',
+  share_created:            'Created a share link',
+  share_revoked:            'Deactivated a share link',
+  calendar_feed_rotated:    'Rotated the calendar feed link',
+}
+
+/**
+ * 'ai_unlock' / 'ai unlock' → 'Unlocked AI access'.
+ * Unknown verbs are sentence-cased: 'widget_frobbed' → 'Widget frobbed'.
+ * Empty / missing → 'Account activity'.
+ */
+export function humanizeVerb(verb) {
+  const raw = String(verb ?? '').trim()
+  if (!raw) return 'Account activity'
+  const key = raw.toLowerCase().replace(/[\s-]+/g, '_')
+  if (ACTIVITY_VERBS[key]) return ACTIVITY_VERBS[key]
+  const words = key.replace(/_/g, ' ').trim()
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Account activity'
+}
+
+// ─── R3A PURE HELPERS END ────────────────────────────────────────────────────
+
 /**
  * Page keyframes + breakpoints, scoped to this page's own markup.
  *
@@ -87,7 +131,10 @@ export function SettingsStyles() {
       .st-nav      { transition: background .16s ease }
       .st-nav:hover:not([data-on="true"]) { background: #F1F0EC }
       .st-btn      { transition: background .15s ease, border-color .15s ease }
-      .st-input:focus { border-color: #C9C8C3; outline: none }
+      /* Border still darkens on focus, but the outline is no longer suppressed:
+         the one app-wide focus ring (src/index.css, 2px brand navy on
+         :focus-visible) is what marks focus everywhere now. */
+      .st-input:focus { border-color: #C9C8C3 }
       .st-link     { color: ${T.ink}; text-decoration: underline; text-underline-offset: 2px }
       .st-link:hover { color: ${T.red} }
       @media (max-width: 1180px) {
@@ -354,7 +401,8 @@ export function Field({ label, hint, style, inputStyle, ...props }) {
           width: '100%', boxSizing: 'border-box', lineHeight: 1.35,
           border: `1px solid ${T.field}`, borderRadius: 10, padding: '10px 13px',
           fontSize: 13, fontFamily: 'inherit', color: T.ink, background: '#fff',
-          outline: 'none',
+          // No inline `outline: none` — an inline style would beat the app-wide
+          // focus ring in src/index.css and leave these fields with none at all.
           ...inputStyle,
         }}
       />

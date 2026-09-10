@@ -96,7 +96,8 @@ export default function GenerationStrip({ candidateName, startedAt, stage = 1, s
                 {active && (
                   <div style={{
                     position: 'absolute', top: 0, bottom: 0, left: 0, width: '38%', borderRadius: 99,
-                    background: 'linear-gradient(90deg,rgba(165,28,36,0),rgba(165,28,36,.95),rgba(165,28,36,0))',
+                    /* rgb(139,0,0) = T.red, the one brand accent */
+                    background: 'linear-gradient(90deg,rgba(139,0,0,0),rgba(139,0,0,.95),rgba(139,0,0,0))',
                     animation: 'pfSlide 1.5s linear infinite',
                   }} />
                 )}

@@ -19,11 +19,9 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
-import { useDialog } from '../../lib/useDialog'
 import { Card, CardBody, Row, Field, Btn, LinkBtn, Pill, Note, Msg, Spinner, T } from './shared'
 
 const SUPPORT_EMAIL = 'support@badgerboardwi.com'
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 // Avatar: 96px square, and the data URL has to stay small — user_metadata rides
 // inside the JWT, so a fat string there bloats every request the app makes.
@@ -253,102 +251,6 @@ function SessionsCard() {
   )
 }
 
-// ── Change email dialog ───────────────────────────────────────────────────────
-// Was a mailto: link to support — which produces nothing visible in a browser
-// with no mail handler registered, so the button looked dead. Now an in-app
-// dialog (same fixed-overlay shape as the confirm dialogs in Settings.jsx)
-// that calls supabase.auth.updateUser({ email }). With Supabase's default
-// "secure email change" on, a confirmation link goes to BOTH addresses.
-
-function ChangeEmailDialog({ currentEmail, onClose }) {
-  const [next, setNext]   = useState('')
-  const [busy, setBusy]   = useState(false)
-  const [msg, setMsg]     = useState(null)
-  const [sent, setSent]   = useState(false)
-  // Escape closes + body scroll-lock, like every other dialog in the app.
-  // (Field is not forwardRef, so initial focus is the input's own autoFocus.)
-  useDialog(onClose)
-
-  const submit = async (e) => {
-    e?.preventDefault?.()
-    const newEmail = next.trim().toLowerCase()
-    if (!EMAIL_RE.test(newEmail)) {
-      setMsg({ type: 'error', text: 'Enter a valid email address.' }); return
-    }
-    if (newEmail === (currentEmail || '').toLowerCase()) {
-      setMsg({ type: 'error', text: 'That is already the email on this account.' }); return
-    }
-    if (!supabase) {
-      setMsg({ type: 'error', text: `Email changes are unavailable right now — contact ${SUPPORT_EMAIL}.` }); return
-    }
-    setBusy(true); setMsg(null)
-    const { error } = await supabase.auth.updateUser({ email: newEmail })
-    setBusy(false)
-    if (error) {
-      setMsg({ type: 'error', text: `That change could not be requested — ${error.message}` })
-      return
-    }
-    setSent(true)
-    setMsg({
-      type: 'success',
-      text: `Check both inboxes — Supabase sends a confirmation link to ${newEmail} and to ${currentEmail}. The change takes effect once you confirm.`,
-    })
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-      onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose() }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="st-change-email-title"
-        style={{
-          background: T.card, borderRadius: 16, boxShadow: '0 20px 50px rgba(0,0,0,.25)',
-          width: '100%', maxWidth: 440, padding: '22px 24px', fontFamily: T.font, color: T.ink,
-        }}
-      >
-        <div id="st-change-email-title" style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Change email address</div>
-        <Note style={{ marginBottom: 16 }}>
-          Currently <strong style={{ color: T.ink }}>{currentEmail}</strong>. We'll send a confirmation link before anything changes.
-        </Note>
-
-        {msg && (
-          <div style={{ marginBottom: 14 }}>
-            <Msg type={msg.type} onDismiss={sent ? undefined : () => setMsg(null)}>{msg.text}</Msg>
-          </div>
-        )}
-
-        {!sent ? (
-          <form onSubmit={submit}>
-            <Field
-              label="New email"
-              type="email"
-              value={next}
-              onChange={e => setNext(e.target.value)}
-              placeholder="you@example.com"
-              autoComplete="email"
-              disabled={busy}
-              autoFocus
-            />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
-              <Btn onClick={onClose} disabled={busy}>Cancel</Btn>
-              <Btn kind="primary" type="submit" disabled={busy || !next.trim()}>
-                {busy ? <><Spinner color="#fff" /> Sending…</> : 'Send'}
-              </Btn>
-            </div>
-          </form>
-        ) : (
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
-            <Btn kind="primary" onClick={onClose}>Done</Btn>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 // ── Pane ──────────────────────────────────────────────────────────────────────
 
 export default function AccountPane({ user, savedName = '', nameField, orgField, onName, onOrg }) {
@@ -406,9 +308,13 @@ export default function AccountPane({ user, savedName = '', nameField, orgField,
     await savePhoto(dataUrl)
   }
 
-  // ── Email change ────────────────────────────────────────────────────────────
-  const [emailDialog, setEmailDialog] = useState(false)
-  const requestEmailChange = () => setEmailDialog(true)
+  const requestEmailChange = () => {
+    const subject = encodeURIComponent('Email change request')
+    const body    = encodeURIComponent(
+      `Please change the email address on my Badger Board account.\n\nCurrent email: ${email}\nNew email: \n`
+    )
+    window.location.href = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`
+  }
 
   return (
     <>
@@ -498,10 +404,6 @@ export default function AccountPane({ user, savedName = '', nameField, orgField,
       </Card>
 
       <SessionsCard />
-
-      {emailDialog && (
-        <ChangeEmailDialog currentEmail={email} onClose={() => setEmailDialog(false)} />
-      )}
     </>
   )
 }
