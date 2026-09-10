@@ -86,7 +86,7 @@ export const Z = {
 const CHANGELOG = [
   {
     version: 'v1.37.0',
-    date: 'August 16, 2026',
+    date: 'September 9, 2026',
     changes: [
       'UI repair round 3: one brand red and navy everywhere, Geist typography app-wide, consistent focus rings, and your profile photo in the top bar',
       'Maps open framed on Wisconsin with working layer chips, results bars use party colors with a clear winner treatment, and the elections calendar matches on both pages',
