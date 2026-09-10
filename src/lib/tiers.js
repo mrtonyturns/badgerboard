@@ -37,7 +37,6 @@ export const CANDIDATE_PLAN_CONFIG = {
       campaignIntel:      false,
       discoverCandidates: false,
       socialLinks:        false,
-      weeklyProfile:      false,
       creditPacks:        false,
       broadside:          false,  // paid-plan feature (v1.18.2)
     },
@@ -74,7 +73,6 @@ export const CANDIDATE_PLAN_CONFIG = {
       campaignIntel:      false,
       discoverCandidates: false,
       socialLinks:        true,
-      weeklyProfile:      false,
       creditPacks:        true,
       broadside:          true,   // v1.18.2: included in all paid plans
     },
@@ -116,7 +114,6 @@ export const CANDIDATE_PLAN_CONFIG = {
       campaignIntel:      true,
       discoverCandidates: true,
       socialLinks:        true,
-      weeklyProfile:      false,
       creditPacks:        true,
       broadside:          true,   // v1.18.2: included in all paid plans
     },
@@ -159,7 +156,6 @@ export const CANDIDATE_PLAN_CONFIG = {
       campaignIntel:      true,
       discoverCandidates: true,
       socialLinks:        true,
-      weeklyProfile:      true,
       creditPacks:        true,
       broadside:          true,   // v1.18.2: included in all paid plans
     },
@@ -220,7 +216,6 @@ export const ACTION_PLAN_CONFIG = {
       campaignIntel:      true,
       discoverCandidates: true,
       socialLinks:        true,
-      weeklyProfile:      false,
       creditPacks:        true,   // every paid plan can buy a la carte profile credits
       bulkCredits:        false,
       broadside:          true,   // v1.18.2: included in all paid plans
@@ -263,7 +258,6 @@ export const ACTION_PLAN_CONFIG = {
       campaignIntel:      true,
       discoverCandidates: true,
       socialLinks:        true,
-      weeklyProfile:      true,
       creditPacks:        true,   // every paid plan can buy a la carte profile credits
       bulkCredits:        false,
       broadside:          true,   // v1.18.2: included in all paid plans
@@ -305,7 +299,6 @@ export const ACTION_PLAN_CONFIG = {
       campaignIntel:      true,
       discoverCandidates: true,
       socialLinks:        true,
-      weeklyProfile:      true,
       creditPacks:        true,   // every paid plan can buy a la carte profile credits
       bulkCredits:        true,
       broadside:          true,   // v1.18.2: included in all paid plans
@@ -677,7 +670,6 @@ export function getBracketConfig(bracketKey) {
 
 // Feature key aliases for backward compatibility (old name → new name)
 const FEATURE_ALIASES = {
-  weeklyDossier: 'weeklyProfile',  // renamed in tiers.js rewrite
   dossierLimit:  'profileLimit',   // renamed in tiers.js rewrite
 }
 
@@ -694,7 +686,7 @@ export function hasFeature(planKey, feature) {
 // those names drifted from the config: a "Pro" pill (no such plan has ever
 // existed) on the Discover and CSV buttons, and "Campaign & Agency plans" on
 // Active Monitoring — 'Agency' is a pre-v1.10 legacy alias, not a sellable
-// plan, and weeklyProfile actually unlocks at Active on the Action side.
+// plan, and unlock tiers can differ between the two plan families.
 // Derive the names from PLAN_CONFIG instead so they can never go stale again.
 
 /** Lowest plan in each family that unlocks `feature` (null when none does). */
@@ -705,7 +697,7 @@ export function lowestPlansWithFeature(feature) {
 
 /**
  * Human label for where a feature unlocks.
- *   featureUnlockLabel('weeklyProfile')             → 'Campaign (Candidate) and Active (Action)'
+ *   featureUnlockLabel('compare')                    → 'Active (Candidate) and Active (Action)'
  *   featureUnlockLabel('discoverCandidates', 'candidate') → 'Active'
  * Pass the viewer's plan family to name only their own ladder; omit it for
  * copy that has to speak to both.
@@ -778,10 +770,11 @@ export function getActiveCandidateLimit(planKey) {
 //
 // Candidates.jsx, CandidateDetail.jsx, Settings.jsx and dashboard/shared.jsx
 // each wrote this ladder out longhand. It lives here now because the FEATURE
-// GATE has to agree with it: monitoring used to be gated on features.weeklyProfile,
-// which is false on c_active and on every Action plan — so a plan that pays for
-// a slot could not reach the switch that fills it. The gate is "do you have a
-// slot", i.e. canMonitorCandidates(), and it reads the same number the counter does.
+// GATE has to agree with it: monitoring used to be gated on a weekly-refresh
+// feature flag (removed as dead — it had no runtime consumers) that was false
+// on c_active and on every Action plan — so a plan that pays for a slot could
+// not reach the switch that fills it. The gate is "do you have a slot", i.e.
+// canMonitorCandidates(), and it reads the same number the counter does.
 export function getMonitoringSlotMax(user) {
   if (user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase())) return Infinity
   if (getUserPlanType(user) === 'candidate') return getActiveCandidateLimit(getUserPlan(user))

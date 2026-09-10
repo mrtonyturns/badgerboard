@@ -42,7 +42,7 @@ import LoadingBar from './LoadingBar'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.38.0'
+const APP_VERSION = 'v1.39.0'
 
 // ─── z-index scale (v1.34.1 — audit fix B1) ──────────────────────────────────
 // One ladder for everything that floats, lowest to highest:
@@ -84,6 +84,15 @@ export const Z = {
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.39.0',
+    date: 'September 10, 2026',
+    changes: [
+      'New: a guided setup checklist on your dashboard walks you from first candidate to first AI profile to monitoring — dismissible, and it disappears on its own once you’re rolling',
+      'November ready: the full Nov 3 general ballot is loaded — 130 races with every nominee from the August primaries plus verified statewide matchups — and the results engine is load-tested for election night',
+      'Under the hood: county clerk result sources wired into election-night collection, and a round of dead code removed',
+    ],
+  },
   {
     version: 'v1.38.0',
     date: 'September 10, 2026',

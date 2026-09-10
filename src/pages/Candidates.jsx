@@ -14,6 +14,7 @@ import { placePath } from '../lib/placeDemographics'
 import { partyGroup, partyBadgeClasses, normalizePartyForDb } from '../lib/party'
 import { SCOUT_CAP_MESSAGE, scoutCapMessage, monitoringToggleError } from '../lib/capErrors'
 import { useDialog } from '../lib/useDialog'
+import OnboardingStepHint from '../components/onboarding/OnboardingStepHint'
 
 // How long the search box waits before it queries the server. The input itself
 // stays instant — only the network call is debounced, because keying it on
@@ -935,6 +936,7 @@ export default function Candidates() {
             <p className="text-gray-500 font-semibold text-lg">No candidates yet</p>
             <p className="text-gray-400 text-sm mt-1">Add candidates to start building your prospecting database</p>
             <button onClick={() => setShowModal(true)} className="btn-primary mt-6">Add First Candidate</button>
+            <OnboardingStepHint stepId="candidate" style={{ marginTop: 14 }} />
           </div>
         ) : (
           <div className="text-center py-20">
@@ -1519,7 +1521,11 @@ export default function Candidates() {
                       ) : (
                         <div className="w-full flex items-center gap-3 py-2.5 px-4 rounded-xl text-sm border-2 border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed">
                           <Wand2 className="w-4 h-4 flex-shrink-0 text-gray-300" />
-                          <span>AI Autofill — <span className="text-brand-red/60 font-semibold">Active plan or higher required.</span> <a href="/settings" className="underline text-brand-red/60 hover:text-brand-red" onClick={(e) => { e.stopPropagation(); }}>Upgrade your plan</a> to use this feature.</span>
+                          <span>AI Autofill — <span className="text-brand-red/60 font-semibold">Active plan or higher required.</span>{' '}
+                            <WebOnlyCta native={NATIVE_PLAN_NOTE}>
+                              <Link to="/plans" className="underline text-brand-red/60 hover:text-brand-red" onClick={(e) => { e.stopPropagation(); }}>Upgrade your plan</Link> to use this feature.
+                            </WebOnlyCta>
+                          </span>
                         </div>
                       )}
                     </div>

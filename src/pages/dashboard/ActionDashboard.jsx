@@ -12,6 +12,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { format, differenceInCalendarDays } from 'date-fns'
 import LoadingBar from '../../components/LoadingBar'
+import OnboardingChecklist from '../../components/onboarding/OnboardingChecklist'
+import {
+  buildOnboardingSteps, onboardingProgress,
+  isOnboardingDismissed, dismissOnboarding,
+} from '../../components/onboarding/steps'
 import { useAuth } from '../../contexts/AuthContext'
 import {
   supabase,
@@ -26,7 +31,7 @@ import { PHASE_MAP } from '../../lib/campaignEnums'
 import { isRep, isDem } from '../../lib/party'
 import { officeLine } from '../../lib/office'
 import {
-  T, Card, CardHead, DashboardShell, DashboardHeader, NextRaceBlock,
+  T, Card, CardHead, DashboardShell, DashboardHeader, NextRaceBlock, firstNameOf,
   StatStrip, StatCell, WeeklyChip, PartyPill, StatusPill, Pill, PhaseDot, DueChip,
   DigestItems, ElectionRows, EmptyState, CtaButton, TextLink, LivePulseDot,
   PartyAvatar, DashboardSkeleton, srOnly,
@@ -467,6 +472,27 @@ export default function ActionDashboard() {
   const profileLimit = getEffectiveProfileLimit(user)
   const banked = getBankedProfileCredits(user)
 
+  // ── first-run checklist ───────────────────────────────────────────────────
+  // Entirely derived from the six arrays this page already fetched — no extra
+  // query. `slots` supplies the entitlement half so the monitoring step can
+  // never tell a zero-slot account to flip a switch it can't reach, and
+  // `monitoredCount` is the same server count the stat strip trusts.
+  const [onbDismissed, setOnbDismissed] = useState(() => isOnboardingDismissed(user?.id))
+  useEffect(() => { setOnbDismissed(isOnboardingDismissed(user?.id)) }, [user?.id])
+
+  const onboardingSteps = useMemo(() => buildOnboardingSteps({
+    candidates, dossiers, voterLists, milestones,
+    planKey: plan,
+    monitoringSlotMax: slots.max,
+    monitoredCount: monitoredCount ?? undefined,
+  }), [candidates, dossiers, voterLists, milestones, plan, slots.max, monitoredCount])
+
+  // Auto-hide on completion is derived, so an account that later deletes its
+  // last candidate correctly gets the checklist back. Only the manual dismiss
+  // is remembered.
+  const showOnboarding = !onbDismissed && !onboardingProgress(onboardingSteps).complete
+  const onboardingWelcome = candidates.length === 0
+
   const prospectTotal = useMemo(
     () => prospects.reduce((n, p) => n + (p.total_count || 0), 0),
     [prospects],
@@ -589,6 +615,19 @@ export default function ActionDashboard() {
           />
         }
       />
+
+      {/* Sits above everything the dashboard draws: on a brand-new account the
+          cards below are all empty states, and this is the one thing on screen
+          that says what to do about that. */}
+      {showOnboarding && (
+        <OnboardingChecklist
+          steps={onboardingSteps}
+          welcome={onboardingWelcome}
+          firstName={firstNameOf(user)}
+          onNavigate={(href) => nav(href)}
+          onDismiss={() => { dismissOnboarding(user?.id); setOnbDismissed(true) }}
+        />
+      )}
 
       <StatStrip>
         <StatCell

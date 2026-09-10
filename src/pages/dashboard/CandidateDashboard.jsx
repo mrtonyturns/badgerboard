@@ -10,6 +10,11 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { format, startOfWeek, addWeeks } from 'date-fns'
 import LoadingBar from '../../components/LoadingBar'
+import OnboardingChecklist from '../../components/onboarding/OnboardingChecklist'
+import {
+  buildOnboardingSteps, onboardingProgress,
+  isOnboardingDismissed, dismissOnboarding,
+} from '../../components/onboarding/steps'
 import { useAuth } from '../../contexts/AuthContext'
 import {
   supabase, getCandidates, getMilestones, getElections,
@@ -25,7 +30,7 @@ import {
   T, Card, CardHead, DashboardShell, DashboardHeader, NextRaceBlock,
   StatStrip, StatCell, WeeklyChip, OverdueChip, PartyPill, DigestItems,
   MilestoneRow, ElectionRows, EmptyState, CtaButton, TextLink, StatRow,
-  DistrictHeatMap, HeatLegend, LivePulseDot, DashboardSkeleton, srOnly,
+  DistrictHeatMap, HeatLegend, LivePulseDot, DashboardSkeleton, srOnly, firstNameOf,
   safeISO, fmtInt, fmtDate, daysUntil, isUpcoming, autoStatus, isMonitored,
   monitoringSlots, nextMonday, loadPopPoints, loadCountyPres,
   resolveDistrict, loadBoundary, countVotersInDistrict,
@@ -496,6 +501,27 @@ export default function CandidateDashboard() {
   const banked = getBankedProfileCredits(user)
   const monitoredIsSelf = monitored && self && monitored.id === self.id
 
+  // ── first-run checklist ───────────────────────────────────────────────────
+  // No new fetch: candidates, dossiers, voterLists and milestones are all
+  // already in scope from the page's own Promise.all. `slots.max` is
+  // getMonitoringSlotMax(user) — zero on scout/c_monitor, which is exactly the
+  // case where "turn on Active Monitoring" would be a dead instruction, so the
+  // step builder swaps it for the upgrade.
+  const [onbDismissed, setOnbDismissed] = useState(() => isOnboardingDismissed(user?.id))
+  useEffect(() => { setOnbDismissed(isOnboardingDismissed(user?.id)) }, [user?.id])
+
+  const onboardingSteps = useMemo(() => buildOnboardingSteps({
+    candidates, dossiers, voterLists, milestones,
+    planKey: plan,
+    monitoringSlotMax: slots.max,
+    monitoredCount: monitoredCount ?? undefined,
+  }), [candidates, dossiers, voterLists, milestones, plan, slots.max, monitoredCount])
+
+  // Completion auto-hides and is derived, so it needs no storage; only the
+  // manual dismissal is remembered.
+  const showOnboarding = !onbDismissed && !onboardingProgress(onboardingSteps).complete
+  const onboardingWelcome = candidates.length === 0
+
   const countyList = useMemo(() => {
     if (!inside?.length) return null
     const names = [...new Set(inside.map(p => p.co).filter(Boolean))].sort()
@@ -573,6 +599,21 @@ export default function CandidateDashboard() {
             ))}
           </div>
         </Card>
+      )}
+
+      {/* Above the stat strip and every card below it. On a brand-new account
+          those cards are all honest empty states; this is the one thing on the
+          page that says what to do next. (It sits under the "which record is
+          you?" picker only so that picker stays next to the link that opens
+          it — that panel needs two candidates, i.e. long past step 1.) */}
+      {showOnboarding && (
+        <OnboardingChecklist
+          steps={onboardingSteps}
+          welcome={onboardingWelcome}
+          firstName={firstNameOf(user)}
+          onNavigate={(href) => nav(href)}
+          onDismiss={() => { dismissOnboarding(user?.id); setOnbDismissed(true) }}
+        />
       )}
 
       <StatStrip>

@@ -64,9 +64,6 @@ const fetchOffices = async (filters = {}) => {
   return { data: all, error: null }
 }
 
-export const getOffice = async (id) =>
-  supabase.from('offices').select('*').eq('id', id).single()
-
 // Migration 20260704000004 dropped the offices insert/update/delete RLS
 // policies, so browser writes are rejected. Office writes route through the
 // admin-verified service-role function, same as elections.
@@ -229,15 +226,6 @@ export const getDossier = async (id) => {
   return withOffline(`dossier:${uid}:${id}`, () => q.single())
 }
 
-export const createDossier = async (data) => {
-  const uid = await currentUserId()
-  // Stamp created_by (the ownership column RLS now enforces) plus generated_by
-  // (kept for the "auto-regen vs user-generated" distinction) and user_id.
-  return supabase.from('dossiers')
-    .insert({ ...data, created_by: uid, generated_by: uid, user_id: uid })
-    .select().single()
-}
-
 export const deleteDossier = async (id) => {
   const uid = await currentUserId()
   let q = supabase.from('dossiers').delete().eq('id', id)
@@ -253,30 +241,9 @@ export const getProspectingLists = async () => {
   return q
 }
 
-export const getProspectingList = async (id) => {
-  const uid = await currentUserId()
-  let q = supabase.from('prospecting_lists').select('*').eq('id', id)
-  if (uid) q = q.eq('created_by', uid)
-  return q.single()
-}
-
 export const createProspectingList = async (data) => {
   const uid = await currentUserId()
   return supabase.from('prospecting_lists').insert({ ...data, created_by: uid }).select().single()
-}
-
-export const updateProspectingList = async (id, data) => {
-  const uid = await currentUserId()
-  let q = supabase.from('prospecting_lists').update(data).eq('id', id)
-  if (uid) q = q.eq('created_by', uid)
-  return q.select().single()
-}
-
-export const deleteProspectingList = async (id) => {
-  const uid = await currentUserId()
-  let q = supabase.from('prospecting_lists').delete().eq('id', id)
-  if (uid) q = q.eq('created_by', uid)
-  return q
 }
 
 // ── Activity Log (USER-SCOPED) ────────────────────────────────
@@ -323,13 +290,6 @@ export const getVoterLists = async () => {
   let q = supabase.from('voter_lists').select('*').order('created_at', { ascending: false })
   if (uid) q = q.eq('created_by', uid)
   return q
-}
-
-export const getVoterList = async (id) => {
-  const uid = await currentUserId()
-  let q = supabase.from('voter_lists').select('*').eq('id', id)
-  if (uid) q = q.eq('created_by', uid)
-  return q.single()
 }
 
 export const createVoterList = async (data) => {
@@ -390,9 +350,6 @@ export const createVoters = async (rows) =>
 export const updateVoter = async (id, data) =>
   supabase.from('voters').update(data).eq('id', id).select().single()
 
-export const deleteVoter = async (id) =>
-  supabase.from('voters').delete().eq('id', id)
-
 export const deleteVotersByList = async (voterListId) =>
   supabase.from('voters').delete().eq('voter_list_id', voterListId)
 
@@ -446,26 +403,12 @@ export const updateRecruitmentSearch = async (id, data) => {
   return q.select().single()
 }
 
-export const deleteRecruitmentSearch = async (id) => {
-  const uid = await currentUserId()
-  let q = supabase.from('recruitment_searches').delete().eq('id', id)
-  if (uid) q = q.eq('created_by', uid)
-  return q
-}
-
 export const getRecruitmentProspects = async (searchId) =>
   supabase.from('recruitment_prospects').select('*').eq('search_id', searchId).order('last_name')
 
 // No .select() — a 25–500 row insert should not echo the whole payload back.
 export const createRecruitmentProspects = async (rows) =>
   supabase.from('recruitment_prospects').insert(rows)
-
-export const updateRecruitmentProspect = async (id, data) => {
-  const uid = await currentUserId()
-  let q = supabase.from('recruitment_prospects').update(data).eq('id', id)
-  if (uid) q = q.eq('created_by', uid)
-  return q.select().single()
-}
 
 /** The background run's only durable channel — polled by the Recruit page. */
 export const getRecruitmentProgress = async (searchId) =>
@@ -512,53 +455,10 @@ export const getDoorKnockLists = async () => {
     .order('created_at', { ascending: false })
 }
 
-export const getDoorKnockList = async (id) => {
-  const uid = await currentUserId()
-  let q = supabase
-    .from('door_knock_lists')
-    .select('*, candidate:candidates(id, name), election:elections(id, name, election_date)')
-    .eq('id', id)
-  if (uid) q = q.eq('created_by', uid)
-  return q.single()
-}
-
 export const createDoorKnockList = async (data) => {
   const uid = await currentUserId()
   return supabase.from('door_knock_lists').insert({ ...data, created_by: uid }).select().single()
 }
-
-export const updateDoorKnockList = async (id, data) => {
-  const uid = await currentUserId()
-  let q = supabase.from('door_knock_lists').update(data).eq('id', id)
-  if (uid) q = q.eq('created_by', uid)
-  return q.select().single()
-}
-
-export const deleteDoorKnockList = async (id) => {
-  const uid = await currentUserId()
-  let q = supabase.from('door_knock_lists').delete().eq('id', id)
-  if (uid) q = q.eq('created_by', uid)
-  return q
-}
-
-// ── Door Knocks ─────────────────────────────────────────────────
-export const getDoorKnocks = async (listId) =>
-  supabase
-    .from('door_knocks')
-    .select('*')
-    .eq('list_id', listId)
-    .order('knocked_at', { ascending: false })
-
-export const createDoorKnock = async (data) => {
-  const uid = await currentUserId()
-  return supabase.from('door_knocks').insert({ ...data, knocked_by: uid }).select().single()
-}
-
-export const updateDoorKnock = async (id, data) =>
-  supabase.from('door_knocks').update(data).eq('id', id).select().single()
-
-export const deleteDoorKnock = async (id) =>
-  supabase.from('door_knocks').delete().eq('id', id)
 
 // ── Door Knock Contact History (by address) ──────────────────────
 // Returns all prior knocks at a given address string across all lists.
@@ -624,34 +524,8 @@ export const getMilestones = async (filters = {}) => {
   return query
 }
 
-export const createMilestone = async (data) => {
-  const uid = await currentUserId()
-  return supabase.from('game_plan_milestones').insert({ ...data, created_by: uid }).select().single()
-}
-
-export const createMilestoneBatch = async (rows) => {
-  const uid = await currentUserId()
-  const stamped = rows.map(r => ({ ...r, created_by: uid }))
-  return supabase.from('game_plan_milestones').insert(stamped).select()
-}
-
 export const updateMilestone = async (id, data) =>
   supabase.from('game_plan_milestones').update(data).eq('id', id).select().single()
-
-export const deleteMilestone = async (id) =>
-  supabase.from('game_plan_milestones').delete().eq('id', id)
-
-export const deleteMilestonesByCandidate = async (candidateId) =>
-  supabase.from('game_plan_milestones').delete().eq('candidate_id', candidateId)
-
-// Removes all template-generated milestones for the current user (undo generate)
-export const deleteTemplateMilestones = async (candidateId = null) => {
-  const uid = await currentUserId()
-  if (!uid) return { error: new Error('Not authenticated') }
-  let q = supabase.from('game_plan_milestones').delete().eq('created_by', uid).eq('is_template', true)
-  if (candidateId) q = q.eq('candidate_id', candidateId)
-  return q
-}
 
 // ─── Game Plan Tasks (Todoist-style) ──────────────────────────────────────────
 // Projects → sections → tasks (subtasks via parent_id). project_id NULL = Inbox.
@@ -904,19 +778,6 @@ export async function getVolunteers(listId) {
     .select('id, created_by, list_id, name, email, phone, role, status, magic_token, created_at')
     .eq('list_id', listId)
     .order('created_at')
-}
-export async function createVolunteer(vol) {
-  // Map coordinator_id → created_by, invite_token → magic_token
-  const { coordinator_id, invite_token, invite_sent_at, ...rest } = vol
-  const record = {
-    ...rest,
-    created_by: coordinator_id || rest.created_by,
-    magic_token: invite_token || rest.magic_token || null,
-  }
-  return supabase.from('volunteers').insert(record).select().single()
-}
-export async function updateVolunteer(id, patch) {
-  return supabase.from('volunteers').update(patch).eq('id', id)
 }
 
 // ─── Voter file — stub (requires DB migration; graceful no-op for now) ────────

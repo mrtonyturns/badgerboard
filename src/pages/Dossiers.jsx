@@ -48,6 +48,7 @@ import {
 } from './profiler/reportModel'
 import { rowToCandidatePatch } from './profiler/bulkCsv'
 import { filterSections } from '../lib/profileContent'
+import OnboardingStepHint from '../components/onboarding/OnboardingStepHint'
 
 const PAGE_SIZE = 25
 const PROGRESS_POLL_MS = 2500
@@ -1224,6 +1225,9 @@ export default function Dossiers() {
                   ? 'Pick a candidate above and generate the first one — it takes 2–4 minutes.'
                   : 'Search runs over candidate names and offices.'}
               </div>
+            )}
+            {!loading && rows.length === 0 && (
+              <OnboardingStepHint stepId="profile" to="/" />
             )}
           </div>
         ) : filtered.slice(0, shown).map(r => (

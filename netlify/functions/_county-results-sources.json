@@ -1,0 +1,290 @@
+{
+ "Adams": {
+  "url": "https://www.co.adams.wi.us/",
+  "verified": false
+ },
+ "Ashland": {
+  "url": "https://www.ashlandcountywi.gov/",
+  "verified": false
+ },
+ "Barron": {
+  "url": "https://www.barroncountywi.gov/index.asp?SEC=%7BF29AC191-3D6E-469C-8C91-9EE7497C9404%7D",
+  "verified": true
+ },
+ "Bayfield": {
+  "url": "https://www.bayfieldcounty.wi.gov/",
+  "verified": false
+ },
+ "Brown": {
+  "url": "https://www.browncountywi.gov/departments/county-clerk/elections/election-results/",
+  "verified": true
+ },
+ "Buffalo": {
+  "url": "https://www.buffalocounty.com/",
+  "verified": false
+ },
+ "Burnett": {
+  "url": "https://www.burnettcounty.com/",
+  "verified": false
+ },
+ "Calumet": {
+  "url": "https://www.co.calumet.wi.us/868/Election-Results",
+  "verified": true
+ },
+ "Chippewa": {
+  "url": "https://www.chippewacountywi.gov/241/Election-Results",
+  "verified": true
+ },
+ "Clark": {
+  "url": "https://www.co.clark.wi.us/",
+  "verified": false
+ },
+ "Columbia": {
+  "url": "https://www.co.columbia.wi.us/columbiacounty/countyclerk/County-Clerk-Home/Election-Voter-Information/Election-Return-Results",
+  "verified": true
+ },
+ "Crawford": {
+  "url": "https://www.crawfordcountywi.org/",
+  "verified": false
+ },
+ "Dane": {
+  "url": "https://elections.danecounty.gov/Election-Result/179",
+  "verified": true
+ },
+ "Dodge": {
+  "url": "https://www.co.dodge.wi.gov/departments/departments-a-d/county-clerk/election-information",
+  "verified": true
+ },
+ "Door": {
+  "url": "https://www.co.door.wi.gov/",
+  "verified": false
+ },
+ "Douglas": {
+  "url": "https://www.douglascountywi.org/",
+  "verified": false
+ },
+ "Dunn": {
+  "url": "https://www.co.dunn.wi.us/",
+  "verified": false
+ },
+ "Eau Claire": {
+  "url": "https://www.eauclairecounty.gov/departments/county_clerk/elections/election_results",
+  "verified": true
+ },
+ "Florence": {
+  "url": "https://www.florencewisconsin.com/",
+  "verified": false
+ },
+ "Fond du Lac": {
+  "url": "https://www.fdlco.wi.gov/departments/departments-a-e/county-clerk/election-results",
+  "verified": true
+ },
+ "Forest": {
+  "url": "https://www.forestcountywi.com/",
+  "verified": false
+ },
+ "Grant": {
+  "url": "https://gcinternetwebsite.co.grant.wi.gov/county-clerk/",
+  "verified": false
+ },
+ "Green": {
+  "url": "https://www.greencountywi.org/",
+  "verified": false
+ },
+ "Green Lake": {
+  "url": "https://www.co.green-lake.wi.us/",
+  "verified": false
+ },
+ "Iowa": {
+  "url": "https://www.iowacounty.wi.gov/",
+  "verified": false
+ },
+ "Iron": {
+  "url": "https://www.ironcountywi.us/",
+  "verified": false
+ },
+ "Jackson": {
+  "url": "https://www.co.jackson.wi.us/",
+  "verified": false
+ },
+ "Jefferson": {
+  "url": "https://apps.jeffersoncountywi.gov/jc/election",
+  "verified": true
+ },
+ "Juneau": {
+  "url": "https://www.co.juneau.wi.us/",
+  "verified": false
+ },
+ "Kenosha": {
+  "url": "https://www.kenoshacountywi.gov/1405/Election-Results",
+  "verified": true
+ },
+ "Kewaunee": {
+  "url": "https://www.kewauneeco.org/",
+  "verified": false
+ },
+ "La Crosse": {
+  "url": "https://lacrossecounty.org/countyclerk/elections/election-results",
+  "verified": true
+ },
+ "Lafayette": {
+  "url": "https://www.lafayettecountywi.org/",
+  "verified": false
+ },
+ "Langlade": {
+  "url": "https://www.langladecounty.org/",
+  "verified": false
+ },
+ "Lincoln": {
+  "url": "https://www.lincolncountywi.org/",
+  "verified": false
+ },
+ "Manitowoc": {
+  "url": "https://manitowoccountywi.gov/departments/county-clerk/election-information/election-results/",
+  "verified": true
+ },
+ "Marathon": {
+  "url": "https://www.marathoncounty.gov/services/elections-voting/results",
+  "verified": true
+ },
+ "Marinette": {
+  "url": "https://www.marinettecounty.com/",
+  "verified": false
+ },
+ "Marquette": {
+  "url": "https://www.co.marquette.wi.us/",
+  "verified": false
+ },
+ "Menominee": {
+  "url": "https://www.menomineecountywi.com/",
+  "verified": false
+ },
+ "Milwaukee": {
+  "url": "https://county.milwaukee.gov/EN/County-Clerk/Off-Nav/Election-Results",
+  "verified": true
+ },
+ "Monroe": {
+  "url": "https://co.monroe.wi.us/",
+  "verified": false
+ },
+ "Oconto": {
+  "url": "https://www.co.oconto.wi.us/",
+  "verified": false
+ },
+ "Oneida": {
+  "url": "https://www.co.oneida.wi.us/",
+  "verified": false
+ },
+ "Outagamie": {
+  "url": "https://www.outagamie.gov/Our-County/County-Clerk/Elections/Outagamie-County-Election-Results",
+  "verified": true
+ },
+ "Ozaukee": {
+  "url": "https://www.ozaukeecounty.gov/162/Election-Information",
+  "verified": true
+ },
+ "Pepin": {
+  "url": "https://www.co.pepin.wi.us/",
+  "verified": false
+ },
+ "Pierce": {
+  "url": "https://www.co.pierce.wi.us/",
+  "verified": false
+ },
+ "Polk": {
+  "url": "https://www.co.polk.wi.us/",
+  "verified": false
+ },
+ "Portage": {
+  "url": "https://www.co.portage.wi.gov/185/Election-Results",
+  "verified": true
+ },
+ "Price": {
+  "url": "https://www.pricecountywi.net/",
+  "verified": false
+ },
+ "Racine": {
+  "url": "https://www.racinecounty.gov/departments/county-clerk/election-information/election-results",
+  "verified": true
+ },
+ "Richland": {
+  "url": "https://www.co.richland.wi.us/",
+  "verified": false
+ },
+ "Rock": {
+  "url": "https://www.co.rock.wi.us/departments/county-clerk/election-information",
+  "verified": true
+ },
+ "Rusk": {
+  "url": "https://www.ruskcounty.org/",
+  "verified": false
+ },
+ "Sauk": {
+  "url": "https://www.co.sauk.wi.us/countyclerk/election-results",
+  "verified": true
+ },
+ "Sawyer": {
+  "url": "https://www.sawyercountygov.org/",
+  "verified": false
+ },
+ "Shawano": {
+  "url": "https://www.shawanocounty.org/",
+  "verified": false
+ },
+ "Sheboygan": {
+  "url": "https://www.sheboygancounty.com/departments/departments-a-e/county-clerk/elections",
+  "verified": true
+ },
+ "St. Croix": {
+  "url": "https://www.sccwi.gov/1035/Election-Information-Results",
+  "verified": true
+ },
+ "Taylor": {
+  "url": "https://www.co.taylor.wi.us/",
+  "verified": false
+ },
+ "Trempealeau": {
+  "url": "https://co.trempealeau.wi.us/departments/service_departments/county_clerk/elections.php",
+  "verified": false
+ },
+ "Vernon": {
+  "url": "https://www.vernoncounty.org/",
+  "verified": false
+ },
+ "Vilas": {
+  "url": "https://www.vilascountywi.gov/",
+  "verified": false
+ },
+ "Walworth": {
+  "url": "https://www.co.walworth.wi.us/199/Election-Results",
+  "verified": true
+ },
+ "Washburn": {
+  "url": "https://www.washburncountywi.gov/",
+  "verified": false
+ },
+ "Washington": {
+  "url": "https://www.washcowisco.gov/departments/county_clerk/election",
+  "verified": true
+ },
+ "Waukesha": {
+  "url": "https://www.waukeshacounty.gov/county-clerks-office/election-information/official-election-results/",
+  "verified": true
+ },
+ "Waupaca": {
+  "url": "https://www.waupacacounty-wi.gov/departments/government_departments/county_clerk/elections.php",
+  "verified": true
+ },
+ "Waushara": {
+  "url": "https://www.co.waushara.wi.us/",
+  "verified": false
+ },
+ "Winnebago": {
+  "url": "https://www.winnebagocountywi.gov/262/Election-Information",
+  "verified": true
+ },
+ "Wood": {
+  "url": "https://www.woodcountywi.gov/departments/clerk/election/",
+  "verified": true
+ }
+}

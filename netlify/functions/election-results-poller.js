@@ -102,6 +102,11 @@ const { normalizePartyForDb } = require('./_party')
 const { determineStatus } = require('./_determination')
 const { notifyContestChanges } = require('./_result-notify')
 const COUNTY_SOURCES = require('./_county-sources.json')
+// County-clerk election-results URLs (Nov 2026 readiness, Sonnet-researched
+// Sep 10). 29 top-population counties verified live; the rest are best-guess
+// clerk homepages marked verified:false. Used as EXTRACTION HINTS in the
+// county prompts — the citations-mandatory rule still applies to every number.
+const COUNTY_RESULT_URLS = require('./_county-results-sources.json')
 
 // Read lazily: the key is looked up per call so a test (or a redeploy that sets
 // the variable after cold start) never gets a stale null captured at require().
@@ -949,7 +954,12 @@ function countyDiscoveryPrompt(election, counties) {
     'primaries that are actually on this ballot.',
     '',
     'Counties to check (and no others):',
-    counties.map(c => `- ${c} County`).join('\n'),
+    counties.map(c => {
+      const src = COUNTY_RESULT_URLS[c]
+      // Verified clerk results pages are the primary source hint; unverified
+      // homepages are still a better starting point than a blind search.
+      return src ? `- ${c} County (county clerk results: ${src.url})` : `- ${c} County`
+    }).join('\n'),
     '',
     `County offices in scope, and nothing else: ${COUNTY_OFFICES.join(', ')}.`,
     '',

@@ -43,6 +43,7 @@ import { parseCsvRows } from '../lib/csv'
 import { buildProspectCsv, confidenceBand, csvFilename, factorSummary } from '../lib/prospectCsv'
 import { DB_PARTIES } from '../lib/party'
 import { T, cardStyle, Btn, Pill, Spinner, EmptyNote } from './profiler/shared.jsx'
+import OnboardingStepHint from '../components/onboarding/OnboardingStepHint'
 
 // Must match MAX_PROSPECTS_PER_RUN in enrich-prospects-background.js. The server
 // enforces it; this is the number the UI promises.
@@ -1238,6 +1239,11 @@ export default function Prospecting() {
                         No candidates match these filters. Widen the status chips, turn off
                         “upcoming elections only”, or import a CSV.
                       </EmptyNote>
+                      {/* Nothing to widen when the account has no candidates at
+                          all — that's step 1, not a filter problem. */}
+                      {candidates.length === 0 && (
+                        <OnboardingStepHint stepId="candidate" to="/candidates" linkLabel="Add a candidate" />
+                      )}
                     </td></tr>
                   )}
                   {discoverRows.map(c => {

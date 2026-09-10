@@ -75,6 +75,7 @@ import { parseCsvRows } from '../lib/csv'
 import { extractDistrictColumns, RECRUIT_VOTER_COLUMNS } from '../lib/recruit'
 import LoadingBar from '../components/LoadingBar'
 import { useDialog } from '../lib/useDialog'
+import OnboardingStepHint from '../components/onboarding/OnboardingStepHint'
 
 // ─── Dialog plumbing ──────────────────────────────────────────────────────────
 // useDialog() has to mount and unmount WITH the dialog (its effect runs once per
@@ -799,6 +800,9 @@ export default function VoterLists() {
               <button onClick={() => setShowUploadModal(true)} className="btn-primary mt-6 flex items-center gap-2">
                 <Upload className="w-4 h-4" /> Upload CSV
               </button>
+              {/* Only when the account has NO lists at all — with lists on file
+                  this panel just means "none selected", not "nothing set up". */}
+              {voterLists.length === 0 && <OnboardingStepHint stepId="voter-list" to="/" />}
             </div>
           ) : (
             <div className="card space-y-4">
