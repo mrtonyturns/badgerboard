@@ -74,11 +74,18 @@ function CandidateCard({ c, selected, flagged, sub, onSelect }) {
       onClick={onSelect}
       style={{
         flex: 'none', width: 206, textAlign: 'left', cursor: 'pointer',
-        background: T.card, borderRadius: 16, padding: 15, position: 'relative',
+        background: T.card, borderRadius: 16, position: 'relative',
         fontFamily: 'inherit', color: 'inherit',
-        border: `1px solid ${selected ? T.red : T.border}`,
+        // The selected ring is a real 2px border, NOT an outside-the-box
+        // shadow: a scroll container clips at its content edge as soon as it
+        // scrolls, so any ring drawn outside the card gets shaved at the
+        // clip boundary at some scroll positions (v1.39.2 — the 4px-padding
+        // attempt in v1.39.1 only protected the resting position). Padding
+        // compensates 1px so the card's inner layout never shifts.
+        border: selected ? `2px solid ${T.red}` : `1px solid ${T.border}`,
+        padding: selected ? 14 : 15,
         boxShadow: selected
-          ? '0 0 0 1px #8B0000, 0 6px 18px rgba(139,0,0,.10)'
+          ? '0 6px 18px rgba(139,0,0,.10)'
           : '0 1px 3px rgba(0,0,0,.03)',
       }}
     >
