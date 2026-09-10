@@ -42,7 +42,7 @@ import LoadingBar from './LoadingBar'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.39.2'
+const APP_VERSION = 'v1.39.3'
 
 // ─── z-index scale (v1.34.1 — audit fix B1) ──────────────────────────────────
 // One ladder for everything that floats, lowest to highest:
@@ -85,10 +85,11 @@ export const Z = {
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
   {
-    version: 'v1.39.2',
+    version: 'v1.39.3',
     date: 'September 10, 2026',
     changes: [
-      'The selected candidate card’s red outline no longer gets clipped by the carousel edges — at any scroll position this time',
+      'Opening the Campaign calendar or results no longer highlights Todo in the sidebar at the same time — one page, one pill',
+      'The selected candidate card’s red outline no longer gets clipped by the carousel edges — at any scroll position',
     ],
   },
   {
@@ -643,7 +644,14 @@ function sectionForLocation(pathname, tab) {
 
 // ─── NavItem ─────────────────────────────────────────────────────────────────
 // Defined at module level so React never sees a new component type on re-render.
-const NavItem = React.memo(function NavItem({ item, onNavigate }) {
+//
+// activeOverride (v1.39.3): NavLink's own isActive matches by PATHNAME only —
+// it cannot see ?tab=, so a NavLink to /game-plan lit up on
+// /game-plan?tab=calendar while the Campaign section header (driven by the
+// query-aware sectionForLocation) lit up too: two red pills at once. Sidebar
+// call sites now pass the sectionForLocation verdict in, making it the single
+// authority; NavLink's isActive is only the fallback for callers that don't.
+const NavItem = React.memo(function NavItem({ item, onNavigate, activeOverride = null }) {
   const Icon = item.icon
   return (
     <NavLink
@@ -652,7 +660,7 @@ const NavItem = React.memo(function NavItem({ item, onNavigate }) {
       onClick={onNavigate}
       className={({ isActive }) =>
         `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
-          isActive
+          (activeOverride ?? isActive)
             ? 'bg-brand-red text-white'
             : 'text-white/70 hover:text-white hover:bg-white/10'
         }`
@@ -814,14 +822,16 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, isActionPlan, isP
           if (!sectionVisible(sec, gates)) return null
           if (sec.direct) {
             const item = { to: sec.direct.to, icon: sec.icon, label: sec.label, end: sec.direct.end }
-            return <NavItem key={sec.key} item={item} onNavigate={onNavigate} />
+            return <NavItem key={sec.key} item={item} onNavigate={onNavigate}
+              activeOverride={currentSectionKey === sec.key} />
           }
           const items = sectionItems(sec, gates)
           if (!items.length) return null
           if (items.length === 1 && !items[0].q) {
             // one visible page — no strip needed, link straight to it
             const solo = { ...items[0], icon: sec.icon, label: sec.label }
-            return <NavItem key={sec.key} item={solo} onNavigate={onNavigate} />
+            return <NavItem key={sec.key} item={solo} onNavigate={onNavigate}
+              activeOverride={currentSectionKey === sec.key} />
           }
           const active = currentSectionKey === sec.key
           const hasNews = items.some(i => i.badge && i.badge !== 'Beta')
