@@ -42,7 +42,7 @@ import LoadingBar from './LoadingBar'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.39.0'
+const APP_VERSION = 'v1.39.1'
 
 // ─── z-index scale (v1.34.1 — audit fix B1) ──────────────────────────────────
 // One ladder for everything that floats, lowest to highest:
@@ -84,6 +84,13 @@ export const Z = {
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.39.1',
+    date: 'September 10, 2026',
+    changes: [
+      'The selected candidate card’s red outline no longer gets clipped by the carousel edges',
+    ],
+  },
   {
     version: 'v1.39.0',
     date: 'September 10, 2026',

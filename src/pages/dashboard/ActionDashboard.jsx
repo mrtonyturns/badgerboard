@@ -704,7 +704,12 @@ export default function ActionDashboard() {
           className={`bb-carousel${carouselAtEnd ? ' bb-carousel--end' : ''}`}
           style={{
             display: 'flex', gap: 12, overflowX: 'auto',
-            paddingBottom: 8, marginBottom: 16,
+            // The selected card's ring is a box-shadow drawn OUTSIDE its
+            // border-box; an overflow container clips at the content edge, so
+            // without padding the ring loses its top/left/right 1-2px
+            // (v1.39.1 — reported live from the carousel). 4px of padding
+            // gives the shadow room; negative margins keep the layout put.
+            padding: '4px 4px 8px 4px', margin: '-4px -4px 16px -4px',
           }}
         >
           {shown.map(c => {
