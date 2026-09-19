@@ -35,6 +35,9 @@ import {
   Percent,
   DollarSign,
   ExternalLink,
+  Bell,
+  BellOff,
+  RotateCcw,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import SearchableSelect from '../components/SearchableSelect'
@@ -279,7 +282,7 @@ const AdminDashboard = () => {
       {/* Content */}
       <div className="max-w-7xl mx-auto px-6 py-8">
         {activeTab === 'health' && <PlatformHealthTab apiCall={apiCall} showToast={showToast} onNavigate={setActiveTab} />}
-        {activeTab === 'accounts' && <AccountManagementTab apiCall={apiCall} showToast={showToast} user={user} />}
+        {activeTab === 'accounts' && <AccountManagementTab apiCall={apiCall} accessCall={accessCall} showToast={showToast} user={user} />}
         {activeTab === 'billing' && <BillingPlansTab billingCall={billingCall} apiCall={apiCall} accessCall={accessCall} showToast={showToast} />}
         {activeTab === 'ai-costs' && <AICostsTab apiCall={apiCall} showToast={showToast} />}
         {activeTab === 'errors' && <ErrorLogsTab apiCall={apiCall} showToast={showToast} />}
@@ -491,7 +494,7 @@ const SignupChart = ({ data }) => {
 }
 
 // TAB 2: Account Management
-const AccountManagementTab = ({ apiCall, showToast, user }) => {
+const AccountManagementTab = ({ apiCall, accessCall, showToast, user }) => {
   const [users, setUsers] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
   const [hideTestAccounts, setHideTestAccounts] = useState(true)
@@ -499,6 +502,9 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
   const [loading, setLoading] = useState(true)
   const [expandedActivity, setExpandedActivity] = useState(null)
   const [activityData, setActivityData] = useState({})
+  // Mute-emails toggle + reset-to-free (v1.40.0 admin controls) — tracks
+  // in-flight user ids so the row buttons can disable themselves.
+  const [accessPending, setAccessPending] = useState(new Set())
 
   const [modals, setModals] = useState({
     editEmail: null,
@@ -696,6 +702,49 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
     }
   }
 
+  // v1.40.0: admin-manage-access mute_emails/unmute_emails — one switch that
+  // silences every email (including payment/security alerts) to an address.
+  // Optimistic toggle so the icon flips immediately; reverted on failure.
+  const handleMuteToggle = async (u) => {
+    const muting = !u.emails_muted
+    if (muting && !window.confirm(`Mute ALL emails to ${u.email}? Includes payment and security alerts.`)) return
+    setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, emails_muted: muting } : x)))
+    setAccessPending((prev) => new Set(prev).add(u.id))
+    try {
+      await accessCall(muting ? 'mute_emails' : 'unmute_emails', { user_id: u.id })
+      const data = await apiCall('users')
+      setUsers(Array.isArray(data) ? data : (data?.users || []))
+      showToast(muting ? `Emails muted for ${u.email}` : `Emails unmuted for ${u.email}`)
+    } catch (err) {
+      console.error(err)
+      setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, emails_muted: !muting } : x)))
+      showToast(`Failed to ${muting ? 'mute' : 'unmute'} emails`, 'error')
+    } finally {
+      setAccessPending((prev) => { const next = new Set(prev); next.delete(u.id); return next })
+    }
+  }
+
+  // v1.40.0: admin-manage-access reset_to_free — clears plan/beta/trial in one
+  // press. The backend 409s (with a message) if a Stripe subscription is on
+  // file, so that message is surfaced verbatim rather than a generic toast.
+  const handleResetToFree = async (u) => {
+    if (!window.confirm(`Reset ${u.email} to the free Scout plan? Clears plan, beta and trial access.`)) return
+    setAccessPending((prev) => new Set(prev).add(u.id))
+    try {
+      await accessCall('reset_to_free', { user_id: u.id })
+      const data = await apiCall('users')
+      setUsers(Array.isArray(data) ? data : (data?.users || []))
+      showToast(`${u.email} reset to the free Scout plan`)
+    } catch (err) {
+      console.error(err)
+      let msg = err.message
+      try { msg = JSON.parse(err.message)?.error || msg } catch {}
+      showToast(msg || 'Failed to reset to free', 'error')
+    } finally {
+      setAccessPending((prev) => { const next = new Set(prev); next.delete(u.id); return next })
+    }
+  }
+
   if (loading) {
     return <Spinner />
   }
@@ -716,6 +765,8 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
             { icon: Unlock, label: 'Unlock Payment', desc: 'Clear past due status — restore access' },
             { icon: Activity, label: 'View Activity', desc: 'Show recent actions taken by this user' },
             { icon: StickyNote, label: 'Notes', desc: 'View or add internal admin notes for this user' },
+            { icon: BellOff, label: 'Mute/Unmute Emails', desc: 'Toggle ALL emails to this user, including payment and security alerts' },
+            { icon: RotateCcw, label: 'Reset to Free', desc: 'Clear plan, beta and trial access — back to the free Scout plan' },
           ].map(({ icon: Icon, label, desc }) => (
             <div key={label} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg basis-full sm:basis-[calc(50%-0.25rem)] md:basis-[calc(33.333%-0.334rem)] grow">
               <Icon className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
@@ -815,6 +866,9 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
                       {ADMIN_EMAILS.includes((u.email || '').toLowerCase()) && (
                         <span className="px-2 py-0.5 bg-red-100 text-red-800 text-xs rounded-full font-medium">Admin</span>
                       )}
+                      {u.emails_muted && (
+                        <span className="px-2 py-0.5 bg-gray-200 text-gray-600 text-xs rounded-full font-medium">Muted</span>
+                      )}
                     </div>
                   </td>
                   {/* Shows the RESOLVED entitlement (admin > beta > trial > paid),
@@ -836,7 +890,7 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
                     )}
                     {/* raw slug kept visible for debugging */}
                     <div className="text-[10px] text-gray-400 font-mono">
-                      {u.plan || '—'}{u.plan_source ? ` · ${u.plan_source}` : ''}
+                      {u.plan || '—'}{u.plan_source ? ` · ${u.plan_source}` : ''}{u.emails_muted ? ' · emails muted' : ''}
                     </div>
                   </td>
                   <td className="px-4 py-3">
@@ -912,6 +966,24 @@ const AccountManagementTab = ({ apiCall, showToast, user }) => {
                         title="View/add notes"
                       >
                         <StickyNote className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleMuteToggle(u)}
+                        disabled={accessPending.has(u.id)}
+                        className="p-1 text-blue-600 hover:bg-blue-50 rounded transition disabled:opacity-40 disabled:cursor-not-allowed"
+                        title={u.emails_muted ? 'Unmute emails' : 'Mute emails'}
+                        aria-label={u.emails_muted ? `Unmute emails to ${u.email}` : `Mute emails to ${u.email}`}
+                      >
+                        {u.emails_muted ? <BellOff className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
+                      </button>
+                      <button
+                        onClick={() => handleResetToFree(u)}
+                        disabled={accessPending.has(u.id)}
+                        className="p-1 text-blue-600 hover:bg-blue-50 rounded transition disabled:opacity-40 disabled:cursor-not-allowed"
+                        title="Reset to free plan"
+                        aria-label={`Reset ${u.email} to the free Scout plan`}
+                      >
+                        <RotateCcw className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => setModals({ ...modals, deleteAccount: u })}

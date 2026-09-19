@@ -51,6 +51,7 @@ async function supabaseQuery(path, method = 'GET', body = null, params = '') {
 // ─── Send acknowledgment confirmation email via Resend ────────────────────────
 async function sendAckEmail(email, acknowledgedAt) {
   if (!RESEND_API_KEY) return
+  if (await require('./_email').isEmailSuppressed(email)) return  // v1.40.0 admin mute
   const dateStr = new Date(acknowledgedAt).toLocaleString('en-US', {
     timeZone: 'America/Chicago',
     dateStyle: 'full',

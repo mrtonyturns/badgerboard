@@ -54,23 +54,11 @@ async function getUser(userId) {
   return res.json()
 }
 
-async function updateAppMetadata(userId, mutate) {
-  const user = await getUser(userId)
-  if (!user) throw new Error('User not found')
-  const meta = { ...(user.app_metadata || {}) }
-  mutate(meta)
-  const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: SERVICE_KEY,
-      Authorization: `Bearer ${SERVICE_KEY}`,
-    },
-    body: JSON.stringify({ app_metadata: meta }),
-  })
-  if (!res.ok) throw new Error(`Supabase update failed (${res.status}): ${await res.text()}`)
-  return { user, updated: await res.json() }
-}
+// v1.40.0: was a local PUT of the mutated object — which silently ignored
+// every `delete meta.x` because the admin endpoint MERGES app_metadata.
+// revoke_trial and set_beta(false) never actually took effect. See
+// _app-metadata.js for the full story; it diffs and sends nulls.
+const { updateAppMetadata } = require('./_app-metadata')
 
 async function setGlobalBeta(enabled, adminEmail) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/app_settings`, {
@@ -124,7 +112,8 @@ exports.handler = async (event) => {
   }
 
   try {
-    switch (body.action) {
+    const action = body.action
+    switch (action) {
 
       // ── Free trial: grant ────────────────────────────────────────────────
       case 'grant_trial': {
@@ -232,6 +221,61 @@ exports.handler = async (event) => {
         await setGlobalBeta(enabled, admin.email)
         console.log(`[admin-manage-access] ${admin.email} set GLOBAL beta_mode_enabled=${enabled}`)
         return { statusCode: 200, headers: CORS, body: JSON.stringify({ success: true, enabled }) }
+      }
+
+      // ── Email mute (v1.40.0) ─────────────────────────────────────────────
+      // One switch that stops EVERY email to an address: sendEmail() and the
+      // four direct-Resend senders all consult email_suppressions first.
+      case 'mute_emails':
+      case 'unmute_emails': {
+        const { user_id, email: rawEmail, reason } = body
+        let email = String(rawEmail || '').trim().toLowerCase()
+        if (!email && user_id) email = String((await getUser(user_id))?.email || '').toLowerCase()
+        if (!email) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'user_id or email required' }) }
+        const svc = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, 'Content-Type': 'application/json' }
+        if (action === 'mute_emails') {
+          const res = await fetch(`${SUPABASE_URL}/rest/v1/email_suppressions`, {
+            method: 'POST',
+            headers: { ...svc, Prefer: 'resolution=merge-duplicates,return=minimal' },
+            body: JSON.stringify({ email, reason: String(reason || 'admin mute').slice(0, 200), created_by: admin.email }),
+          })
+          if (!res.ok) throw new Error(`suppression insert failed (${res.status}): ${await res.text()}`)
+        } else {
+          const res = await fetch(`${SUPABASE_URL}/rest/v1/email_suppressions?email=eq.${encodeURIComponent(email)}`, {
+            method: 'DELETE', headers: svc,
+          })
+          if (!res.ok) throw new Error(`suppression delete failed (${res.status}): ${await res.text()}`)
+        }
+        console.log(`[admin-manage-access] ${admin.email} ${action === 'mute_emails' ? 'MUTED' : 'unmuted'} emails for ${email}`)
+        return { statusCode: 200, headers: CORS, body: JSON.stringify({ success: true, email, emails_muted: action === 'mute_emails' }) }
+      }
+
+      // ── Reset to free (v1.40.0) ──────────────────────────────────────────
+      // "Expired and off beta" in one press: clears plan, beta and every trial
+      // field — deletions that actually persist now (see _app-metadata.js).
+      // Stripe-backed plans are refused here; cancel the subscription first.
+      case 'reset_to_free': {
+        const { user_id } = body
+        if (!user_id) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'user_id required' }) }
+        const current = await getUser(user_id)
+        if (!current) return { statusCode: 404, headers: CORS, body: JSON.stringify({ error: 'User not found' }) }
+        if (current.app_metadata?.stripe_subscription_id) {
+          return { statusCode: 409, headers: CORS, body: JSON.stringify({ error: 'This account has a Stripe subscription on file. Cancel it in Billing first, then reset.' }) }
+        }
+        const { user } = await updateAppMetadata(user_id, (meta) => {
+          delete meta.plan
+          delete meta.plan_type
+          delete meta.bracket
+          delete meta.beta_mode
+          delete meta.trial_plan
+          delete meta.trial_bracket
+          delete meta.trial_started_at
+          delete meta.trial_ends_at
+          delete meta.trial_granted_by
+          delete meta.trial_warning_sent
+        })
+        console.log(`[admin-manage-access] ${admin.email} reset ${user.email} to free (plan/beta/trial cleared)`)
+        return { statusCode: 200, headers: CORS, body: JSON.stringify({ success: true, email: user.email }) }
       }
 
       default:

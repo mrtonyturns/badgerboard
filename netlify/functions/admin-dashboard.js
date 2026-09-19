@@ -47,9 +47,19 @@ async function getAllUsers() {
   // the backend uses, and ship BOTH: raw slug for debugging, resolved for display.
   const globalBeta = await getGlobalBetaEnabled();
 
+  // v1.40.0: admin email mute state, one query for the whole list.
+  let muted = new Set();
+  try {
+    const sres = await fetch(`${process.env.SUPABASE_URL}/rest/v1/email_suppressions?select=email`, {
+      headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` },
+    });
+    if (sres.ok) muted = new Set((await sres.json()).map(r => String(r.email).toLowerCase()));
+  } catch (e) { console.warn('[admin-dashboard] suppression list read failed:', e.message); }
+
   const mapped = await Promise.all(allRaw.map(async (u) => {
     const resolved = await resolveEntitlement(u, { globalBeta });
     return {
+      emails_muted: muted.has(String(u.email || '').toLowerCase()),
       id: u.id,
       email: u.email,
       created_at: u.created_at,
@@ -244,6 +254,9 @@ async function updateUser(userId, email, password) {
 }
 
 async function sendReset(email) {
+  // v1.40.0: admin email mute outranks even an admin-triggered reset — the
+  // response tells the admin instead of silently mailing a muted address.
+  if (await require('./_email').isEmailSuppressed(email)) return { suppressed: true, error: 'This address is muted (admin email mute). Unmute to send.' }
   // Generate recovery link via Supabase
   const linkRes = await fetch(
     `${process.env.SUPABASE_URL}/auth/v1/admin/generate_link`,

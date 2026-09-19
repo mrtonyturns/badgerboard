@@ -77,6 +77,7 @@ async function listBelongsToUser(listId, userId) {
 // ── Send invite email via Resend ──────────────────────────────────────────────
 async function sendInviteEmail({ name, email, token }) {
   if (!RESEND_API_KEY || !email) return { skipped: true }
+  if (await require('./_email').isEmailSuppressed(email)) return { skipped: true, suppressed: true }  // v1.40.0 admin mute
 
   // Audit fix (#14): the link MUST carry both token and email — the portal's
   // auto-login requires both query params, so the old email-less link dumped

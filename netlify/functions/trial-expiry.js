@@ -38,18 +38,13 @@ async function listAllUsers() {
   return users
 }
 
-async function putAppMetadata(userId, meta) {
-  const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: SERVICE_KEY,
-      Authorization: `Bearer ${SERVICE_KEY}`,
-    },
-    body: JSON.stringify({ app_metadata: meta }),
-  })
-  if (!res.ok) throw new Error(`Metadata update failed (${res.status}): ${await res.text()}`)
-}
+// v1.40.0: the old local PUT sent the object with trial keys *deleted* — and
+// the admin endpoint MERGES app_metadata, so the keys were never removed.
+// Result: every expired trial was "expired" again on every daily run, and
+// the "your trial has ended" email went out EVERY MORNING (a month of it for
+// one user). putAppMetadataDiff sends deleted keys as null, which sticks.
+const { putAppMetadataDiff } = require('./_app-metadata')
+const putAppMetadata = (userId, before, after) => putAppMetadataDiff(userId, before, after)
 
 exports.handler = async () => {
   if (!SUPABASE_URL || !SERVICE_KEY) {
@@ -86,7 +81,7 @@ exports.handler = async () => {
         delete newMeta.trial_ends_at
         delete newMeta.trial_granted_by
         delete newMeta.trial_warning_sent
-        await putAppMetadata(user.id, newMeta)
+        await putAppMetadata(user.id, meta, newMeta)
         expired++
         console.log(`[trial-expiry] expired ${planLabel} trial for ${user.email}`)
 
@@ -104,7 +99,7 @@ exports.handler = async () => {
       } else if (endsAt - now <= WARNING_WINDOW_MS && !meta.trial_warning_sent) {
         // ── Ending soon: one-time warning email
         const daysLeft = Math.max(1, Math.ceil((endsAt - now) / 86400000))
-        await putAppMetadata(user.id, { ...meta, trial_warning_sent: true })
+        await putAppMetadata(user.id, meta, { ...meta, trial_warning_sent: true })
         warned++
         console.log(`[trial-expiry] warned ${user.email} — ${daysLeft}d left on ${planLabel} trial`)
 

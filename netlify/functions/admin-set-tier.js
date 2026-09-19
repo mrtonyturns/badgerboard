@@ -120,26 +120,10 @@ exports.handler = async (event) => {
       delete newMeta.bracket
     }
 
-    // Update plan in app_metadata (service-role-writable only)
-    const updateRes = await fetch(
-      `${SB_URL}/auth/v1/admin/users/${user.id}`,
-      {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: SERVICE_KEY,
-          Authorization: `Bearer ${SERVICE_KEY}`,
-        },
-        body: JSON.stringify({ app_metadata: newMeta }),
-      }
-    )
-
-    if (!updateRes.ok) {
-      const text = await updateRes.text()
-      throw new Error(`Supabase update failed (${updateRes.status}): ${text}`)
-    }
-
-    const updated = await updateRes.json()
+    // Update plan in app_metadata (service-role-writable only).
+    // v1.40.0: diffed PUT — the admin endpoint merges, so `delete newMeta.bracket`
+    // above only takes effect if the key is sent as null (see _app-metadata.js).
+    const updated = await require('./_app-metadata').putAppMetadataDiff(user.id, user.app_metadata || {}, newMeta)
     console.log(`[admin-set-tier] ${admin.email} set ${email} → plan:${plan} plan_type:${planType(plan)}${bracket ? ` bracket:${bracket}` : ''}`)
 
     return {

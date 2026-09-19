@@ -17,7 +17,7 @@
 //   body { dry_run?: true, only_email?: "user@x.com" }
 //   dry_run returns the built HTML instead of sending.
 
-const { getNotificationPrefs } = require('./_email')
+const { getNotificationPrefs, isEmailSuppressed } = require('./_email')
 
 const SUPABASE_URL   = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SERVICE_KEY    = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -162,6 +162,10 @@ exports.handler = async (event) => {
     if (opts.only_email && email.toLowerCase() !== String(opts.only_email).toLowerCase()) {
       results.push({ owner: email, status: 'filtered' }); continue
     }
+
+    // Admin mute outranks everything (v1.40.0) — this sender talks to Resend
+    // directly, so it must consult the suppression list itself.
+    if (await isEmailSuppressed(email)) { results.push({ owner: email, status: 'suppressed' }); continue }
 
     // Respect notification preferences (weekly_digest, default on)
     try {

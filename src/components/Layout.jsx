@@ -42,7 +42,7 @@ import LoadingBar from './LoadingBar'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.39.3'
+const APP_VERSION = 'v1.40.0'
 
 // ─── z-index scale (v1.34.1 — audit fix B1) ──────────────────────────────────
 // One ladder for everything that floats, lowest to highest:
@@ -84,6 +84,15 @@ export const Z = {
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.40.0',
+    date: 'September 19, 2026',
+    changes: [
+      'Fixed: expired trials and revoked beta access now actually clear — a metadata-merge bug meant they never persisted, and one lapsed account was getting a “your trial has ended” email every morning',
+      'Accounts that own candidates, lists, or profiles can now be deleted (14 database constraints blocked it before)',
+      'Admin: mute every email to any user with one click, and reset an account to the free plan in one press',
+    ],
+  },
   {
     version: 'v1.39.3',
     date: 'September 10, 2026',

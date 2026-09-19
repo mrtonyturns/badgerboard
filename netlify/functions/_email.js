@@ -53,6 +53,27 @@ function emailTemplate({ title, preheader = '', body, ctaText, ctaUrl, footerNot
 </html>`
 }
 
+// ── Admin email mute (v1.40.0) ───────────────────────────────────────────────
+// email_suppressions is the one list every sender honors. Keyed by address so
+// it survives account deletion and covers senders that only hold an email.
+// Fails OPEN on lookup errors (a transient DB blip must not silence payment
+// warnings for everyone) — but a definite hit is a definite no-send.
+async function isEmailSuppressed(to) {
+  const email = String(to || '').trim().toLowerCase()
+  if (!email || !process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return false
+  try {
+    const res = await fetch(
+      `${process.env.SUPABASE_URL}/rest/v1/email_suppressions?email=eq.${encodeURIComponent(email)}&select=email&limit=1`,
+      { headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` } }
+    )
+    if (!res.ok) return false
+    const rows = await res.json()
+    return Array.isArray(rows) && rows.length > 0
+  } catch {
+    return false
+  }
+}
+
 async function sendEmail({ to, subject, title, preheader, body, ctaText, ctaUrl, footerNote, flagBar, titleCenter }) {
   if (!RESEND_API_KEY) {
     console.warn('[email] RESEND_API_KEY not set — skipping email to', to)
@@ -61,6 +82,10 @@ async function sendEmail({ to, subject, title, preheader, body, ctaText, ctaUrl,
   if (!to) {
     console.warn('[email] No recipient — skipping')
     return { skipped: true }
+  }
+  if (await isEmailSuppressed(to)) {
+    console.log('[email] suppressed (admin mute) —', to, '—', subject)
+    return { skipped: true, suppressed: true }
   }
   const html = emailTemplate({ title: title || subject, preheader, body, ctaText, ctaUrl, footerNote, flagBar: flagBar !== false, titleCenter: titleCenter === true })
   try {
@@ -122,4 +147,4 @@ async function getNotificationPrefs(userId) {
   }
 }
 
-module.exports = { sendEmail, emailTemplate, getNotificationPrefs }
+module.exports = { sendEmail, emailTemplate, getNotificationPrefs, isEmailSuppressed }

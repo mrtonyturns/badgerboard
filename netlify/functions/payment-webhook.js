@@ -82,7 +82,7 @@ export const handler = async (event) => {
     }
 
     // Send payment issue email if locking and Resend is configured
-    if (status === 'past_due' && process.env.RESEND_API_KEY) {
+    if (status === 'past_due' && process.env.RESEND_API_KEY && !(await require('./_email').isEmailSuppressed(userEmail))) {  // v1.40.0 admin mute
       const settingsUrl = `${process.env.SITE_URL || 'https://www.badgerboardwi.com'}/settings`;
       const emailTemplate = paymentIssueTemplate(settingsUrl);
 
