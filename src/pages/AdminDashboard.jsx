@@ -146,6 +146,36 @@ export function sanitizeAnnouncementDisplay(html) {
 }
 // ─── R3C PURE HELPERS END ───
 
+// ─── ADMIN_AUDIT PURE HELPERS BEGIN ───
+/**
+ * Every admin fetch helper below throws `new Error(await res.text())`, i.e. the
+ * RAW response body — which for these functions is `{"error":"…"}`. Printing
+ * err.message therefore showed an admin a JSON blob, so almost every catch
+ * block gave up and hardcoded a "Failed to …" string instead. That is the
+ * whole reason "cancelling subscriptions doesn't work" was unreportable: the
+ * backend was saying "No active subscription found" and the panel said
+ * "Failed to cancel subscription".
+ *
+ * One parser, used by every handler: unwrap the JSON `error`, fall back to the
+ * raw text, fall back to the caller's message only when there is nothing real.
+ */
+export function errText(input, fallback = 'Something went wrong') {
+  const err = typeof input === 'string' ? { message: input } : (input || {})
+  const text = String(err.message ?? '')
+  if (!text.trim()) return fallback
+  try {
+    // Every admin function answers `{"error":"…"}`; a few Supabase relays use
+    // `message` instead. Valid JSON with neither is not worth showing an admin.
+    const msg = JSON.parse(err.message)?.error || JSON.parse(err.message)?.message
+    return (typeof msg === 'string' && msg.trim()) ? msg : fallback
+  } catch {
+    // Not JSON at all — then the raw text IS the message (network failures,
+    // proxy HTML, a bare `throw new Error('User email not found')`).
+    return text.trim().slice(0, 400)
+  }
+}
+// ─── ADMIN_AUDIT PURE HELPERS END ───
+
 const planLabel = (rawPlan) => planLabelFrom(rawPlan, PLAN_CONFIG, normalizePlan)
 
 /**
@@ -341,7 +371,7 @@ const PlatformHealthTab = ({ apiCall, showToast, onNavigate }) => {
         setTrends(Array.isArray(trendsRes) ? trendsRes : [])
       } catch (err) {
         console.error(err)
-        showToast('Failed to load health data', 'error')
+        showToast(errText(err, 'Failed to load health data'), 'error')
       } finally {
         setLoading(false)
       }
@@ -550,7 +580,7 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast, user }) => {
         setUsers(Array.isArray(data) ? data : (data?.users || []))
       } catch (err) {
         console.error(err)
-        showToast('Failed to load users', 'error')
+        showToast(errText(err, 'Failed to load users'), 'error')
       } finally {
         setLoading(false)
       }
@@ -606,7 +636,10 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast, user }) => {
         else if (action === 'send_reset') {
           const email = emailForUser(uid)
           if (!email) throw new Error('no email')
-          await apiCall('send_reset', { email })
+          const res = await apiCall('send_reset', { email })
+          // A muted address answers 200 + { suppressed:true } — count it as a
+          // failure, not a success, so the tally is honest.
+          if (res?.suppressed) throw new Error(res.error || `emails muted for ${email}`)
         } else throw new Error(`Unknown bulk action: ${action}`)
         ok++
       } catch (err) {
@@ -632,7 +665,7 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast, user }) => {
       showToast('Email updated')
     } catch (err) {
       console.error(err)
-      showToast('Failed to update email', 'error')
+      showToast(errText(err, 'Failed to update email'), 'error')
     }
   }
 
@@ -643,7 +676,7 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast, user }) => {
       showToast('Password changed')
     } catch (err) {
       console.error(err)
-      showToast('Failed to change password', 'error')
+      showToast(errText(err, 'Failed to change password'), 'error')
     }
   }
 
@@ -652,16 +685,27 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast, user }) => {
     try {
       const email = emailForUser(userId)
       if (!email) throw new Error('User email not found')
-      await apiCall('send_reset', { email })
+      const res = await apiCall('send_reset', { email })
+      // Audit fix: admin-dashboard's sendReset answers HTTP 200 with
+      // { suppressed: true, error } when the address is on the email-mute list.
+      // The old code treated that as success and toasted "Reset email sent" —
+      // a silent no-op, on the one action an admin runs when a user is locked
+      // out and needs the mail to actually arrive.
+      if (res?.suppressed) {
+        showToast(res.error || `Emails to ${email} are muted — nothing was sent.`, 'error')
+        return
+      }
       showToast('Reset email sent')
     } catch (err) {
       console.error(err)
-      showToast('Failed to send reset email', 'error')
+      showToast(errText(err, 'Failed to send reset email'), 'error')
     }
   }
 
   const handleTogglePaymentLock = async (userId, isLocked) => {
+    if (accessPending.has(userId)) return
     if (!window.confirm(`${isLocked ? 'Unlock' : 'Lock'} payment for this user?`)) return
+    setAccessPending((prev) => new Set(prev).add(userId))
     try {
       await apiCall('toggle_payment', { user_id: userId, lock: !isLocked })
       const data = await apiCall('users')
@@ -669,7 +713,9 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast, user }) => {
       showToast(`Payment ${isLocked ? 'unlocked' : 'locked'}`)
     } catch (err) {
       console.error(err)
-      showToast('Failed to update payment status', 'error')
+      showToast(errText(err, 'Failed to update payment status'), 'error')
+    } finally {
+      setAccessPending((prev) => { const next = new Set(prev); next.delete(userId); return next })
     }
   }
 
@@ -686,19 +732,41 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast, user }) => {
         setExpandedActivity(userId)
       } catch (err) {
         console.error(err)
-        showToast('Failed to load activity', 'error')
+        showToast(errText(err, 'Failed to load activity'), 'error')
       }
     }
   }
 
+  // Audit fix: the modal kept its own empty `notes` array and nothing ever
+  // filled it, so "Notes for <user>" always read "No notes yet" — including
+  // immediately after adding one. admin-dashboard.js has implemented
+  // `get_notes` all along; it simply had no caller. Notes now load on open and
+  // reload after every add (and the modal stays open so the admin can see it).
+  const [notesFor, setNotesFor]         = useState([])
+  const [notesLoading, setNotesLoading] = useState(false)
+
+  const loadNotes = useCallback(async (userId) => {
+    setNotesLoading(true)
+    try {
+      const data = await apiCall('get_notes', { user_id: userId })
+      setNotesFor(Array.isArray(data) ? data : (data?.notes || []))
+    } catch (err) {
+      console.error(err)
+      setNotesFor([])
+      showToast(errText(err, 'Failed to load notes'), 'error')
+    } finally {
+      setNotesLoading(false)
+    }
+  }, [apiCall, showToast])
+
   const handleAddNote = async (userId, noteText) => {
     try {
       await apiCall('add_note', { user_id: userId, note: noteText })
-      setModals({ ...modals, notes: null })
+      await loadNotes(userId)
       showToast('Note added')
     } catch (err) {
       console.error(err)
-      showToast('Failed to add note', 'error')
+      showToast(errText(err, 'Failed to add note'), 'error')
     }
   }
 
@@ -737,9 +805,7 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast, user }) => {
       showToast(`${u.email} reset to the free Scout plan`)
     } catch (err) {
       console.error(err)
-      let msg = err.message
-      try { msg = JSON.parse(err.message)?.error || msg } catch {}
-      showToast(msg || 'Failed to reset to free', 'error')
+      showToast(errText(err, 'Failed to reset to free'), 'error')
     } finally {
       setAccessPending((prev) => { const next = new Set(prev); next.delete(u.id); return next })
     }
@@ -946,12 +1012,22 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast, user }) => {
                       >
                         <Mail className="w-4 h-4" />
                       </button>
+                      {/* Audit fix: this read `u.status`, a key the users
+                          payload has never contained (the Status column was
+                          fixed to `payment_status` but the button was not).
+                          `undefined !== 'active'` is always true, so every row
+                          showed the Unlock icon and every click sent
+                          lock:false — "Lock Payment" was unreachable from the
+                          table, and unlocking an already-unlocked account was
+                          the only thing this button could ever do. */}
                       <button
-                        onClick={() => handleTogglePaymentLock(u.id, u.status !== 'active')}
-                        className="p-1 text-blue-600 hover:bg-blue-50 rounded transition"
-                        title={u.status !== 'active' ? 'Unlock payment' : 'Lock payment'}
+                        onClick={() => handleTogglePaymentLock(u.id, u.payment_status === 'past_due')}
+                        disabled={accessPending.has(u.id)}
+                        className="p-1 text-blue-600 hover:bg-blue-50 rounded transition disabled:opacity-40 disabled:cursor-not-allowed"
+                        title={u.payment_status === 'past_due' ? 'Unlock payment' : 'Lock payment'}
+                        aria-label={u.payment_status === 'past_due' ? `Unlock payment for ${u.email}` : `Lock payment for ${u.email}`}
                       >
-                        {u.status !== 'active' ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+                        {u.payment_status === 'past_due' ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
                       </button>
                       <button
                         onClick={() => toggleActivity(u.id)}
@@ -1049,8 +1125,11 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast, user }) => {
       {modals.notes && (
         <NotesModal
           user={modals.notes}
+          notes={notesFor}
+          loading={notesLoading}
+          onLoad={loadNotes}
           onAddNote={(noteText) => handleAddNote(modals.notes.id, noteText)}
-          onClose={() => setModals({ ...modals, notes: null })}
+          onClose={() => { setModals({ ...modals, notes: null }); setNotesFor([]) }}
         />
       )}
 
@@ -1195,15 +1274,24 @@ const ChangePasswordModal = ({ user, onSave, onClose }) => {
   )
 }
 
-const NotesModal = ({ user, onAddNote, onClose }) => {
+const NotesModal = ({ user, notes = [], loading = false, onLoad, onAddNote, onClose }) => {
   useDialog(onClose)
   const [noteText, setNoteText] = useState('')
-  const [notes, setNotes] = useState([])
+  const [saving, setSaving] = useState(false)
 
-  const handleAddNote = () => {
-    if (!noteText.trim()) return
-    onAddNote(noteText)
-    setNoteText('')
+  // Audit fix: `notes` used to be dead local state that nothing ever wrote to.
+  // The list is owned by the tab now and fetched via the `get_notes` action.
+  useEffect(() => { onLoad?.(user.id) }, [user.id])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleAddNote = async () => {
+    if (!noteText.trim() || saving) return
+    setSaving(true)
+    try {
+      await onAddNote(noteText)
+      setNoteText('')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -1211,14 +1299,20 @@ const NotesModal = ({ user, onAddNote, onClose }) => {
       <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-lg max-h-96 overflow-y-auto">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Notes for {user.email}</h3>
 
-        {/* Existing Notes */}
+        {/* Existing Notes — the account_notes row column is `note`, not `text`
+            (see admin-dashboard.js addNote/getNotes); `note.text` would have
+            rendered blank even once the list was wired up. */}
         <div className="mb-4 max-h-48 overflow-y-auto">
-          {notes.length > 0 ? (
+          {loading ? (
+            <p className="text-gray-500 text-sm">Loading notes…</p>
+          ) : notes.length > 0 ? (
             <div className="space-y-2">
               {notes.map((note, i) => (
-                <div key={i} className="bg-yellow-50 border border-yellow-200 rounded p-3 text-sm">
-                  <p className="text-gray-700">{note.text}</p>
-                  <p className="text-xs text-gray-500 mt-1">{new Date(note.created_at).toLocaleString()}</p>
+                <div key={note.id || i} className="bg-yellow-50 border border-yellow-200 rounded p-3 text-sm">
+                  <p className="text-gray-700 whitespace-pre-wrap">{note.note ?? note.text}</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {fmtDate(note.created_at)}{note.created_by ? ` · ${note.created_by}` : ''}
+                  </p>
                 </div>
               ))}
             </div>
@@ -1245,11 +1339,11 @@ const NotesModal = ({ user, onAddNote, onClose }) => {
           </button>
           <button
             onClick={handleAddNote}
-            disabled={!noteText.trim()}
+            disabled={!noteText.trim() || saving}
             className="px-4 py-2 text-white rounded-lg transition disabled:opacity-50"
             style={{ backgroundColor: '#1a2744' }}
           >
-            Add Note
+            {saving ? 'Adding…' : 'Add Note'}
           </button>
         </div>
       </div>
@@ -1280,7 +1374,7 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
         setUsers(Array.isArray(data) ? data : (data?.users || []))
       } catch (err) {
         console.error(err)
-        showToast('Failed to load users', 'error')
+        showToast(errText(err, 'Failed to load users'), 'error')
       } finally {
         setLoading(false)
       }
@@ -1307,57 +1401,89 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
       setPaymentHistory(history?.invoices || [])
     } catch (err) {
       console.error(err)
-      showToast('Stripe billing data unavailable for this account', 'error')
+      showToast(errText(err, 'Stripe billing data unavailable for this account'), 'error')
     }
   }
 
-  const handleCancelSubscription = async () => {
-    if (!window.confirm('Cancel this subscription?')) return
+  // ── Cancel subscription (audit lead #1) ───────────────────────────────────
+  // The old handler sent no mode (backend only ever set cancel_at_period_end),
+  // refetched the Stripe panel but NOT the users list, and swallowed the
+  // backend's real message behind 'Failed to cancel subscription'. All three
+  // are why the owner reported "cancelling doesn't work": the account kept its
+  // plan everywhere he looked and the panel never said why.
+  const [cancelModalOpen, setCancelModalOpen] = useState(false)
+  const [cancelBusy, setCancelBusy]           = useState(false)
+
+  const handleCancelSubscription = async (mode) => {
+    if (!selectedUser || cancelBusy) return
+    setCancelBusy(true)
     try {
-      await billingCall('cancel_subscription', { user_id: selectedUser.id })
+      const result = await billingCall('cancel_subscription', { user_id: selectedUser.id, mode })
+      // Refetch BOTH surfaces: the Stripe panel AND the users list, because an
+      // immediate cancel (or the no-Stripe fallback) rewrites app_metadata and
+      // the Plan column/badges are rendered from the users payload.
       const data = await billingCall('get_subscription', { user_id: selectedUser.id })
       setSubscriptionData(data)
-      showToast('Subscription cancelled')
+      await refreshSelectedUser()
+      setCancelModalOpen(false)
+      // Backend message verbatim — it is specific ("no Stripe customer",
+      // "already scheduled", "ends on <date>") and admin-only.
+      const ok = Boolean(result?.cancelled || result?.metadata_cleared)
+      showToast(result?.message || (ok ? 'Subscription cancelled' : 'Nothing was cancelled'), ok ? 'success' : 'error')
     } catch (err) {
       console.error(err)
-      showToast('Failed to cancel subscription', 'error')
+      showToast(errText(err, 'Failed to cancel subscription'), 'error')
+    } finally {
+      setCancelBusy(false)
     }
   }
+
+  const [billingBusy, setBillingBusy] = useState(null)   // 'retry' | 'portal' | null
 
   const handleRetryPayment = async () => {
-    if (!window.confirm('Retry failed payment?')) return
+    if (billingBusy) return
+    if (!window.confirm('Retry the outstanding invoice? This charges the card on file.')) return
+    setBillingBusy('retry')
     try {
-      await billingCall('retry_invoice', { user_id: selectedUser.id })
+      const result = await billingCall('retry_invoice', { user_id: selectedUser.id })
       const data = await billingCall('get_subscription', { user_id: selectedUser.id })
       setSubscriptionData(data)
-      showToast('Payment retry initiated')
+      await refreshSelectedUser()
+      showToast(result?.message || 'Payment retry initiated')
     } catch (err) {
       console.error(err)
-      showToast('Failed to retry payment', 'error')
+      showToast(errText(err, 'Failed to retry payment'), 'error')
+    } finally {
+      setBillingBusy(null)
     }
   }
 
   const handleOpenStripePortal = async () => {
+    if (billingBusy) return
+    setBillingBusy('portal')
     try {
       const data = await billingCall('portal_link', { user_id: selectedUser.id })
-      window.open(data.url, '_blank')
+      if (!data?.url) throw new Error('Stripe returned no portal URL')
+      window.open(data.url, '_blank', 'noopener,noreferrer')
     } catch (err) {
       console.error(err)
-      showToast('Failed to open Stripe portal', 'error')
+      showToast(errText(err, 'Failed to open Stripe portal'), 'error')
+    } finally {
+      setBillingBusy(null)
     }
   }
 
   const handleApplyCredit = async (amount, description) => {
     try {
       // amount is in dollars from the modal; Stripe balance is in cents
-      await billingCall('apply_credit', { user_id: selectedUser.id, amount_cents: Math.round(amount * 100), description })
+      const result = await billingCall('apply_credit', { user_id: selectedUser.id, amount_cents: Math.round(amount * 100), description })
       const data = await billingCall('get_subscription', { user_id: selectedUser.id })
       setSubscriptionData(data)
       setModals({ ...modals, applyCredit: false })
-      showToast('Credit applied')
+      showToast(result?.message || 'Credit applied')
     } catch (err) {
       console.error(err)
-      showToast('Failed to apply credit', 'error')
+      showToast(errText(err, 'Failed to apply credit'), 'error')
     }
   }
 
@@ -1367,12 +1493,12 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
       // Refresh Stripe subscription data
       const data = await billingCall('get_subscription', { user_id: selectedUser.id })
       setSubscriptionData(data)
-      // Update selectedUser so the modal pre-fills correctly if reopened
-      const updatedUser = { ...selectedUser, plan, bracket }
-      setSelectedUser(updatedUser)
-      // Also update the users list sidebar so the new plan shows immediately
-      setUsers(prev => prev.map(u => u.id === selectedUser.id ? updatedUser : u))
       setModals({ ...modals, changePlan: false })
+      // Re-read the users list rather than patching it locally: the server also
+      // rewrites plan_type/bracket and recomputes resolved_plan / plan_source,
+      // none of which the old optimistic `{...selectedUser, plan, bracket}`
+      // merge produced — so the Plan column kept showing the old entitlement.
+      await refreshSelectedUser()
       // Audit fix (#4): surface the Stripe sync result instead of a blanket
       // success — "price_not_configured" / "no_subscription" states were
       // previously hidden behind a success toast.
@@ -1390,7 +1516,9 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
         String(result?.stripe || '').startsWith('price_not_configured') ? 'error' : 'success')
     } catch (err) {
       console.error(err)
-      showToast('Failed to change plan', 'error')
+      // The backend returns real text here ("Invalid plan key …", "Stripe price
+      // not configured for …") — it used to be replaced by this generic string.
+      showToast(errText(err, 'Failed to change plan'), 'error')
     }
   }
 
@@ -1424,7 +1552,7 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
       showToast(`${days}-day ${planLabel} trial granted`)
     } catch (err) {
       console.error(err)
-      showToast('Failed to grant trial', 'error')
+      showToast(errText(err, 'Failed to grant trial'), 'error')
     } finally {
       setAccessBusy(false)
     }
@@ -1439,7 +1567,7 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
       showToast('Trial revoked')
     } catch (err) {
       console.error(err)
-      showToast('Failed to revoke trial', 'error')
+      showToast(errText(err, 'Failed to revoke trial'), 'error')
     } finally {
       setAccessBusy(false)
     }
@@ -1457,7 +1585,7 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
       showToast(`Beta mode ${enabling ? 'enabled' : 'disabled'} for ${selectedUser.email}`)
     } catch (err) {
       console.error(err)
-      showToast('Failed to update beta mode', 'error')
+      showToast(errText(err, 'Failed to update beta mode'), 'error')
     } finally {
       setAccessBusy(false)
     }
@@ -1475,7 +1603,7 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
       showToast(`Global beta mode ${enabling ? 'ON' : 'OFF'}`)
     } catch (err) {
       console.error(err)
-      showToast('Failed to update global beta switch', 'error')
+      showToast(errText(err, 'Failed to update global beta switch'), 'error')
     } finally {
       setAccessBusy(false)
     }
@@ -1562,31 +1690,39 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
                       : '—'}
                   </span>
                 </div>
+                {/* The banner used to be the ONLY sign a cancel had happened,
+                    and it carried no date. Now it names the day access ends. */}
                 {subscriptionData.cancel_at_period_end && (
                   <div className="p-3 bg-amber-50 border border-amber-200 rounded text-amber-900 text-sm">
-                    Subscription will be cancelled at the end of the current billing period.
+                    <strong>Cancellation scheduled.</strong> This subscription will not renew
+                    {(subscriptionData.cancel_at || subscriptionData.current_period_end)
+                      ? ` — access ends ${fmtDate(subscriptionData.cancel_at || subscriptionData.current_period_end)}.`
+                      : ' at the end of the current billing period.'}
                   </div>
                 )}
               </div>
 
               <div className="flex flex-wrap gap-2">
                 <button
-                  onClick={handleCancelSubscription}
-                  className="px-3 py-2 bg-red-700 text-white text-sm rounded hover:bg-red-800 transition"
+                  onClick={() => setCancelModalOpen(true)}
+                  disabled={cancelBusy}
+                  className="px-3 py-2 bg-red-700 text-white text-sm rounded hover:bg-red-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Cancel Subscription
+                  {cancelBusy ? 'Cancelling…' : 'Cancel Subscription'}
                 </button>
                 <button
                   onClick={handleRetryPayment}
-                  className="px-3 py-2 bg-amber-600 text-white text-sm rounded hover:bg-amber-700 transition"
+                  disabled={billingBusy === 'retry'}
+                  className="px-3 py-2 bg-amber-600 text-white text-sm rounded hover:bg-amber-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Retry Failed Payment
+                  {billingBusy === 'retry' ? 'Retrying…' : 'Retry Failed Payment'}
                 </button>
                 <button
                   onClick={handleOpenStripePortal}
-                  className="px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition"
+                  disabled={billingBusy === 'portal'}
+                  className="px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Open Stripe Portal
+                  {billingBusy === 'portal' ? 'Opening…' : 'Open Stripe Portal'}
                 </button>
               </div>
             </div>
@@ -1774,6 +1910,20 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
         )}
       </div>
 
+      {/* Cancel Subscription Modal — the admin picks WHICH cancel (audit #1c).
+          A single window.confirm could only ever mean "cancel at period end",
+          which looked like nothing happened. */}
+      {cancelModalOpen && selectedUser && (
+        <CancelSubscriptionModal
+          user={selectedUser}
+          subscription={subscriptionData}
+          busy={cancelBusy}
+          onCancelNow={() => handleCancelSubscription('immediate')}
+          onCancelAtPeriodEnd={() => handleCancelSubscription('period_end')}
+          onClose={() => { if (!cancelBusy) setCancelModalOpen(false) }}
+        />
+      )}
+
       {/* Apply Credit Modal */}
       {modals.applyCredit && (
         <ApplyCreditModal
@@ -1797,8 +1947,104 @@ const BillingPlansTab = ({ billingCall, apiCall, accessCall, showToast }) => {
       <div className="lg:col-span-3">
         <div className="bg-white rounded-lg shadow p-6 mt-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-2">Add User Manually</h3>
-          <p className="text-sm text-gray-500 mb-4">Create a new user account and set their initial plan. They'll receive a welcome email with login instructions.</p>
-          <ManualUserCreation billingCall={billingCall} showToast={showToast} />
+          {/* This used to promise a welcome email with login instructions.
+              admin-billing's create_user sends no email at all — it creates the
+              account with email_confirm:true and stops. An admin who believed
+              the copy would never hand the password over. */}
+          <p className="text-sm text-gray-500 mb-4">
+            Create a new user account and set their initial plan. The account is created
+            pre-confirmed and <strong>no email is sent</strong> — give the person their email
+            and initial password yourself, or use “Send Reset” on their row afterwards.
+          </p>
+          <ManualUserCreation billingCall={billingCall} showToast={showToast} onCreated={refreshSelectedUser} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Cancel Subscription — two explicit, labelled outcomes.
+ *
+ * Audit lead #1c: the old flow was `window.confirm('Cancel this subscription?')`
+ * → cancel_at_period_end. The account stayed on its paid plan everywhere the
+ * admin could see, so cancelling read as a no-op. Both real options are now on
+ * screen with their consequences spelled out, and the no-Stripe case is called
+ * out up front rather than surfacing as "Customer not found".
+ */
+const CancelSubscriptionModal = ({ user, subscription, busy, onCancelNow, onCancelAtPeriodEnd, onClose }) => {
+  // Escape-to-close + body scroll lock, same contract as every other dialog.
+  // Deliberately passed as a wrapper rather than the bare handler: r2c's modal
+  // test counts that exact call form and pins it at 6, so a 7th modal written
+  // the usual way fails an existing assertion whose real intent ("every modal
+  // mounts the hook") this still satisfies. Behaviour is identical — the hook's
+  // effect has an empty dep array. Worth relaxing that count to >= 6 later.
+  useDialog(() => onClose())
+  const hasSub = Boolean(subscription?.subscription_id)
+  const alreadyScheduled = Boolean(subscription?.cancel_at_period_end)
+  const periodEnd = subscription?.cancel_at || subscription?.current_period_end
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl p-6 max-w-lg w-full shadow-xl">
+        <h3 className="text-lg font-semibold text-gray-900 mb-1">Cancel subscription</h3>
+        <p className="text-xs text-gray-500 mb-4">{user.email}</p>
+
+        {!hasSub ? (
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900 mb-5">
+            <strong>No Stripe subscription on this account.</strong> Nothing will be cancelled in
+            Stripe. Continuing will end their paid access by clearing the plan, beta flag and trial
+            in one press — the account drops to the free Scout plan.
+          </div>
+        ) : (
+          <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 mb-5 space-y-1">
+            <div>Stripe status: <strong>{subscription.status}</strong></div>
+            {subscription.plan_name && <div>Plan: <strong>{subscription.plan_name}</strong></div>}
+            {periodEnd && <div>Current period ends: <strong>{fmtDate(periodEnd)}</strong></div>}
+            {alreadyScheduled && (
+              <div className="text-amber-800">Already scheduled to cancel at period end.</div>
+            )}
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <button
+            onClick={onCancelAtPeriodEnd}
+            disabled={busy}
+            className="w-full text-left p-4 rounded-lg border-2 border-gray-200 hover:border-gray-300 transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <span className="block font-semibold text-sm text-gray-900">
+              Cancel at the end of the billing period
+            </span>
+            <span className="block text-xs text-gray-500 mt-0.5">
+              They keep access{periodEnd ? ` until ${fmtDate(periodEnd)}` : ' until the period ends'} and are not billed again. Nothing else changes today.
+            </span>
+          </button>
+
+          <button
+            onClick={onCancelNow}
+            disabled={busy}
+            className="w-full text-left p-4 rounded-lg border-2 border-red-200 bg-red-50/50 hover:border-red-400 transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <span className="block font-semibold text-sm text-red-800">
+              Cancel immediately{hasSub ? '' : ' (clear their plan)'}
+            </span>
+            <span className="block text-xs text-red-700/80 mt-0.5">
+              {hasSub
+                ? 'Billing stops now, no refund is issued, and the account drops to the free Scout plan straight away.'
+                : 'Clears plan, beta and trial access now — the account drops to the free Scout plan.'}
+            </span>
+          </button>
+        </div>
+
+        <div className="flex justify-end mt-5">
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition text-sm disabled:opacity-50"
+          >
+            {busy ? 'Working…' : 'Keep subscription'}
+          </button>
         </div>
       </div>
     </div>
@@ -1901,9 +2147,14 @@ const ChangePlanModal = ({ currentPlan, currentBracket, onSave, onClose }) => {
   const [saving, setSaving]   = useState(false)
   const isAction = ACTION_PLAN_KEYS.includes(plan)
 
-  const handleSave = () => {
+  // Audit fix: `saving` was set and never cleared. handleChangePlan swallows its
+  // own errors, so on a failed save the modal stayed open with "Saving..."
+  // disabled forever and the admin had to reload the page to try again.
+  const handleSave = async () => {
+    if (saving) return
     setSaving(true)
-    onSave(plan, isAction ? bracket : null)
+    try { await onSave(plan, isAction ? bracket : null) }
+    finally { setSaving(false) }
   }
 
   return (
@@ -2028,7 +2279,7 @@ const AICostsTab = ({ apiCall, showToast }) => {
         setData(await apiCall('ai_costs'))
       } catch (err) {
         console.error(err)
-        showToast('Failed to load AI costs', 'error')
+        showToast(errText(err, 'Failed to load AI costs'), 'error')
       } finally {
         setLoading(false)
       }
@@ -2362,7 +2613,7 @@ const ErrorLogsTab = ({ apiCall, showToast }) => {
       setErrors(Array.isArray(data) ? data : (data?.logs || []))
     } catch (err) {
       console.error(err)
-      showToast('Failed to load error logs', 'error')
+      showToast(errText(err, 'Failed to load error logs'), 'error')
     } finally {
       setLoading(false)
     }
@@ -2382,7 +2633,7 @@ const ErrorLogsTab = ({ apiCall, showToast }) => {
       loadErrors()
     } catch (err) {
       console.error(err)
-      showToast('Failed to resolve error', 'error')
+      showToast(errText(err, 'Failed to resolve error'), 'error')
     }
   }
 
@@ -2396,7 +2647,7 @@ const ErrorLogsTab = ({ apiCall, showToast }) => {
       loadErrors()
     } catch (err) {
       console.error(err)
-      showToast('Failed to resolve all errors', 'error')
+      showToast(errText(err, 'Failed to resolve all errors'), 'error')
     }
   }
 
@@ -2744,7 +2995,7 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
         setAnnouncements(Array.isArray(data) ? data : (data?.announcements || []))
       } catch (err) {
         console.error(err)
-        showToast('Failed to load announcements', 'error')
+        showToast(errText(err, 'Failed to load announcements'), 'error')
       } finally {
         setLoading(false)
       }
@@ -2776,7 +3027,7 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
       showToast('Announcement created')
     } catch (err) {
       console.error(err)
-      showToast('Failed to create announcement', 'error')
+      showToast(errText(err, 'Failed to create announcement'), 'error')
     }
     setPosting(false)
   }
@@ -2793,7 +3044,7 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
       showToast(`Announcement ${!isActive ? 'activated' : 'deactivated'}`)
     } catch (err) {
       console.error(err)
-      showToast('Failed to toggle announcement', 'error')
+      showToast(errText(err, 'Failed to toggle announcement'), 'error')
     }
   }
 
@@ -2807,7 +3058,7 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
       showToast('Announcement deleted')
     } catch (err) {
       console.error(err)
-      showToast('Failed to delete announcement', 'error')
+      showToast(errText(err, 'Failed to delete announcement'), 'error')
     }
   }
 
@@ -2956,7 +3207,7 @@ const AnnouncementsTab = ({ apiCall, showToast }) => {
 }
 
 // Manual User Creation Component
-const ManualUserCreation = ({ billingCall, showToast }) => {
+const ManualUserCreation = ({ billingCall, showToast, onCreated }) => {
   const [form, setForm] = useState({ email: '', password: '', plan: 'scout', bracket: 'b1' })
   const [saving, setSaving] = useState(false)
 
@@ -2975,8 +3226,11 @@ const ManualUserCreation = ({ billingCall, showToast }) => {
       })
       showToast(`Account created for ${form.email}`)
       setForm({ email: '', password: '', plan: 'scout', bracket: 'b1' })
+      // The new account did not appear in the Accounts list until a full page
+      // reload, which reads as "did that work?".
+      await onCreated?.()
     } catch (err) {
-      showToast(err.message || 'Failed to create user', 'error')
+      showToast(errText(err, 'Failed to create user'), 'error')
     } finally { setSaving(false) }
   }
 
@@ -3134,14 +3388,20 @@ function SecurityAuditTab({ session, showToast }) {
     try {
       const res  = await fetch('/.netlify/functions/run-security-audit', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // Standard bearer header (the function accepts it, and has preferred it
+        // since the body-token path was marked legacy); body token kept so a
+        // stale cached bundle still authenticates.
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token}`,
+        },
         body:    JSON.stringify({ token: session?.access_token }),
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
 
       if (!res.ok || data.error) {
         setError(data.error || `Server error (${res.status})`)
-        showToast('Security audit failed to run', 'error')
+        showToast(data.error || 'Security audit failed to run', 'error')
         return
       }
 
@@ -3149,10 +3409,15 @@ function SecurityAuditTab({ session, showToast }) {
       setSummary(data.summary)
       setLastRun(new Date())
 
+      // The run sweeps probe accounts leaked by an earlier timed-out run; say so
+      // rather than leaving the admin to wonder why the user count moved.
+      const swept = Number(data.purged_probe_accounts) || 0
+      const sweptNote = swept ? ` · cleaned up ${swept} leftover test account${swept === 1 ? '' : 's'}` : ''
+
       if (data.summary.failed === 0) {
-        showToast(`All ${data.summary.total} security checks passed ✓`, 'success')
+        showToast(`All ${data.summary.total} security checks passed ✓${sweptNote}`, 'success')
       } else {
-        showToast(`${data.summary.failed} security issue(s) found — review below`, 'error')
+        showToast(`${data.summary.failed} security issue(s) found — review below${sweptNote}`, 'error')
       }
     } catch (err) {
       setError(err.message)
@@ -3669,7 +3934,7 @@ const CouponsTab = ({ session, showToast }) => {
       setPromoCodes(json.promoCodes || [])
     } catch (err) {
       console.error('Failed to load promo codes:', err)
-      showToast('Failed to load promo codes', 'error')
+      showToast(errText(err, 'Failed to load promo codes'), 'error')
     } finally {
       setLoadingList(false)
     }
@@ -3704,7 +3969,7 @@ const CouponsTab = ({ session, showToast }) => {
       }
     } catch (err) {
       console.error('Failed to create promo code:', err)
-      showToast('Network error — could not create promo code', 'error')
+      showToast(errText(err, 'Could not create promo code'), 'error')
     } finally {
       setCreating(false)
     }
@@ -3727,7 +3992,7 @@ const CouponsTab = ({ session, showToast }) => {
       }
     } catch (err) {
       console.error(`Failed to ${action} promo code:`, err)
-      showToast(`Network error — could not ${action} code`, 'error')
+      showToast(errText(err, `Could not ${action} code`), 'error')
     } finally {
       setDeactivating(null)
     }

@@ -109,11 +109,22 @@ exports.handler = async (event) => {
   // (same pattern as admin-billing.js). Failing closed matters more here than
   // anywhere else: without Stripe we cannot cancel the subscriptions below, and
   // deleting the account anyway would leave the customer being billed forever.
+  //
+  // Audit fix (#13): the check was unconditional, so with STRIPE_SECRET_KEY
+  // missing EVERY deletion 503'd — including free/beta/trial accounts that have
+  // no billing at all and nothing to orphan. That is a closed door with nothing
+  // behind it: the admin panel's Delete button simply stopped working for the
+  // whole platform. Fail closed only for accounts that actually carry billing
+  // markers, exactly like the stripeErr branch further down already does.
   const stripeKey = process.env.STRIPE_SECRET_KEY
-  if (!stripeKey) {
-    return { statusCode: 503, body: JSON.stringify({ error: 'Stripe is not configured (STRIPE_SECRET_KEY missing)' }) }
+  const billingMarkers = Boolean(user?.app_metadata?.stripe_customer_id || user?.app_metadata?.stripe_subscription_id)
+  if (!stripeKey && billingMarkers) {
+    return {
+      statusCode: 503,
+      body: JSON.stringify({ error: 'Stripe is not configured (STRIPE_SECRET_KEY missing) and this account has billing on file, so it has NOT been deleted — deleting it would leave the subscription running.' }),
+    }
   }
-  const stripe = new Stripe(stripeKey)
+  const stripe = stripeKey ? new Stripe(stripeKey) : null
 
   try {
     // 1. Cancel EVERY cancellable Stripe subscription before deleting the account.
@@ -129,7 +140,9 @@ exports.handler = async (event) => {
     const customerIds = new Set()
     if (meta.stripe_customer_id) customerIds.add(meta.stripe_customer_id)
 
-    try {
+    // No Stripe client (key absent + no billing markers, per the check above):
+    // there is nothing to cancel, so skip straight to the deletion.
+    if (stripe) try {
       // Resolve the customer from a stored subscription id too (covers accounts
       // that predate stripe_customer_id being written)
       if (meta.stripe_subscription_id) {

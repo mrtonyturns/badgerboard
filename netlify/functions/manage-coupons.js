@@ -36,6 +36,22 @@ function randomCode(prefix = 'BB') {
   return `${prefix}-${seg(4)}-${seg(4)}`
 }
 
+// Audit fix: every catch here returned a hardcoded "An internal error
+// occurred", so Stripe's own — and highly actionable — messages ("The
+// promotion code `SUMMER` already exists", "No such promotion code") never
+// reached the admin; the Coupons tab then added its own "Network error —"
+// prefix on top. This endpoint is admin-gated and Stripe's message is exactly
+// what's needed to fix the input. Non-Stripe failures stay opaque.
+function stripeErrorResponse(err) {
+  if (err?.type && String(err.type).startsWith('Stripe')) {
+    return {
+      statusCode: err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 502,
+      body: JSON.stringify({ error: `Stripe: ${err.message}`, stripe_code: err.code || null }),
+    }
+  }
+  return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
+}
+
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) }
@@ -47,6 +63,13 @@ export const handler = async (event) => {
     return { statusCode: 403, body: JSON.stringify({ error: 'Admin access required' }) }
   }
 
+  // Audit fix: `new Stripe(undefined)` THROWS ("Neither apiKey nor
+  // config.authenticator provided") outside every try block in this file, so a
+  // missing key produced a bare Netlify 502 with no JSON body — the Coupons tab
+  // just said "Failed to load promo codes" with nothing to go on.
+  if (!process.env.STRIPE_SECRET_KEY) {
+    return { statusCode: 503, body: JSON.stringify({ error: 'Stripe is not configured (STRIPE_SECRET_KEY missing) — coupons are unavailable.' }) }
+  }
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
 
   let body
@@ -88,7 +111,7 @@ export const handler = async (event) => {
       return { statusCode: 200, body: JSON.stringify({ success: true, promoCodes: result }) }
     } catch (err) {
       console.error('manage-coupons list error:', err.message)
-      return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
+      return stripeErrorResponse(err)
     }
   }
 
@@ -167,7 +190,7 @@ export const handler = async (event) => {
       }
     } catch (err) {
       console.error('manage-coupons create error:', err.message)
-      return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
+      return stripeErrorResponse(err)
     }
   }
 
@@ -186,7 +209,7 @@ export const handler = async (event) => {
       return { statusCode: 200, body: JSON.stringify({ success: true }) }
     } catch (err) {
       console.error(`manage-coupons ${action} error:`, err.message)
-      return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
+      return stripeErrorResponse(err)
     }
   }
 

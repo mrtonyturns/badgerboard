@@ -69,6 +69,62 @@ async function deleteTestUser(id) {
   try { await adminFetch(`/auth/v1/admin/users/${id}`, { method: 'DELETE' }) } catch {}
 }
 
+/**
+ * Audit fix (#12): ~25 sectest-…@badger-test.invalid accounts were sitting in
+ * production. Two ways this function leaks them, both fixed here:
+ *
+ *  1. The setup block created user A, then returned early on ANY later failure
+ *     (user B create, either sign-in) without deleting A. runAudit()'s
+ *     try/finally only covers the checks, not setup.
+ *  2. The audit makes ~40 live HTTP round-trips against the deployed site. If
+ *     the Netlify function hits its wall-clock limit mid-run the process is
+ *     killed and `finally` never executes — nothing in the old code could ever
+ *     clean those up on a later run.
+ *
+ * So every run first sweeps this function's own leftovers. Scoped as narrowly
+ * as possible: only the `sectest-` prefix this file generates, only on the
+ * reserved .invalid TLD, and only accounts older than STALE_MINUTES so a
+ * concurrent run is never touched. `ftesta-`/`ftestb-` (tests/full.test.js) and
+ * every other address are deliberately left alone.
+ */
+const PROBE_PREFIX  = 'sectest-'
+const STALE_MINUTES = 30
+
+export function isStaleProbeUser(user, now = Date.now(), staleMinutes = STALE_MINUTES) {
+  const email = String(user?.email || '').toLowerCase()
+  const at = email.lastIndexOf('@')
+  if (at < 0) return false
+  const domain = email.slice(at + 1)
+  if (domain !== 'badger-test.invalid') return false
+  if (!email.startsWith(PROBE_PREFIX)) return false
+  const created = Date.parse(user?.created_at || '')
+  if (!Number.isFinite(created)) return false
+  return now - created > staleMinutes * 60 * 1000
+}
+
+async function purgeStaleProbeUsers() {
+  const purged = []
+  try {
+    for (let page = 1; page <= 20; page++) {
+      const res = await adminFetch(`/auth/v1/admin/users?per_page=1000&page=${page}`)
+      if (!res.ok) break
+      const data = await res.json()
+      const batch = data.users || []
+      for (const u of batch) {
+        if (isStaleProbeUser(u)) {
+          await deleteTestUser(u.id)
+          purged.push(u.email)
+        }
+      }
+      if (batch.length < 1000) break
+    }
+  } catch (e) {
+    console.warn('[run-security-audit] stale probe sweep failed:', e.message)
+  }
+  if (purged.length) console.log(`[run-security-audit] purged ${purged.length} leaked probe account(s): ${purged.join(', ')}`)
+  return purged
+}
+
 async function signIn(email, password) {
   const res  = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
     method: 'POST',
@@ -235,7 +291,12 @@ async function runAudit() {
     get userBUserId() { return userBUserId },
   }
 
-  // Setup
+  // Sweep any probe accounts a previous run leaked (timeout / partial setup)
+  // BEFORE creating new ones, so the leak can never accumulate again.
+  const purged = await purgeStaleProbeUsers()
+
+  // Setup — a failure part-way through used to `return` while user A was
+  // already created, leaking it permanently. Clean up what we made.
   try {
     userAId     = await createTestUser(EMAIL_A, PASS)
     userBId     = await createTestUser(EMAIL_B, PASS)
@@ -246,7 +307,9 @@ async function runAudit() {
     userAUserId = sessA.userId
     userBUserId = sessB.userId
   } catch (e) {
-    return { error: `Setup failed: ${e.message}`, results: [] }
+    if (userAId) await deleteTestUser(userAId)
+    if (userBId) await deleteTestUser(userBId)
+    return { error: `Setup failed: ${e.message}`, results: [], purged_probe_accounts: purged.length }
   }
 
   try {
@@ -686,7 +749,7 @@ async function runAudit() {
     if (userBId) await deleteTestUser(userBId)
   }
 
-  return { results }
+  return { results, purged_probe_accounts: purged.length }
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -708,8 +771,8 @@ export const handler = async (event) => {
   if (!admin) return { statusCode: 403, headers: CORS, body: JSON.stringify({ error: 'Admin access required' }) }
 
   try {
-    const { results, error } = await runAudit()
-    if (error) return { statusCode: 500, headers: { ...CORS, 'Content-Type': 'application/json' }, body: JSON.stringify({ error }) }
+    const { results, error, purged_probe_accounts } = await runAudit()
+    if (error) return { statusCode: 500, headers: { ...CORS, 'Content-Type': 'application/json' }, body: JSON.stringify({ error, purged_probe_accounts }) }
 
     const passed = results.filter(r => r.ok).length
     const failed = results.filter(r => !r.ok).length
@@ -717,7 +780,7 @@ export const handler = async (event) => {
     return {
       statusCode: 200,
       headers: { ...CORS, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ results, summary: { passed, failed, total: results.length } }),
+      body: JSON.stringify({ results, purged_probe_accounts, summary: { passed, failed, total: results.length } }),
     }
   } catch (err) {
     console.error('[run-security-audit] Error:', err)

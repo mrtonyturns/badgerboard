@@ -91,6 +91,7 @@ const CHANGELOG = [
       'Fixed: expired trials and revoked beta access now actually clear — a metadata-merge bug meant they never persisted, and one lapsed account was getting a “your trial has ended” email every morning',
       'Accounts that own candidates, lists, or profiles can now be deleted (14 database constraints blocked it before)',
       'Admin: mute every email to any user with one click, and reset an account to the free plan in one press',
+      'Admin repair: subscription cancel now finds the real Stripe customer, cancels immediately or at period end (your choice), and works on manual plans; beta/trial/lock toggles reflect their new state instantly; notes, error-log search, and every failure message now show what actually happened',
     ],
   },
   {

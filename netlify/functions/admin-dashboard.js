@@ -232,10 +232,28 @@ async function getAICosts() {
   };
 }
 
+/**
+ * Audit fix: the handler's catch turned every failure into "An internal error
+ * occurred", so the admin panel could only print its own hardcoded fallback.
+ * Errors raised deliberately here are marked `expose` and returned verbatim —
+ * this endpoint is admin-gated, and "A user with this email address has already
+ * been registered" is the entire answer to "why didn't the email change?".
+ */
+class AdminError extends Error {
+  constructor(message, statusCode = 400) {
+    super(message);
+    this.name = 'AdminError';
+    this.expose = true;
+    this.statusCode = statusCode;
+  }
+}
+
 async function updateUser(userId, email, password) {
   const body = {};
   if (email) body.email = email;
   if (password) body.password = password;
+  if (!Object.keys(body).length) throw new AdminError('Nothing to update — provide an email or a password.');
+  if (password && String(password).length < 8) throw new AdminError('Password must be at least 8 characters.');
 
   const res = await fetch(
     `${process.env.SUPABASE_URL}/auth/v1/admin/users/${userId}`,
@@ -249,7 +267,13 @@ async function updateUser(userId, email, password) {
       body: JSON.stringify(body),
     }
   );
-  if (!res.ok) throw new Error('Failed to update user');
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new AdminError(
+      detail.msg || detail.message || detail.error_description || `Failed to update user (HTTP ${res.status})`,
+      res.status === 422 ? 400 : 502
+    );
+  }
   return { updated: true };
 }
 
@@ -490,24 +514,20 @@ async function getErrorLogs(showResolved = false) {
   const logs = await res.json();
   if (!Array.isArray(logs)) return [];
 
-  // Enrich with user email where possible
-  const userIds = [...new Set(logs.filter(l => l.user_id).map(l => l.user_id))];
+  // Enrich with user email where possible.
+  // Audit fix: this read a SINGLE un-paginated page (per_page=500), so once the
+  // platform passes 500 accounts every error raised by a later-created user
+  // renders as a bare UUID in the Error Logs tab — and the Search box (which
+  // matches on user_email) stops finding them. getAllUsers() already pages
+  // through everything; reuse it rather than keeping a second, capped copy.
+  const userIds = new Set(logs.filter(l => l.user_id).map(l => l.user_id));
   const userEmailMap = {};
-  if (userIds.length > 0) {
+  if (userIds.size > 0) {
     try {
-      const usersRes = await fetch(`${process.env.SUPABASE_URL}/auth/v1/admin/users?per_page=500`, {
-        headers: {
-          apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
-          Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-        },
-      });
-      if (usersRes.ok) {
-        const usersData = await usersRes.json();
-        for (const u of (usersData.users || [])) {
-          if (userIds.includes(u.id)) userEmailMap[u.id] = u.email;
-        }
+      for (const u of await getAllUsers()) {
+        if (userIds.has(u.id)) userEmailMap[u.id] = u.email;
       }
-    } catch (_) {}
+    } catch (e) { console.warn('[admin-dashboard] error-log email enrichment failed:', e.message); }
   }
 
   return logs.map(l => ({
@@ -685,6 +705,11 @@ export const handler = async (event) => {
     }
   } catch (err) {
     console.error('Admin dashboard error:', err);
+    // Deliberate, admin-facing messages only (AdminError). Anything unexpected
+    // stays opaque to the client and detailed in the function log.
+    if (err?.expose) {
+      return { statusCode: err.statusCode || 400, body: JSON.stringify({ error: err.message }) };
+    }
     return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) };
   }
 };
