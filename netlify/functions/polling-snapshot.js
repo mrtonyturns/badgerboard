@@ -73,6 +73,24 @@ exports.handler = async (event) => {
 
   const headers = { 'Content-Type': 'application/json' }
 
+  // v1.40.1 — server-side watchdog. A row can only legitimately sit in
+  // 'generating' for as long as the background pipeline is allowed to run
+  // (Netlify background cap is 15 min; the pipeline budgets far less). Past
+  // STUCK_MS the job is dead — flip it to 'error' so the client stops polling
+  // and offers a retry, instead of serving the zombie row forever.
+  const STUCK_MS = 10 * 60 * 1000
+  const healIfStuck = async (row) => {
+    if (!row || row.status !== 'generating') return row
+    const age = Date.now() - new Date(row.generated_at).getTime()
+    if (!(age > STUCK_MS)) return row
+    const note = 'The snapshot job never finished (timed out). Try again.'
+    await sb(`/poll_snapshots?district=eq.${encodeURIComponent(row.district)}&user_id=eq.${row.user_id}`, {
+      method: 'PATCH', headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({ status: 'error', error_note: note }),
+    }).catch(() => {})
+    return { ...row, status: 'error', error_note: note }
+  }
+
   if (action === 'get') {
     // Personalized row (user has local intel for this district) wins over the
     // shared baseline; fall back to global when none exists.
@@ -84,13 +102,13 @@ exports.handler = async (event) => {
       if (!pr.ok) return { statusCode: 503, headers, body: JSON.stringify({ error: 'Snapshot store unavailable — try again shortly' }) }
       const prows = await pr.json()
       if (prows?.[0]) {
-        return { statusCode: 200, headers, body: JSON.stringify({ snapshot: prows[0], personalized: true, intel_count: nIntel, fresh_days: FRESH_DAYS }) }
+        return { statusCode: 200, headers, body: JSON.stringify({ snapshot: await healIfStuck(prows[0]), personalized: true, intel_count: nIntel, fresh_days: FRESH_DAYS }) }
       }
     }
     const res = await sb(`/poll_snapshots?district=eq.${encodeURIComponent(district)}&user_id=eq.${GLOBAL_USER}&select=*`)
     if (!res.ok) return { statusCode: 503, headers, body: JSON.stringify({ error: 'Snapshot store unavailable — try again shortly' }) }
     const rows = await res.json()
-    const snap = rows?.[0] || null
+    const snap = await healIfStuck(rows?.[0] || null)
     return { statusCode: 200, headers, body: JSON.stringify({ snapshot: snap, personalized: false, intel_count: nIntel, fresh_days: FRESH_DAYS }) }
   }
 
@@ -112,7 +130,12 @@ exports.handler = async (event) => {
     const existing = rows?.[0]
     if (existing) {
       const ageMs = Date.now() - new Date(existing.generated_at).getTime()
-      if (existing.status === 'generating' && ageMs < 10 * 60 * 1000) {
+      // Concurrency guard. A forced regenerate ("Try again" after the client's
+      // 3-minute ceiling) may re-fire once the row has been 'generating' longer
+      // than that ceiling — otherwise a job that died mid-flight would make the
+      // user sit through the full 10-minute watchdog window twice.
+      const guardMs = body.force ? 3 * 60 * 1000 : 10 * 60 * 1000
+      if (existing.status === 'generating' && ageMs < guardMs) {
         return { statusCode: 200, headers, body: JSON.stringify({ status: 'generating' }) }
       }
       if (existing.status === 'ready' && ageMs < FRESH_DAYS * 86400000 && !body.force) {
@@ -125,13 +148,39 @@ exports.handler = async (event) => {
     await sb('/poll_snapshots?on_conflict=district,user_id', {
       method: 'POST',
       headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify({ district, user_id: rowUser, status: 'generating', generated_at: new Date().toISOString(), requested_by: user.id }),
+      body: JSON.stringify({ district, user_id: rowUser, status: 'generating', generated_at: new Date().toISOString(), requested_by: user.id, error_note: null }),
     })
-    fetch(`${SITE_URL}/.netlify/functions/polling-snapshot-background`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ district, internal_trigger: process.env.ADMIN_TRIGGER_SECRET, requested_by: user.id, snapshot_user: nIntel > 0 ? user.id : null }),
-    }).catch(e => console.error('[polling] background fire failed:', e.message))
+
+    // v1.40.1 — ROOT CAUSE of the "Building the snapshot…" forever spinner
+    // (Sep 21 sweep: 13+ minutes, status 'generating', model_used null):
+    // this trigger was fire-and-forget. Netlify freezes the Lambda the instant
+    // the handler returns, so the outbound request was frequently never
+    // flushed and the background pipeline never ran — nobody wrote a terminal
+    // status, and the client polled the same row for eternity. Background
+    // functions answer 202 the moment they accept the job, so awaiting costs
+    // ~nothing (generate-dossier.js has done it this way all along). A
+    // non-2xx answer (bad trigger secret, cold-start 5xx) is now written to
+    // the row as an error instead of vanishing into a console line.
+    const markError = (note) => sb(`/poll_snapshots?district=eq.${encodeURIComponent(district)}&user_id=eq.${rowUser}`, {
+      method: 'PATCH', headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({ status: 'error', error_note: String(note).slice(0, 300) }),
+    }).catch(() => {})
+    try {
+      const bg = await fetch(`${SITE_URL}/.netlify/functions/polling-snapshot-background`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ district, internal_trigger: process.env.ADMIN_TRIGGER_SECRET, requested_by: user.id, snapshot_user: nIntel > 0 ? user.id : null }),
+      })
+      if (!bg.ok) {
+        console.error(`[polling] background trigger returned HTTP ${bg.status}`)
+        await markError(`Could not start the snapshot job (HTTP ${bg.status}). Try again.`)
+        return { statusCode: 503, headers, body: JSON.stringify({ status: 'error', error: 'Could not start the snapshot job. Try again in a moment.' }) }
+      }
+    } catch (e) {
+      console.error('[polling] background fire failed:', e.message)
+      await markError(`Could not start the snapshot job: ${e.message}`)
+      return { statusCode: 503, headers, body: JSON.stringify({ status: 'error', error: 'Could not start the snapshot job. Try again in a moment.' }) }
+    }
 
     return { statusCode: 200, headers, body: JSON.stringify({ status: 'generating', personalized: nIntel > 0 }) }
   }

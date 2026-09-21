@@ -145,6 +145,41 @@ export function dateBadgeParts(dateStr) {
 }
 // ─── R2C PURE HELPERS END ───
 
+// ── Sep-21 sweep: cached search results were shown as "upcoming" long after
+// the events already happened, because "next 60 days" was computed once at
+// SEARCH time and never revisited. These two helpers make "upcoming" and
+// "fresh" both relative to render time instead of fetch time. ─────────────
+// ─── R4 PURE HELPERS BEGIN ───
+/** Drops events whose date is before today (local day boundary — an event
+ * happening today is kept). Events with a missing/unparseable date are never
+ * dropped — silently disappearing events is worse than a missing filter — but
+ * they're sorted after every dated event so a stale/bad date can't lead the
+ * list. */
+export function filterUpcoming(events, now = new Date()) {
+  if (!Array.isArray(events)) return []
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const dated = [], undated = []
+  for (const ev of events) {
+    const t = Date.parse(`${ev?.date_start}T00:00:00`)
+    if (!Number.isFinite(t)) { undated.push(ev); continue }
+    if (t >= todayStart) dated.push(ev)
+  }
+  dated.sort((a, b) => Date.parse(`${a.date_start}T00:00:00`) - Date.parse(`${b.date_start}T00:00:00`))
+  return [...dated, ...undated]
+}
+
+/** True once a cached search is older than `thresholdDays`. A missing/invalid
+ * timestamp is never stale — there's nothing to warn about — so callers don't
+ * need to guard this themselves. */
+export function isStale(lastSearchedAt, now = new Date(), thresholdDays = 7) {
+  const t = Date.parse(lastSearchedAt || '')
+  if (!Number.isFinite(t)) return false
+  const nowMs = now instanceof Date ? now.getTime() : Date.parse(now)
+  if (!Number.isFinite(nowMs)) return false
+  return nowMs - t > thresholdDays * 24 * 3600 * 1000
+}
+// ─── R4 PURE HELPERS END ───
+
 // Escape + scroll-lock for this page's dialogs. Mounted only while the dialog
 // is open, so the hook's effect is scoped to the dialog's lifetime.
 function Dialog({ onClose, className = '', onClick, children }) {
@@ -379,16 +414,49 @@ export default function Events() {
     })()
   }, [target?.key, readCache, readProgress, watchRun])
 
+  // A single flag covers both "the auto-refresh already ran" and "the user
+  // already clicked Search themselves" — either one means we must never kick
+  // off a second, silent run behind their back. Refs (not state) so setting
+  // them can't itself trigger a re-render/effect loop.
+  const searchStartedRef = useRef(false)
+  const startSearch = useCallback(() => {
+    searchStartedRef.current = true
+    loadEvents(true)
+  }, [loadEvents])
+
+  // Sep-21 sweep: a cache older than a week was shown with no warning and no
+  // way to get current data short of noticing the stale date yourself and
+  // clicking Refresh. Once the stored results are in and look stale, kick off
+  // the same search the button would (still subject to loadEvents' own
+  // in-flight guard), while the stale list stays on screen underneath a
+  // banner. `autoRefreshFiredRef` makes sure this only ever happens once per
+  // page mount, however many times `events`/`fetchedAt` change afterward.
+  const autoRefreshFiredRef = useRef(false)
+  useEffect(() => {
+    if (autoRefreshFiredRef.current || searchStartedRef.current) return
+    if (!cacheChecked || loading) return
+    if (!events || !events.length) return
+    if (!isStale(fetchedAt, new Date())) return
+    autoRefreshFiredRef.current = true
+    startSearch()
+  }, [cacheChecked, loading, events, fetchedAt, startSearch])
+
+  // "next 60 days" only means anything if it's measured from now, not from
+  // whenever the cache was last populated — so every rendered list (grid,
+  // select-mode, the lean filters below) is derived from `upcoming`, never
+  // straight from `events`.
+  const upcoming = useMemo(() => filterUpcoming(events, new Date()), [events])
+
   const filtered = useMemo(() => {
-    if (!events) return []
-    if (filter === 'all') return events
-    return events.filter(e => {
+    if (!upcoming.length) return []
+    if (filter === 'all') return upcoming
+    return upcoming.filter(e => {
       const l = e.lean?.label || 'nonpartisan'
       if (filter === 'conservative') return l.includes('conservative')
       if (filter === 'liberal') return l.includes('liberal')
       return l === 'nonpartisan'
     })
-  }, [events, filter])
+  }, [upcoming, filter])
 
   // ── add-to-calendar flow ────────────────────────────────────────────────────
   const pushToFeed = async (ev) => {
@@ -545,8 +613,9 @@ export default function Events() {
             {target && (
               <span className="text-xs font-bold bg-red-50 text-brand-red px-2.5 py-1 rounded-full whitespace-nowrap">{target.name}</span>
             )}
-            {/* The only thing that starts the AI search — never a page load. */}
-            <button onClick={() => loadEvents(true)} disabled={loading || !target}
+            {/* The only thing that starts the AI search — never a page load
+                (auto-refresh of a stale cache excepted; see startSearch). */}
+            <button onClick={startSearch} disabled={loading || !target}
               className="flex items-center gap-1.5 bg-brand-red text-white text-sm font-extrabold px-4 py-2 rounded-xl hover:bg-red-800 disabled:opacity-50 whitespace-nowrap transition-colors">
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
               {loading ? 'Searching…' : events ? 'Search for new events' : 'Search for events'}
@@ -647,11 +716,38 @@ export default function Events() {
             Nothing has been searched for {target?.name || 'this area'} yet. Badger Board will research public
             calendars, local news and community sources, then read each crowd&rsquo;s lean.
           </p>
-          <button onClick={() => loadEvents(true)} disabled={!target}
+          <button onClick={startSearch} disabled={!target}
             className="mt-5 inline-flex items-center gap-2 bg-brand-red text-white text-sm font-extrabold px-5 py-3 rounded-xl hover:bg-red-800 disabled:opacity-50 transition-colors">
             <Sparkles className="w-4 h-4" /> Search for new events
           </button>
           <p className="text-xs text-gray-400 font-semibold mt-3">Takes a couple of minutes — it runs on the server, so you can leave this page.</p>
+        </div>
+      )}
+
+      {/* staleness banner — Sep-21 sweep: a week-plus-old cache was rendered
+          with no indication anything was stale, so "next 60 days" quietly
+          meant 60 days from the last search instead of from now. Sits above
+          the list; reuses the exact same click-gated search handler (and its
+          in-flight guard) as the "Search for new events" button, and reflects
+          whether that search is the auto-triggered one already in flight. */}
+      {events && events.length > 0 && isStale(fetchedAt, new Date()) && (
+        <div className="flex items-center gap-3 flex-wrap bg-amber-50 border-2 border-amber-200 text-amber-900 rounded-xl px-4 py-3">
+          <RefreshCw className={`w-4 h-4 flex-shrink-0 ${loading ? 'animate-spin' : ''}`} />
+          {loading ? (
+            <span className="text-sm font-semibold">
+              Results from {new Date(fetchedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} — refreshing now…
+            </span>
+          ) : (
+            <>
+              <span className="text-sm font-semibold">
+                These results are from {new Date(fetchedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}. Search again for current events.
+              </span>
+              <button onClick={startSearch} disabled={loading || !target}
+                className="ml-auto text-xs font-extrabold text-amber-900 underline decoration-2 underline-offset-2 hover:text-amber-700 disabled:opacity-50 whitespace-nowrap">
+                Search again
+              </button>
+            </>
+          )}
         </div>
       )}
 

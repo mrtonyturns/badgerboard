@@ -42,7 +42,7 @@ import LoadingBar from './LoadingBar'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.40.0'
+const APP_VERSION = 'v1.40.1'
 
 // ─── z-index scale (v1.34.1 — audit fix B1) ──────────────────────────────────
 // One ladder for everything that floats, lowest to highest:
@@ -84,6 +84,15 @@ export const Z = {
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.40.1',
+    date: 'September 21, 2026',
+    changes: [
+      'Polling snapshots no longer hang forever on “Building the snapshot…” — the job is started reliably, dead jobs surface as an error with Try again, and the page stops waiting after 3 minutes',
+      'Events hides dates that have already passed, warns when results are over a week old, and refreshes stale results automatically',
+      'Admin “Active This Week” counts real session activity instead of only fresh sign-ins',
+    ],
+  },
   {
     version: 'v1.40.0',
     date: 'September 19, 2026',

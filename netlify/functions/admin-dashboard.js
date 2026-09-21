@@ -56,10 +56,28 @@ async function getAllUsers() {
     if (sres.ok) muted = new Set((await sres.json()).map(r => String(r.email).toLowerCase()));
   } catch (e) { console.warn('[admin-dashboard] suppression list read failed:', e.message); }
 
+  // v1.40.1: real activity. last_sign_in_at only moves on a fresh sign-in, so
+  // a long-lived session looks dead for weeks and "Active This Week" read 0
+  // with an admin on the site. auth.sessions.refreshed_at (via the
+  // service-role RPC from migration 20260921000000) is the honest signal.
+  const lastActive = new Map();
+  try {
+    const ares = await fetch(`${process.env.SUPABASE_URL}/rest/v1/rpc/admin_active_user_ids`, {
+      method: 'POST',
+      headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ since_days: 90 }),
+    });
+    if (ares.ok) for (const r of await ares.json()) lastActive.set(r.user_id, r.last_active);
+    else console.warn('[admin-dashboard] admin_active_user_ids rpc:', ares.status);
+  } catch (e) { console.warn('[admin-dashboard] active-users rpc failed:', e.message); }
+
   const mapped = await Promise.all(allRaw.map(async (u) => {
     const resolved = await resolveEntitlement(u, { globalBeta });
     return {
       emails_muted: muted.has(String(u.email || '').toLowerCase()),
+      // Most recent session refresh in the last 90 days (null = none); the
+      // frontend's "Active This Week" uses this OR last_sign_in_at.
+      last_active_at: lastActive.get(u.id) || null,
       id: u.id,
       email: u.email,
       created_at: u.created_at,

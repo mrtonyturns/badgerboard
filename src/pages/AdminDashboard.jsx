@@ -389,7 +389,11 @@ const PlatformHealthTab = ({ apiCall, showToast, onNavigate }) => {
   const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
   const stats = {
     totalUsers: countedUsers.length,
-    activeThisWeek: countedUsers.filter((u) => Date.parse(u.last_sign_in_at || '') > weekAgo).length,
+    // v1.40.1: session refreshes count as activity (last_active_at from
+    // auth.sessions), not just fresh sign-ins — see admin-dashboard.js.
+    activeThisWeek: countedUsers.filter((u) =>
+      Date.parse(u.last_active_at || '') > weekAgo || Date.parse(u.last_sign_in_at || '') > weekAgo
+    ).length,
     pastDueAccounts: countedUsers.filter((u) => u.payment_status === 'past_due').length,
     totalErrors: unresolvedErrors,
   }
