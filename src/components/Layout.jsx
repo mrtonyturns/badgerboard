@@ -42,7 +42,7 @@ import LoadingBar from './LoadingBar'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.40.1'
+const APP_VERSION = 'v1.40.2'
 
 // ─── z-index scale (v1.34.1 — audit fix B1) ──────────────────────────────────
 // One ladder for everything that floats, lowest to highest:
@@ -84,6 +84,13 @@ export const Z = {
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.40.2',
+    date: 'September 26, 2026',
+    changes: [
+      'Election night hardening: “Yes, Call It” can’t double-fire (no duplicate winner emails), un-calling asks first and reports honestly, and the admin results view loads every candidate on large ballots instead of silently stopping at 1,000',
+    ],
+  },
   {
     version: 'v1.40.1',
     date: 'September 21, 2026',

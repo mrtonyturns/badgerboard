@@ -440,12 +440,18 @@ async function route(sb, action, params, headers, event) {
     case 'uncall_race': {
       const { contest_id } = params
       if (!isUuid(contest_id)) return json(400, { error: 'Invalid contest_id' })
+      // v1.40.2: the only mutation here with no affected-row check — a stale
+      // or mistyped id returned 200 "Race un-called" having touched nothing.
+      const { data: existing, error: xErr } = await sb.from('election_contests')
+        .select('id').eq('id', contest_id)
+      if (xErr) return json(500, { error: xErr.message })
+      if (!existing?.length) return json(404, { error: 'Contest not found — nothing was un-called' })
       const { error } = await sb.from('election_results')
         .update({ winner: false, declared: false }).eq('contest_id', contest_id)
       if (error) return json(500, { error: error.message })
       // Still an admin decision — un-calling is not an invitation for the engine
       // to immediately re-call the race. Use reset_status_auto for that.
-      await sb.from('election_contests').update({
+      const { data: updated, error: uErr } = await sb.from('election_contests').update({
         status: 'reporting',
         status_source: 'admin',
         status_updated_at: new Date().toISOString(),
@@ -454,7 +460,9 @@ async function route(sb, action, params, headers, event) {
           computed_at: new Date().toISOString(),
           source: 'admin',
         },
-      }).eq('id', contest_id)
+      }).eq('id', contest_id).select('id')
+      if (uErr) return json(500, { error: uErr.message })
+      if (!updated?.length) return json(500, { error: 'Winner flags cleared but the contest status did not update — refresh and check the race' })
       return json(200, { data: { uncalled: true } })
     }
 

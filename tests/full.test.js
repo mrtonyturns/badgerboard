@@ -93,7 +93,31 @@ async function createUser(email, password, meta = {}) {
 
 async function deleteUser(id) {
   if (!id) return
-  await adminFetch(`/auth/v1/admin/users/${id}`, { method: 'DELETE' })
+  // v1.40.2: the response used to be ignored, so a blocked delete (14 tables
+  // referenced auth.users with ON DELETE NO ACTION until 20260919000000) left
+  // an ftestA-/ftestB- account behind on EVERY run — 14 of them in prod.
+  // Cascades now make the delete succeed; a failure is a loud test failure.
+  const res = await adminFetch(`/auth/v1/admin/users/${id}`, { method: 'DELETE' })
+  if (res && res.ok === false) {
+    const text = await res.text().catch(() => '')
+    console.error(`  \x1b[31mLEAK: could not delete test user ${id} (${res.status}) ${text.slice(0, 200)}\x1b[0m`)
+  }
+}
+
+// Sweep probe accounts older than an hour that a crashed/killed earlier run
+// left behind. Scoped to the ftestA-/ftestB- naming on badger-test.invalid.
+async function sweepStaleTestUsers() {
+  try {
+    const res = await adminFetch('/auth/v1/admin/users?per_page=1000&page=1')
+    if (!res?.ok) return
+    const { users = [] } = await res.json()
+    const cutoff = Date.now() - 60 * 60 * 1000
+    const stale = users.filter(u => /^ftest[ab]-\d+@badger-test\.invalid$/i.test(u.email || '') && Date.parse(u.created_at) < cutoff)
+    for (const u of stale) {
+      await deleteUser(u.id)
+      console.log(`  Swept stale test user: ${u.email}`)
+    }
+  } catch (e) { console.warn('  stale-user sweep skipped:', e.message) }
 }
 
 async function signIn(email, password) {
@@ -219,6 +243,7 @@ async function teardown() {
   await deleteUser(userBId)
   console.log(`  Deleted: ${EMAIL_A}`)
   console.log(`  Deleted: ${EMAIL_B}`)
+  await sweepStaleTestUsers()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

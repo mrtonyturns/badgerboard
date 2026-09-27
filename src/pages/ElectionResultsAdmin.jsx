@@ -2,7 +2,7 @@
 // Manual election results entry for the admin panel.
 // Replaces the fake WEC poller — an admin enters results by hand on election night.
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
 import {
@@ -135,6 +135,12 @@ export default function ElectionResultsAdmin({ showToast }) {
   const [deleting,     setDeleting]     = useState(null)
   // Call confirmation: { contestId, candidateId, candidateName, seats, currentWinners }
   const [callConfirm,  setCallConfirm]  = useState(null)
+  // v1.40.2: in-flight guard. A double-click on "Yes, Call It" used to fire
+  // call_race twice — two winner-notification fan-outs to every subscriber
+  // on that race. The ref blocks re-entry even before React re-renders.
+  const [callBusy, setCallBusy] = useState(false)
+  const callBusyRef = useRef(false)
+  const [uncallBusy, setUncallBusy] = useState(null) // contestId in flight
 
   // Load elections list
   useEffect(() => {
@@ -178,14 +184,28 @@ export default function ElectionResultsAdmin({ showToast }) {
     if (cData?.length) {
       // FK-join filter rather than a 250-id `.in()` — that URL is ~10KB today
       // and crosses the gateway limit at November's ~400 contests.
-      const { data: rData } = await supabase
-        .from('election_results')
-        .select('*, election_contests!inner(election_id)')
-        .eq('election_contests.election_id', electionId)
-        .order('votes', { ascending: false })
+      // v1.40.2: paged. PostgREST caps a single response at 1,000 rows; the
+      // November general is 130 contests × 2–6 candidates and the primary was
+      // 251 × ~2.5 — either can pass 1,000 result rows, after which the old
+      // single read silently dropped the tail and the admin saw races with
+      // missing candidates. A failed page is surfaced, not swallowed.
+      const PAGE = 1000
+      const rData = []
+      for (let from = 0; ; from += PAGE) {
+        const { data: page, error: rErr } = await supabase
+          .from('election_results')
+          .select('*, election_contests!inner(election_id)')
+          .eq('election_contests.election_id', electionId)
+          .order('votes', { ascending: false })
+          .order('id')
+          .range(from, from + PAGE - 1)
+        if (rErr) { showToast('Results load error: ' + rErr.message + ' — showing contests without results', 'error'); break }
+        rData.push(...(page || []))
+        if (!page || page.length < PAGE) break
+      }
 
       const map = {}
-      for (const raw of rData || []) {
+      for (const raw of rData) {
         const { election_contests: _join, ...r } = raw
         if (!map[r.contest_id]) map[r.contest_id] = []
         map[r.contest_id].push(r)
@@ -204,10 +224,14 @@ export default function ElectionResultsAdmin({ showToast }) {
    */
   const refreshContest = useCallback(async (contestId) => {
     if (!contestId) return
-    const [{ data: cRow }, { data: rRows }] = await Promise.all([
+    const [{ data: cRow, error: cErr }, { data: rRows, error: rErr }] = await Promise.all([
       supabase.from('election_contests').select('*').eq('id', contestId).maybeSingle(),
       supabase.from('election_results').select('*').eq('contest_id', contestId).order('votes', { ascending: false }),
     ])
+    // v1.40.2: a transient read failure used to look identical to "row gone"
+    // and DELETED the contest from the admin view. Errors now keep the row
+    // and say so; only a clean null means the row was really removed.
+    if (cErr || rErr) { showToast('Refresh failed: ' + (cErr || rErr).message + ' — showing last known state', 'error'); return }
     if (cRow) {
       setContests(prev => prev.map(c => (c.id === contestId ? { ...c, ...cRow } : c)))
       setResultsMap(prev => ({ ...prev, [contestId]: rRows || [] }))
@@ -216,7 +240,7 @@ export default function ElectionResultsAdmin({ showToast }) {
       setContests(prev => prev.filter(c => c.id !== contestId))
       setResultsMap(prev => { const next = { ...prev }; delete next[contestId]; return next })
     }
-  }, [])
+  }, [showToast])
 
   // ── Contest CRUD ──────────────────────────────────────────────────────────
   const openAddContest = () => {
@@ -349,7 +373,8 @@ export default function ElectionResultsAdmin({ showToast }) {
   }
 
   const confirmCallRace = async () => {
-    if (!callConfirm) return
+    if (!callConfirm || callBusyRef.current) return
+    callBusyRef.current = true; setCallBusy(true)
     const { contestId, candidateId, candidateName, seats } = callConfirm
     const results = resultsMap[contestId] || []
     // Audit fix (#13): the old direct update silently matched 0 rows under RLS
@@ -362,6 +387,7 @@ export default function ElectionResultsAdmin({ showToast }) {
       candidate_name: candidateName,
     })
     setCallConfirm(null)
+    callBusyRef.current = false; setCallBusy(false)
     if (error) { showToast('Call failed: ' + error.message + ' — the board was NOT updated', 'error'); return }
     const newWinnerCount = results.filter(r => r.declared || r.id === candidateId).length
     showToast(newWinnerCount >= seats ? `All ${seats} seat${seats > 1 ? 's' : ''} called` : 'Candidate declared winner')
@@ -369,7 +395,13 @@ export default function ElectionResultsAdmin({ showToast }) {
   }
 
   const uncallRace = async (contestId) => {
+    if (uncallBusy) return
+    // v1.40.2: this clears EVERY winner flag in the contest and re-opens it on
+    // the public board — it deserves the same confirm as calling does.
+    if (!window.confirm('Un-call this race? Every declared winner in it is cleared and the public board goes back to "reporting".')) return
+    setUncallBusy(contestId)
     const { error } = await adminElections('uncall_race', { contest_id: contestId })
+    setUncallBusy(null)
     if (error) { showToast('Un-call failed: ' + error.message, 'error'); return }
     showToast('Race un-called')
     refreshContest(contestId)
@@ -912,7 +944,8 @@ export default function ElectionResultsAdmin({ showToast }) {
                             {r.declared && (
                               <button
                                 onClick={() => uncallRace(contest.id)}
-                                className="text-xs bg-amber-100 text-amber-700 hover:bg-amber-200 px-2 py-1 rounded font-medium"
+                                disabled={uncallBusy === contest.id}
+                                className="text-xs bg-amber-100 text-amber-700 hover:bg-amber-200 px-2 py-1 rounded font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                                 title="Un-call all winners in this race"
                               >
                                 Un-call
@@ -1069,8 +1102,10 @@ export default function ElectionResultsAdmin({ showToast }) {
               </div>
             </div>
             <div className="flex gap-3">
-              <button type="button" onClick={() => setCallConfirm(null)} className="btn-secondary flex-1">Cancel</button>
-              <button type="button" onClick={confirmCallRace} className="btn-primary flex-1">Yes, Call It</button>
+              <button type="button" onClick={() => setCallConfirm(null)} disabled={callBusy} className="btn-secondary flex-1">Cancel</button>
+              <button type="button" onClick={confirmCallRace} disabled={callBusy} className="btn-primary flex-1 disabled:opacity-60 disabled:cursor-not-allowed">
+                {callBusy ? 'Calling…' : 'Yes, Call It'}
+              </button>
             </div>
           </div>
         </Modal>
