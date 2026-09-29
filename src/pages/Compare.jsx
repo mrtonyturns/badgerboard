@@ -1,15 +1,25 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { Link, createSearchParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { format } from 'date-fns'
 import {
-  ArrowLeft, Users, Sparkles, AlertTriangle, CheckCircle, XCircle,
-  DollarSign, Vote, Target, Building2, FileText, Scale,
-  ChevronDown, ChevronUp, TrendingUp, Trophy, Zap,
-  MapPin, Globe, Phone, Mail, Briefcase, Home as HomeIcon, ExternalLink,
-  BarChart2, Flag,
+  ArrowLeft,
+  Users,
+  Sparkles,
+  AlertTriangle,
+  CheckCircle,
+  DollarSign,
+  Vote,
+  Target,
+  Building2,
+  FileText,
+  Scale,
+  ChevronDown,
+  ChevronUp,
+  TrendingUp,
+  ExternalLink,
+  Flag,
 } from 'lucide-react'
 import { getCandidates, getDossiers } from '../lib/supabase'
-import { useAuth } from '../contexts/AuthContext'
 import LoadingBar from '../components/LoadingBar'
 import SearchableSelect from '../components/SearchableSelect'
 import { partyGroup, partyAbbrev, partyBadgeClasses } from '../lib/party'
@@ -24,7 +34,7 @@ const PARTY_BORDER = {
   R: 'border-red-200', D: 'border-blue-200', I: 'border-purple-200',
   L: 'border-amber-200', G: 'border-green-200', N: 'border-gray-200', O: 'border-gray-200',
 }
-const partyColor = (p, side) => `${partyBadgeClasses(p)} border ${PARTY_BORDER[partyGroup(p)]}`
+const partyColor = (p) => `${partyBadgeClasses(p)} border ${PARTY_BORDER[partyGroup(p)]}`
 
 // ─── Section extraction helpers ───────────────────────────────────────────────
 function extractSection(content, num) {
@@ -41,19 +51,6 @@ function extractBullets(sectionText, limit = 8) {
     .map(l => l.trim().replace(/^[-*•] /, '').replace(/\*\*\[[A-Z ]+\]\*\*/g, '').replace(/\*{1,2}/g, '').trim())
     .filter(Boolean)
     .slice(0, limit)
-}
-
-function extractSummary(content, maxLen = 220) {
-  if (!content) return ''
-  const plain = content
-    .replace(/## SECTION \d+[^\n]*/g, '')
-    .replace(/\*{1,2}([^*]+)\*{1,2}/g, '$1')
-    .replace(/#{1,4} .+/g, '')
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    .replace(/\n+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  return plain.length > maxLen ? plain.slice(0, maxLen) + '…' : plain
 }
 
 // ─── Candidate picker ────────────────────────────────────────────────────────
@@ -262,12 +259,22 @@ function ScoreCard({ left, right, leftDossier, rightDossier, leftSections, right
 }
 
 // ─── Profile facts row ────────────────────────────────────────────────────────
+// Lint (Sep 29 2026) surfaced that `icon`/`label` were accepted and never
+// rendered — every comparison row showed two bare values with no caption.
+// Render the caption as a full-width header line above the value pair.
 function FactRow({ icon: Icon, label, left, right, leftAdv, rightAdv }) {
   const isEmpty = !left && !right
   if (isEmpty) return null
   const differ = left !== right && left && right
   return (
-    <div className={`grid grid-cols-2 gap-px border-b border-gray-50 last:border-0 ${differ ? 'bg-yellow-50/30' : ''}`}>
+    <div className={`border-b border-gray-50 last:border-0 ${differ ? 'bg-yellow-50/30' : ''}`}>
+      {label && (
+        <div className="px-4 pt-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+          {Icon && <Icon className="w-3 h-3" />}
+          {label}
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-px">
       <div className={`px-4 py-2.5 flex items-center gap-2 text-sm ${leftAdv ? 'text-emerald-700 font-semibold' : 'text-gray-700'}`}>
         {leftAdv && <TrendingUp className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />}
         {left || <span className="text-gray-300 italic text-xs">—</span>}
@@ -276,16 +283,16 @@ function FactRow({ icon: Icon, label, left, right, leftAdv, rightAdv }) {
         {rightAdv && <TrendingUp className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />}
         {right || <span className="text-gray-300 italic text-xs">—</span>}
       </div>
+      </div>
     </div>
   )
 }
 
 // ─── Dossier section compare block ───────────────────────────────────────────
-function SectionBlock({ title, icon: Icon, leftBullets, rightBullets, leftName, rightName, emptyLeft, emptyRight }) {
+function SectionBlock({ title, icon: Icon, leftBullets, rightBullets, emptyLeft, emptyRight }) {
   const [open, setOpen] = useState(true)
   const total = leftBullets.length + rightBullets.length
   if (total === 0 && emptyLeft && emptyRight) return null
-  const maxLen = Math.max(leftBullets.length, rightBullets.length)
   const lEdge = leftBullets.length > rightBullets.length
   const rEdge = rightBullets.length > leftBullets.length
 
@@ -373,8 +380,8 @@ function SectionBlock({ title, icon: Icon, leftBullets, rightBullets, leftName, 
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function Compare() {
-  const { user } = useAuth()
-  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
 
   const [candidates, setCandidates]         = useState([])
   const [loadingCandidates, setLoadingCand] = useState(true)
@@ -398,12 +405,18 @@ export default function Compare() {
     })
   }, [])
 
+  // Mirror the selection into the URL. This uses navigate() rather than
+  // setSearchParams: in react-router 6.30 (BrowserRouter) setSearchParams is
+  // re-created whenever location.search changes, so as a dependency it would
+  // re-fire this effect after every write and on any external ?a=/?b= change.
+  // navigate() only changes identity when the route pathname changes (i.e. on
+  // leaving this page), so the effect still runs only when leftId/rightId do.
   useEffect(() => {
     const params = {}
     if (leftId)  params.a = leftId
     if (rightId) params.b = rightId
-    setSearchParams(params, { replace: true })
-  }, [leftId, rightId])
+    navigate({ search: `?${createSearchParams(params)}` }, { replace: true })
+  }, [leftId, rightId, navigate])
 
   const loadSide = useCallback(async (id) => {
     if (!id) return [null, null]
@@ -540,7 +553,7 @@ export default function Compare() {
               { label: 'Occupation',  left: leftCandidate.occupation,                         right: rightCandidate.occupation },
               { label: 'Website',     left: leftCandidate.website,                            right: rightCandidate.website },
             ].map(row => (
-              <FactRow key={row.label} {...row} icon={FileText} />
+              <FactRow key={row.label} {...row} />
             ))}
           </div>
 
@@ -570,7 +583,6 @@ export default function Compare() {
                 title="Recent News & Media"
                 icon={FileText}
                 leftBullets={lb(1)}  rightBullets={rb(1)}
-                leftName={lName}     rightName={rName}
                 emptyLeft={!lC  ? 'No profile available' : 'No news items found'}
                 emptyRight={!rC ? 'No profile available' : 'No news items found'}
               />
@@ -578,7 +590,6 @@ export default function Compare() {
                 title="Political Record"
                 icon={Vote}
                 leftBullets={lb(4)}  rightBullets={rb(4)}
-                leftName={lName}     rightName={rName}
                 emptyLeft={!lC  ? 'No profile available' : 'No political record items'}
                 emptyRight={!rC ? 'No profile available' : 'No political record items'}
               />
@@ -586,7 +597,6 @@ export default function Compare() {
                 title="Campaign Finance"
                 icon={DollarSign}
                 leftBullets={lb(5)}  rightBullets={rb(5)}
-                leftName={lName}     rightName={rName}
                 emptyLeft={!lC  ? 'No profile available' : 'No financial data'}
                 emptyRight={!rC ? 'No profile available' : 'No financial data'}
               />
@@ -594,7 +604,6 @@ export default function Compare() {
                 title="Controversies & Opposition Research"
                 icon={AlertTriangle}
                 leftBullets={lb(6)}  rightBullets={rb(6)}
-                leftName={lName}     rightName={rName}
                 emptyLeft={!lC  ? 'No profile available' : 'No controversies noted'}
                 emptyRight={!rC ? 'No profile available' : 'No controversies noted'}
               />
@@ -602,7 +611,6 @@ export default function Compare() {
                 title="Policy Positions"
                 icon={Target}
                 leftBullets={lb(7)}  rightBullets={rb(7)}
-                leftName={lName}     rightName={rName}
                 emptyLeft={!lC  ? 'No profile available' : 'No policy positions found'}
                 emptyRight={!rC ? 'No profile available' : 'No policy positions found'}
               />
@@ -610,7 +618,6 @@ export default function Compare() {
                 title="Affiliations & Organizations"
                 icon={Building2}
                 leftBullets={lb(8)}  rightBullets={rb(8)}
-                leftName={lName}     rightName={rName}
                 emptyLeft={!lC  ? 'No profile available' : 'No affiliations found'}
                 emptyRight={!rC ? 'No profile available' : 'No affiliations found'}
               />

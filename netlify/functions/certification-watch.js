@@ -260,7 +260,7 @@ exports.handler = async (event = {}) => {
   const startedAt = Date.now()
   const headers = { 'Content-Type': 'application/json' }
 
-  let body = {}
+  let body
   try { body = JSON.parse(event.body || '{}') || {} } catch { body = {} }
 
   // Netlify's scheduler POSTs { next_run: <ISO> } and some runtimes hand a

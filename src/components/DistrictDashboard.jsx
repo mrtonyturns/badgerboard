@@ -1,7 +1,7 @@
 // DistrictDashboard.jsx — full district intelligence view for state & federal
 // districts, opened from the Offices map. County/municipal clicks keep the
 // simple DistrictPanel. Design: v3 mockup (bold, 3-column, heat map center).
-import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { X, Sparkles, ChevronRight, Loader2, Users, MapPin, RefreshCw } from 'lucide-react'
@@ -55,7 +55,7 @@ const CHAMBER_META = {
   senate:   { office: (n) => `State Senator, Senate District ${n}`, badge: 'State · Legislative', term: 4,
     elig: (n) => `Qualified elector of Senate District ${n} (resident 28+ days before filing) · U.S. citizen, age 18+ · nomination papers with 400–800 district signatures · CF-1 + declaration of candidacy filed by June 1 of the election year · no felony conviction unless rights restored` },
   congress: { office: (n) => `U.S. Representative, Congressional District ${n}`, badge: 'Federal · Legislative', term: 2,
-    elig: (n) => `U.S. citizen for 7+ years · age 25+ · resident of Wisconsin (district residency customary, not required) · nomination papers with 1,000–2,000 district signatures · federal FEC registration once raising/spending over $5,000 · WI filing by June 1 of the election year` },
+    elig: () => `U.S. citizen for 7+ years · age 25+ · resident of Wisconsin (district residency customary, not required) · nomination papers with 1,000–2,000 district signatures · federal FEC registration once raising/spending over $5,000 · WI filing by June 1 of the election year` },
   ussenate: { office: () => `U.S. Senator for Wisconsin`, badge: 'Federal · Statewide', term: 6,
     elig: () => `U.S. citizen for 9+ years · age 30+ · inhabitant of Wisconsin when elected (U.S. Const. Art. I §3) · nomination papers with 2,000–4,000 statewide signatures (Wis. Stat. § 8.15) · federal FEC registration once raising/spending over $5,000 · WI declaration of candidacy + filing by June 1 of the election year · seats are elected statewide on a 6-year cycle (Class I and Class III, staggered)` },
   county:   { office: (n, name) => `County Sheriff of ${name} County`, badge: 'County', term: 4,
@@ -212,23 +212,32 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
   const [voters, setVoters]     = useState(null)
   const [showAllElig, setShowAllElig] = useState(false)
 
+  // districtKeyFor() returns a fresh object every render, so the effect below
+  // keys on its primitive fields instead. chamber/num/countyName are all pure
+  // functions of key (see districtKeyFor), so these deps change together and
+  // only when the district actually changes.
+  const idKey = id?.key
+  const idChamber = id?.chamber
+  const idNum = id?.num
+  const idCountyName = id?.countyName
+
   // static data + DB contests + cached history + voters
   useEffect(() => {
     let alive = true
     loadStatic().then(s => { if (alive) setStatics(s) })
 
-    const num = id?.num
+    const num = idNum
     const baseSel = supabase.from('election_contests')
       .select('id, office, district, seats, election:elections(id, name, election_date, type), results:election_results(candidate_name, party, votes, vote_pct, winner, declared)')
-    if (id?.chamber === 'county') {
-      baseSel.eq('county', id.countyName).limit(60).then(({ data }) => { if (alive) setContests(data || []) })
-    } else if (id?.chamber === 'ussenate') {
+    if (idChamber === 'county') {
+      baseSel.eq('county', idCountyName).limit(60).then(({ data }) => { if (alive) setContests(data || []) })
+    } else if (idChamber === 'ussenate') {
       // Statewide race — no district number to match on
       baseSel.or('office.ilike.%U.S. Senat%,office.ilike.%United States Senat%,office.ilike.%US Senat%')
         .limit(40)
         .then(({ data }) => { if (alive) setContests(data || []) })
     } else {
-      const chamberWord = id?.chamber === 'assembly' ? 'Assembly' : id?.chamber === 'senate' ? 'Senate' : 'Congressional'
+      const chamberWord = idChamber === 'assembly' ? 'Assembly' : idChamber === 'senate' ? 'Senate' : 'Congressional'
       baseSel.or(`office.ilike.%${chamberWord}%District ${num}%,district.ilike.%District ${num}%`)
         .limit(40)
         .then(({ data }) => {
@@ -240,15 +249,14 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
         })
     }
 
-    supabase.from('district_intel').select('history').eq('district_key', id?.key || '').maybeSingle()
+    supabase.from('district_intel').select('history').eq('district_key', idKey || '').maybeSingle()
       .then(({ data }) => { if (alive && data?.history) setHistory(data.history) })
 
     supabase.from('voters').select('id, full_name, first_name, last_name, address, city, latitude, longitude, voter_list_id').not('latitude', 'is', null).limit(5000)
       .then(({ data }) => { if (alive) setVoters(data || []) })
 
     return () => { alive = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id?.key])
+  }, [idKey, idChamber, idNum, idCountyName])
 
   const demo = statics?.demo?.[id?.key]
 

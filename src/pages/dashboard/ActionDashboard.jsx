@@ -8,7 +8,7 @@
 // empty state from SPEC.md rule 4 — never as a zero, a dash dressed up as data,
 // or an invented score.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { format, differenceInCalendarDays } from 'date-fns'
 import LoadingBar from '../../components/LoadingBar'
@@ -46,6 +46,13 @@ import {
 // ── helpers ──────────────────────────────────────────────────────────────────
 // isThisWeek / latestDigestOf / weekDigestOf moved to shared.jsx so the two
 // dashboards cannot drift on what "this week's digest" means.
+
+// Per-candidate lookups over the byCandidate index (candidate_id → dossiers,
+// newest first). Pure functions of their arguments, so the useMemos that call
+// them depend only on byCandidate, never on a per-render closure.
+const latestOf          = (byCandidate, id) => byCandidate[id]?.[0] || null
+const latestDigestForId = (byCandidate, id) => latestDigestOf(byCandidate[id] || [])
+const weekDigestForId   = (byCandidate, id) => weekDigestOf(byCandidate[id] || [])
 
 // Recent activity's initial preview — see the "Show all activity" toggle below.
 const ACTIVITY_PREVIEW_COUNT = 4
@@ -332,15 +339,10 @@ export default function ActionDashboard() {
     return map
   }, [dossiers])
 
-  const latestOf = (id) => byCandidate[id]?.[0] || null
-  // Per-candidate wrappers over the shared helpers.
-  const latestDigestForId = (id) => latestDigestOf(byCandidate[id] || [])
-  const weekDigestForId   = (id) => weekDigestOf(byCandidate[id] || [])
-
   const flaggedIds = useMemo(() => {
     const set = new Set()
     candidates.forEach(c => {
-      const wk = weekDigestForId(c.id)
+      const wk = weekDigestForId(byCandidate, c.id)
       if (wk?.weekly_digest?.items?.some(i => i.category === 'controversy')) set.add(c.id)
     })
     return set
@@ -352,7 +354,7 @@ export default function ActionDashboard() {
     [...candidates].sort((a, b) => {
       const am = isMonitored(a) ? 0 : 1, bm = isMonitored(b) ? 0 : 1
       if (am !== bm) return am - bm
-      const ad = latestOf(a.id)?.generated_at || '', bd = latestOf(b.id)?.generated_at || ''
+      const ad = latestOf(byCandidate, a.id)?.generated_at || '', bd = latestOf(byCandidate, b.id)?.generated_at || ''
       if (ad !== bd) return String(bd).localeCompare(String(ad))
       return String(a.name).localeCompare(String(b.name))
     })
@@ -397,9 +399,9 @@ export default function ActionDashboard() {
   // The panel this feeds is headed "THIS WEEK'S DIGEST", so it must be this
   // week's — it used to render the newest digest of any age. selLatestDigest is
   // kept so the empty state can date the last one honestly.
-  const selDigest       = useMemo(() => (sel ? weekDigestForId(sel.id) : null), [sel, byCandidate])
-  const selLatestDigest = useMemo(() => (sel ? latestDigestForId(sel.id) : null), [sel, byCandidate])
-  const selProfile = useMemo(() => (sel ? latestOf(sel.id) : null), [sel, byCandidate])
+  const selDigest       = useMemo(() => (sel ? weekDigestForId(byCandidate, sel.id) : null), [sel, byCandidate])
+  const selLatestDigest = useMemo(() => (sel ? latestDigestForId(byCandidate, sel.id) : null), [sel, byCandidate])
+  const selProfile = useMemo(() => (sel ? latestOf(byCandidate, sel.id) : null), [sel, byCandidate])
 
   // Per-candidate voter count: rows from the account's uploaded voter lists whose
   // geocode falls inside that candidate's district. There is no candidate↔voter
@@ -529,7 +531,7 @@ export default function ActionDashboard() {
   const attention = useMemo(() => {
     const out = []
     candidates.forEach(c => {
-      const wk = weekDigestForId(c.id)
+      const wk = weekDigestForId(byCandidate, c.id)
       const hit = wk?.weekly_digest?.items?.find(i => i.category === 'controversy')
       if (hit) {
         out.push({
@@ -720,8 +722,8 @@ export default function ActionDashboard() {
           }}
         >
           {shown.map(c => {
-            const wk = weekDigestForId(c.id)
-            const last = latestOf(c.id)
+            const wk = weekDigestForId(byCandidate, c.id)
+            const last = latestOf(byCandidate, c.id)
             const sub = isMonitored(c)
               ? wk
                 ? `Digest updated ${fmtDate(wk.generated_at)} · ${wk.weekly_digest.items?.length || 0} items`

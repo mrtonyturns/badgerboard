@@ -2,11 +2,18 @@
 // Pick one of your offices → AI researches upcoming community events in that
 // office's district, classifies each event's political lean, and lets you add
 // events to your connected calendars (personal feed) in one click.
-import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import {
-  CalendarDays, RefreshCw, Loader2, Sparkles, MapPin, ChevronDown,
-  Check, X, Settings as SettingsIcon, ExternalLink, Users, CheckSquare, Square,
+  RefreshCw,
+  Loader2,
+  Sparkles,
+  X,
+  Settings as SettingsIcon,
+  ExternalLink,
+  Users,
+  CheckSquare,
+  Square,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { getUserPlanType } from '../lib/tiers'
@@ -110,6 +117,7 @@ const PHASE_LABELS = [
 const POLL_MS            = 3000
 const MAX_WAIT_MS        = 8 * 60 * 1000    // the function's budget is 15 min; real runs are 1–5
 const HEARTBEAT_STALE_MS = 3 * 60 * 1000    // progress row untouched this long ⇒ the run died
+const CACHE_MS           = 24 * 3600 * 1000 // shared district_events cache is fresh for a day
 const phaseLabel = (stage) => PHASE_LABELS[Math.min(Math.max(Number(stage) || 1, 1), 4) - 1]
 const freshMs = (iso) => {
   const t = Date.parse(iso || '')
@@ -257,15 +265,18 @@ export default function Events() {
   useEffect(() => () => { pollGenRef.current++ }, [])
 
   const index   = useMemo(() => buildPlaceIndex(places), [places])
-  const options = index[mode] || []
-  const target  = options.find(o => o.key === sel) || null
+  // Memoized so both keep one identity until places/mode/sel actually change
+  // (the `|| []` fallback used to mint a new array every render).
+  const options = useMemo(() => index[mode] || [], [index, mode])
+  const target  = useMemo(() => options.find(o => o.key === sel) || null, [options, sel])
 
-  // Keep a valid selection when the mode changes or the dataset loads
+  // Keep a valid selection when the mode changes or the dataset loads.
+  // sel is a dep (the guard reads it). The only write is setSel(options[0].key),
+  // a key that IS in options, so the re-run it causes passes the guard and
+  // stops — one step to converge, no loop.
   useEffect(() => {
     if (options.length && !options.find(o => o.key === sel)) setSel(options[0].key)
-  }, [mode, index]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const CACHE_MS = 24 * 3600 * 1000
+  }, [options, sel])
 
   const readCache = useCallback(async (key) => {
     const { data } = await supabase.from('district_events')
@@ -377,7 +388,10 @@ export default function Events() {
       return
     }
     if (alive()) setLoading(false)
-  }, [target?.key, readCache, readProgress, watchRun]) // eslint-disable-line react-hooks/exhaustive-deps
+    // target is memoized on (places, mode, sel), so this changes when the
+    // selected area does — same cadence as the old target?.key key — and it
+    // now reads target.name/counties/area from the current object.
+  }, [target, readCache, readProgress, watchRun])
 
   // Area change → show what is already stored, and nothing else.
   //

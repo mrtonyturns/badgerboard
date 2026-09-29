@@ -5,7 +5,6 @@
 // edit/save flow is the one that already exists: the page owns `editing` and
 // `form`, this view renders inputs when editing and read rows when not.
 
-import React from 'react'
 import SearchableSelect from '../../components/SearchableSelect'
 import { candidateStatusLabel } from '../../lib/campaignEnums'
 import { DB_PARTIES } from '../../lib/party'

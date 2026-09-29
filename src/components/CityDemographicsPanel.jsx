@@ -20,19 +20,24 @@ import { partyGroup } from '../lib/party'
  */
 export function usePlaceLookup(info) {
   const [state, setState] = useState({ loading: true, place: null })
+  // Key the effect on the three primitive fields it actually reads, not the
+  // `info` object (callers build a fresh object per click / per render).
+  const layerKey = info?.layerKey
+  const county = info?.county
+  const name = info?.name
 
   useEffect(() => {
-    if (!info || info.layerKey !== 'municipal') { setState({ loading: false, place: null }); return }
+    if (layerKey !== 'municipal') { setState({ loading: false, place: null }); return }
     let alive = true
     setState({ loading: true, place: null })
     loadPlaceDemographics().then(data => {
       if (!alive) return
-      const key = placeKey(info.county, info.name)
+      const key = placeKey(county, name)
       const place = data?.places?.[key] || null
       setState({ loading: false, place })
     }).catch(() => { if (alive) setState({ loading: false, place: null }) })
     return () => { alive = false }
-  }, [info?.layerKey, info?.county, info?.name])
+  }, [layerKey, county, name])
 
   return state
 }

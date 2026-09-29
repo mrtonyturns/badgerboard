@@ -8,7 +8,7 @@
 // netlify/functions/monitoring-digest.js (the producer). Nothing here defines a
 // second copy of a category, status, party or plan value.
 
-import React, { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { sanitizeHtml } from '../../lib/sanitize'
 import { getDossier } from '../../lib/supabase'
 import { digestCategory } from '../../lib/campaignEnums'

@@ -6,7 +6,7 @@
 // watches calendar_feeds.fetch_log for a real fetch by that provider before it
 // marks anything connected.
 
-import React, { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Check, Copy, Eye, EyeOff } from 'lucide-react'
 import { supabase, logActivity } from '../../lib/supabase'
 import {

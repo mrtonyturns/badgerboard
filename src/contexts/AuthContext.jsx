@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { ADMIN_EMAILS, setGlobalBetaEnabled } from '../lib/tiers'
 import { isNativeApp, API_ORIGIN } from '../lib/native'

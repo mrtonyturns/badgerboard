@@ -1,4 +1,4 @@
-import React, { Suspense, lazy } from 'react'
+import { Suspense, lazy } from 'react'
 import LoadingBar from '../components/LoadingBar'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserPlanType } from '../lib/tiers'

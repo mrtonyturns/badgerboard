@@ -2,13 +2,25 @@
 // Manual election results entry for the admin panel.
 // Replaces the fake WEC poller — an admin enters results by hand on election night.
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
 import {
-  BarChart2, Plus, Edit2, Trash2, Trophy, ChevronDown, ChevronUp,
-  CheckCircle2, X, MapPin, Users, Radio, ExternalLink, AlertTriangle,
-  Search, Filter, ShieldCheck,
+  BarChart2,
+  Plus,
+  Edit2,
+  Trash2,
+  Trophy,
+  ChevronDown,
+  ChevronUp,
+  CheckCircle2,
+  X,
+  MapPin,
+  Radio,
+  AlertTriangle,
+  Search,
+  Filter,
+  ShieldCheck,
 } from 'lucide-react'
 import { supabase, adminElections } from '../lib/supabase'
 import SearchableSelect from '../components/SearchableSelect'
@@ -160,11 +172,6 @@ export default function ElectionResultsAdmin({ showToast }) {
     () => elections.filter(e => !isTestElection(e) || e.id === selectedElection?.id),
     [elections, selectedElection?.id])
 
-  // Load contests + results whenever selected election changes
-  useEffect(() => {
-    if (selectedElection) loadContests(selectedElection.id)
-  }, [selectedElection])
-
   // Switching elections should not carry the previous ballot's filters over.
   // (nor the last certification sweep's leftovers)
   useEffect(() => { setSearch(''); setTypeFilter('all'); setExpanded({}); setNeedsResolution([]) }, [selectedElection?.id])
@@ -216,6 +223,14 @@ export default function ElectionResultsAdmin({ showToast }) {
     }
     setLoading(false)
   }, [showToast])
+
+  // Load contests + results whenever selected election changes. Declared after
+  // loadContests because the dep array reads it during render. loadContests is
+  // keyed only on showToast (a useCallback([]) in AdminDashboard), so it is
+  // stable and this still fires only on an election change.
+  useEffect(() => {
+    if (selectedElection) loadContests(selectedElection.id)
+  }, [selectedElection, loadContests])
 
   /**
    * Refresh ONE contest after a per-row save. The old code refetched the whole

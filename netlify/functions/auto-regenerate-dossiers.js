@@ -61,7 +61,7 @@ export const handler = async (event) => {
 
   // ── 1. Fetch candidates with active monitoring enabled ──────────────────────
   // Monitoring is stored as section_timestamps->>monitoring = 'true' (JSONB field, text comparison)
-  let candidates = []
+  let candidates
   try {
     // Fetch full candidate fields + office join so we can pass a complete candidate object
     // to generate-dossier-background (which requires body.candidate with name/party/office etc.)

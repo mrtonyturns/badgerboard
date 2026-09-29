@@ -369,7 +369,7 @@ t('#7 a failed setup deletes the probe users it already created',
 t('#7 each run sweeps probe accounts leaked by an earlier timed-out run',
   /purgeStaleProbeUsers\(\)/.test(F.audit))
 t('#7 the sweep is scoped to this function\'s own prefix and domain',
-  /PROBE_PREFIX  = 'sectest-'/.test(F.audit) && /domain !== 'badger-test\.invalid'/.test(F.audit))
+  /PROBE_PREFIX {2}= 'sectest-'/.test(F.audit) && /domain !== 'badger-test\.invalid'/.test(F.audit))
 t('#7 the sweep never touches an in-flight run', /STALE_MINUTES = 30/.test(F.audit))
 t('#7 the finally block still deletes both probes', /if \(userAId\) await deleteTestUser\(userAId\)\s*\n\s*if \(userBId\) await deleteTestUser\(userBId\)/.test(F.audit))
 

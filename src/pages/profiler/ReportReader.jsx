@@ -18,7 +18,7 @@
 //     marked. Verdicts persist on dossiers.claim_verdicts via `onVerdict`; with
 //     no `onVerdict` (the public share view) they render read-only.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { filterSections } from '../../lib/profileContent'
 import {
   parseSections, buildReport, filterToUnverified, sourcingStats, riskStats,
@@ -64,8 +64,14 @@ function scrollParentOf(node) {
 function useScrollSpy(ids, docRef, enabled) {
   const [active, setActive] = useState(ids[0] || '')
   const key = ids.join('|')
+  // Keyed on the ids' CONTENT (key), not the array's identity. The array is
+  // read through a latest-value ref: whenever its content changes, key changes
+  // and the listener is re-attached; identity-only changes are ignored.
+  const idsRef = useRef(ids)
+  idsRef.current = ids
 
   useEffect(() => {
+    const ids = idsRef.current
     if (!enabled || !ids.length) return
     // Viewport-relative spy, attached to window in the CAPTURE phase so it
     // hears scrolls from ANY ancestor scroller (Layout's <main> in-app, the
@@ -83,7 +89,6 @@ function useScrollSpy(ids, docRef, enabled) {
     window.addEventListener('scroll', onScroll, { capture: true, passive: true })
     onScroll()
     return () => window.removeEventListener('scroll', onScroll, { capture: true })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, enabled])
 
   const scrollToSection = useCallback((id) => {

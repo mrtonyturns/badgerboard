@@ -17,7 +17,7 @@
 // through get_my_sessions() / revoke_my_session(). We show the raw IP because
 // we have no geolocation — a wrong city is worse than an honest address.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { Card, CardBody, Row, Field, Btn, LinkBtn, Pill, Note, Msg, Spinner, T } from './shared'
 

@@ -4,7 +4,7 @@
 // quotes, CRLF/CR line endings, and a leading BOM. Returns an array of rows,
 // each an array of raw field strings (callers trim/normalize as needed).
 export function parseCsvRows(text) {
-  const s = String(text ?? '').replace(/^﻿/, '')
+  const s = String(text ?? '').replace(/^\uFEFF/, '')
   const rows = []
   let row = [], cur = '', inQ = false
   for (let i = 0; i < s.length; i++) {

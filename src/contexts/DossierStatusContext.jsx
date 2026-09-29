@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect } from 'react'
 
 // ─── Dossier Status Context ───────────────────────────────────────────────────
 // Provides global state for dossier generation progress so the header status

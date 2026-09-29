@@ -626,6 +626,6 @@ exports.handler = async (event) => {
     }
   } catch (err) {
     console.error('Seed error:', err)
-    return { statusCode: 500, headers, body: JSON.stringify({ error: 'An internal error occurred' || 'Seeding failed' }) }
+    return { statusCode: 500, headers, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }
 }

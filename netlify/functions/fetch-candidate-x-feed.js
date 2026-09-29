@@ -95,7 +95,6 @@ export const handler = async (event) => {
   // X handles are [A-Za-z0-9_], ≤15 chars. Enforce strictly so a crafted handle
   // can't inject search operators (e.g. "foo OR from:someoneelse").
   const handle        = (sanitize(body.handle, 50).replace(/^@/, '').match(/^[A-Za-z0-9_]{1,15}/) || [''])[0]
-  const district      = sanitize(body.district, 100)
 
   if (!candidateName) {
     return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'candidateName is required' }) }

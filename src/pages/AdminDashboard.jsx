@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  Shield,
   Search,
   Edit2,
   Key,
@@ -10,8 +9,6 @@ import {
   Unlock,
   Activity,
   StickyNote,
-  ChevronDown,
-  ChevronUp,
   Trash2,
   Check,
   Wand2,
@@ -27,9 +24,6 @@ import {
   AlertTriangle,
   ChevronRight,
   BarChart2,
-  Radio,
-  CalendarDays,
-  Clock,
   Gift,
   Tag,
   Percent,
@@ -127,7 +121,7 @@ export function fmtDate(value, fallback = '—') {
 export function sanitizeAnnouncementDisplay(html) {
   if (typeof html !== 'string' || !html) return ''
   // one emoji + its variation-selector / ZWJ / skin-tone tail counts as ONE glyph
-  const EMOJI_RUN = /\p{Extended_Pictographic}(?:[\uFE0F\u200D\u{1F3FB}-\u{1F3FF}]|\p{Extended_Pictographic})*/gu
+  const EMOJI_RUN = /\p{Extended_Pictographic}(?:\uFE0F|\u200D|[\u{1F3FB}-\u{1F3FF}]|\p{Extended_Pictographic})*/gu
   const out = html
     .split(/(<[^>]*>)/)
     .map((seg) => {
@@ -528,7 +522,7 @@ const SignupChart = ({ data }) => {
 }
 
 // TAB 2: Account Management
-const AccountManagementTab = ({ apiCall, accessCall, showToast, user }) => {
+const AccountManagementTab = ({ apiCall, accessCall, showToast }) => {
   const [users, setUsers] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
   const [hideTestAccounts, setHideTestAccounts] = useState(true)
@@ -1285,7 +1279,10 @@ const NotesModal = ({ user, notes = [], loading = false, onLoad, onAddNote, onCl
 
   // Audit fix: `notes` used to be dead local state that nothing ever wrote to.
   // The list is owned by the tab now and fetched via the `get_notes` action.
-  useEffect(() => { onLoad?.(user.id) }, [user.id])  // eslint-disable-line react-hooks/exhaustive-deps
+  // onLoad is the tab's loadNotes useCallback([apiCall, showToast]); it only
+  // changes when the admin's access token rotates. loadNotes writes the
+  // parent's notes state, never its own deps, so this can't loop.
+  useEffect(() => { onLoad?.(user.id) }, [user.id, onLoad])
 
   const handleAddNote = async () => {
     if (!noteText.trim() || saving) return
@@ -2610,10 +2607,13 @@ const ErrorLogsTab = ({ apiCall, showToast }) => {
   const [componentFilter, setComponentFilter] = useState('all')
   const [search, setSearch] = useState('')
 
-  const loadErrors = async (resolved = showResolved) => {
+  // True deps: the API client, the toast, and the resolved/unresolved filter.
+  // It writes only `loading` and `errors`, neither of which it depends on, so
+  // the effect below that calls it cannot feed itself.
+  const loadErrors = useCallback(async () => {
     try {
       setLoading(true)
-      const data = await apiCall('error_logs', { show_resolved: resolved })
+      const data = await apiCall('error_logs', { show_resolved: showResolved })
       setErrors(Array.isArray(data) ? data : (data?.logs || []))
     } catch (err) {
       console.error(err)
@@ -2621,13 +2621,14 @@ const ErrorLogsTab = ({ apiCall, showToast }) => {
     } finally {
       setLoading(false)
     }
-  }
+  }, [apiCall, showToast, showResolved])
 
-  useEffect(() => { loadErrors() }, []) // eslint-disable-line
+  // Initial load, and the reload when the "show resolved" filter flips (the
+  // toggle handler used to fetch explicitly; the effect now owns that).
+  useEffect(() => { loadErrors() }, [loadErrors])
 
   const handleToggleResolved = (val) => {
     setShowResolved(val)
-    loadErrors(val)
   }
 
   const handleMarkResolved = async (errorId) => {
@@ -3369,7 +3370,6 @@ function SecurityAuditTab({ session, showToast }) {
   const [error, setError]             = useState(null)
   const [promptOpen, setPromptOpen]   = useState(false)
   const [promptCopied, setPromptCopied] = useState(false)
-  const promptRef                       = useRef(null)
 
   const generatedPrompt = results ? buildClaudePrompt(results, summary, lastRun) : null
 
@@ -3662,224 +3662,6 @@ function SecurityAuditTab({ session, showToast }) {
   )
 }
 
-// ── Elections Admin Tab — replaced by ElectionResultsAdmin (imported above) ──
-// keeping this stub so git blame is clear
-function _ElectionsAdminTab_REMOVED({ showToast }) {
-  const [pollerLog, setPollerLog]       = useState([])
-  const [logLoading, setLogLoading]     = useState(true)
-  const [syncRunning, setSyncRunning]   = useState(false)
-  const [contests, setContests]         = useState([])
-  const [statsLoading, setStatsLoading] = useState(true)
-
-  useEffect(() => { loadData() }, [])
-
-  async function loadData() {
-    setLogLoading(true)
-    setStatsLoading(true)
-
-    // Poller health log
-    const { data: log } = await supabase
-      .from('election_poller_log')
-      .select('*')
-      .order('ran_at', { ascending: false })
-      .limit(20)
-    setPollerLog(log || [])
-    setLogLoading(false)
-
-    // Recent contest count
-    const { data: recentContests } = await supabase
-      .from('election_contests')
-      .select('id, office, office_type, precincts_rptg, precincts_total, updated_at')
-      .order('updated_at', { ascending: false })
-      .limit(50)
-    setContests(recentContests || [])
-    setStatsLoading(false)
-  }
-
-  async function runSync() {
-    setSyncRunning(true)
-    try {
-      const res  = await fetch('/.netlify/functions/election-results-poller?force=true', { method: 'POST' })
-      const data = await res.json()
-      if (data.error) {
-        showToast('Sync error: ' + data.error, 'error')
-      } else if (data.skipped) {
-        showToast('Poller skipped — no active elections found', 'info')
-      } else {
-        showToast(`Synced ${data.contests_synced || 0} contests, ${data.results_upserted || 0} results`, 'success')
-      }
-      await loadData()
-    } catch (err) {
-      showToast('Sync failed: ' + err.message, 'error')
-    }
-    setSyncRunning(false)
-  }
-
-  const lastRun     = pollerLog[0]
-  const lastSuccess = pollerLog.find(r => !r.error)
-  const minutesAgo  = lastRun ? Math.round((Date.now() - new Date(lastRun.ran_at)) / 60000) : null
-  const isStale     = minutesAgo !== null && minutesAgo > 10  // warn if no run in 10+ min
-
-  return (
-    <div className="max-w-5xl mx-auto p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-            <BarChart2 className="w-5 h-5 text-brand-red" />
-            Election Results System
-          </h2>
-          <p className="text-sm text-gray-500 mt-1">WEC poller health, contest sync status, and live results management</p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={runSync}
-            disabled={syncRunning}
-            className="btn-primary flex items-center gap-1.5 text-sm py-2"
-          >
-            <RefreshCw className={`w-4 h-4 ${syncRunning ? 'animate-spin' : ''}`} />
-            {syncRunning ? 'Syncing…' : 'Force Sync WEC'}
-          </button>
-          <Link to="/elections?tab=results" className="btn-secondary flex items-center gap-1.5 text-sm py-2">
-            <Radio className="w-4 h-4" />
-            View Live Board
-          </Link>
-        </div>
-      </div>
-
-      {/* Poller health */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className={`rounded-xl border-2 p-4 ${isStale ? 'border-amber-300 bg-amber-50' : 'border-green-200 bg-green-50'}`}>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Last Run</p>
-          {lastRun ? (
-            <>
-              <p className={`text-lg font-bold ${isStale ? 'text-amber-700' : 'text-green-700'}`}>
-                {minutesAgo === 0 ? 'Just now' : `${minutesAgo}m ago`}
-              </p>
-              <p className="text-xs text-gray-500">{new Date(lastRun.ran_at).toLocaleTimeString()}</p>
-              {lastRun.error && (
-                <p className="text-xs text-red-600 mt-1 font-medium">Error: {lastRun.error}</p>
-              )}
-            </>
-          ) : (
-            <p className="text-lg font-bold text-gray-400">Never</p>
-          )}
-        </div>
-
-        <div className="rounded-xl border-2 border-gray-200 bg-white p-4">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Last Success</p>
-          {lastSuccess ? (
-            <>
-              <p className="text-lg font-bold text-gray-900">
-                {lastSuccess.contests_synced} races
-              </p>
-              <p className="text-xs text-gray-500">{lastSuccess.results_upserted} results upserted</p>
-            </>
-          ) : (
-            <p className="text-lg font-bold text-gray-400">None yet</p>
-          )}
-        </div>
-
-        <div className="rounded-xl border-2 border-gray-200 bg-white p-4">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Live Contests</p>
-          <p className="text-lg font-bold text-gray-900">{contests.length}</p>
-          <p className="text-xs text-gray-500">in election_contests table</p>
-        </div>
-      </div>
-
-      {/* Poller log table */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
-          <Clock className="w-4 h-4 text-gray-400" />
-          <h3 className="text-sm font-bold text-gray-900">Poller Log (last 20 runs)</h3>
-        </div>
-        {logLoading ? (
-          <div className="flex justify-center py-8">
-            <div className="w-6 h-6 border-3 border-brand-red border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : pollerLog.length === 0 ? (
-          <p className="text-center text-sm text-gray-400 py-8">
-            No runs yet. The poller runs every 2 minutes during election windows, or click "Force Sync WEC" above.
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="text-left text-xs font-semibold text-gray-500 px-4 py-2">Time</th>
-                  <th className="text-left text-xs font-semibold text-gray-500 px-4 py-2">Election Date</th>
-                  <th className="text-right text-xs font-semibold text-gray-500 px-4 py-2">Contests</th>
-                  <th className="text-right text-xs font-semibold text-gray-500 px-4 py-2">Results</th>
-                  <th className="text-right text-xs font-semibold text-gray-500 px-4 py-2">Duration</th>
-                  <th className="text-left text-xs font-semibold text-gray-500 px-4 py-2">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pollerLog.map(row => (
-                  <tr key={row.id} className="border-b border-gray-50 hover:bg-gray-50">
-                    <td className="px-4 py-2 text-xs text-gray-600 tabular-nums">
-                      {new Date(row.ran_at).toLocaleString()}
-                    </td>
-                    <td className="px-4 py-2 text-xs text-gray-600">{row.election_date || '—'}</td>
-                    <td className="px-4 py-2 text-xs text-gray-900 text-right tabular-nums">{row.contests_synced}</td>
-                    <td className="px-4 py-2 text-xs text-gray-900 text-right tabular-nums">{row.results_upserted}</td>
-                    <td className="px-4 py-2 text-xs text-gray-500 text-right tabular-nums">{row.duration_ms}ms</td>
-                    <td className="px-4 py-2">
-                      {row.error ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-red-600 font-medium">
-                          <XCircle className="w-3 h-3" /> {row.error.slice(0, 40)}
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-xs text-green-600 font-medium">
-                          <CheckCircle2 className="w-3 h-3" /> OK
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {/* Recent contests */}
-      {contests.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
-            <CalendarDays className="w-4 h-4 text-gray-400" />
-            <h3 className="text-sm font-bold text-gray-900">Recent Contests ({contests.length})</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="text-left text-xs font-semibold text-gray-500 px-4 py-2">Office</th>
-                  <th className="text-left text-xs font-semibold text-gray-500 px-4 py-2">Type</th>
-                  <th className="text-right text-xs font-semibold text-gray-500 px-4 py-2">Precincts</th>
-                  <th className="text-left text-xs font-semibold text-gray-500 px-4 py-2">Last Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {contests.slice(0, 20).map(c => (
-                  <tr key={c.id} className="border-b border-gray-50 hover:bg-gray-50">
-                    <td className="px-4 py-2 text-xs text-gray-900 font-medium">{c.office}</td>
-                    <td className="px-4 py-2 text-xs text-gray-500">{c.office_type || '—'}</td>
-                    <td className="px-4 py-2 text-xs text-gray-600 text-right tabular-nums">
-                      {c.precincts_rptg}/{c.precincts_total}
-                    </td>
-                    <td className="px-4 py-2 text-xs text-gray-400">
-                      {new Date(c.updated_at).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
 
 // Spinner Component
 const Spinner = () => (
@@ -3918,10 +3700,11 @@ const CouponsTab = ({ session, showToast }) => {
 
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }))
 
-  const couponCall = async (body) => {
+  const accessToken = session?.access_token
+  const couponCall = useCallback(async (body) => {
     const res = await fetch('/.netlify/functions/manage-coupons', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
       body:    JSON.stringify(body),
     })
     if (!res.ok) {
@@ -3929,9 +3712,9 @@ const CouponsTab = ({ session, showToast }) => {
       throw new Error(err.error || `HTTP ${res.status}`)
     }
     return res.json()
-  }
+  }, [accessToken])
 
-  const loadCodes = async () => {
+  const loadCodes = useCallback(async () => {
     setLoadingList(true)
     try {
       const json = await couponCall({ action: 'list' })
@@ -3942,9 +3725,9 @@ const CouponsTab = ({ session, showToast }) => {
     } finally {
       setLoadingList(false)
     }
-  }
+  }, [couponCall, showToast])
 
-  useEffect(() => { loadCodes() }, [])
+  useEffect(() => { loadCodes() }, [loadCodes])
 
   const handleCreate = async (e) => {
     e.preventDefault()

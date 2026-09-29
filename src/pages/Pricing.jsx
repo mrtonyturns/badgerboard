@@ -28,8 +28,6 @@ import {
  * groups:     [{ section, rows: [{ label, [key]: true|false|string }] }]
  */
 function FeatureMatrix({ groups, colConfigs, navigate, user }) {
-  const highlightedKey = colConfigs.find(c => c.highlighted)?.key
-
   return (
     <div className="mt-12">
       {/* Section label */}
@@ -105,7 +103,7 @@ function FeatureMatrix({ groups, colConfigs, navigate, user }) {
 
             {/* ── Feature rows ───────────────────────────────────────────── */}
             <tbody>
-              {groups.map((group, gi) => (
+              {groups.map((group) => (
                 <React.Fragment key={group.section}>
 
                   {/* Section header */}
@@ -418,6 +416,19 @@ export default function Pricing() {
   const { user, session, refreshSession } = useAuth()
   const navigate          = useNavigate()
 
+  const userPlan          = user ? getUserPlan(user)     : null
+  const userPlanType      = user ? getUserPlanType(user) : null
+  const userBracket       = user ? getUserBracket(user)  : null
+  const userBilling       = (user?.app_metadata?.billing) || 'monthly'
+  // Hooks before any early return (rules-of-hooks). isNativeApp is a module
+  // constant so the order was stable in practice, but the lint is right that
+  // it's fragile.
+  const [tab,             setTab]             = useState(userPlanType === 'action' ? 'action' : 'candidate')
+  const [billing,         setBilling]         = useState('monthly')
+  const [bracket,         setBracket]         = useState(userBracket || 'b6')
+  const [checkoutLoading, setCheckoutLoading] = useState(null)
+  const [checkoutError,   setCheckoutError]   = useState(null)
+
   // ── Native app (App Store / Play Store) ─────────────────────────────────────
   // Apple/Google rules prohibit selling digital subscriptions in-app outside
   // their IAP systems. The native app shows a neutral notice instead of plans.
@@ -437,10 +448,6 @@ export default function Pricing() {
     )
   }
 
-  const userPlan          = user ? getUserPlan(user)     : null
-  const userPlanType      = user ? getUserPlanType(user) : null
-  const userBracket       = user ? getUserBracket(user)  : null
-  const userBilling       = (user?.app_metadata?.billing) || 'monthly'
 
   // Credit packs are a plan feature, not a universal add-on. Scout has
   // features.creditPacks = false and every plan below Action Campaign has
@@ -482,11 +489,6 @@ export default function Pricing() {
     }
   }
 
-  const [tab,             setTab]             = useState(userPlanType === 'action' ? 'action' : 'candidate')
-  const [billing,         setBilling]         = useState('monthly')
-  const [bracket,         setBracket]         = useState(userBracket || 'b6')
-  const [checkoutLoading, setCheckoutLoading] = useState(null)
-  const [checkoutError,   setCheckoutError]   = useState(null)
 
   const bp = BILLING_PERIODS[billing]
 
@@ -545,8 +547,6 @@ export default function Pricing() {
   // ── Price helpers ─────────────────────────────────────────────────────────────
 
   const cEffective = (base) => base === 0 ? 0 : effectiveMonthlyRate(base, billing)
-  const cTotal     = (base) => base === 0 ? null : periodTotal(base, billing)
-  const cSavings   = (base) => base === 0 ? 0 : annualSavings(base, billing)
 
   const aEffective = (pk)   => actionEffectiveRate(pk, bracket, billing)
   const aBase      = (pk)   => ACTION_MONTHLY_PRICES[pk]?.[bracket] ?? null
@@ -566,7 +566,7 @@ export default function Pricing() {
   const PlanCard = ({
     planKey, name, basePrice, highlighted,
     features, current, onSelect, note, isEnt, loading,
-    profilesPerMo, userSeats, ctaLabel,
+    ctaLabel,
   }) => {
     const effectivePrice = basePrice != null ? cEffective(basePrice) : (isEnt ? null : aEffective(planKey))
     const bSub = basePrice != null
@@ -924,7 +924,6 @@ export default function Pricing() {
           <div className="grid sm:grid-cols-3 gap-4 mb-10">
             {ACTION_PLAN_ORDER.map(pk => {
               const plan = ACTION_PLAN_CONFIG[pk]
-              const base = ACTION_MONTHLY_PRICES[pk]?.[bracket]
               return (
                 <PlanCard
                   key={pk}
@@ -970,7 +969,7 @@ export default function Pricing() {
                     </tr>
                   </thead>
                   <tbody>
-                    {bracketList.map((b, i) => (
+                    {bracketList.map((b) => (
                       // Picking a bracket was mouse-only: the row carried the
                       // click and nothing else, so keyboard users could not
                       // change bracket and nothing announced which was chosen.

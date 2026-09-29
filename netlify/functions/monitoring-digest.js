@@ -41,16 +41,6 @@ const sb = async (path) => {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 const slug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 
-const CATEGORY_META = {
-  news:        { label: 'News',        color: '#1d4ed8', bg: '#dbeafe' },
-  social:      { label: 'Social',      color: '#0369a1', bg: '#e0f2fe' },
-  podcast:     { label: 'Podcast/TV',  color: '#7c3aed', bg: '#ede9fe' },
-  controversy: { label: 'Controversy', color: '#b91c1c', bg: '#fee2e2' },
-  polling:     { label: 'Polling',     color: '#0d9488', bg: '#ccfbf1' },
-  endorsement: { label: 'Endorsement', color: '#15803d', bg: '#dcfce7' },
-  other:       { label: 'Update',      color: '#475569', bg: '#f1f5f9' },
-}
-
 // Extract the PROFILE SNAPSHOT line from stored content for the email intro
 function snapshotOf(content) {
   const m = String(content || '').match(/##\s*PROFILE SNAPSHOT\s*\n([\s\S]*?)(?=\n##\s|$)/i)

@@ -52,7 +52,7 @@ export function filterSectionContent(content = '') {
   const headingMatch = content.match(/^(#{1,2} .*)$/m)
   // Split into blocks at sub-headings (###+) — each block = subheading + its body
   const blocks = content.split(/\n(?=#{3,6} )/)
-  const kept = blocks.filter((block, i) => {
+  const kept = blocks.filter((block) => {
     // Never drop the very first block if it contains the section heading AND findings elsewhere survive;
     // judge each block by its own body (minus its subheading line).
     const body = block.replace(/^#{1,6} .*$/m, '')

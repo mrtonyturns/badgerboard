@@ -6,7 +6,7 @@
 // for a value the card renders the honest empty state from SPEC.md rule 4
 // instead of a zero, a dash, or a fabricated metric.
 
-import React, { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { format, startOfWeek, addWeeks } from 'date-fns'
 import LoadingBar from '../../components/LoadingBar'
@@ -27,14 +27,45 @@ import {
 } from '../../lib/tiers'
 import { PHASE_MAP, MONITORING_SERIES } from '../../lib/campaignEnums'
 import {
-  T, Card, CardHead, DashboardShell, DashboardHeader, NextRaceBlock,
-  StatStrip, StatCell, WeeklyChip, OverdueChip, PartyPill, DigestItems,
-  MilestoneRow, ElectionRows, EmptyState, CtaButton, TextLink, StatRow,
-  DistrictHeatMap, HeatLegend, LivePulseDot, DashboardSkeleton, srOnly, firstNameOf,
-  safeISO, fmtInt, fmtDate, daysUntil, isUpcoming, autoStatus, isMonitored,
-  monitoringSlots, nextMonday, loadPopPoints, loadCountyPres,
-  resolveDistrict, loadBoundary, countVotersInDistrict,
-  weekDigestOf, latestDigestOf,
+  T,
+  Card,
+  CardHead,
+  DashboardShell,
+  DashboardHeader,
+  NextRaceBlock,
+  StatStrip,
+  StatCell,
+  WeeklyChip,
+  OverdueChip,
+  PartyPill,
+  DigestItems,
+  MilestoneRow,
+  ElectionRows,
+  EmptyState,
+  CtaButton,
+  TextLink,
+  StatRow,
+  DistrictHeatMap,
+  HeatLegend,
+  LivePulseDot,
+  DashboardSkeleton,
+  srOnly,
+  firstNameOf,
+  safeISO,
+  fmtInt,
+  fmtDate,
+  isUpcoming,
+  autoStatus,
+  isMonitored,
+  monitoringSlots,
+  nextMonday,
+  loadPopPoints,
+  loadCountyPres,
+  resolveDistrict,
+  loadBoundary,
+  countVotersInDistrict,
+  weekDigestOf,
+  latestDigestOf,
 } from './shared'
 
 // ── self-candidate resolution ────────────────────────────────────────────────
@@ -128,7 +159,7 @@ function MonitoringActivity({ weeks }) {
 // the schema stores no dedicated completed_at, so this is a stated proxy.
 function BurnUp({ points, total, targetLabel }) {
   if (!points?.length || !total) return null
-  const W = 560, BASE = 112, TOP = 10, L = 4, R = 556
+  const BASE = 112, TOP = 10, L = 4, R = 556
   const span = points.length > 1 ? (R - L) / (points.length - 1) : 0
   const xy = points.map((v, i) => [L + i * span, BASE - (v / total) * (BASE - TOP)])
   const path = xy.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
@@ -329,14 +360,13 @@ export default function CandidateDashboard() {
     if (!countyMix || !pres) return null
     const out = []
     for (const year of [2024, 2020, 2016]) {
-      let gop = 0, dem = 0, w = 0
+      let gop = 0, w = 0
       for (const [county, share] of Object.entries(countyMix)) {
         const r = pres[county]?.[year]
         if (!r?.total) continue
         const two = (r.gop || 0) + (r.dem || 0)
         if (!two) continue
         gop += (r.gop / two) * share
-        dem += (r.dem / two) * share
         w += share
       }
       if (w > 0.5) {

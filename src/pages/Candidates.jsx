@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Users, Plus, Search, ExternalLink, Trash2, X, Phone, Mail, Globe, Telescope, Lock, Wand2, CheckCircle, AlertCircle, Map, LayoutList, Upload, Zap, FileText } from 'lucide-react'
 import { supabase, getCandidates, getOffices, getElections, createCandidate, deleteCandidate, updateCandidate } from '../lib/supabase'
@@ -86,33 +86,6 @@ const WI_COUNTIES = [
   'Waupaca', 'Waushara', 'Winnebago', 'Wood'
 ]
 
-const WI_COUNTY_COORDS = {
-  'Adams': [43.97, -89.82], 'Ashland': [46.58, -90.67], 'Barron': [45.42, -91.85],
-  'Bayfield': [46.51, -91.29], 'Brown': [44.47, -88.02], 'Buffalo': [44.38, -91.73],
-  'Burnett': [45.86, -92.37], 'Calumet': [44.07, -88.22], 'Chippewa': [45.09, -91.24],
-  'Clark': [44.72, -90.61], 'Columbia': [43.47, -89.34], 'Crawford': [43.27, -90.87],
-  'Dane': [43.07, -89.40], 'Dodge': [43.43, -88.71], 'Door': [44.95, -87.23],
-  'Douglas': [46.60, -91.89], 'Dunn': [44.94, -91.89], 'Eau Claire': [44.73, -91.30],
-  'Florence': [45.92, -88.27], 'Fond du Lac': [43.77, -88.49], 'Forest': [45.67, -88.94],
-  'Grant': [42.89, -90.69], 'Green': [42.68, -89.59], 'Green Lake': [43.84, -89.00],
-  'Iowa': [43.00, -90.14], 'Iron': [46.32, -90.27], 'Jackson': [44.33, -90.72],
-  'Jefferson': [43.01, -88.78], 'Juneau': [43.97, -90.11], 'Kenosha': [42.57, -88.00],
-  'Kewaunee': [44.55, -87.54], 'La Crosse': [43.90, -91.11], 'Lafayette': [42.66, -90.14],
-  'Langlade': [45.28, -89.08], 'Lincoln': [45.34, -89.73], 'Manitowoc': [44.10, -87.67],
-  'Marathon': [44.90, -89.77], 'Marinette': [45.33, -87.71], 'Marquette': [43.86, -89.38],
-  'Menominee': [44.99, -88.73], 'Milwaukee': [43.02, -87.95], 'Monroe': [44.00, -90.63],
-  'Oconto': [44.99, -88.27], 'Oneida': [45.70, -89.54], 'Outagamie': [44.42, -88.43],
-  'Ozaukee': [43.37, -87.89], 'Pepin': [44.56, -92.13], 'Pierce': [44.74, -92.40],
-  'Polk': [45.47, -92.63], 'Portage': [44.47, -89.50], 'Price': [45.68, -90.36],
-  'Racine': [42.72, -87.84], 'Richland': [43.34, -90.41], 'Rock': [42.67, -89.07],
-  'Rusk': [45.47, -91.14], 'Sauk': [43.43, -89.88], 'Sawyer': [45.89, -91.17],
-  'Shawano': [44.79, -88.77], 'Sheboygan': [43.75, -87.82], 'St. Croix': [45.03, -92.43],
-  'Taylor': [45.22, -90.49], 'Trempealeau': [44.27, -91.35], 'Vernon': [43.60, -90.84],
-  'Vilas': [46.07, -89.49], 'Walworth': [42.67, -88.54], 'Washburn': [45.89, -91.76],
-  'Washington': [43.36, -88.24], 'Waukesha': [43.02, -88.25], 'Waupaca': [44.35, -89.00],
-  'Waushara': [44.12, -89.24], 'Winnebago': [44.05, -88.64], 'Wood': [44.45, -90.02],
-}
-
 // Keyed by partyGroup() so 'Democrat', 'Democratic' and 'DEM' share a badge.
 const partyColor = (p) => ({
   R: 'badge-republican',
@@ -120,16 +93,6 @@ const partyColor = (p) => ({
   I: 'badge-independent',
   N: 'badge-nonpartisan',
 }[partyGroup(p)] || 'badge-independent')
-
-const statusColor = (s) => ({
-  exploring:      'bg-gray-100 text-gray-600',
-  declared:       'bg-blue-100 text-blue-700',
-  primary_winner: 'bg-purple-100 text-purple-700',
-  general:        'bg-yellow-100 text-yellow-700',
-  elected:        'bg-green-100 text-green-700',
-  lost:           'bg-red-100 text-red-600',
-  withdrawn:      'bg-gray-100 text-gray-400',
-}[s] || 'bg-gray-100 text-gray-600')
 
 // ─── R3B PURE HELPERS BEGIN ───────────────────────────────────────────────────
 // (no imports in this block — tests/r3b.test.mjs slices it out and imports it)
@@ -333,36 +296,44 @@ export default function Candidates() {
   const [saveProgress, setSaveProgress] = useState({})
 
   // Keep an unfiltered total count for the Scout plan cap — refreshed after any save/delete
-  const refreshTotalCount = async () => {
-    if (!user?.id) return
+  const userId = user?.id
+  const refreshTotalCount = useCallback(async () => {
+    if (!userId) return
     const { count } = await supabase
       .from('candidates')
       .select('id', { count: 'exact', head: true })
-      .eq('created_by', user.id)
+      .eq('created_by', userId)
     setTotalCandidateCount(count ?? 0)
-  }
+  }, [userId])
 
   // Active-monitoring slots must come from an UNFILTERED server count, exactly
   // like CandidateDetail.jsx's toggle guard. Counting the rendered `candidates`
   // array instead let any filter (search, party, office, "unmonitored only")
   // hide monitored rows, drop activeCount below the cap and re-open slots the
   // account does not have.
-  const refreshActiveCount = async () => {
-    if (!user?.id) return
+  const refreshActiveCount = useCallback(async () => {
+    if (!userId) return
     const { count, error } = await supabase
       .from('candidates')
       .select('id', { count: 'exact', head: true })
-      .eq('created_by', user.id)
+      .eq('created_by', userId)
       .contains('section_timestamps', { monitoring: true })
     if (!error) setActiveMonitoringCount(count ?? 0)
-  }
+  }, [userId])
 
+  // Reference data: once per mount (fetchOfficesAndElections captures nothing
+  // but state setters, so it has no deps). The candidate list itself is loaded
+  // by the filter-keyed fetchData effect below, which also runs on mount.
   useEffect(() => {
-    fetchData()
     fetchOfficesAndElections()
+  }, [])
+
+  // Plan-cap counts are per user: load on mount and whenever the signed-in
+  // user id changes (both callbacks are keyed only on the primitive user id).
+  useEffect(() => {
     refreshTotalCount()
     refreshActiveCount()
-  }, [])
+  }, [refreshTotalCount, refreshActiveCount])
 
   // Typing stays instant (`search` re-renders the input on every key); only this
   // mirror moves, SEARCH_DEBOUNCE_MS after the last keystroke, and only it is a
@@ -371,9 +342,11 @@ export default function Candidates() {
     if (searchQuery === search) return
     const id = setTimeout(() => setSearchQuery(search), SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(id)
-  }, [search])   // eslint-disable-line react-hooks/exhaustive-deps
+    // searchQuery is read by the equality guard, so it is a dep. The only
+    // write here is setSearchQuery(search); the re-run that write causes sees
+    // searchQuery === search and returns at the guard — it converges in one step.
+  }, [search, searchQuery])
 
-  useEffect(() => { fetchData() }, [searchQuery, partyFilter, statusFilter, officeFilter])
 
   // Used by the empty state to tell "this account has nothing yet" apart from
   // "the current search/filters matched nothing".
@@ -398,7 +371,9 @@ export default function Candidates() {
     }
   }
 
-  const fetchData = async () => {
+  // Keyed on the four primitive filter strings, so its identity (and the
+  // effect above) changes only when a filter actually changes.
+  const fetchData = useCallback(async () => {
     setLoading(true)
     try {
       const { data, error } = await getCandidates({
@@ -419,7 +394,9 @@ export default function Candidates() {
       console.error('fetchData error:', err)
     }
     setLoading(false)
-  }
+  }, [searchQuery, partyFilter, statusFilter, officeFilter])
+  // Declared after fetchData: the dep array reads it during render.
+  useEffect(() => { fetchData() }, [fetchData])
 
   const handleSave = async (e) => {
     e.preventDefault()
@@ -1046,7 +1023,6 @@ export default function Candidates() {
                         <div style={{ padding:'6px 0' }}>
                           {cands.map((c, idx) => {
                             const partyColors = { R:'#dc2626', D:'#2563eb', I:'#7c3aed', L:'#f97316', G:'#16a34a', N:'#6b7280' }
-                            const statusCls = { elected:'bg-green-100 text-green-700', declared:'bg-blue-100 text-blue-700', primary_winner:'bg-purple-100 text-purple-700', general:'bg-amber-100 text-amber-700', exploring:'bg-gray-100 text-gray-500', lost:'bg-red-100 text-red-500', withdrawn:'bg-gray-100 text-gray-400' }
                             return (
                               <div key={c.id} style={{ padding:'6px 12px', display:'flex', alignItems:'center', gap:8, background: idx%2===0 ? 'white' : '#fafafa' }}>
                                 <div style={{ width:8, height:8, borderRadius:'50%', flexShrink:0, background: partyColors[partyGroup(c.party)] || '#6b7280' }} />

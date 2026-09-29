@@ -243,11 +243,6 @@ const FINAL_FOOTER  = `You asked to hear about this race on Badger Board. ${MANA
 
 const ctaUrlFor = (contest = {}, opts = {}) => `${BOARD_URL}${encodeURIComponent(asObj(opts).electionId || asObj(contest).election_id || '')}`
 
-const electionLine = (contest, opts = {}) => {
-  const name = asObj(opts).electionName || asObj(contest).election_name || ''
-  return name ? `<p style="margin:0 0 4px;color:#6b7280;font-size:13px">${esc(name)}</p>` : ''
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Email builders — pure, unit-tested, previewable
 // ─────────────────────────────────────────────────────────────────────────────
@@ -304,7 +299,6 @@ function buildWinnerEmail(rawContest = {}, results = [], rawOpts = {}) {
   const contest = asObj(rawContest)
   const opts = asObj(rawOpts)
   const now = asDate(opts.now)
-  const name = raceName(contest)
   const office = String(contest.office || 'this race')
   const winners = winnersOf(results, contest.seats)
   const winnerNames = winners.map(w => w.candidate_name)
@@ -357,7 +351,6 @@ function buildRecountEmail(rawContest = {}, results = [], rawOpts = {}) {
   const contest = asObj(rawContest)
   const opts = asObj(rawOpts)
   const now = asDate(opts.now)
-  const name = raceName(contest)
   const office = String(contest.office || 'this race')
   const { leader, runnerUp, margin, marginPct, totalVotes } = marginOf(results, contest.seats)
   const detail = contest.status_detail && typeof contest.status_detail === 'object' ? contest.status_detail : null

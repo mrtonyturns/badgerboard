@@ -9,7 +9,7 @@
 // Everything that reads plan limits imports from lib/tiers.js. Nothing here
 // invents a number.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useRef } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { format, startOfWeek } from 'date-fns'
@@ -448,7 +448,7 @@ export function EmptyState({ title, body, action }) {
   )
 }
 
-export function TextLink({ to, onClick, children, style }) {
+export function TextLink({ onClick, children, style }) {
   return (
     <button
       type="button"

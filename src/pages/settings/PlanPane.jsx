@@ -3,7 +3,7 @@
 // Every number here comes from src/lib/tiers.js or a real count passed in by
 // Settings.jsx. Nothing on this screen is illustrative.
 
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import {
   PLAN_CONFIG, MONTHLY_PRICES, BILLING_PERIODS,

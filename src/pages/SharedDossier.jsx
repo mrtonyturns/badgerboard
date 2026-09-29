@@ -8,7 +8,7 @@
 // Still no auth dependency: everything session-shaped (research note actions,
 // share management, regenerate) is simply not passed in.
 
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { formatDistanceToNow } from 'date-fns'
 import ReportReader from './profiler/ReportReader'

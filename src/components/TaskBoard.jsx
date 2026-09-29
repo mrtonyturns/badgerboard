@@ -3,23 +3,57 @@
 // with #project @label p1 + natural-language dates, Today/Upcoming/Inbox views,
 // List + Board layouts, completed history, WI campaign plan template generator.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   format, parseISO, isToday, isPast, addDays, differenceInCalendarDays,
 } from 'date-fns'
 import {
-  Plus, Calendar, CalendarDays, Inbox, CheckCircle2, Circle, Flag, Tag,
-  Hash, ChevronDown, ChevronRight, X, Trash2, Edit2, Loader2, LayoutGrid,
-  List as ListIcon, Sun, RotateCcw, Sparkles, MoreHorizontal, GripVertical,
-  AlertCircle, Star, Repeat,
+  Plus,
+  Calendar,
+  CalendarDays,
+  Inbox,
+  CheckCircle2,
+  Flag,
+  Tag,
+  ChevronDown,
+  ChevronRight,
+  X,
+  Trash2,
+  Edit2,
+  Loader2,
+  LayoutGrid,
+  List as ListIcon,
+  Sun,
+  RotateCcw,
+  Sparkles,
+  MoreHorizontal,
+  GripVertical,
+  AlertCircle,
+  Star,
+  Repeat,
 } from 'lucide-react'
 import {
-  getTaskProjects, createTaskProject, updateTaskProject, deleteTaskProject,
-  getTaskSections, createTaskSection, updateTaskSection, deleteTaskSection,
-  getTasks, getCompletedTasks, createTask, updateTask, deleteTask,
-  getTaskLabels, createTaskLabel, deleteTaskLabel,
-  getTaskPlanOwners, getElections,
-  createTasksBatch, createTaskSectionsBatch, primeTaskCaches, subscribeTaskChanges,
+  getTaskProjects,
+  createTaskProject,
+  updateTaskProject,
+  deleteTaskProject,
+  getTaskSections,
+  createTaskSection,
+  deleteTaskSection,
+  getTasks,
+  getCompletedTasks,
+  createTask,
+  updateTask,
+  deleteTask,
+  getTaskLabels,
+  createTaskLabel,
+  deleteTaskLabel,
+  getTaskPlanOwners,
+  getElections,
+  createTasksBatch,
+  createTaskSectionsBatch,
+  primeTaskCaches,
+  subscribeTaskChanges,
 } from '../lib/supabase'
 import { recurrenceLabel, nextOccurrence } from '../lib/recurrence.js'
 import SearchableSelect from './SearchableSelect'
@@ -607,7 +641,9 @@ export default function TaskBoard() {
   const ownerId = activePlan?.self === false ? activePlan.id : null
 
   const loadSeq = useRef(0)
-  const loadAll = async (owner = ownerId) => {
+  // loadPlan only touches refs, state setters and module imports, so it is
+  // referentially stable for the component's lifetime (safe as an effect dep).
+  const loadPlan = useCallback(async (owner) => {
     const seq = ++loadSeq.current
     const [p, s, t, l] = await Promise.all([
       getTaskProjects(owner), getTaskSections(owner), getTasks(owner), getTaskLabels(owner),
@@ -622,15 +658,17 @@ export default function TaskBoard() {
     const errMsg = String(p.error?.message || t.error?.message || '')
     setSetupNeeded(/relation .* does not exist|schema cache/i.test(errMsg))
     setLoading(false)
-  }
+  }, [])
+  // Handlers reload whichever plan is currently open.
+  const loadAll = (owner = ownerId) => loadPlan(owner)
 
   useEffect(() => {
     getTaskPlanOwners().then(({ data }) => {
       setPlanOwners(data || [])
       setActivePlan((data || [])[0] || null)
     })
-    loadAll(null)
-  }, [])
+    loadPlan(null)
+  }, [loadPlan])
 
   const switchPlan = async (id) => {
     const plan = planOwners.find(o => o.id === id)
@@ -642,17 +680,22 @@ export default function TaskBoard() {
     await loadAll(plan.self ? null : plan.id)
   }
 
-  const loadCompleted = async () => {
+  const loadCompleted = useCallback(async () => {
     const { data } = await getCompletedTasks(ownerId)
     setCompleted(data || [])
-  }
-  useEffect(() => { if (view.type === 'completed') loadCompleted() }, [view.type, activePlan?.id])
+  }, [ownerId])
+  useEffect(() => { if (view.type === 'completed') loadCompleted() }, [view.type, loadCompleted])
 
-  // Keep the offline snapshot in sync with live state (recommendation #3)
+  // Keep the offline snapshot in sync with live state (recommendation #3).
+  // ownerId is a real input (it picks the cache key). When it changes via
+  // switchPlan, `loading` flips true in the same batch, so the render that
+  // carries the new ownerId bails here instead of writing the previous plan's
+  // rows under the new owner's key; the next write happens once loadPlan has
+  // replaced projects/sections/tasks/labels and cleared `loading`.
   useEffect(() => {
     if (loading || setupNeeded) return
     primeTaskCaches(ownerId, { projects, sections, tasks, labels })
-  }, [projects, sections, tasks, labels, loading, setupNeeded])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ownerId, projects, sections, tasks, labels, loading, setupNeeded])
 
   // Realtime: when anyone else edits this plan, resync (debounced).
   // RLS applies to change events, so users only ever receive their own plans'.
@@ -661,12 +704,14 @@ export default function TaskBoard() {
     let dispose = () => {}
     let timer = null
     let cancelled = false
+    // Keyed on ownerId (derived from activePlan) rather than activePlan.id;
+    // loadPlan is stable, so this re-subscribes only on a real plan switch.
     subscribeTaskChanges(ownerId, () => {
       clearTimeout(timer)
-      timer = setTimeout(() => loadAll(), 800)
+      timer = setTimeout(() => loadPlan(ownerId), 800)
     }).then(fn => { if (cancelled) fn(); else dispose = fn })
     return () => { cancelled = true; clearTimeout(timer); dispose() }
-  }, [activePlan?.id, setupNeeded])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ownerId, setupNeeded, loadPlan])
 
   // ── Derived ─────────────────────────────────────────────────────────────────
   const topTasks    = useMemo(() => tasks.filter(t => !t.parent_id), [tasks])
@@ -1405,7 +1450,6 @@ function ProjectView({ project, sections, topTasks, subsByParent, projects, layo
         .sort((a, b) => (a.sort_order - b.sort_order) || byPriorityThenOrder(a, b)),
     })),
   ]
-  const done  = projectTasks.filter(t => t.completed).length
   const total = projectTasks.length
 
   return (

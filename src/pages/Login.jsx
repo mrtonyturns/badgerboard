@@ -1,9 +1,9 @@
-import React, { useState, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import SearchableSelect from '../components/SearchableSelect'
 import { useNavigate, Link } from 'react-router-dom'
 import { Eye, EyeOff, AlertCircle, CheckCircle, User, Building2, Phone, Mail, Briefcase } from 'lucide-react'
-import BluejackLogo from '../components/BluejackLogo'
+
 import BadgerBoardLogo from '../components/BadgerBoardLogo'
 // One password scorer for the whole app — ResetPassword.jsx and
 // settings/SecurityPane.jsx used to carry their own identical copies.

@@ -11,7 +11,7 @@
 // never compared here — it is posted to the endpoint, which is also responsible
 // for the audit log entry.
 
-import React, { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { format } from 'date-fns'
 import { supabase, updateCandidate } from '../../lib/supabase'
 import {

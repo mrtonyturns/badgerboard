@@ -13,7 +13,7 @@ const t = (name, cond) => { cond ? pass++ : fail++; console.log(`${cond ? '  ✓
 const {
   normalizePlan, PLAN_ORDER, PLAN_CONFIG,
   getUserPlan, getNextPlan, isUpgrade, getEntitlementSource,
-  periodTotal, CANDIDATE_PLAN_CONFIG, ACTION_MONTHLY_PRICES, BRACKET_ORDER,
+  periodTotal, CANDIDATE_PLAN_CONFIG, ACTION_MONTHLY_PRICES,
 } = await import('../src/lib/tiers.js')
 
 // ─── normalizePlan ────────────────────────────────────────────────────────────

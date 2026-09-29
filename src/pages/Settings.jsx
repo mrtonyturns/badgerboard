@@ -10,7 +10,7 @@
 // preferences, the org-level AI default — and the billing/cancel/delete flows.
 // The panes themselves are in src/pages/settings/.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useLocation, useParams } from 'react-router-dom'
 import {
   User, Shield, CreditCard, Bell, CalendarDays, Lock,
@@ -126,8 +126,10 @@ export default function Settings() {
     // Normalise legacy hash links and unknown panes onto a real URL.
     if (hashPane) { navigate(`/settings/${hashPane}`, { replace: true }); return }
     if (paneParam && !PANE_IDS.includes(paneParam)) navigate('/settings', { replace: true })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hashPane, paneParam])
+    // navigate only changes identity when the pathname does, which here always
+    // coincides with a paneParam change. Converges in one step: the normalised
+    // URL has no hash and a valid (or no) pane, so the re-run is a no-op.
+  }, [hashPane, paneParam, navigate])
 
   const goPane = (id) => {
     navigate(id === DEFAULT_PANE ? '/settings' : `/settings/${id}`)
@@ -256,10 +258,18 @@ export default function Settings() {
   const notifDebounceRef = useRef(null)
   const notifPendingRef  = useRef(null)
 
+  /** One write path for this row — the email toggles, the AI default and the
+   *  digest cadence all land in notification_preferences. Keyed on the
+   *  primitive user id only, so it is stable for a given signed-in user. */
+  const userId = user?.id
+  const writePrefRow = useCallback((patch) => supabase
+    .from('notification_preferences')
+    .upsert({ user_id: userId, ...patch, updated_at: new Date().toISOString() }), [userId])
+
   useEffect(() => {
-    if (!supabase || !user?.id) return
+    if (!supabase || !userId) return
     let alive = true
-    supabase.from('notification_preferences').select('*').eq('user_id', user.id).maybeSingle()
+    supabase.from('notification_preferences').select('*').eq('user_id', userId).maybeSingle()
       .then(({ data }) => {
         if (!alive || !data) return
         const loaded = readPrefs(data)
@@ -282,13 +292,8 @@ export default function Settings() {
       })
       .catch(() => {})
     return () => { alive = false }
-  }, [user?.id])
+  }, [userId, writePrefRow])
 
-  /** One write path for this row — the email toggles, the AI default and the
-   *  digest cadence all land in notification_preferences. */
-  const writePrefRow = (patch) => supabase
-    .from('notification_preferences')
-    .upsert({ user_id: user.id, ...patch, updated_at: new Date().toISOString() })
 
   const handleNotifToggle = (key) => {
     setNotifPrefs(prev => {
@@ -366,8 +371,10 @@ export default function Settings() {
       setBillingMsg({ type: 'info', text: 'Checkout was cancelled — nothing changed.' })
       window.history.replaceState({}, '', window.location.pathname)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    // refreshSession is AuthContext's useCallback([]) — stable, so this still
+    // runs once. Even if it re-ran, the ?billing= param is stripped above, so
+    // a second pass would find nothing to do.
+  }, [refreshSession])
 
   const handleManageBilling = async () => {
     setPortalLoading(true)

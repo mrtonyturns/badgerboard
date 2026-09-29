@@ -6,7 +6,6 @@
 // signed-in users (it is a child of the "/" route), so it keeps the sidebar and
 // top bar and only replaces the page body.
 
-import React from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Compass, ArrowLeft } from 'lucide-react'
 

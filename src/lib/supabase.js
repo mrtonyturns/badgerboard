@@ -781,13 +781,13 @@ export async function getVolunteers(listId) {
 }
 
 // ─── Voter file — stub (requires DB migration; graceful no-op for now) ────────
-export async function getVoterFileEntries(listId, limit = 500) {
+export async function getVoterFileEntries() {
   return { data: [], error: null }
 }
-export async function upsertVoterFileEntries(entries) {
+export async function upsertVoterFileEntries() {
   return { data: null, error: null }
 }
-export async function getVoterFileCount(listId) {
+export async function getVoterFileCount() {
   return { count: 0, error: null }
 }
 

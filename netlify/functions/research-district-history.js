@@ -26,7 +26,7 @@ const sigOk = (districtKey, research, sig) => {
   return A.length === B.length && crypto.timingSafeEqual(A, B)
 }
 
-const DISTRICT_KEY_RE = /^[\w:.\-]{1,80}$/
+const DISTRICT_KEY_RE = /^[\w:.-]{1,80}$/
 
 export const handler = async (event) => {
   const headers = {

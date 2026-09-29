@@ -10,8 +10,8 @@
 // reads or counts now lives in src/pages/profiler/reportModel.js so the reader,
 // the table, the print document and the public share view can't disagree.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams, Link, useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams, createSearchParams, Link, useNavigate } from 'react-router-dom'
 import { Search } from 'lucide-react'
 import { format } from 'date-fns'
 
@@ -66,6 +66,12 @@ const ANNOTATION_PREFIX = 'dossier_annotation_'
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
+const scrollPageTop = () => {
+  const main = document.querySelector('main')
+  if (main && main.scrollHeight > main.clientHeight) main.scrollTo({ top: 0 })
+  else window.scrollTo({ top: 0 })
+}
+
 /** Escape user-written text before it is injected into the print document. */
 const escapeForPrint = (s = '') => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -112,9 +118,13 @@ export default function Dossiers() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const initCandidateId = searchParams.get('candidate')
-  const initViewId      = searchParams.get('view')
   const initSection     = searchParams.get('section')
   const initViewOpened  = useRef(false)
+  // The query string as it was when the page MOUNTED. The ?view=/&section=
+  // and ?newname=/&context= deep links are one-shot "arrive here" intents, so
+  // they're read from this snapshot (useRef keeps its first value) rather than
+  // the live params, which openDossier/rememberSection rewrite as you read.
+  const mountParamsRef  = useRef(searchParams)
 
   const userTier  = getUserTier(user)
   const limit     = getEffectiveProfileLimit(user)
@@ -226,8 +236,34 @@ export default function Dossiers() {
     setVerdicts(authoritative)
     setSelected(prev => (prev && prev.id === dossierId ? { ...prev, claim_verdicts: authoritative } : prev))
     setDossiers(prev => prev.map(d => (d.id === dossierId ? { ...d, claim_verdicts: authoritative } : d)))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [selected?.id, user?.id])
+
+  // Opens a profile in the reader and records it in the URL. Uses navigate()
+  // rather than setSearchParams: in react-router 6.30 (BrowserRouter)
+  // setSearchParams is re-created on every query-string change, and this very
+  // function writes the query string — so depending on it would give
+  // openDossier (and fetchData + the effects below) a new identity on every
+  // open. navigate() only changes identity when the route pathname changes.
+  // Everything else it touches is a ref, a state setter or a module function.
+  const openDossier = useCallback(async (id, section = null) => {
+    const { data } = await getDossier(id)
+    if (!data || !aliveRef.current) return
+    setSelected(data)
+    setShowReviewer(false); setShowNotes(false); setMoreOpen(false); setShowEmpty(false)
+    // Refresh-proof: the open profile (and section) live in the URL.
+    navigate({ search: `?${createSearchParams(section ? { view: id, section } : { view: id })}` }, { replace: false })
+    scrollPageTop()
+    if (section) {
+      const jump = () => {
+        const el = document.getElementById(`pf-${section}`)
+        // 'auto' on purpose — smooth programmatic scrolling no-ops on this container
+        if (el) el.scrollIntoView({ behavior: 'auto', block: 'start' })
+        return !!el
+      }
+      setTimeout(() => { if (!jump()) setTimeout(jump, 700) }, 400)
+    }
+  }, [navigate])
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
   // Stamped on every successful library load; the completed-run watcher below
@@ -251,12 +287,15 @@ export default function Dossiers() {
     setDossiers(d || [])
     setUsed((monthly || []).length)
     setLoading(false)
-    if (initViewId && d && !initViewOpened.current) {
-      const found = d.find(x => x.id === initViewId)
-      if (found) { initViewOpened.current = true; openDossier(initViewId, initSection) }
+    // Mount-time ?view= deep link (snapshot, not live params — see
+    // mountParamsRef). Reading the live values here would make fetchData
+    // change identity on every open/scroll and refetch the library each time.
+    const initView = mountParamsRef.current.get('view')
+    if (initView && d && !initViewOpened.current) {
+      const found = d.find(x => x.id === initView)
+      if (found) { initViewOpened.current = true; openDossier(initView, mountParamsRef.current.get('section')) }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id])
+  }, [user?.id, openDossier])
 
   useEffect(() => { fetchData() }, [fetchData])
 
@@ -307,13 +346,14 @@ export default function Dossiers() {
   }, [fetchData])
 
   // Deep link from the District Dashboard: /profiler?newname=…&context=…
+  // Mount-once: reads the mount-time snapshot, so the dep list is honestly empty.
   useEffect(() => {
-    const newName = searchParams.get('newname')
+    const params = mountParamsRef.current
+    const newName = params.get('newname')
     if (newName) {
-      setNewCandForm({ name: newName, research_context: searchParams.get('context') || '' })
+      setNewCandForm({ name: newName, research_context: params.get('context') || '' })
       setShowNewCand(true)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Deep link from the weekly digest email: open that candidate's latest profile
@@ -326,27 +366,9 @@ export default function Dossiers() {
     if (!latest) return
     deepLinkedRef.current = true
     openDossier(latest.id, initSection)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dossiers, initCandidateId])
-
-  const openDossier = async (id, section = null) => {
-    const { data } = await getDossier(id)
-    if (!data || !aliveRef.current) return
-    setSelected(data)
-    setShowReviewer(false); setShowNotes(false); setMoreOpen(false); setShowEmpty(false)
-    // Refresh-proof: the open profile (and section) live in the URL.
-    setSearchParams(section ? { view: id, section } : { view: id }, { replace: false })
-    scrollPageTop()
-    if (section) {
-      const jump = () => {
-        const el = document.getElementById(`pf-${section}`)
-        // 'auto' on purpose — smooth programmatic scrolling no-ops on this container
-        if (el) el.scrollIntoView({ behavior: 'auto', block: 'start' })
-        return !!el
-      }
-      setTimeout(() => { if (!jump()) setTimeout(jump, 700) }, 400)
-    }
-  }
+    // initSection is a real input. Once deepLinkedRef is set every re-run
+    // returns at the guard, so openDossier rewriting ?section= can't loop.
+  }, [dossiers, initCandidateId, initSection, openDossier])
 
   // As the reader scrolls or the rail navigates, remember the section in the
   // URL (replace, so history isn't spammed) — refresh lands where you were.
@@ -360,13 +382,15 @@ export default function Dossiers() {
     }, { replace: true })
   }, [setSearchParams])
 
-  const scrollPageTop = () => {
-    const main = document.querySelector('main')
-    if (main && main.scrollHeight > main.clientHeight) main.scrollTo({ top: 0 })
-    else window.scrollTo({ top: 0 })
-  }
-
   // ── Real generation progress (dossier_generation_progress) ────────────────
+  // `candidates` is only read (for the failure banner's name) and is written by
+  // fetchData(), which this very poll calls on 'done'. As a dep it would
+  // restart the poll after every refetch — which re-reads the still-'done' row
+  // and refetches again: a poll loop. It is read through a latest-value ref.
+  // fetchData / clearDossierStatus are stable (per user id / context
+  // useCallback), so listing them doesn't add re-runs.
+  const candidatesRef = useRef(candidates)
+  candidatesRef.current = candidates
   useEffect(() => {
     const cid = genCandidateId || (dossierPhase === 'generating' ? pendingCandidateId : null)
     if (!generating || !cid) { setProgress(null); return }
@@ -394,7 +418,7 @@ export default function Dossiers() {
           setGenFailure({
             stage: data.stage,
             candidateId: cid,
-            candidateName: candidates.find(c => c.id === cid)?.name || '',
+            candidateName: candidatesRef.current.find(c => c.id === cid)?.name || '',
           })
           setGenerating(false)
           setGenCandidateId(null)
@@ -406,10 +430,16 @@ export default function Dossiers() {
     poll()
     iv = setInterval(poll, PROGRESS_POLL_MS)
     return () => { alive = false; stop() }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [generating, genCandidateId, dossierPhase, pendingCandidateId])
+  }, [generating, genCandidateId, dossierPhase, pendingCandidateId, fetchData, clearDossierStatus])
 
   // ── Resume after a refresh (belt-and-suspenders: a NEW dossier row) ───────
+  // Keyed on phase + candidate. generationStartedAt is set in the same context
+  // update as those two and is only read once, as this run's cutoff, so it is
+  // read via a latest-value ref. The callbacks are all stable (fetchData per
+  // user id, openDossier per route, the context's own useCallbacks) — none of
+  // them change as a result of what this loop does, so it can't restart itself.
+  const generationStartedAtRef = useRef(generationStartedAt)
+  generationStartedAtRef.current = generationStartedAt
   const resumeRef = useRef(false)
   useEffect(() => {
     if (dossierPhase !== 'generating' || !pendingCandidateId || resumeRef.current) return
@@ -418,6 +448,7 @@ export default function Dossiers() {
     setGenCandidateId(pendingCandidateId)
 
     const MAX_WAIT = GENERATION_MAX_WAIT_MS
+    const generationStartedAt = generationStartedAtRef.current
     const pollStart = generationStartedAt ? new Date(generationStartedAt).getTime() : Date.now()
     const deadline = pollStart + MAX_WAIT
     const startISO = generationStartedAt || new Date(pollStart - 1000).toISOString()
@@ -455,8 +486,7 @@ export default function Dossiers() {
     })()
 
     return () => { stopped = true; resumeRef.current = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dossierPhase, pendingCandidateId])
+  }, [dossierPhase, pendingCandidateId, fetchData, openDossier, setDossierReady, clearDossierStatus])
 
   // Pre-fill research context from the candidate record
   useEffect(() => {

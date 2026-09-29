@@ -1,4 +1,3 @@
-import React from 'react'
 import { useNavigate, useLocation, Link } from 'react-router-dom'
 import { Lock, AlertTriangle, CreditCard, Calendar, ArrowRight } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'

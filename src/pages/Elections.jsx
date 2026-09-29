@@ -2,7 +2,7 @@
 // Two tabs: Calendar (upcoming/past) | Results (live board for selected election)
 // Clicking "View Results" on any card switches to Results tab with that election loaded.
 
-import React, { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { format, differenceInDays, isPast, isFuture, parseISO, isToday } from 'date-fns'
 
@@ -12,8 +12,16 @@ import { format, differenceInDays, isPast, isFuture, parseISO, isToday } from 'd
 // needs the EPOCH contract — not lib/date.js's safeISO, which returns null.
 import { safeISOOrEpoch as safeISO } from '../lib/date'
 import {
-  CalendarDays, Plus, Clock, CheckCircle, Edit2, Trash2, X,
-  BarChart2, AlertCircle, AlertTriangle, Radio,
+  CalendarDays,
+  Plus,
+  Clock,
+  CheckCircle,
+  Edit2,
+  Trash2,
+  X,
+  BarChart2,
+  AlertCircle,
+  AlertTriangle,
 } from 'lucide-react'
 import { supabase, getElections, createElection, updateElection, deleteElection } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'

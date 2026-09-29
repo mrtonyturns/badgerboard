@@ -1,7 +1,7 @@
 // Campaign Connect — links Action accounts (managers/consultants/parties) to Candidate
 // accounts. Redesigned visual layer (v2): hero, connection motif, gradient stat tiles,
 // card grids, modern empty states. Logic/endpoints unchanged.
-import React, { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Users, UserPlus, Send, Clock, Check, X, Shield, AlertTriangle, RefreshCw, ChevronRight, Inbox, Trash2, Eye, ArrowLeft, Copy, Link2, Sparkles, CheckCircle2, ListChecks, FileText, Zap } from 'lucide-react'
 import { supabase } from '../lib/supabase'

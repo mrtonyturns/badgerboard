@@ -4,7 +4,7 @@
 // as a right-hand drawer from the reader's "More" menu instead of squeezing the
 // document into a narrower column.
 
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ThumbsUp, ThumbsDown, HelpCircle, Check, X } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useDialog } from '../../lib/useDialog'

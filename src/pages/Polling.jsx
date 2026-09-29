@@ -4,7 +4,7 @@
 // Approval Estimate (approve/disapprove bar), Vote-Share Projection
 // (horizontal bars), and a Confidence Indicator beside every number.
 // Every figure is labeled AI-Estimated, timestamped, and source-cited.
-import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import {
   BarChart2, RefreshCw, Loader2, AlertCircle, Sparkles, ExternalLink,
   Clock, ShieldAlert, Paperclip, Plus, Trash2, FileText, Image as ImageIcon,
@@ -57,6 +57,10 @@ const DISTRICTS = [
 // Last-opened district survives tab switches and refreshes; the recent-5 list
 // feeds a "Recent" group at the top of the selector. Both are cleared by the
 // explicit sign-out in AuthContext (bb_polling_* prefix).
+// Snapshot poll timing (see runGenerate in Polling()).
+const POLL_CEILING_MS = 180 * 1000
+const POLL_EVERY_MS   = 4000
+
 const lastKey   = (uid) => `bb_polling_last_${uid || 'anon'}`
 const recentKey = (uid) => `bb_polling_recent_${uid || 'anon'}`
 const readRecent = (uid) => {
@@ -262,6 +266,41 @@ export default function Polling() {
     return json
   }, [district])
 
+  // v1.40.1 — hard wall-clock ceiling (was 50 × 4s ≈ 200s of *sleeps*, which
+  // stretched well past that once each `get` round-trip was added in; the Sep
+  // 21 sweep watched one spinner for 13 minutes). The advertised window is
+  // 60–90s; 180s is generous. On the ceiling, a server 'error' status, or a
+  // failed trigger, polling STOPS and the error card offers "Try again".
+  // Navigating away bumps pollRef (see the unmount effect below), which every
+  // loop checks via alive() — no interval survives the component.
+  // POLL_CEILING_MS / POLL_EVERY_MS live at module scope.
+  // useCallback([api]): api changes only with `district`; everything else here
+  // is a ref or a state setter, so runGenerate is stable per district.
+  const runGenerate = useCallback(async (gen = ++pollRef.current, force = false) => {
+    const alive = () => pollRef.current === gen
+    setGenerating(true); setLoading(true); setError(null)
+    try {
+      const kicked = await api('generate', force ? { force: true } : {})
+      if (kicked?.status === 'error') throw new Error(kicked.error || 'Could not start the snapshot job — try again')
+      const startedAt = Date.now()
+      while (Date.now() - startedAt < POLL_CEILING_MS) {
+        await new Promise(r => setTimeout(r, POLL_EVERY_MS))
+        if (!alive()) return
+        const got2 = await api('get')
+        const snap = got2.snapshot
+        if (!alive()) return
+        if (snap?.status === 'ready' && (!force || Date.now() - new Date(snap.generated_at).getTime() < 10 * 60000)) {
+          setSnapshot(snap); setPersonalized(!!got2.personalized); setGenerating(false); setLoading(false); setIntelDirty(false)
+          return
+        }
+        if (snap?.status === 'error') throw new Error(snap.error_note || 'Snapshot generation failed — try again')
+      }
+      throw new Error('The snapshot took longer than 3 minutes and was abandoned — try again')
+    } catch (e) {
+      if (alive()) { setError(e.message); setGenerating(false); setLoading(false) }
+    }
+  }, [api])
+
   // Load (or start generating) when a district is picked
   useEffect(() => {
     if (!district) { setSnapshot(null); return }
@@ -285,42 +324,9 @@ export default function Polling() {
         await runGenerate(gen)
       } catch (e) { if (alive()) { setError(e.message); setLoading(false) } }
     })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [district])
-
-  // v1.40.1 — hard wall-clock ceiling (was 50 × 4s ≈ 200s of *sleeps*, which
-  // stretched well past that once each `get` round-trip was added in; the Sep
-  // 21 sweep watched one spinner for 13 minutes). The advertised window is
-  // 60–90s; 180s is generous. On the ceiling, a server 'error' status, or a
-  // failed trigger, polling STOPS and the error card offers "Try again".
-  // Navigating away bumps pollRef (see the unmount effect below), which every
-  // loop checks via alive() — no interval survives the component.
-  const POLL_CEILING_MS = 180 * 1000
-  const POLL_EVERY_MS   = 4000
-  const runGenerate = async (gen = ++pollRef.current, force = false) => {
-    const alive = () => pollRef.current === gen
-    setGenerating(true); setLoading(true); setError(null)
-    try {
-      const kicked = await api('generate', force ? { force: true } : {})
-      if (kicked?.status === 'error') throw new Error(kicked.error || 'Could not start the snapshot job — try again')
-      const startedAt = Date.now()
-      while (Date.now() - startedAt < POLL_CEILING_MS) {
-        await new Promise(r => setTimeout(r, POLL_EVERY_MS))
-        if (!alive()) return
-        const got2 = await api('get')
-        const snap = got2.snapshot
-        if (!alive()) return
-        if (snap?.status === 'ready' && (!force || Date.now() - new Date(snap.generated_at).getTime() < 10 * 60000)) {
-          setSnapshot(snap); setPersonalized(!!got2.personalized); setGenerating(false); setLoading(false); setIntelDirty(false)
-          return
-        }
-        if (snap?.status === 'error') throw new Error(snap.error_note || 'Snapshot generation failed — try again')
-      }
-      throw new Error('The snapshot took longer than 3 minutes and was abandoned — try again')
-    } catch (e) {
-      if (alive()) { setError(e.message); setGenerating(false); setLoading(false) }
-    }
-  }
+    // api and runGenerate both change only when district does, so this still
+    // runs exactly once per district pick.
+  }, [district, api, runGenerate])
 
   // Unmount: invalidate every in-flight poll loop so it exits on its next tick.
   useEffect(() => () => { pollRef.current += 1 }, [])

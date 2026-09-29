@@ -218,7 +218,7 @@ export const handler = async (event) => {
   // validate its shape, cap the free-text fields that fence the prompts, and
   // only allow admins to force-refresh (each force run is real LLM spend and
   // last-write-wins on a row every user reads).
-  if (!/^[\w:.\-]{1,80}$/.test(district_key)) {
+  if (!/^[\w:.-]{1,80}$/.test(district_key)) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid district_key' }) }
   }
 

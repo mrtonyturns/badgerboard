@@ -167,6 +167,6 @@ Additional rules:
     return { statusCode: 200, headers, body: JSON.stringify({ fields: populated, name }) }
   } catch (err) {
     console.error('Autofill error:', err)
-    return { statusCode: 500, headers, body: JSON.stringify({ error: 'An internal error occurred' || 'Autofill failed' }) }
+    return { statusCode: 500, headers, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }
 }

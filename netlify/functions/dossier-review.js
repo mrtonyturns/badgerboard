@@ -158,7 +158,7 @@ export const handler = async (event) => {
     )
 
     // Insert new acknowledgment
-    const { ok, data } = await supabaseQuery('dossier_acknowledgments', 'POST', {
+    const { ok } = await supabaseQuery('dossier_acknowledgments', 'POST', {
       user_id:             user.id,
       user_email:          user.email,
       disclaimer_version:  DISCLAIMER_VERSION,
@@ -188,7 +188,7 @@ export const handler = async (event) => {
 
   // ── get_ack ──────────────────────────────────────────────────────────────────
   if (action === 'get_ack') {
-    const { ok, data } = await supabaseQuery(
+    const { data } = await supabaseQuery(
       `dossier_acknowledgments`,
       'GET',
       null,
@@ -246,7 +246,7 @@ export const handler = async (event) => {
     }
 
     // Insert new
-    const { ok, data } = await supabaseQuery('dossier_claim_reviews', 'POST', {
+    const { ok } = await supabaseQuery('dossier_claim_reviews', 'POST', {
       dossier_id,
       user_id:    user.id,
       section_id,
@@ -270,7 +270,7 @@ export const handler = async (event) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'valid dossier_id required' }) }
     }
 
-    const { ok, data } = await supabaseQuery(
+    const { data } = await supabaseQuery(
       `dossier_claim_reviews`,
       'GET',
       null,

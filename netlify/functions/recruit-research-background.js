@@ -183,7 +183,7 @@ ${research.text || '(no research returned)'}`,
     inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0,
   })
 
-  let parsed = {}
+  let parsed
   try {
     const raw = (data.content?.find(b => b.type === 'text')?.text || '')
       .replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()

@@ -231,7 +231,7 @@ function detectAgencySignals({ html = '', url = '', researchText = '' } = {}) {
   for (const line of String(researchText || '').split(/\r?\n/)) {
     if (!/https?:\/\//i.test(line)) continue
     const evUrl = (line.match(/https?:\/\/\S+/) || [])[0]
-    const detail = line.replace(/https?:\/\/\S+/g, '').replace(/^[-*\s]*(AGENCY_EVIDENCE|EVIDENCE)\s*[:\-]?\s*/i, '').replace(/[\s—–\-|]+$/, '').trim()
+    const detail = line.replace(/https?:\/\/\S+/g, '').replace(/^[-*\s]*(AGENCY_EVIDENCE|EVIDENCE)\s*[:-]?\s*/i, '').replace(/[\s—–\-|]+$/, '').trim()
     if (!detail) continue
     if (/ad\s*library|meta ads|facebook ad library/i.test(line)) {
       push('ad_library', detail, evUrl, 'meta_ad_library')
@@ -350,7 +350,7 @@ function parseCitedFields(text) {
   const out = {}
   for (const raw of String(text || '').split(/\r?\n/)) {
     const line = raw.replace(/^[-*\s]+/, '').trim()
-    const m = line.match(/^([A-Z_]{3,30})\s*[:\-]\s*(.+)$/)
+    const m = line.match(/^([A-Z_]{3,30})\s*[:-]\s*(.+)$/)
     if (!m) continue
     const key = m[1].toUpperCase()
     const rest = m[2]
@@ -705,18 +705,16 @@ async function verifyWebsite(url) {
 // information copied from those reports, and Badger Board's whole use case is
 // commercial, so this stays off until counsel answers §5 of the game plan.
 //
+// The disabled stub (a CFIS_ENABLED flag plus an unreferenced
+// fetchCfisVendorSignals()) was removed as dead code: nothing ever called it.
 // When (and only when) that answer arrives:
-//   1. flip CFIS_ENABLED,
-//   2. implement fetchCfisVendorSignals() to return the SAME evidence shape
-//      detectAgencySignals() produces ({ type:'vendor_payment', detail, url, source }),
-//   3. add the cfis_signals column from the migration's extension point,
-//   4. decide separately whether those rows may leave the internal signal layer
+//   1. add a CFIS_ENABLED flag and a fetchCfisVendorSignals(candidate) that
+//      returns the SAME evidence shape detectAgencySignals() produces
+//      ({ type:'vendor_payment', detail, url, source }), and call it from
+//      enrichOne() behind that flag,
+//   2. add the cfis_signals column from the migration's extension point,
+//   3. decide separately whether those rows may leave the internal signal layer
 //      (buildProspectCsv must keep excluding them unless counsel says otherwise).
-const CFIS_ENABLED = false
-async function fetchCfisVendorSignals(/* candidate */) {
-  if (!CFIS_ENABLED) return { detected: false, evidence: [] }
-  throw new Error('CFIS ingestion is not implemented and must not be enabled without a written legal read of Wis. Stat. §11.1304(12).')
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Per-prospect pipeline

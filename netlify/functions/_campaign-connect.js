@@ -32,7 +32,7 @@ async function sb(path, method = 'GET', body = null, extraHeaders = {}) {
     body: body ? JSON.stringify(body) : undefined,
   })
   const text = await res.text()
-  let data = null
+  let data
   try { data = text ? JSON.parse(text) : null } catch { data = text }
   return { ok: res.ok, status: res.status, data }
 }

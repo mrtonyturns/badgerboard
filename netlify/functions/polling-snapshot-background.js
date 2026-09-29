@@ -405,7 +405,7 @@ function validateVoteShare(vs) {
 // the shared research; the final projection is the average of the valid
 // estimates (matched by candidate, renormalized to 100).
 
-const VOTE_SHARE_RULES = (district) => `Today's date is ${new Date().toISOString().slice(0, 10)}. Wisconsin's 2026 partisan primary is August 11, 2026; the general is November 3, 2026.
+const VOTE_SHARE_RULES = () => `Today's date is ${new Date().toISOString().slice(0, 10)}. Wisconsin's 2026 partisan primary is August 11, 2026; the general is November 3, 2026.
 Output STRICT JSON only (no prose, no markdown fences) in exactly this shape:
 {
   "phase": "primary" | "general",
@@ -447,7 +447,7 @@ const hasKeyFor = (p) => p === 'xai' ? !!XAI_KEY : p === 'perplexity' ? !!PPLX_K
 async function estimateVoteShareOnce(provider, district, research, requestedBy, intel, prior) {
   const label = districtLabel(district)
   const prompt = `You are projecting the vote share for ${label}, Wisconsin (office: ${officeLabel(district)}).
-${VOTE_SHARE_RULES(district)}
+${VOTE_SHARE_RULES()}
 
 RESEARCH:
 ${(research?.text || '').slice(0, 11000)}${PRIOR_NOTE(prior)}${INTEL_NOTE(intel)}`
@@ -859,7 +859,7 @@ export const handler = async (event) => {
       const url = String(c.url || c).slice(0, 500)
       let title = String(c.title || c.name || '').trim().slice(0, 160)
       // Grok annotations often carry bare footnote numbers as titles — use the domain instead
-      if (!title || /^[\d.\[\]#]+$/.test(title)) title = hostOf(url)
+      if (!title || /^[\d.[\]#]+$/.test(title)) title = hostOf(url)
       return { title, url }
     }).filter(s => /^https?:\/\//.test(s.url))
     // dedupe by URL (multi-annotation citations repeat)

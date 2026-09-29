@@ -152,9 +152,6 @@ const CHUNK_MIN_BUDGET_MS = 8000
 // down-ballot budget.
 const TIER1_TIMEOUT_MS = 10000
 
-// Nothing left to learn about these, so they leave the rotation entirely.
-const DONE_STATUSES = new Set(['called', 'certified'])
-
 // ── Election-night call embargo (owner directive, Aug 11 2026) ───────────────
 // No race may be auto-called before 22:30 CT on election night: early county
 // feeds carry junk precinct totals ("1 of 1 reporting") that made races look
@@ -1175,7 +1172,7 @@ exports.handler = async (event = {}) => {
   const headers = { ...cors(), 'Content-Type': 'application/json' }
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers, body: '' }
 
-  let body = {}
+  let body
   try { body = JSON.parse(event.body || '{}') || {} } catch { body = {} }
 
   // ── 1. Guard ─────────────────────────────────────────────────────────────
@@ -1408,7 +1405,8 @@ async function loadContests(sb, electionId) {
   // saw before the join.
   const rows = (results || []).map((r) => {
     if (!r || typeof r !== 'object') return r
-    const { election_contests, ...rest } = r
+    const rest = { ...r }
+    delete rest.election_contests
     return rest
   })
 

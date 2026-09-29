@@ -107,7 +107,7 @@ console.log('F3 — create-checkout-session validation')
   process.env.STRIPE_SECRET_KEY = 'sk_test_dummy_never_called'
   const realFetch = global.fetch
   let stripeCalled = false
-  global.fetch = async (url, opts) => {
+  global.fetch = async (url) => {
     const u = String(url)
     if (u.includes('/auth/v1/user')) {
       return { ok: true, json: async () => ({ id: '11111111-1111-4111-8111-111111111111', email: 'x@y.z' }) }
@@ -735,7 +735,7 @@ console.log('Phases 2-3 — election-results-poller window decision')
 {
   console.log('Full ballot — tier-2 chunking + rotation')
   const {
-    chunkList, tierTwoQueue, assignChunks, orderChunk, chunkIndexOf,
+    chunkList, tierTwoQueue, orderChunk,
     selectRotationChunks, rotationTick, contestLine,
     countyChunk, countyDiscoveryPrompt, shapeCountyContests,
     WI_COUNTIES, COUNTY_CHUNKS, TIER2_CHUNK_SIZE, TIER2_MAX_CALLS,
@@ -1659,7 +1659,6 @@ console.log('Phases 2-3 — election-results-poller window decision')
 {
   const { callEmbargoActive } = require('../netlify/functions/election-results-poller.js')
   const { winnerEmbargoActive, decideNotification } = require('../netlify/functions/_result-notify.js')
-  const ctInstant = (h, m) => new Date(Date.UTC(2026, 7, 12, (h + 5) % 24, m)) // CDT = UTC-5; 8/11 CT evening
   const eight = new Date(Date.UTC(2026, 7, 12, 1, 15))   // 8:15 PM CT Aug 11
   const tenTwentyNine = new Date(Date.UTC(2026, 7, 12, 3, 29))
   const tenThirty = new Date(Date.UTC(2026, 7, 12, 3, 30))

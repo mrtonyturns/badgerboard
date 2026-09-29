@@ -29,7 +29,7 @@
 // release. Nothing here was softened, but the reorganisation changed sentence
 // boundaries and counsel should confirm the intent survives intact.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useDialog } from '../../lib/useDialog'
 import { T, Btn, plural, relativeAge } from './shared'

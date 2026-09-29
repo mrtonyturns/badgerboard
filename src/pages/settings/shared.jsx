@@ -18,7 +18,6 @@
 // the `.st-shell` rule in SettingsStyles) so button/input/select/textarea — which
 // do not inherit font-family by default — stay on Geist.
 
-import React from 'react'
 import { plural } from '../../lib/text'
 
 export const T = {

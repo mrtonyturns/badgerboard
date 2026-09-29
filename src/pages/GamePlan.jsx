@@ -1,7 +1,7 @@
 // GamePlan.jsx — Campaign election calendar + results shell
 // The Tasks tab renders <TaskBoard />; Calendar and Results live here.
 
-import React, { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   format, differenceInDays,
@@ -71,7 +71,7 @@ function ElectionModal({ open, ...props }) {
   return <ElectionModalBody {...props} />
 }
 
-function ElectionModalBody({ onClose, editing, onSave, saving }) {
+function ElectionModalBody({ onClose, editing, onSave, saving, error }) {
   const [form, setForm] = useState(defaultElectionForm)
   useEffect(() => {
     setForm(editing
@@ -121,6 +121,7 @@ function ElectionModalBody({ onClose, editing, onSave, saving }) {
             <label className="label">Notes</label>
             <textarea className="input" rows={2} value={form.notes} onChange={f('notes')} placeholder="Additional context…" />
           </div>
+          {error && <p className="text-sm text-red-600" role="alert">{error}</p>}
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
             <button type="submit" className="btn-primary flex-1" disabled={saving}>
@@ -609,10 +610,11 @@ export default function GamePlan() {
       {/* ── Modals ── */}
       <ElectionModal
         open={showElect}
-        onClose={() => { if (!electSaving) { setEditingElect(null); setShowElect(false) } }}
+        onClose={() => { if (!electSaving) { setEditingElect(null); setShowElect(false); setElectError(null) } }}
         editing={editingElect}
         onSave={handleSaveElection}
         saving={electSaving}
+        error={electError}
       />
     </div>
   )

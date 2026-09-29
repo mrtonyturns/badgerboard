@@ -1,4 +1,3 @@
-import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Lock, Sparkles, Check, ArrowRight } from 'lucide-react'
 import { isNativeApp } from '../lib/native'

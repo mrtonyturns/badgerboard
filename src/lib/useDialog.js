@@ -16,7 +16,7 @@
 // shadow DOM, portals) is a component-library problem; Escape + scroll-lock +
 // initial focus fixes what the audit actually flagged without new risk.
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 
 let lockCount = 0
 let prevOverflow = ''
@@ -35,26 +35,35 @@ function unlockBody() {
 }
 
 export function useDialog(onClose, { locked = true, initialFocusRef = null } = {}) {
+  // Latest-value refs: the keydown listener is attached once per mount (and
+  // re-attached only if `locked` flips), but always calls the CURRENT onClose
+  // and reads the CURRENT initialFocusRef — so callers may pass inline arrows
+  // without re-binding the listener or re-toggling the scroll lock.
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  const initialFocusRefRef = useRef(initialFocusRef)
+  initialFocusRefRef.current = initialFocusRef
+
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape' && typeof onClose === 'function') {
+      const close = onCloseRef.current
+      if (e.key === 'Escape' && typeof close === 'function') {
         e.stopPropagation()
-        onClose()
+        close()
       }
     }
     document.addEventListener('keydown', onKey)
     if (locked) lockBody()
-    if (initialFocusRef?.current?.focus) {
+    const focusRef = initialFocusRefRef.current
+    if (focusRef?.current?.focus) {
       // rAF so the element exists post-paint (portals mount late).
-      requestAnimationFrame(() => initialFocusRef.current?.focus?.())
+      requestAnimationFrame(() => focusRef.current?.focus?.())
     }
     return () => {
       document.removeEventListener('keydown', onKey)
       if (locked) unlockBody()
     }
-    // onClose is intentionally captured per-mount; dialogs remount per open.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [locked])
 }
 
 export default useDialog

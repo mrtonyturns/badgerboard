@@ -241,7 +241,7 @@ function StatusBadge({ status, contest }) {
 
 function VerifiedStamp({ at }) {
   if (!at) return null
-  let when = null
+  let when
   try { when = format(parseISO(at), 'MMM d, h:mm a') } catch { when = null }
   return (
     <span

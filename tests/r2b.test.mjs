@@ -198,8 +198,13 @@ console.log('8 — search debounce')
   t('the input still updates state on every keystroke', /value=\{search\} onChange=\{e => setSearch\(e\.target\.value\)\}/.test(c))
   t('a timer mirrors it into the query state', /setTimeout\(\(\) => setSearchQuery\(search\), SEARCH_DEBOUNCE_MS\)/.test(c))
   t('…and is cleared on the next keystroke', /return \(\) => clearTimeout\(id\)/.test(c))
-  t('the fetch effect depends on the DEBOUNCED value only',
-    /useEffect\(\(\) => \{ fetchData\(\) \}, \[searchQuery, partyFilter, statusFilter, officeFilter\]\)/.test(c))
+  // Sep 29 2026: fetchData became a useCallback (exhaustive-deps cleanup); the
+  // invariant is the same — the fetch is keyed on the debounced `searchQuery`,
+  // never the raw `search` — now expressed as callback deps + [fetchData].
+  const fetchDeps = (c.match(/const fetchData = useCallback\([\s\S]*?\n {2}\}, \[([^\]]*)\]\)/) || [])[1] || ''
+  t('the fetch callback depends on the DEBOUNCED value only',
+    /\bsearchQuery\b/.test(fetchDeps) && !/(^|[\s,])search([\s,]|$)/.test(fetchDeps))
+  t('the fetch effect is keyed on the callback', /useEffect\(\(\) => \{ fetchData\(\) \}, \[fetchData\]\)/.test(c))
   t('the server is asked for the debounced term', /search: searchQuery \|\| undefined/.test(c))
   t('no effect fires on the raw search term any more', !/\}, \[search, partyFilter/.test(c))
 }

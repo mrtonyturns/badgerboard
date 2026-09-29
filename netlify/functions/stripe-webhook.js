@@ -47,9 +47,7 @@ const { sendEmail, getNotificationPrefs } = require('./_email')
 const CANDIDATE_PLANS = ['c_monitor', 'c_active', 'c_campaign']
 const ACTION_PLANS    = ['a_monitor', 'a_active', 'a_campaign']
 const LEGACY_PLANS    = ['monitor', 'campaign', 'agency']
-const VALID_PLANS     = [...CANDIDATE_PLANS, ...ACTION_PLANS, ...LEGACY_PLANS]
 const VALID_BRACKETS  = ['b1', 'b2_5', 'b6', 'b11', 'b26', 'b51']
-const VALID_BILLING   = ['monthly', 'quarterly', 'semiannual', 'annual']
 
 // v1.18 raised-price catalog (pricing_gen v2026_07, minted 2026-07-21).
 // Takes precedence over the founder-era STRIPE_PRICES below; a same-named

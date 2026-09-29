@@ -8,7 +8,7 @@
 // The run itself belongs to the parent (it needs auth + the generate flow); the
 // modal only reports per-row progress and can be closed while it continues.
 
-import React, { useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { useDialog } from '../../lib/useDialog'
 import { T, Btn, Spinner, plural } from './shared'
 import { parseBulkCsv, bulkFailure, BULK_COLUMNS, rowOfficeLabel } from './bulkCsv'

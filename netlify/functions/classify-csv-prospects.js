@@ -86,7 +86,7 @@ function describeProspect(row) {
 // pass user.id straight through.
 async function classifyBatch(prospects, userId) {
   const items = prospects.map((p, i) => {
-    const { displayName, description } = describeProspect(p)
+    const { description } = describeProspect(p)
     return `[${i}] ${description}`
   })
 

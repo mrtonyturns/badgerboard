@@ -24,7 +24,7 @@ const t = (name, cond) => { cond ? pass++ : fail++; console.log(`${cond ? '  ✓
 
 const {
   isUpgrade, planChangeKind, normalizePlan,
-  CANDIDATE_PLAN_ORDER, ACTION_PLAN_ORDER, PLAN_ORDER, PLAN_CONFIG,
+  CANDIDATE_PLAN_ORDER, ACTION_PLAN_ORDER, PLAN_ORDER,
   CREDIT_PACKS, BULK_CREDIT_PACKS,
 } = await import('../src/lib/tiers.js')
 

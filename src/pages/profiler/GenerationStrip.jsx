@@ -10,7 +10,7 @@
 //   Loading | light red + shimmer    | spinning     | Loading
 //   Queued  | light grey             | hollow ring  | Queued
 
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { T, cardStyle, elapsedLabel } from './shared'
 
 export const STAGE_LABELS = [

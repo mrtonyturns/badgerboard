@@ -11,7 +11,6 @@
 // pages that use it (Dossiers, Prospecting) are inline-token pages; inline
 // styles land identically on both kinds.
 
-import React from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
 import { getUserPlan, isActionPlan } from '../../lib/tiers.js'

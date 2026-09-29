@@ -7,7 +7,7 @@
 // filter pills and the AI-research extract/add-all flow. Profile History lists
 // every generated profile newest-first with Auto/Manual and its item count.
 
-import React, { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { format } from 'date-fns'
 import {
   supabase, logActivity,
@@ -233,7 +233,7 @@ function RecordForm({ candidateId, userId, existing, onSave, onCancel }) {
     // An empty date must go in as NULL — '' is not a valid DATE and the insert
     // is rejected outright.
     const payload = { ...form, date: form.date || null }
-    let error = null
+    let error
     if (existing?.id) {
       ({ error } = await updateIncumbentRecord(existing.id, payload))
       if (!error) {
@@ -632,10 +632,19 @@ const CMP_CHIP = {
 function CompareModal({ candidate, newer, older, onClose }) {
   const [state, setState] = useState({ loading: true, error: '', diff: null })
 
+  // Keyed on the two dossier ids (the rows arrive as fresh objects whenever the
+  // parent refetches); the rows themselves are read through latest-value refs.
+  const newerId = newer?.id
+  const olderId = older?.id
+  const newerRef = useRef(newer)
+  newerRef.current = newer
+  const olderRef = useRef(older)
+  olderRef.current = older
+
   useEffect(() => {
     let cancelled = false
     setState({ loading: true, error: '', diff: null })
-    Promise.all([fetchDossierContent(newer), fetchDossierContent(older)])
+    Promise.all([fetchDossierContent(newerRef.current), fetchDossierContent(olderRef.current)])
       .then(([a, b]) => {
         if (cancelled) return
         if (!a || !b) {
@@ -646,7 +655,7 @@ function CompareModal({ candidate, newer, older, onClose }) {
       })
       .catch(e => { if (!cancelled) setState({ loading: false, diff: null, error: e.message || 'Could not load the profiles.' }) })
     return () => { cancelled = true }
-  }, [newer?.id, older?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [newerId, olderId])
 
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') onClose() }

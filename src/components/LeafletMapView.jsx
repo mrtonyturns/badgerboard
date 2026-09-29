@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import { pointInGeometry } from '../lib/geo'
 import 'leaflet/dist/leaflet.css'
@@ -232,16 +232,21 @@ export default function LeafletMapView({
   const lastPointRef  = useRef(null)   // last known container point for the hovered layer
   const [hoverCard, setHoverCard] = useState(null) // { county, name, place, x, y }
 
-  const clearHoverTimer = () => { if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null } }
-  const clearHideTimer  = () => { if (hideTimerRef.current)  { clearTimeout(hideTimerRef.current);  hideTimerRef.current  = null } }
+  // The hover helpers below touch only refs, the setHoverCard setter and
+  // module imports, so every useCallback here has stable deps and each
+  // function keeps one identity for the component's lifetime. That lets the
+  // map-init and district-overlay effects list them honestly without ever
+  // re-running because of them.
+  const clearHoverTimer = useCallback(() => { if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null } }, [])
+  const clearHideTimer  = useCallback(() => { if (hideTimerRef.current)  { clearTimeout(hideTimerRef.current);  hideTimerRef.current  = null } }, [])
 
-  const hideHoverCard = () => {
+  const hideHoverCard = useCallback(() => {
     clearHoverTimer(); clearHideTimer()
     hoverTargetRef.current = null
     setHoverCard(null)
-  }
+  }, [clearHoverTimer, clearHideTimer])
 
-  const handleMuniMouseOver = (e, name, county) => {
+  const handleMuniMouseOver = useCallback((e, name, county) => {
     clearHideTimer()
     if (hoverTargetRef.current === e.target) return // already pending/showing for this feature
     clearHoverTimer()
@@ -268,13 +273,13 @@ export default function LeafletMapView({
         setHoverCard({ county, name, place, x, y })
       }, 1500)
     }).catch(() => {})
-  }
+  }, [clearHideTimer, clearHoverTimer])
 
-  const handleMuniMouseMove = (e) => {
+  const handleMuniMouseMove = useCallback((e) => {
     if (hoverTargetRef.current === e.target) lastPointRef.current = e.containerPoint
-  }
+  }, [])
 
-  const handleMuniMouseOut = (e) => {
+  const handleMuniMouseOut = useCallback((e) => {
     if (hoverTargetRef.current !== e.target) return
     clearHoverTimer()
     clearHideTimer()
@@ -284,12 +289,17 @@ export default function LeafletMapView({
       hoverTargetRef.current = null
       setHoverCard(null)
     }, 180)
-  }
+  }, [clearHoverTimer, clearHideTimer])
 
   // Keep callback refs fresh across re-renders
   useEffect(() => { onClickRef.current = onDistrictClick })
   useEffect(() => { onLearnMoreRef.current = onLearnMore })
   useEffect(() => { onViewChangeRef.current = onViewChange })
+  // initialView is applied once, at map creation; later prop changes are
+  // deliberately ignored (the map owns its view after init). Read via a ref so
+  // the init effect below stays mount-once with an honest dep list.
+  const initialViewRef = useRef(initialView)
+  initialViewRef.current = initialView
 
   // ── 0. Preload city centroids from municipal GeoJSON ───────────────────────
   // Done once at mount so municipal office dots have accurate coordinates.
@@ -320,6 +330,7 @@ export default function LeafletMapView({
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
 
+    const initialView = initialViewRef.current
     const hasInitialView = Array.isArray(initialView?.center) && typeof initialView?.zoom === 'number'
     const initCenter = Array.isArray(initialView?.center) ? initialView.center : WI_CENTROID
     const initZoom   = typeof initialView?.zoom === 'number' ? initialView.zoom : 7
@@ -425,8 +436,7 @@ export default function LeafletMapView({
       map.remove()
       mapRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [hideHoverCard]) // hideHoverCard is stable → still runs once per mount
 
   // ── 2. Dot markers ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -704,7 +714,9 @@ export default function LeafletMapView({
     setLoadError(null)
     loadAll()
     return () => { cancelled = true }
-  }, [activeLayer, layerReloadKey]) // eslint-disable-line react-hooks/exhaustive-deps
+    // The hover handlers are stable (see useCallback note above), so this
+    // still re-runs only when activeLayer or layerReloadKey changes.
+  }, [activeLayer, layerReloadKey, hideHoverCard, handleMuniMouseOver, handleMuniMouseMove, handleMuniMouseOut])
 
   // ── Legend ─────────────────────────────────────────────────────────────────
   // Office mode: the legend used to list the four pre-v1.19.1 levels

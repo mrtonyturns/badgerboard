@@ -1,10 +1,26 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import {
-  Map, Users, BarChart2, Smartphone, Bell, Trophy,
-  Plus, Trash2, Zap, X, ChevronRight, Download, Send,
-  CheckCircle, Clock, XCircle, MapPin, AlertCircle, Star,
-  Calendar, FileText, MessageCircle, Wifi, WifiOff,
-  RefreshCw, AlertTriangle, History, UserCheck, Database,
+  Map,
+  Users,
+  BarChart2,
+  Bell,
+  Trophy,
+  Plus,
+  Trash2,
+  Zap,
+  X,
+  Download,
+  Send,
+  CheckCircle,
+  MapPin,
+  Calendar,
+  FileText,
+  MessageCircle,
+  WifiOff,
+  RefreshCw,
+  AlertTriangle,
+  UserCheck,
+  Database,
 } from 'lucide-react'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
@@ -12,19 +28,29 @@ import { useAuth } from '../contexts/AuthContext'
 import { getUserPlan } from '../lib/tiers'
 import { parseCsvRows } from '../lib/csv'
 import {
-  getDoorKnockCandidates, getCandidates,
-  getShifts, createShift, updateShift, deleteShift,
-  getMessages, sendMessage, getDoorKnocksForExport,
-  getKnockHistoryByAddress, getDoorKnockLists, createDoorKnockList,
+  getDoorKnockCandidates,
+  getCandidates,
+  getShifts,
+  createShift,
+  updateShift,
+  deleteShift,
+  getMessages,
+  sendMessage,
+  getDoorKnocksForExport,
+  getDoorKnockLists,
+  createDoorKnockList,
   saveCandidateSurveyQuestions,
   supabase,
-  getTurfBlocks, saveTurfBlock, deleteTurfBlock,
-  getTurfAssignments, saveTurfAssignment, updateTurfAssignment,
+  getTurfBlocks,
+  saveTurfBlock,
+  getTurfAssignments,
   getVolunteers,
-  getVoterFileEntries, upsertVoterFileEntries, getVoterFileCount,
-  getDoorKnockStats, getDoorKnockFeed,
+  upsertVoterFileEntries,
+  getVoterFileCount,
+  getDoorKnockStats,
+  getDoorKnockFeed,
 } from '../lib/supabase'
-import { queueKnock, pendingCount, flushQueue } from '../lib/offlineQueue'
+import { pendingCount, flushQueue } from '../lib/offlineQueue'
 import { VolunteerManager } from './VolunteerPortal'
 
 // ─── Empty defaults — door knocking requires real DB candidates ───────────────
@@ -198,15 +224,6 @@ function estTime(count) {
   return `~${hh}h${mm ? ` ${mm}min` : ''}`
 }
 
-// ─── House fill color ─────────────────────────────────────────────────────────
-function houseColor(status) {
-  if (status === 'contacted')     return '#16a34a'
-  if (status === 'not_home')      return '#eab308'
-  if (status === 'refused')       return '#dc2626'
-  if (status === 'no_soliciting') return '#d97706'
-  return '#9ca3af'
-}
-
 // ─── LEADERBOARD data (static demo) ──────────────────────────────────────────
 const LEADERBOARD = [
   { rank:1, initials:'RP', name:'Rob Petersen', color:'#8b5cf6', doors:50, contact:66, streak:4 },
@@ -241,24 +258,6 @@ function relTime(isoStr) {
   const hrs = Math.floor(mins / 60)
   if (hrs < 24) return `${hrs}h ago`
   return `${Math.floor(hrs / 24)}d ago`
-}
-
-// ─── Status badge helper ──────────────────────────────────────────────────────
-function statusBadge(status) {
-  const map = {
-    contacted:     { bg:'#dcfce7', c:'#15803d', label:'Contacted' },
-    not_home:      { bg:'#fef9c3', c:'#a16207', label:'Left Lit' },
-    refused:       { bg:'#fee2e2', c:'#b91c1c', label:'Refused' },
-    no_soliciting: { bg:'#fef3c7', c:'#92400e', label:'No Soliciting' },
-    moved:         { bg:'#f3f4f6', c:'#6b7280', label:'Moved' },
-    wrong_address: { bg:'#fde68a', c:'#92400e', label:'Wrong Addr' },
-    do_not_knock:  { bg:'#f1f5f9', c:'#475569', label:'DNC' },
-  }
-  const s = map[status] || { bg:'#f3f4f6', c:'#6b7280', label: status }
-  return (
-    <span style={{ display:'inline-block', padding:'2px 7px', borderRadius:4, fontSize:10,
-      fontWeight:700, background:s.bg, color:s.c }}>{s.label}</span>
-  )
 }
 
 // ─── TURF BUILDER (MapLibre) ──────────────────────────────────────────────────
@@ -344,7 +343,7 @@ function TurfBuilder({ candKey, cfg, houses, districtGeo, geoLoading, listId }) 
   const styleInitRef       = useRef(false) // skip the first isSatellite effect run
   const [mapLoaded,    setMapLoaded]    = useState(false)
   const [nets,         setNets]         = useState([])
-  const [nextId,       setNextId]       = useState(1)
+  const [, setNextId]                   = useState(1)
   const [selectedId,   setSelectedId]   = useState(null)
   const [tool,         setTool]         = useState('draw')
   const [isSatellite,  setIsSatellite]  = useState(false)
@@ -670,7 +669,7 @@ function TurfBuilder({ candKey, cfg, houses, districtGeo, geoLoading, listId }) 
       map.getCanvas().style.cursor = ''
       map.dragPan.enable()
     }
-  }, [mapLoaded, tool, houses])
+  }, [mapLoaded, tool, houses, listId, user?.id])
 
   // ── deleteNet / autoAssign / stats ───────────────────────────────────────────
   const deleteNet = useCallback((id) => {
@@ -1012,7 +1011,7 @@ function LiveDashboard({ listId }) {
           {/* Result breakdown */}
           <div style={{ background:'#fff', border:'1px solid #E5E7EB', borderRadius:10, padding:'14px 16px' }}>
             <div style={{ fontSize:13, fontWeight:700, marginBottom:12 }}>Result Breakdown</div>
-            {stats && Object.entries(stats.byStatus).length > 0 ? Object.entries(stats.byStatus).map(([status, count], i) => {
+            {stats && Object.entries(stats.byStatus).length > 0 ? Object.entries(stats.byStatus).map(([status, count]) => {
               const sc = statusColorMap[status] || { bg:'#f3f4f6', c:'#374151', label: status }
               const pct = stats.total > 0 ? Math.round((count / stats.total) * 100) : 0
               return (
@@ -1185,316 +1184,6 @@ function TeamMobile({ listId }) {
   )
 }
 
-// ─── CANVASSER VIEW (unused — canvassing handled in the Volunteer Portal at /v) ─
-// eslint-disable-next-line no-unused-vars
-function _CanvasserView({ isOnline, listId, onKnockSaved, activeCandidates = [], activeCandidateId = null, isScout = false }) {
-  const { user } = useAuth()
-  const [activeHouse, setActiveHouse] = useState(null)
-  const [noteText, setNoteText]       = useState('')
-  const [savingKnock, setSavingKnock] = useState(false)
-  const [savedStatus, setSavedStatus] = useState(null)
-  const [history, setHistory]         = useState([])
-  const [historyLoading, setHistoryLoading] = useState(false)
-  const [offlineQueued, setOfflineQueued]   = useState(false)
-  const [advancedMode, setAdvancedMode]     = useState(false)
-  const [supportLevels, setSupportLevels]   = useState({}) // { [candidateId]: level }
-  const [surveyAnswers, setSurveyAnswers]   = useState({}) // { [questionId]: answer }
-
-  const houses = [
-    { addr:'1842 Rib Mountain Dr', resident:'James P. (R)', age:54 },
-    { addr:'1840 Rib Mountain Dr', resident:'Linda P. (D)', age:51 },
-    { addr:'1836 Rib Mountain Dr', resident:'Unknown',      age:null },
-    { addr:'307 N 3rd Ave',        resident:'Tom K. (R)',   age:67 },
-    { addr:'309 N 3rd Ave',        resident:'Wanda K. (I)', age:64 },
-  ]
-
-  const SIMPLE_BTNS = [
-    { label:'⌂ Home',          bg:'#dcfce7', c:'#15803d', val:'contacted' },
-    { label:'▤ Left Lit',      bg:'#fef9c3', c:'#a16207', val:'not_home' },
-    { label:'⊘ Refused',       bg:'#fee2e2', c:'#b91c1c', val:'refused' },
-    { label:'■ No Soliciting', bg:'#fef3c7', c:'#92400e', val:'no_soliciting' },
-  ]
-  const ADVANCED_BTNS = [
-    { label:'⊗ Do Not Knock',  bg:'#dbeafe', c:'#1d4ed8', val:'do_not_knock' },
-    { label:'✉ Moved',         bg:'#f3e8ff', c:'#7e22ce', val:'moved' },
-    { label:'✕ Wrong Address', bg:'#f3f4f6', c:'#6b7280', val:'wrong_address' },
-  ]
-
-  // Load contact history when house is selected
-  useEffect(() => {
-    if (activeHouse === null) { setHistory([]); return }
-    const addr = houses[activeHouse].addr
-    setHistoryLoading(true)
-    getKnockHistoryByAddress(addr)
-      .then(({ data }) => { setHistory(Array.isArray(data) ? data : []) })
-      .catch(() => setHistory([]))
-      .finally(() => setHistoryLoading(false))
-  }, [activeHouse])
-
-  const handleSelectHouse = (i) => {
-    setActiveHouse(i)
-    setSavedStatus(null)
-    setNoteText('')
-    setOfflineQueued(false)
-    setSupportLevels({})
-    setSurveyAnswers({})
-  }
-
-  const handleLog = async (statusVal) => {
-    if (activeHouse === null) return
-    setSavingKnock(true)
-    setSavedStatus(null)
-    setOfflineQueued(false)
-    const knockData = {
-      list_id:       listId || null,
-      address:       houses[activeHouse].addr,
-      status:        statusVal,
-      notes:         noteText || null,
-      knocked_at:    new Date().toISOString(),
-      survey_answers: Object.keys(surveyAnswers).length > 0 ? surveyAnswers : null,
-      support_levels: Object.keys(supportLevels).length > 0 ? supportLevels : null,
-    }
-    try {
-      if (!isOnline) throw new Error('offline')
-      const { error } = await supabase
-        .from('door_knocks')
-        .insert({ ...knockData, knocked_by: user?.id || null })
-        .select()
-      if (error) throw error
-      setSavedStatus(statusVal)
-      onKnockSaved && onKnockSaved()
-      // Refresh history
-      const { data } = await getKnockHistoryByAddress(houses[activeHouse].addr)
-      setHistory(Array.isArray(data) ? data : [])
-    } catch (err) {
-      // Offline fallback: queue to IndexedDB
-      await queueKnock(knockData)
-      setOfflineQueued(true)
-      setSavedStatus(statusVal)
-    } finally {
-      setSavingKnock(false)
-    }
-  }
-
-  return (
-    <div style={{ overflowY:'auto', padding:'16px 20px', flex:1 }}>
-      {!isOnline && (
-        <div style={{ display:'flex', alignItems:'center', gap:8, background:'#fef3c7', border:'1px solid #fcd34d', borderRadius:8, padding:'8px 14px', marginBottom:12, fontSize:12, fontWeight:600, color:'#92400e' }}>
-          <WifiOff size={14}/> Offline — knocks will be saved to your device and synced when you reconnect.
-        </div>
-      )}
-      {!listId && (
-        <div style={{ display:'flex', alignItems:'center', gap:8, background:'#f0f9ff', border:'1px solid #bae6fd', borderRadius:8, padding:'8px 14px', marginBottom:12, fontSize:12, fontWeight:600, color:'#0369a1' }}>
-          <Clock size={14}/> Setting up campaign… Knocks recorded now will be saved without a list assignment.
-        </div>
-      )}
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, alignItems:'start' }}>
-
-        {/* House list */}
-        <div>
-          <div style={{ fontSize:13, fontWeight:700, marginBottom:10 }}>Your Turf — Block 4-A ({houses.length} doors)</div>
-          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-            {houses.map((h, i) => (
-              <div key={h.addr || i} onClick={() => handleSelectHouse(i)}
-                style={{ background:'#fff', border:`2px solid ${activeHouse===i ? '#8B0000' : '#E5E7EB'}`, borderRadius:9, padding:'10px 14px', cursor:'pointer', transition:'all .15s' }}>
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                  <div>
-                    <div style={{ fontWeight:600, fontSize:13 }}>{h.addr}</div>
-                    <div style={{ fontSize:11, color:'#6B7280' }}>{h.resident}{h.age ? ` · Age ${h.age}` : ''}</div>
-                  </div>
-                  <ChevronRight size={16} style={{ color:'#9ca3af' }}/>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Detail panel */}
-        {activeHouse !== null ? (
-          <div style={{ background:'#fff', border:'1px solid #E5E7EB', borderRadius:10, padding:16 }}>
-            <div style={{ fontWeight:700, fontSize:14, marginBottom:2 }}>{houses[activeHouse].addr}</div>
-            <div style={{ fontSize:12, color:'#6B7280', marginBottom:12 }}>{houses[activeHouse].resident}</div>
-
-            {/* ── Contact History (Feature 2) ── */}
-            <div style={{ marginBottom:12, background:'#f9fafb', border:'1px solid #E5E7EB', borderRadius:8, padding:'10px 12px' }}>
-              <div style={{ display:'flex', alignItems:'center', gap:5, fontSize:11, fontWeight:700, color:'#374151', marginBottom:6 }}>
-                <History size={12}/> Prior Visits
-              </div>
-              {historyLoading ? (
-                <div style={{ fontSize:11, color:'#9ca3af' }}>Loading history…</div>
-              ) : history.length === 0 ? (
-                <div style={{ fontSize:11, color:'#9ca3af' }}>No prior visits — first contact.</div>
-              ) : (
-                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-                  {history.slice(0, 3).map((h, i) => (
-                    <div key={h.id || `hist-${i}`} style={{ display:'flex', alignItems:'center', gap:8, fontSize:11 }}>
-                      <span style={{ color:'#6B7280', minWidth:52 }}>{relTime(h.knocked_at)}</span>
-                      {statusBadge(h.status)}
-                      {h.notes && <span style={{ color:'#6B7280', fontStyle:'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:120 }}>"{h.notes}"</span>}
-                    </div>
-                  ))}
-                  {history.length > 3 && <div style={{ fontSize:10, color:'#9ca3af' }}>+{history.length - 3} more visits</div>}
-                </div>
-              )}
-            </div>
-
-            {/* Action buttons */}
-            {savedStatus ? (
-              <div style={{ textAlign:'center', padding:'16px 8px' }}>
-                {offlineQueued ? (
-                  <div style={{ color:'#92400e', fontSize:12, fontWeight:600 }}>
-                    <WifiOff size={16} style={{ display:'block', margin:'0 auto 6px' }}/> Saved offline — will sync when connected
-                  </div>
-                ) : (
-                  <div style={{ color:'#15803d', fontSize:12, fontWeight:600 }}>
-                    <CheckCircle size={16} style={{ display:'block', margin:'0 auto 6px' }}/> Logged successfully
-                  </div>
-                )}
-                <button onClick={() => { setSavedStatus(null); setNoteText('') }}
-                  style={{ marginTop:10, padding:'6px 16px', borderRadius:7, fontSize:12, fontWeight:600, border:'1px solid #E5E7EB', background:'#fff', cursor:'pointer' }}>
-                  Next Door →
-                </button>
-              </div>
-            ) : (
-              <>
-                {/* ── Simple / Advanced mode toggle ── */}
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
-                  <div style={{ fontSize:11, fontWeight:700, color:'#374151' }}>Log Result</div>
-                  <button
-                    type="button"
-                    onClick={() => setAdvancedMode(m => !m)}
-                    style={{ fontSize:10, fontWeight:600, color: advancedMode ? '#7e22ce' : '#6B7280', background: advancedMode ? '#f3e8ff' : '#f3f4f6', border:'none', borderRadius:5, padding:'3px 8px', cursor:'pointer' }}>
-                    {advancedMode ? '▸ Simple mode' : '≡ Advanced'}
-                  </button>
-                </div>
-
-                {/* ── Primary result buttons ── */}
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom: advancedMode ? 6 : 12 }}>
-                  {SIMPLE_BTNS.map((b, i) => (
-                    <button key={i} onClick={() => handleLog(b.val)} disabled={savingKnock}
-                      style={{ borderRadius:10, padding:'12px 8px', fontSize:11, fontWeight:700, cursor:savingKnock?'wait':'pointer', border:'none', background:b.bg, color:b.c, display:'flex', flexDirection:'column', alignItems:'center', gap:3, opacity:savingKnock?.6:1 }}>
-                      <span style={{ fontSize:18 }}>{b.label.split(' ')[0]}</span>
-                      {b.label.split(' ').slice(1).join(' ')}
-                    </button>
-                  ))}
-                </div>
-
-                {/* ── Advanced result buttons (hidden in simple mode) ── */}
-                {advancedMode && (
-                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:6, marginBottom:12 }}>
-                    {ADVANCED_BTNS.map((b, i) => (
-                      <button key={i} onClick={() => handleLog(b.val)} disabled={savingKnock}
-                        style={{ borderRadius:8, padding:'8px 4px', fontSize:10, fontWeight:700, cursor:savingKnock?'wait':'pointer', border:'1px dashed #E5E7EB', background:b.bg, color:b.c, display:'flex', flexDirection:'column', alignItems:'center', gap:2, opacity:savingKnock?.6:1 }}>
-                        <span style={{ fontSize:14 }}>{b.label.split(' ')[0]}</span>
-                        {b.label.split(' ').slice(1).join(' ')}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {/* ── Multi-candidate support levels (advanced mode, 2+ candidates) ── */}
-                {advancedMode && activeCandidates.length > 1 && (
-                  <div style={{ background:'#fafafa', border:'1px solid #E5E7EB', borderRadius:8, padding:'10px 12px', marginBottom:10 }}>
-                    <div style={{ fontSize:11, fontWeight:700, color:'#374151', marginBottom:7 }}>
-                      Voter Support Levels
-                    </div>
-                    {activeCandidates.map(cand => (
-                      <div key={cand.id} style={{ marginBottom:8 }}>
-                        <div style={{ fontSize:11, fontWeight:600, color:'#374151', marginBottom:4 }}>{cand.name}</div>
-                        <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
-                          {[
-                            { val:'strong_support',  label:'Strong ✓', c:'#15803d', bg:'#dcfce7' },
-                            { val:'lean_support',    label:'Lean ✓',   c:'#166534', bg:'#bbf7d0' },
-                            { val:'undecided',       label:'Undecided',c:'#6B7280', bg:'#f3f4f6' },
-                            { val:'lean_against',    label:'Lean ✗',   c:'#b91c1c', bg:'#fee2e2' },
-                            { val:'strong_against',  label:'Strong ✗', c:'#991b1b', bg:'#fecaca' },
-                          ].map(opt => (
-                            <button
-                              key={opt.val}
-                              type="button"
-                              onClick={() => setSupportLevels(prev => ({ ...prev, [cand.id]: opt.val }))}
-                              style={{
-                                fontSize:9, fontWeight:700, padding:'3px 7px', borderRadius:4, cursor:'pointer',
-                                border: supportLevels[cand.id] === opt.val ? `2px solid ${opt.c}` : '1px solid #E5E7EB',
-                                background: supportLevels[cand.id] === opt.val ? opt.bg : '#fff',
-                                color: supportLevels[cand.id] === opt.val ? opt.c : '#6B7280',
-                              }}>
-                              {opt.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* ── Survey questions (advanced mode, candidate has questions defined) ── */}
-                {advancedMode && !isScout && (() => {
-                  const cand = activeCandidates.find(c => c.id === activeCandidateId)
-                  const questions = cand?.survey_questions || []
-                  if (questions.length === 0) return null
-                  return (
-                    <div style={{ background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:8, padding:'10px 12px', marginBottom:10 }}>
-                      <div style={{ fontSize:11, fontWeight:700, color:'#1d4ed8', marginBottom:7 }}>
-                        Survey Questions
-                      </div>
-                      {questions.map(q => (
-                        <div key={q.id} style={{ marginBottom:10 }}>
-                          <div style={{ fontSize:11, fontWeight:600, color:'#1e3a8a', marginBottom:4 }}>{q.text}</div>
-                          {q.type === 'yes_no' ? (
-                            <div style={{ display:'flex', gap:6 }}>
-                              {['Yes','No','N/A'].map(opt => (
-                                <button key={opt} type="button"
-                                  onClick={() => setSurveyAnswers(prev => ({ ...prev, [q.id]: opt }))}
-                                  style={{ fontSize:10, fontWeight:700, padding:'4px 10px', borderRadius:5, cursor:'pointer',
-                                    border: surveyAnswers[q.id] === opt ? '2px solid #1d4ed8' : '1px solid #bfdbfe',
-                                    background: surveyAnswers[q.id] === opt ? '#dbeafe' : '#fff', color: surveyAnswers[q.id] === opt ? '#1d4ed8' : '#6B7280' }}>
-                                  {opt}
-                                </button>
-                              ))}
-                            </div>
-                          ) : q.type === 'choice' && q.options?.length > 0 ? (
-                            <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
-                              {q.options.map(opt => (
-                                <button key={opt} type="button"
-                                  onClick={() => setSurveyAnswers(prev => ({ ...prev, [q.id]: opt }))}
-                                  style={{ fontSize:10, fontWeight:600, padding:'3px 8px', borderRadius:5, cursor:'pointer',
-                                    border: surveyAnswers[q.id] === opt ? '2px solid #1d4ed8' : '1px solid #bfdbfe',
-                                    background: surveyAnswers[q.id] === opt ? '#dbeafe' : '#fff', color: surveyAnswers[q.id] === opt ? '#1d4ed8' : '#6B7280' }}>
-                                  {opt}
-                                </button>
-                              ))}
-                            </div>
-                          ) : (
-                            <input type="text" value={surveyAnswers[q.id] || ''}
-                              onChange={e => setSurveyAnswers(prev => ({ ...prev, [q.id]: e.target.value }))}
-                              placeholder="Type answer…"
-                              style={{ width:'100%', padding:'5px 8px', border:'1px solid #bfdbfe', borderRadius:5, fontSize:11, outline:'none', boxSizing:'border-box' }}/>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )
-                })()}
-
-                {/* ── Notes ── */}
-                <textarea value={noteText} onChange={e => setNoteText(e.target.value)}
-                  placeholder="Notes (optional)…"
-                  style={{ width:'100%', padding:'8px 10px', border:'1px solid #E5E7EB', borderRadius:7, fontSize:12, resize:'vertical', minHeight:52, outline:'none', fontFamily:'inherit', boxSizing:'border-box' }}/>
-              </>
-            )}
-          </div>
-        ) : (
-          <div style={{ background:'#fff', border:'1px solid #E5E7EB', borderRadius:10, padding:32, textAlign:'center', color:'#6B7280' }}>
-            <MapPin size={28} style={{ margin:'0 auto 8px', opacity:.4 }}/>
-            <div style={{ fontWeight:600 }}>Select a house to log results</div>
-            <div style={{ fontSize:11, marginTop:4 }}>Prior visit history loads automatically</div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
 
 // ─── FOLLOW-UP QUEUE ──────────────────────────────────────────────────────────
 function FollowUpQueue({ listId }) {
@@ -1915,7 +1604,7 @@ function ShiftsTab({ listId }) {
               ))}</tr>
             </thead>
             <tbody>
-              {shifts.map((s, i) => (
+              {shifts.map((s) => (
                 <tr key={s.id}>
                   <td style={{ padding:'10px 14px', borderBottom:'1px solid #f3f4f6', fontWeight:600, fontSize:13 }}>
                     <div style={{ display:'flex', alignItems:'center', gap:8 }}>
@@ -1997,7 +1686,7 @@ function ExportTab({ listId, candidateName }) {
     }
   }, [listId, fromDate, toDate])
 
-  useEffect(() => { fetchPreview() }, [listId, fromDate, toDate])
+  useEffect(() => { fetchPreview() }, [fetchPreview])
 
   const escHtml = (s) => String(s == null ? '' : s)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -2183,7 +1872,6 @@ ${knocks.slice(0, 200).map(k =>
           )}
           <div style={{ paddingTop:20 }}>
             {['Today','Last 7 days','Last 30 days'].map((label, i) => {
-              const d = new Date()
               const days = [0,7,30][i]
               return (
                 <button key={label} onClick={() => {
@@ -2541,7 +2229,10 @@ export default function DoorKnocking() {
   const [candKey, setCandKey] = useState('kroll')
   const [candidateConfig, setCandidateConfig] = useState(STATIC_CANDIDATE_CONFIG)
   const [candidateList, setCandidateList] = useState(STATIC_CANDIDATE_LIST)
-  const [houses, setHouses] = useState([])
+  // Full generated house set for the district; the Scout cap is applied as a
+  // derived value so a plan change re-slices without refetching geometry.
+  const [allHouses, setAllHouses] = useState([])
+  const houses = useMemo(() => (isScout ? allHouses.slice(0, 100) : allHouses), [allHouses, isScout])
   const [districtGeo, setDistrictGeo] = useState(null) // { feature, ring, bbox }
   const [geoLoading, setGeoLoading] = useState(true)
 
@@ -2677,20 +2368,17 @@ export default function DoorKnocking() {
     return () => { mounted = false; clearInterval(iv) }
   }, [])
 
-  // ── Auto-sync when connection returns ─────────────────────────────────────────
-  useEffect(() => {
-    if (!isOnline || pendingKnocksCount === 0 || syncing) return
-    syncOfflineKnocks()
-  }, [isOnline, user]) // eslint-disable-line react-hooks/exhaustive-deps
-
   const [syncResult, setSyncResult] = useState(null) // null | { synced, failed }
 
-  async function syncOfflineKnocks() {
-    if (!user?.id) return
+  // Depends only on the user's id (plus setters/imports), so it keeps one
+  // identity per signed-in user.
+  const userId = user?.id
+  const syncOfflineKnocks = useCallback(async () => {
+    if (!userId) return
     setSyncing(true)
     setSyncResult(null)
     try {
-      const result = await flushQueue(supabase, user.id)
+      const result = await flushQueue(supabase, userId)
       const synced = result.synced || 0
       const failed = result.failed || 0
       if (synced > 0) setPendingKnocksCount(prev => Math.max(0, prev - synced))
@@ -2701,7 +2389,23 @@ export default function DoorKnocking() {
       setSyncResult({ synced: 0, failed: -1 }) // -1 = total failure
     }
     finally { setSyncing(false) }
-  }
+  }, [userId])
+
+  // ── Auto-sync when connection returns ─────────────────────────────────────────
+  // Triggers: coming online, or the signed-in user (and therefore
+  // syncOfflineKnocks) changing. pendingKnocksCount and syncing are GUARDS,
+  // not triggers — both are written by syncOfflineKnocks itself, so making
+  // them deps would turn a partially-failed flush into a retry loop
+  // (syncing true→false re-fires the effect while pending stays > 0). They
+  // are read through latest-value refs instead.
+  const pendingKnocksCountRef = useRef(pendingKnocksCount)
+  pendingKnocksCountRef.current = pendingKnocksCount
+  const syncingRef = useRef(syncing)
+  syncingRef.current = syncing
+  useEffect(() => {
+    if (!isOnline || pendingKnocksCountRef.current === 0 || syncingRef.current) return
+    syncOfflineKnocks()
+  }, [isOnline, syncOfflineKnocks])
 
   // ── Resolve the door_knock_lists DB row for the active candidate ──────────────
   // Creates a default list if none exists so Shifts/Messages/Export always have an ID.
@@ -2725,7 +2429,7 @@ export default function DoorKnocking() {
         }
       })
       .catch(() => {})
-  }, [candKey, candidateConfig]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [candKey, candidateConfig])  
 
   // Load real GeoJSON geometry whenever candidate or config changes
   useEffect(() => {
@@ -2735,8 +2439,7 @@ export default function DoorKnocking() {
     loadDistrictGeometry(candidateConfig[candKey]).then(geo => {
       if (!mounted) return
       setDistrictGeo(geo)
-      const allHouses = geo ? genHousesInRing(candKey, geo.ring) : []
-      setHouses(isScout ? allHouses.slice(0, 100) : allHouses)
+      setAllHouses(geo ? genHousesInRing(candKey, geo.ring) : [])
       setGeoLoading(false)
     }).catch(() => {
       if (mounted) setGeoLoading(false)

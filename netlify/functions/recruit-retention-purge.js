@@ -144,7 +144,7 @@ exports.handler = async (event = {}) => {
   })
 
   // ── 1. How many rows are in scope? (also the whole job when dry_run) ───────
-  let eligible = 0
+  let eligible
   try {
     const res = await rest(`/recruitment_prospects?select=id&${filter}`, {
       method: 'HEAD',
@@ -181,7 +181,7 @@ exports.handler = async (event = {}) => {
     { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(patch) },
   )
 
-  let purged = 0
+  let purged
   let statusWritten = true
   try {
     let res = await patchOnce(PURGE_PATCH)
@@ -200,7 +200,8 @@ exports.handler = async (event = {}) => {
           + 'recruitment_prospects.research_status to include \'purged\'. Detail: '
           + body.slice(0, 300)
         )
-        const { research_status, ...withoutStatus } = PURGE_PATCH
+        const withoutStatus = { ...PURGE_PATCH }
+        delete withoutStatus.research_status
         statusWritten = false
         res = await patchOnce(withoutStatus)
       } else {

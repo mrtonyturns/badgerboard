@@ -1606,7 +1606,7 @@ async function runAnnouncements() {
       const count = await fetch(`${DB}/announcements?is_active=eq.true`, {
         headers: { apikey: ANON },
       })
-      const rows = await count.json()
+      await count.json()  // drain the body; only the status is asserted
       // If any were deleted, this is a problem — but we can't know baseline count easily
       // Just assert the operation was either blocked or 0 rows affected
     }
@@ -1684,7 +1684,7 @@ async function main() {
 
   // ─── Summary ──────────────────────────────────────────────────────────────
   console.log('\n\x1b[1m\x1b[35m═══════════════════════════════════════════════\x1b[0m')
-  console.log(`\x1b[1m Results: ${totalPass}/${totalTests} passed\x1b[0m`)
+  console.log(`\x1b[1m Results: ${totalPass}/${totalTests} passed, ${totalFail} failed\x1b[0m`)
 
   const failures = results.filter(r => !r.ok)
   if (failures.length > 0) {

@@ -14,7 +14,7 @@
 // the existing sources (pages/dashboard/shared, lib/campaignEnums, lib/tiers) —
 // this file defines none of them.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { format, differenceInCalendarDays } from 'date-fns'
 import { Lock } from 'lucide-react'
@@ -100,7 +100,7 @@ export default function CandidateDetail() {
   const districtCounties = useDistrictCounties(candidate?.office)
 
   // ── data ────────────────────────────────────────────────────────────────────
-  const fetchAll = async () => {
+  const fetchAll = useCallback(async () => {
     const [{ data: c }, { data: d }, { data: ir }] = await Promise.all([
       getCandidate(id), getDossiers(id), getIncumbentRecords(id),
     ])
@@ -109,7 +109,7 @@ export default function CandidateDetail() {
     setDossiers(d || [])
     setRecords(ir || [])
     return c
-  }
+  }, [id])
 
   useEffect(() => {
     let cancelled = false
@@ -120,7 +120,7 @@ export default function CandidateDetail() {
     setEditing(false); setSaveError('')
     fetchAll().finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [id])
+  }, [fetchAll])
 
   // ── Route → view sync (bug fix) ─────────────────────────────────────────────
   // React Router keeps this component MOUNTED when only the :id param changes,

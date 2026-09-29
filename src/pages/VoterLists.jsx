@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { format } from 'date-fns'
 import {
   Users, Upload, Download, MapPin, Search, Trash2,
@@ -35,7 +35,9 @@ function VoteHistoryDots({ seed = 0 }) {
 // NOTE: This displays simulated/placeholder data. Integrate a real voter file
 // provider to show actual propensity scores.
 function PropensityBar({ seed = 0 }) {
-  let r = ((seed * 6364136223846793005 + 1442695040888963407) & 0x7fffffff) || 1
+  // 32-bit LCG via Math.imul — the old 64-bit constants exceeded 2^53 and
+  // silently lost precision in JS doubles (no-loss-of-precision).
+  let r = (((Math.imul(seed | 0, 1664525) + 1013904223) >>> 0) & 0x7fffffff) || 1
   const score = Math.abs(r % 101)
   const color = score >= 70 ? '#16a34a' : score >= 40 ? '#eab308' : '#dc2626'
   return (
@@ -65,9 +67,18 @@ function SimulatedDataBanner() {
   )
 }
 import {
-  getVoterLists, createVoterList, updateVoterList, deleteVoterList,
-  getVoters, getAllVoters, createVoters, deleteVotersByList, updateVoter,
-  getVoterSavedLists, createVoterSavedList, updateVoterSavedList, deleteVoterSavedList,
+  getVoterLists,
+  createVoterList,
+  updateVoterList,
+  deleteVoterList,
+  getVoters,
+  getAllVoters,
+  createVoters,
+  deleteVotersByList,
+  getVoterSavedLists,
+  createVoterSavedList,
+  updateVoterSavedList,
+  deleteVoterSavedList,
 } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import SearchableSelect from '../components/SearchableSelect'
@@ -246,7 +257,7 @@ function VoterMapView({ voters, savedLists, onAddToList }) {
           `<div data-list-id="${sl.id}" style="padding:4px 8px;cursor:pointer;font-size:12px;border-radius:4px;hover:background:#f3f4f6">+ Add to "${sl.name}"</div>`
         ).join('')
 
-        const popup = L.popup({ maxWidth: 220, closeButton: true })
+        L.popup({ maxWidth: 220, closeButton: true })
           .setLatLng([voter.latitude, voter.longitude])
           .setContent(`
             <div style="font-family:sans-serif;font-size:12px;">
@@ -436,7 +447,11 @@ export default function VoterLists() {
       // Strip raw_data before inserting (avoids large payloads) and batch in 200-row chunks
       // created_by is REQUIRED by the voters RLS insert policy (migration
       // 20260422000004) — without it every chunk is rejected with 403.
-      const rows = csvPreview.map(({ raw_data, ...r }) => ({ ...r, voter_list_id: newList.id, created_by: user?.id }))
+      const rows = csvPreview.map((row) => {
+        const r = { ...row }
+        delete r.raw_data   // parser-only field, not a voters column
+        return { ...r, voter_list_id: newList.id, created_by: user?.id }
+      })
       const chunks = []
       for (let i = 0; i < rows.length; i += UPLOAD_CHUNK_SIZE) {
         chunks.push(rows.slice(i, i + UPLOAD_CHUNK_SIZE))

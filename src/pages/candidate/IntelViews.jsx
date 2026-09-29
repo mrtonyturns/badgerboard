@@ -7,7 +7,7 @@
 // Section 6 / Section 13 opposition panels, and the Sections 8 & 9 allies
 // content. The plan gate (canIntel) and its Lock behavior are preserved.
 
-import React, { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase, updateCandidate, getDossier } from '../../lib/supabase'
 import {
   T, Card, EmptyState, CtaButton, TextLink, Btn, ViewHead, NewBadge,
@@ -385,15 +385,23 @@ const QUADRANTS = [
   { key: 'threats',       label: 'Threats',       color: '#b45309' },
 ]
 
+// Empty SWOT. Module-scope constant: state updates are always immutable
+// spreads (setSwot(p => ({ ...p, ... }))), so sharing it is safe.
+const BLANK_SWOT = { strengths: '', weaknesses: '', opportunities: '', threats: '' }
+
 export function SwotView({ candidate, dossiers, canIntel, swotUpdated, onRefresh, nav }) {
-  const blank = { strengths: '', weaknesses: '', opportunities: '', threats: '' }
-  const [swot, setSwot] = useState(candidate.swot_data || blank)
+  const [swot, setSwot] = useState(candidate.swot_data || BLANK_SWOT)
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState('')
 
-  useEffect(() => { setSwot(candidate.swot_data || blank) }, [candidate.id])
+  // Re-seed the local draft ONLY when the candidate changes. swot_data is a
+  // fresh object on every parent refetch (onRefresh → fetchAll), so keying on
+  // it would clobber in-progress edits; read the latest value via a ref instead.
+  const swotDataRef = useRef(candidate.swot_data)
+  swotDataRef.current = candidate.swot_data
+  useEffect(() => { setSwot(swotDataRef.current || BLANK_SWOT) }, [candidate.id])
 
   if (!canIntel) return <LockedView title="SWOT" onSeePlans={() => nav('/plans')} />
 
@@ -444,7 +452,7 @@ export function SwotView({ candidate, dossiers, canIntel, swotUpdated, onRefresh
           {!editing && <Btn onClick={() => setEditing(true)}>Edit</Btn>}
           {editing && (
             <>
-              <Btn onClick={() => { setEditing(false); setSwot(candidate.swot_data || blank) }}>Cancel</Btn>
+              <Btn onClick={() => { setEditing(false); setSwot(candidate.swot_data || BLANK_SWOT) }}>Cancel</Btn>
               <Btn kind="primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Btn>
             </>
           )}
@@ -710,9 +718,15 @@ export function parseAllies(sectionText) {
 // no guessing — and it simply doesn't run when there is no previous dossier.
 function usePreviousAllyNames(dossiers) {
   const prevId = dossiers?.[1]?.id || null
+  // Keyed on the previous dossier's id, not the array identity (the parent
+  // hands down a fresh array on every refetch). The row itself is read through
+  // a latest-value ref so the effect gets the current object without making
+  // its identity a trigger.
+  const prevRef = useRef(null)
+  prevRef.current = dossiers?.[1] || null
   const [names, setNames] = useState(null)
   useEffect(() => {
-    const prev = dossiers?.[1]
+    const prev = prevRef.current
     if (!prev) { setNames(null); return }
     let cancelled = false
     fetchDossierContent(prev).then(content => {
@@ -725,7 +739,7 @@ function usePreviousAllyNames(dossiers) {
       setNames(new Set(found))
     })
     return () => { cancelled = true }
-  }, [prevId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [prevId])
   return names
 }
 

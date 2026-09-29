@@ -10,7 +10,7 @@
 // create at signup was rejected the first time they tried to change it here,
 // with no explanation of why the rules differed. One minimum, everywhere.
 
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { supabase, getRecentActivity, logActivity } from '../../lib/supabase'
 import { scorePassword, PASSWORD_MIN_LENGTH, PASSWORD_MIN_SCORE } from '../../lib/password'

@@ -393,9 +393,8 @@ async function runAudit() {
 
     // ── RLS: Door Knocks ─────────────────────────────────────────────────────
     const DKK = 'RLS — Door Knocks'
-    let doorKnockId = null
     if (seedListId) {
-      doorKnockId = await rlsIsolationSuite(
+      await rlsIsolationSuite(
         DKK,
         'door_knocks',
         { list_id: seedListId, address: `${STAMP} Audit St`, status: 'not_home' },

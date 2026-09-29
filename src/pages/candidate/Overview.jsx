@@ -8,15 +8,27 @@
 // the card renders the honest empty state instead of a zero or a placeholder
 // chart (SPEC rule 4 / §4 "never render zero-filled charts").
 
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { format } from 'date-fns'
 import { getDossier } from '../../lib/supabase'
 import { hasFindings } from '../../lib/profileContent'
 import { candidateStatusLabel as statusLabel } from '../../lib/campaignEnums'
 import {
-  T, Card, CardHead, EmptyState, CtaButton, TextLink, LivePulseDot,
-  fmtDate, safeISO, nextMonday, Btn, CategoryPill, sectionTarget, Spinner,
-  digestItemMeta, isDigestItemUnread,
+  T,
+  Card,
+  CardHead,
+  EmptyState,
+  CtaButton,
+  TextLink,
+  fmtDate,
+  safeISO,
+  nextMonday,
+  Btn,
+  CategoryPill,
+  sectionTarget,
+  Spinner,
+  digestItemMeta,
+  isDigestItemUnread,
 } from './shared'
 
 // ── Status detection (unchanged rules from the previous page) ────────────────

@@ -116,6 +116,12 @@ const LEVEL_TINT = {
   negative: { bg: '#FDECEC', c: '#A51C24' },
   unknown:  { bg: '#F5F5F4', c: T.faint },
 }
+// Sort ranks for the results table (constant — module scope so the view
+// useMemo doesn't depend on objects re-created every render).
+const NOTORIETY_RANK = { high: 0, medium: 1, low: 2, unknown: 3 }
+const SENTIMENT_RANK = { positive: 0, mixed: 1, negative: 2, unknown: 3 }
+const STATUS_RANK    = { done: 0, researching: 1, pending: 2, skipped_quota: 3, error: 4 }
+
 const STATUS_TINT = {
   pending:       { bg: '#F5F5F4', c: T.faint,   label: 'Pending' },
   researching:   { bg: '#FDF6F0', c: '#B45309', label: 'Researching' },
@@ -414,10 +420,7 @@ export default function Recruit() {
   }
 
   // ── Results view: filter → sort → export ───────────────────────────────────
-  const NOTORIETY_RANK = { high: 0, medium: 1, low: 2, unknown: 3 }
-  const SENTIMENT_RANK = { positive: 0, mixed: 1, negative: 2, unknown: 3 }
-  const STATUS_RANK    = { done: 0, researching: 1, pending: 2, skipped_quota: 3, error: 4 }
-
+  // (sort ranks live at module scope: NOTORIETY_RANK / SENTIMENT_RANK / STATUS_RANK)
   const view = useMemo(() => {
     let rows = prospects.filter(p => !p.excluded)
     if (excludeUnknowns) rows = rows.filter(p => !isUnknownProspect(p))

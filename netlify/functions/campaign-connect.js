@@ -69,7 +69,6 @@ exports.handler = async (event) => {
         // attach inviter email for display
         const links = Array.isArray(data) ? data : []
         for (const l of links) {
-          const inv = await H.sb(`account_links?id=eq.${l.id}&select=action_user_id`)
           l.inviter_email = null
         }
         return reply({ ok: true, invites: links })

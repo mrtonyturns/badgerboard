@@ -9,7 +9,6 @@
 // Styling matches the dashboards, not Tailwind: tokens come from
 // pages/dashboard/shared so the card can't drift from the cards below it.
 
-import React from 'react'
 import { T, Card, CtaButton, TextLink } from '../../pages/dashboard/shared'
 import { onboardingProgress } from './steps.js'
 

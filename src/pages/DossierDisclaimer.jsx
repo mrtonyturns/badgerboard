@@ -1,4 +1,3 @@
-import React from 'react'
 import { Link } from 'react-router-dom'
 import { FileText, Shield, AlertTriangle, Scale, ChevronLeft } from 'lucide-react'
 import BadgerBoardLogo from '../components/BadgerBoardLogo'

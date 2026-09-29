@@ -128,7 +128,7 @@ Return ONLY the JSON array:`
   logAiUsage({ userId: uid, endpoint: 'district-intel', provider: 'anthropic', model: 'claude-opus-4-8', inputTokens: claudeData?.usage?.input_tokens || 0, outputTokens: claudeData?.usage?.output_tokens || 0 })
   const rawText = claudeData.content?.[0]?.text?.trim() || '[]'
 
-  let records = []
+  let records
   try {
     // Strip any accidental markdown code fences
     const cleaned = rawText.replace(/^```(?:json)?\n?/i, '').replace(/\n?```\s*$/i, '').trim()

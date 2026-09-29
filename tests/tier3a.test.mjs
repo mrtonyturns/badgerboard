@@ -238,7 +238,7 @@ t('every option a dropdown offers survives normalizePartyForDb unchanged',
     /const PARTIES = DB_PARTIES/.test(admin) && !/'Democrat', 'Republican'/.test(admin))
 
   t('prospecting filter is DB_PARTIES',
-    /const PARTY_OPTIONS  = DB_PARTIES/.test(prosp))
+    /const PARTY_OPTIONS {2}= DB_PARTIES/.test(prosp))
   t('prospecting filter keeps its "All parties" blank option',
     prosp.includes('<option value="">All parties</option>'))
 

@@ -11,7 +11,6 @@
 //      There is no server behaviour behind a "only when something changes"
 //      cadence, so that option is not offered rather than shipped dead.
 
-import React from 'react'
 import { Card, CardBody, Row, ChoicePill, Toggle, Pill, Note, Msg, StubPill, plural, T } from './shared'
 
 // `lockNote` is per-alert on purpose: both locked rows used to append one

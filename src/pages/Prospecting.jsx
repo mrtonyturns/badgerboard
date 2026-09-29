@@ -23,9 +23,8 @@
 // Design language: the redesign shell tokens (Geist) shared with the Profiler
 // and the dashboards — src/pages/profiler/shared.jsx.
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate } from 'react-router-dom'
 import { format } from 'date-fns'
 import {
   Search, Plus, Download, X, AlertCircle, Upload, Globe,
@@ -684,7 +683,6 @@ function AddToCandidatesModal({ rows, onClose, onDone }) {
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function Prospecting() {
-  const navigate = useNavigate()
   const { user } = useAuth()
   const userTier = getUserTier(user)
 

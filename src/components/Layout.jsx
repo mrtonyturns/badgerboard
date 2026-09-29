@@ -42,7 +42,7 @@ import LoadingBar from './LoadingBar'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.40.2'
+const APP_VERSION = 'v1.41.0'
 
 // ─── z-index scale (v1.34.1 — audit fix B1) ──────────────────────────────────
 // One ladder for everything that floats, lowest to highest:
@@ -84,6 +84,14 @@ export const Z = {
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.41.0',
+    date: 'September 29, 2026',
+    changes: [
+      'Stability pass: the codebase now has a real lint gate (zero errors, zero warnings, zero suppressions) and `npm test` runs every unit suite — 2,041 assertions',
+      'Fixed along the way: comparison rows show their labels again, election-save errors are shown instead of swallowed, a random-sample generator that silently lost precision, and a handful of dead code paths',
+    ],
+  },
   {
     version: 'v1.40.2',
     date: 'September 26, 2026',

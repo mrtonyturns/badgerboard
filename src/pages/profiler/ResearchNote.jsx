@@ -6,7 +6,7 @@
 // and this renders it as one amber callout above the document, with a resolving
 // action when the fix is a status change and a Dismiss that is remembered.
 
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { T } from './shared'
 import { CANDIDATE_STATUS_LABELS } from '../../lib/campaignEnums'
 

@@ -16,7 +16,6 @@
 //     (from netlify/functions/research-district-history.js — bios are
 //     intentionally never read here)
 
-import React from 'react'
 import { partyGroup, partyAbbrev, partyColorHex } from '../lib/party'
 
 const GENERAL_TYPES = new Set(['general', 'spring_general', 'special'])

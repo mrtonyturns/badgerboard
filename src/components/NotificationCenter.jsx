@@ -12,7 +12,7 @@
 // persistent inbox for everything, transient toast only for celebratory news.
 // Read + toast-shown state is tracked per device in localStorage.
 
-import React, { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { Bell, Info, AlertTriangle, CheckCircle, AlertCircle, X } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { supabase } from '../lib/supabase'
@@ -125,11 +125,13 @@ export default function NotificationCenter() {
   // timer inside the effect above meant its cleanup ran the moment `toast`
   // changed from null → the announcement, clearing the timer immediately and
   // leaving the popup on screen forever.
+  const toastId = toast ? toast.id : null
   useEffect(() => {
-    if (!toast) return undefined
-    toastTimerRef.current = setTimeout(() => setToast(null), TOAST_MS)
-    return () => clearTimeout(toastTimerRef.current)
-  }, [toast?.id])
+    if (toastId == null) return undefined
+    const timer = setTimeout(() => setToast(null), TOAST_MS)
+    toastTimerRef.current = timer
+    return () => clearTimeout(timer)
+  }, [toastId])
 
   const dismissToast = useCallback(() => {
     clearTimeout(toastTimerRef.current)

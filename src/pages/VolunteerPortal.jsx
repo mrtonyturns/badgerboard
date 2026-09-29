@@ -11,18 +11,36 @@
  *   5. Profile — volunteer stats + settings
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { isNativeApp, API_ORIGIN } from '../lib/native'
 import {
-  Home, DoorOpen, MessageCircle, User, Bell, Send,
-  CheckCircle, XCircle, Clock, MapPin, Phone, Mail,
-  ChevronRight, LogOut, Star, Zap, Trophy, Target,
-  AlertCircle, Info, AlertTriangle, Wifi, WifiOff,
-  ArrowRight, RefreshCw, ThumbsUp, ThumbsDown, Minus,
-  ChevronLeft, MoreVertical, Circle,
+  Home,
+  DoorOpen,
+  MessageCircle,
+  User,
+  Bell,
+  Send,
+  CheckCircle,
+  XCircle,
+  Clock,
+  MapPin,
+  Phone,
+  Mail,
+  ChevronRight,
+  LogOut,
+  Zap,
+  AlertCircle,
+  Info,
+  AlertTriangle,
+  Wifi,
+  WifiOff,
+  ArrowRight,
+  RefreshCw,
+  ThumbsDown,
+  Circle,
 } from 'lucide-react'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -116,7 +134,7 @@ function NotifBadge({ count }) {
 }
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
-function LoginScreen({ onLogin }) {
+function LoginScreen() {
   const [email, setEmail]       = useState('')
   const [loading, setLoading]   = useState(false)
   const [sent, setSent]         = useState(false)
@@ -1044,9 +1062,19 @@ export default function VolunteerPortal() {
   }, [])
 
   // ── Auto-login from URL token ─────────────────────────────────────────────
+  // Mount-once by design: the URL token is consumed exactly once (and then
+  // stripped from the URL), and the auth listener is subscribed once. Both
+  // values it reads are kept current in refs so the dep list is honestly
+  // empty. volunteerRef also fixes the listener's guard, which used to see the
+  // mount-time `volunteer` (always null) forever.
+  const searchParamsRef = useRef(searchParams)
+  searchParamsRef.current = searchParams
+  const volunteerRef = useRef(volunteer)
+  volunteerRef.current = volunteer
   useEffect(() => {
     const initAuth = async () => {
       // 1. Check URL token (from magic link)
+      const searchParams = searchParamsRef.current
       const token = searchParams.get('token')
       const email = searchParams.get('email')
 
@@ -1104,7 +1132,7 @@ export default function VolunteerPortal() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       const email = session?.user?.email
       const accessToken = session?.access_token
-      if (!email || volunteer) return
+      if (!email || volunteerRef.current) return
       setTimeout(async () => {
         const res = await callApi('get_volunteer', { email }, accessToken)
         if (res.volunteer) {
@@ -1116,7 +1144,7 @@ export default function VolunteerPortal() {
     })
 
     return () => subscription.unsubscribe()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   // ── Load + poll messages and notifications ─────────────────────────────────
   // Audit fix (#15): the portal used to query volunteer_messages /
@@ -1256,7 +1284,7 @@ export default function VolunteerPortal() {
   }
 
   if (!volunteer) {
-    return <LoginScreen onLogin={setVolunteer} />
+    return <LoginScreen />
   }
 
   const tabs = [

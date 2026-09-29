@@ -16,7 +16,6 @@
 //   (or use the bulk script printed in the response)
 
 import Stripe from 'stripe'
-import { ADMIN_EMAILS } from './_config.js'
 
 // ── Pricing tables ────────────────────────────────────────────────────────────
 

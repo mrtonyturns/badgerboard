@@ -375,31 +375,6 @@ async function fetchPerplexityAffiliations(name, office, district, ctx, mode) {
   )
 }
 
-// ─── Incumbent voting record (used in addition to politicalRecord for incumbents) ──
-async function fetchPerplexityIncumbent(candidateName, office) {
-  if (!PERPLEXITY_API_KEY) return null
-  const query = `Find all bills, acts, regulations, laws, votes, legal proceedings, ethics complaints, and notable political actions for ${candidateName} who holds or has held the office of ${office} in Wisconsin. Check https://docs.legis.wisconsin.gov for past bills, votes, and their summaries — this is the official Wisconsin legislative document repository and should be the primary source for bill text and voting records. Include specific bill numbers, vote outcomes, dates, and sources.`
-  try {
-    const ctrl = new AbortController()
-    setTimeout(() => ctrl.abort(), 20000)
-    const res = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST', signal: ctrl.signal,
-      headers: { 'Authorization': `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'sonar',
-        messages: [
-          { role: 'system', content: 'You are a Wisconsin legislative records researcher. Return a structured list of incumbent actions. For each item:\n**[TYPE: Bill/Vote/Legal/Other]** Title (Number if applicable)\nDate · Vote: yes/no/abstain/absent\nOutcome: Brief description. Source: Name.\n\nFor each bill, include: bill number, title, one-sentence summary of what the bill does, the candidate\'s vote (yes/no/abstain/absent), and the outcome.' },
-          { role: 'user', content: query },
-        ],
-        max_tokens: 2000,
-      }),
-    })
-    if (!res.ok) { console.error(`[perplexity/incumbent] ${res.status}`); return null }
-    const data = await res.json()
-    return data.choices?.[0]?.message?.content || null
-  } catch (e) { console.error(`[perplexity/incumbent] ${e.message}`); return null }
-}
-
 // ─── Grok: real-time X + web intelligence — mode-aware ───────────────────────
 async function fetchGrokXIntelligence(name, office, district, twitterHandle, ctx, mode) {
   if (!XAI_API_KEY) return null
@@ -930,7 +905,7 @@ exports.handler = async (event) => {
     || (typeof body.internal_trigger === 'string' ? body.internal_trigger : null)
   const isInternalTrigger = Boolean(internalSecret && providedInternal && safeEqual(providedInternal, internalSecret))
 
-  let user = null
+  let user
   if (isInternalTrigger) {
     user = await getCandidateOwner(body.candidate_id)
     if (!user) console.warn('[dossier-bg] Internal trigger: no owner resolved — gating by top plan (monitored candidate)')
@@ -1241,7 +1216,7 @@ Label all items [RESEARCH REQUIRED] unless you have a credible public record sou
   const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
 
   // ─── Wait for all Perplexity + Grok results in parallel ─────────────────
-  let perplexityNews = null, perplexityIncumbent = null, localNews = null
+  let perplexityNews = null, perplexityIncumbent = null, localNews
   let identityData = null, financeData = null, politicalData = null, affiliationsData = null, socialMediaData = null
   let grokData = null, officialData = null
   try {
@@ -1865,7 +1840,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     if (!saveRes.ok) {
       // If extended fields don't exist in schema, save without them
       const saveErr = await saveRes.text()
-      console.log(`[dossier-bg] Extended save failed (${saveRes.status}), retrying with base fields`)
+      console.log(`[dossier-bg] Extended save failed (${saveRes.status}): ${saveErr.slice(0, 300)} — retrying with base fields`)
       const baseRes = await fetch(`${SUPABASE_URL}/rest/v1/dossiers`, {
         method: 'POST',
         headers: { 'apikey': SUPABASE_SERVICE_KEY, 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },

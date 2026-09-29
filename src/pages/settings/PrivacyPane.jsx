@@ -16,7 +16,6 @@
 // The delete-account card lives at the bottom of THIS pane only. It is never
 // adjacent to a preference.
 
-import React from 'react'
 import { Card, CardBody, Row, Btn, Toggle, Pill, Note, Msg, StubPill, T, plural } from './shared'
 
 export default function PrivacyPane({

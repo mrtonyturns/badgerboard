@@ -35,7 +35,7 @@ async function sendMagicLink(email, volunteerName, listName, token) {
   const portalLink = `${SITE_URL}/v?token=${token}&email=${encodeURIComponent(email)}`
 
   // Use Supabase Auth admin API to send magic link
-  const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
+  await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
     method: 'POST',
     headers: {
       apikey: SERVICE_KEY,
