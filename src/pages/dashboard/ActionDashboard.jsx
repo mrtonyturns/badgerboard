@@ -21,7 +21,7 @@ import { useAuth } from '../../contexts/AuthContext'
 import {
   supabase,
   getCandidates, getMilestones, getElections, getDossiers,
-  getProspectingLists, getVoterLists, getRecentActivity,
+  getProspectingLists, getVoterLists, getRecentActivity, getDashboardBootstrap,
 } from '../../lib/supabase'
 import {
   getUserPlan, getPlanConfig, getUserBracket, getBracketConfig,
@@ -297,15 +297,24 @@ export default function ActionDashboard() {
       const startOfMonth = new Date()
       startOfMonth.setDate(1)
       startOfMonth.setHours(0, 0, 0, 0)
-      const [c, m, e, d, pl, vl, act] = await Promise.all([
-        getCandidates({}),
-        getMilestones({}),
-        getElections(),
-        getDossiers(null, { list: true }),   // no `content` — this page only draws digests
-        getProspectingLists(),
-        getVoterLists(),
-        getRecentActivity(8),
-      ])
+      // v1.42.1: one RPC round-trip; the seven individual reads remain as the
+      // fallback (offline cache, or the function missing on a stale DB).
+      const boot = await getDashboardBootstrap(8)
+      const [c, m, e, d, pl, vl, act] = boot
+        ? [
+            { data: boot.candidates }, { data: boot.milestones }, { data: boot.elections },
+            { data: boot.dossiers }, { data: boot.prospecting_lists }, { data: boot.voter_lists },
+            { data: boot.activity },
+          ]
+        : await Promise.all([
+            getCandidates({}),
+            getMilestones({}),
+            getElections(),
+            getDossiers(null, { list: true }),   // no `content` — this page only draws digests
+            getProspectingLists(),
+            getVoterLists(),
+            getRecentActivity(8),
+          ])
       if (dead) return
       const allDossiers = d.data || []
       setCands(c.data || [])

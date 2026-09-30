@@ -18,7 +18,7 @@ import {
 import { useAuth } from '../../contexts/AuthContext'
 import {
   supabase, getCandidates, getMilestones, getElections,
-  getDossiers, getVoterLists, updateMilestone, logActivity,
+  getDossiers, getVoterLists, updateMilestone, logActivity, getDashboardBootstrap,
 } from '../../lib/supabase'
 import { pointInGeometry } from '../../lib/geo'
 import {
@@ -272,13 +272,17 @@ export default function CandidateDashboard() {
       const startOfMonth = new Date()
       startOfMonth.setDate(1)
       startOfMonth.setHours(0, 0, 0, 0)
-      const [c, m, e, d, vl] = await Promise.all([
-        getCandidates({}),
-        getMilestones({}),
-        getElections(),
-        getDossiers(null, { list: true }),   // no `content` — the dashboard only draws digests
-        getVoterLists(),
-      ])
+      // v1.42.1: one RPC round-trip; individual reads remain as the fallback.
+      const boot = await getDashboardBootstrap(8)
+      const [c, m, e, d, vl] = boot
+        ? [{ data: boot.candidates }, { data: boot.milestones }, { data: boot.elections }, { data: boot.dossiers }, { data: boot.voter_lists }]
+        : await Promise.all([
+            getCandidates({}),
+            getMilestones({}),
+            getElections(),
+            getDossiers(null, { list: true }),   // no `content` — the dashboard only draws digests
+            getVoterLists(),
+          ])
       if (dead) return
       const allDossiers = d.data || []
       setCandidates(c.data || [])

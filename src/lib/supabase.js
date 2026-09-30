@@ -35,6 +35,22 @@ async function currentUserId() {
   return session?.user?.id || null
 }
 
+// ── Dashboard bootstrap (v1.42.1 perf) ────────────────────────────
+// One RPC round-trip carrying every dataset the dashboards need, instead of
+// 7-10 parallel REST reads that queue on the client link (measured 3-4s each
+// on the owner's connection vs ~500ms in isolation). SECURITY INVOKER on the
+// server, so RLS applies exactly as it does to the individual reads. Returns
+// null on any failure so callers fall back to the individual helpers.
+export const getDashboardBootstrap = async (activityLimit = 8) => {
+  try {
+    const { data, error } = await supabase.rpc('dashboard_bootstrap', { activity_limit: activityLimit })
+    if (error || !data || typeof data !== 'object') return null
+    return data
+  } catch {
+    return null
+  }
+}
+
 // ── Offices (shared reference data — no user scoping) ──────────
 // Fetch ALL offices, paginating through Supabase's 1000-row max_rows limit.
 // The offices table has 3,200+ rows so a single request would be truncated.
