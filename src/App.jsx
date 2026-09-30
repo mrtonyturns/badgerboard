@@ -89,8 +89,8 @@ import { supabaseConfigured } from './lib/supabase'
 import { DossierStatusProvider } from './contexts/DossierStatusContext'
 import Layout from './components/Layout'
 import Login from './pages/Login'
-import Dashboard from './pages/Dashboard'
-import Offices from './pages/Offices'
+const Dashboard = lazyRetry(() => import('./pages/Dashboard'))  // code-split (v1.42.0 perf): was eager — every visitor paid for it
+const Offices = lazyRetry(() => import('./pages/Offices'))  // code-split (v1.42.0 perf): was eager — every visitor paid for it
 const Elections = lazyRetry(() => import('./pages/Elections'))  // code-split: trims the initial bundle (M1)
 const GamePlan = lazyRetry(() => import('./pages/GamePlan'))  // code-split: trims the initial bundle (M1)
 // ElectionResults (legacy standalone page) replaced by Elections.jsx two-tab UI.
@@ -108,19 +108,19 @@ const VoterLists = lazyRetry(() => import('./pages/VoterLists'))  // code-split:
 // import DoorKnocking from './pages/DoorKnocking'
 const CampaignConnect = lazyRetry(() => import('./pages/CampaignConnect'))  // code-split: trims the initial bundle (M1)
 const Dossiers = lazyRetry(() => import('./pages/Dossiers'))  // code-split: trims the initial bundle (M1)
-import Settings from './pages/Settings'
-import Terms from './pages/Terms'
+const Settings = lazyRetry(() => import('./pages/Settings'))  // code-split (v1.42.0 perf): was eager — every visitor paid for it
+const Terms = lazyRetry(() => import('./pages/Terms'))  // code-split (v1.42.0 perf): was eager — every visitor paid for it
 const Pricing = lazyRetry(() => import('./pages/Pricing'))  // code-split: trims the initial bundle (M1)
 const AdminDashboard = lazyRetry(() => import('./pages/AdminDashboard'))  // code-split: trims the initial bundle (M1)
-import DossierDisclaimer from './pages/DossierDisclaimer'
+const DossierDisclaimer = lazyRetry(() => import('./pages/DossierDisclaimer'))  // code-split (v1.42.0 perf): was eager — every visitor paid for it
 const Compare = lazyRetry(() => import('./pages/Compare'))  // code-split: trims the initial bundle (M1)
-import VolunteerPortal from './pages/VolunteerPortal'
-import SharedDossier from './pages/SharedDossier'
+const VolunteerPortal = lazyRetry(() => import('./pages/VolunteerPortal'))  // code-split (v1.42.0 perf): was eager — every visitor paid for it
+const SharedDossier = lazyRetry(() => import('./pages/SharedDossier'))  // code-split (v1.42.0 perf): was eager — every visitor paid for it
 const Events = lazyRetry(() => import('./pages/Events'))  // code-split: trims the initial bundle (M1)
 const Broadside = lazyRetry(() => import('./pages/Broadside'))  // code-split: admin-only beta
 const CityDemographics = lazyRetry(() => import('./pages/CityDemographics'))  // code-split: trims the initial bundle (M1)
 const Polling = lazyRetry(() => import('./pages/Polling'))  // code-split: beta-only (v1.22)
-import ResetPassword from './pages/ResetPassword'
+const ResetPassword = lazyRetry(() => import('./pages/ResetPassword'))  // code-split (v1.42.0 perf): was eager — every visitor paid for it
 import NotFound from './pages/NotFound'
 
 const ProtectedRoute = ({ children }) => {

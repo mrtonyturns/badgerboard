@@ -26,9 +26,13 @@ export const supabase = createClient(
 
 // ── Helper: get current user ID ────────────────────────────────
 // Used by create functions to stamp ownership.  Cached per call.
+// PERF (v1.42.0): getUser() is a network round-trip to /auth/v1/user on
+// EVERY call — 39 call sites meant the dashboard boot fired it 7 times
+// (measured). getSession() reads the locally cached JWT and its embedded
+// user with no network; the id is identical.
 async function currentUserId() {
-  const { data: { user } } = await supabase.auth.getUser()
-  return user?.id || null
+  const { data: { session } } = await supabase.auth.getSession()
+  return session?.user?.id || null
 }
 
 // ── Offices (shared reference data — no user scoping) ──────────

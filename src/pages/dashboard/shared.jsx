@@ -10,8 +10,11 @@
 // invents a number.
 
 import React, { useEffect, useRef } from 'react'
-import L from 'leaflet'
-import 'leaflet/dist/leaflet.css'
+// PERF (v1.42.0): Leaflet (~150 KB) is loaded on demand inside DistrictHeatMap
+// rather than statically — both dashboards import this module, so a static
+// import put the map library in the dashboard's critical path for every user,
+// including the many whose dashboard never renders a district map.
+const loadLeaflet = () => Promise.all([import('leaflet'), import('leaflet/dist/leaflet.css')]).then(([m]) => m.default)
 import { format, startOfWeek } from 'date-fns'
 import { safeISO } from '../../lib/date'
 // Date arithmetic lives in ./dueMath (a JSX-free module the tests can import).
@@ -893,7 +896,9 @@ export function DistrictHeatMap({ geometry, popPoints, height = 168 }) {
 
   useEffect(() => {
     if (!ref.current || mapRef.current || !geometry) return
-    let map
+    let map, ro, cancelled = false
+    loadLeaflet().then((L) => {
+      if (cancelled || !ref.current || mapRef.current) return
     try {
       map = L.map(ref.current, {
         scrollWheelZoom: false, zoomControl: false,
@@ -921,11 +926,13 @@ export function DistrictHeatMap({ geometry, popPoints, height = 168 }) {
     })
 
     mapRef.current = map
-    const ro = new ResizeObserver(() => { try { map.invalidateSize() } catch (_) {} })
+    ro = new ResizeObserver(() => { try { map.invalidateSize() } catch (_) {} })
     ro.observe(ref.current)
+    })
     return () => {
-      ro.disconnect()
-      try { map.remove() } catch (_) {}
+      cancelled = true
+      ro?.disconnect()
+      try { map?.remove() } catch (_) {}
       mapRef.current = null
     }
   }, [geometry, popPoints])

@@ -70,10 +70,15 @@ export const AuthProvider = ({ children }) => {
       setLoading(false)
     }, 10000)
 
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
       if (disposed) return
       applySession(session)
 
+      // PERF (v1.42.0): this used to `await` the refresh below before the
+      // gate opened — a measured 6.4s on the owner's connection, during which
+      // the whole app sat on a spinner. The cached JWT is valid for auth
+      // purposes; the refresh only picks up server-side metadata edits, and
+      // applySession() will swap the newer token in whenever it lands.
       if (session) {
         // Skip auto-refresh when the user landed via a password-recovery link.
         // The recovery session token is one-time-use; calling refreshSession()
@@ -85,12 +90,9 @@ export const AuthProvider = ({ children }) => {
           // refreshSession() hits Supabase's /token endpoint and returns a new JWT
           // that includes the latest user_metadata from the server.  This is a silent
           // background call — if it fails we still have the cached session as fallback.
-          try {
-            const { data: refreshed } = await supabase.auth.refreshSession()
-            if (refreshed?.session) applySession(refreshed.session)
-          } catch {
-            // silently ignore — cached session is still valid for auth purposes
-          }
+          supabase.auth.refreshSession()
+            .then(({ data: refreshed }) => { if (!disposed && refreshed?.session) applySession(refreshed.session) })
+            .catch(() => { /* cached session is still valid for auth purposes */ })
         }
       }
 
@@ -142,8 +144,11 @@ export const AuthProvider = ({ children }) => {
   // documented "migration not yet run" state and the query succeeds with data
   // === null.
   const [globalBetaEnabled, setGlobalBetaState] = useState(true)
+  // Keyed on the id, not the user object: the background token refresh swaps
+  // the object identity and this used to fire twice per boot (measured).
+  const userId = user?.id
   useEffect(() => {
-    if (!user) return
+    if (!userId) return
     let cancelled = false
     supabase
       .from('app_settings')
@@ -160,7 +165,7 @@ export const AuthProvider = ({ children }) => {
         setGlobalBetaState(enabled)     // context state (drives admin UI)
       })
     return () => { cancelled = true }
-  }, [user])
+  }, [userId])
 
   // Force-refresh the session to pick up metadata changes (plan, bracket, payment_status, etc.)
   // Can be awaited by callers that want to know if the refresh succeeded.

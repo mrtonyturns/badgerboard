@@ -173,8 +173,10 @@ const authSrc = src('src/contexts/AuthContext.jsx')
 t('there is a single applySession() writer during init',
   /const applySession = \(incoming\) =>/.test(authSrc))
 t('the getSession() success arm no longer bails out on `settled`',
-  !/getSession\(\)\.then\(async \(\{ data: \{ session \} \} \) => \{\s*if \(settled\) return/.test(authSrc) &&
-  /getSession\(\)\.then\(async[^\n]*\n\s*if \(disposed\) return/.test(authSrc))
+  // v1.42.0: the callback dropped `async` (it no longer awaits the token
+  // refresh — that was the boot-time bottleneck); the guard is what matters.
+  !/getSession\(\)\.then\((?:async )?\(\{ data: \{ session \} \} \) => \{\s*if \(settled\) return/.test(authSrc) &&
+  /getSession\(\)\.then\((?:async )?[^\n]*\n\s*if \(disposed\) return/.test(authSrc))
 t('`settled` now guards only the loading gate (setLoading), not session state',
   /if \(settled\) return\s+\/\/ the 10s arm already opened the gate/.test(authSrc))
 t('the 10s arm still opens the loading gate — public routes keep rendering',
