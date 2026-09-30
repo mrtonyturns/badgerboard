@@ -42,7 +42,7 @@ import LoadingBar from './LoadingBar'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.42.1'
+const APP_VERSION = 'v1.42.2'
 
 // ─── z-index scale (v1.34.1 — audit fix B1) ──────────────────────────────────
 // One ladder for everything that floats, lowest to highest:
@@ -85,7 +85,7 @@ export const Z = {
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
   {
-    version: 'v1.42.1',
+    version: 'v1.42.2',
     date: 'September 30, 2026',
     changes: [
       'Much faster startup: the app no longer waits on a background token refresh before showing your dashboard, loads only the code each page needs, and stops re-asking the server who you are on every action',

@@ -60,6 +60,10 @@ as $$
       select jsonb_agg(row_to_json(v)::jsonb order by v.created_at desc)
       from voter_lists v where v.created_by = auth.uid()
     ), '[]'::jsonb),
+    'monitored_count', (
+      select count(*) from candidates
+      where created_by = auth.uid() and section_timestamps->>'monitoring' = 'true'
+    ),
     'activity', coalesce((
       select jsonb_agg(row_to_json(a)::jsonb order by a.created_at desc)
       from (select * from activity_log where user_id = auth.uid() order by created_at desc limit greatest(1, least(activity_limit, 50))) a

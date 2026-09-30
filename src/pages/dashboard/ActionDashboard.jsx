@@ -290,6 +290,7 @@ export default function ActionDashboard() {
   // Authoritative count of THIS USER's candidates with monitoring switched on.
   // null = not answered yet (fall back to the client-side derivation below).
   const [monitoredCount, setMonitoredCount] = useState(null)
+  const bootCountRef = useRef(null)  // monitored_count from dashboard_bootstrap, if it ran
 
   useEffect(() => {
     let dead = false
@@ -300,6 +301,8 @@ export default function ActionDashboard() {
       // v1.42.1: one RPC round-trip; the seven individual reads remain as the
       // fallback (offline cache, or the function missing on a stale DB).
       const boot = await getDashboardBootstrap(8)
+      bootCountRef.current = typeof boot?.monitored_count === 'number' ? boot.monitored_count : null
+      if (bootCountRef.current !== null) setMonitoredCount(bootCountRef.current)
       const [c, m, e, d, pl, vl, act] = boot
         ? [
             { data: boot.candidates }, { data: boot.milestones }, { data: boot.elections },
@@ -462,6 +465,9 @@ export default function ActionDashboard() {
   // the others.
   useEffect(() => {
     if (!supabase || !user?.id) return
+    // v1.42.2: the bootstrap RPC carries monitored_count — skip the separate
+    // head-count query (one less connection in the cold-start burst).
+    if (typeof bootCountRef.current === 'number') { setMonitoredCount(bootCountRef.current); return }
     let dead = false
     supabase
       .from('candidates')

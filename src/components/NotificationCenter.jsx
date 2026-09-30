@@ -58,12 +58,15 @@ function useAnnouncements() {
           if (data) setAnnouncements(data)
         })
     }
-    load()
+    // v1.42.2: the bell is not on the critical path — wait a beat so this
+    // read isn't part of the cold-start burst competing with the dashboard.
+    const first = setTimeout(load, 2500)
     const interval = setInterval(load, 5 * 60 * 1000)
     const onFocus = () => { if (document.visibilityState === 'visible') load() }
     document.addEventListener('visibilitychange', onFocus)
     window.addEventListener('focus', onFocus)
     return () => {
+      clearTimeout(first)
       clearInterval(interval)
       document.removeEventListener('visibilitychange', onFocus)
       window.removeEventListener('focus', onFocus)

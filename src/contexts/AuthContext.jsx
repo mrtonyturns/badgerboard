@@ -46,6 +46,7 @@ export const AuthProvider = ({ children }) => {
     // waiting on auth.
     let settled  = false   // loading gate resolved (by either arm)
     let disposed = false   // effect cleaned up — stop touching React state
+    const refreshTimers = []
 
     // Single writer for session state during init. Honours the same
     // expires_at watermark onAuthStateChange uses, so a late arm can never
@@ -90,9 +91,17 @@ export const AuthProvider = ({ children }) => {
           // refreshSession() hits Supabase's /token endpoint and returns a new JWT
           // that includes the latest user_metadata from the server.  This is a silent
           // background call — if it fails we still have the cached session as fallback.
-          supabase.auth.refreshSession()
-            .then(({ data: refreshed }) => { if (!disposed && refreshed?.session) applySession(refreshed.session) })
-            .catch(() => { /* cached session is still valid for auth purposes */ })
+          // v1.42.2: deferred ~4s. supabase-js serializes REST calls behind an
+          // in-flight refresh (auth lock), so an immediate refresh pushed the
+          // first dashboard request back by ~1s. The cached JWT is valid; the
+          // refresh only picks up admin metadata edits and can wait.
+          const refreshTimer = setTimeout(() => {
+            if (disposed) return
+            supabase.auth.refreshSession()
+              .then(({ data: refreshed }) => { if (!disposed && refreshed?.session) applySession(refreshed.session) })
+              .catch(() => { /* cached session is still valid for auth purposes */ })
+          }, 4000)
+          refreshTimers.push(refreshTimer)
         }
       }
 
@@ -128,6 +137,7 @@ export const AuthProvider = ({ children }) => {
 
     return () => {
       disposed = true
+      refreshTimers.forEach(clearTimeout)
       clearTimeout(initTimer)
       subscription.unsubscribe()
     }
