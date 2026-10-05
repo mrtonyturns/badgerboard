@@ -20,7 +20,7 @@ import { Card, CardBody, Row, Btn, Toggle, Pill, Note, Msg, StubPill, T, plural 
 
 export default function PrivacyPane({
   aiDefault, onAiDefault, aiMsg, aiLoading,
-  shareCount, shareLoading, onReviewShares, onDeleteAccount,
+  shareCount, shareLoading, shareFailed, onReviewShares, onDeleteAccount,
 }) {
   return (
     <>
@@ -67,14 +67,16 @@ export default function PrivacyPane({
         />
         <Row
           title="Active share links"
-          badge={shareLoading
+          badge={shareLoading || shareFailed
             ? null
             : shareCount > 0
               ? <Pill c={T.amber} bg={T.warmBg}>{shareCount === 1 ? '1 LIVE' : `${shareCount} LIVE`}</Pill>
               : <Pill>NONE LIVE</Pill>}
           desc={shareLoading
             ? 'Counting your live share links…'
-            : shareCount > 0
+            : shareFailed
+              ? "Couldn't count your live share links right now — reload to try again, or review them in the Profiler."
+              : shareCount > 0
               ? `${plural(shareCount, 'link')} can be opened right now by anyone holding the URL, until each one expires.`
               : 'No live share links. Anyone you sent an expired link to gets nothing.'}
           control={<Btn ctl onClick={onReviewShares}>Open Profiler</Btn>}

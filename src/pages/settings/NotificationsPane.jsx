@@ -38,7 +38,7 @@ const DIGEST_NOTE = {
 }
 
 export default function NotificationsPane({
-  prefs, onToggle, digest, onDigest, digestMsg, monitoredCount, monitoringLoading,
+  prefs, onToggle, digest, onDigest, digestMsg, monitoredCount, monitoringLoading, monitoringFailed,
 }) {
   return (
     <>
@@ -56,7 +56,9 @@ export default function NotificationsPane({
           <Note style={{ marginTop: 8, fontSize: 11.5, color: T.muted }}>
             {monitoringLoading
               ? 'Checking how many candidates you monitor…'
-              : monitoredCount > 0
+              : monitoringFailed
+                ? "Couldn't check how many candidates you monitor right now — reload to try again."
+                : monitoredCount > 0
                 ? `${plural(monitoredCount, 'candidate')} currently monitored.`
                 : 'No candidates are monitored yet, so there is nothing to digest — turn monitoring on from a candidate to start.'}
           </Note>

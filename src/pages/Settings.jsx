@@ -215,14 +215,16 @@ export default function Settings() {
   }, [user?.id])
 
   // ── Live share links (Data & privacy) ───────────────────────────────────────
-  const [shares, setShares] = useState({ loading: true, count: 0 })
+  const [shares, setShares] = useState({ loading: true, count: 0, failed: false })
   useEffect(() => {
     if (!supabase || !user?.id) return
     let alive = true
     supabase.from('dossier_shares').select('id', { count: 'exact', head: true })
       .eq('created_by', user.id).eq('is_active', true).gt('expires_at', new Date().toISOString())
-      .then(({ count }) => { if (alive) setShares({ loading: false, count: count ?? 0 }) })
-      .catch(() => { if (alive) setShares({ loading: false, count: 0 }) })
+      // A failed count must not read as "No live share links" — that tells the
+      // user nothing is exposed when we simply don't know.
+      .then(({ count, error }) => { if (alive) setShares({ loading: false, count: count ?? 0, failed: !!error || count == null }) })
+      .catch(() => { if (alive) setShares({ loading: false, count: 0, failed: true }) })
     return () => { alive = false }
   }, [user?.id])
 
@@ -710,9 +712,9 @@ export default function Settings() {
               onDigest={handleDigest}
               digestMsg={digestMsg}
               monitoredCount={usage.monitored}
-              // A failed count stays in the neutral "checking" state rather
-              // than claiming nothing is monitored.
-              monitoringLoading={usage.loading || usage.failed.monitored}
+              monitoringLoading={usage.loading}
+              // A failed count says so rather than claiming nothing is monitored.
+              monitoringFailed={usage.failed.monitored}
             />
           )}
 
@@ -726,6 +728,7 @@ export default function Settings() {
               aiLoading={aiSaving}
               shareCount={shares.count}
               shareLoading={shares.loading}
+              shareFailed={shares.failed}
               onReviewShares={() => navigate('/profiler')}
               onDeleteAccount={() => { setCancelStep('warn'); setDeleteMsg(null) }}
             />
