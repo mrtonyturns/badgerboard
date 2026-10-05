@@ -391,7 +391,9 @@ export default function Compare() {
   const [rightCandidate, setRC] = useState(null)
   const [leftDossier,    setLD] = useState(null)
   const [rightDossier,   setRD] = useState(null)
-  const [loading, setLoading]   = useState(false)
+  const [leftLoading,  setLeftLoading]  = useState(false)
+  const [rightLoading, setRightLoading] = useState(false)
+  const loading = leftLoading || rightLoading
 
   // Use a ref so loadSide always has the latest candidates without being a dependency
   const candidatesRef = useRef([])
@@ -425,19 +427,36 @@ export default function Compare() {
     return [candidate, dossiers?.[0] || null]
   }, [])  // stable — reads candidatesRef.current at call time
 
+  // One effect per side, each with a `cancelled` flag: a slow response for a
+  // side's previous pick used to land after the newer one (the old shared
+  // Promise.all had no guard), showing the wrong candidate. Splitting also
+  // stops a change on one side from re-fetching the other.
   useEffect(() => {
     // Wait for candidates to load before reading candidatesRef
     if (loadingCandidates) return
-    if (!leftId && !rightId) {
-      setLC(null); setRC(null); setLD(null); setRD(null)
-      return
-    }
-    setLoading(true)
-    Promise.all([loadSide(leftId), loadSide(rightId)]).then(([[lc, ld], [rc, rd]]) => {
-      setLC(lc); setRC(rc); setLD(ld); setRD(rd)
-      setLoading(false)
+    if (!leftId) { setLC(null); setLD(null); setLeftLoading(false); return }
+    let cancelled = false
+    setLeftLoading(true)
+    loadSide(leftId).then(([c, d]) => {
+      if (cancelled) return
+      setLC(c); setLD(d)
+      setLeftLoading(false)
     })
-  }, [leftId, rightId, loadSide, loadingCandidates])
+    return () => { cancelled = true }
+  }, [leftId, loadSide, loadingCandidates])
+
+  useEffect(() => {
+    if (loadingCandidates) return
+    if (!rightId) { setRC(null); setRD(null); setRightLoading(false); return }
+    let cancelled = false
+    setRightLoading(true)
+    loadSide(rightId).then(([c, d]) => {
+      if (cancelled) return
+      setRC(c); setRD(d)
+      setRightLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [rightId, loadSide, loadingCandidates])
 
   const hasComparison = leftId && rightId && leftCandidate && rightCandidate
 

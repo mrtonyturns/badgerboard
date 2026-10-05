@@ -14,7 +14,10 @@ async function callDossierReview(action, payload, token) {
     },
     body: JSON.stringify({ action, ...payload }),
   })
-  if (!res.ok) throw new Error('Request failed')
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.error || `Request failed (HTTP ${res.status})`)
+  }
   return res.json()
 }
 
@@ -85,15 +88,18 @@ export default function DossierDisclaimerModal({ onAcknowledged, onClose }) {
       const token = await getToken()
       if (!token) throw new Error('Session expired — please sign in again.')
       const result = await callDossierReview('acknowledge', {}, token)
+      if (!result?.ok || !result.acknowledged_at) throw new Error('The acknowledgment was not recorded.')
+      setLoading(false)
       onAcknowledged(result.acknowledged_at)
     } catch (err) {
-      // Graceful fallback: if the dossier_acknowledgments table doesn't exist yet,
-      // record the ack locally so the user isn't blocked.
-      console.warn('Disclaimer API error (falling back to local):', err.message)
-      const now = new Date().toISOString()
-      onAcknowledged(now)
+      // No local fallback: this used to record (and permanently cache) the ack
+      // in localStorage when the server call failed, so the legal record was
+      // never written and the user was never asked again. Only a confirmed
+      // server write counts — show the error and leave the button to retry.
+      console.warn('Disclaimer acknowledgment failed:', err.message)
+      setError(`We couldn't record your acknowledgment (${String(err.message || 'network error').replace(/\.$/, '')}). Please try again.`)
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   return (

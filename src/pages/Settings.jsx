@@ -37,6 +37,10 @@ const startOfThisMonth = () => {
   return d
 }
 
+// Per-count query-failure flags for the usage state (see the usage effect).
+const NO_FAILURES = { profilesUsed: false, monitored: false, candidates: false }
+const ALL_FAILED  = { profilesUsed: true, monitored: true, candidates: true }
+
 // ── Rail ──────────────────────────────────────────────────────────────────────
 
 const NAV_GROUPS = [
@@ -164,7 +168,10 @@ export default function Settings() {
   const maxSlots = getMonitoringSlotMax(user)
 
   // ── Real usage counts ───────────────────────────────────────────────────────
-  const [usage, setUsage] = useState({ loading: true, profilesUsed: 0, monitored: 0, candidates: 0 })
+  // `failed` flags a count whose query errored. Those render as "—" /
+  // unavailable — reading a failed query as 0 showed the whole allowance as
+  // unused (e.g. "5 profiles left" when the count simply didn't load).
+  const [usage, setUsage] = useState({ loading: true, profilesUsed: 0, monitored: 0, candidates: 0, failed: NO_FAILURES })
 
   useEffect(() => {
     if (!supabase || !user?.id) return
@@ -189,13 +196,21 @@ export default function Settings() {
           .eq('created_by', user.id).contains('section_timestamps', { monitoring: true }),
       ])
       if (!alive) return
+      if (monthly.error)    console.error('[Settings] profile usage count failed:', monthly.error)
+      if (candidates.error) console.error('[Settings] candidate count failed:', candidates.error)
+      if (monitored.error)  console.error('[Settings] monitored count failed:', monitored.error)
       setUsage({
         loading: false,
         profilesUsed: (monthly.data || []).length,
         candidates: candidates.count ?? 0,
         monitored: monitored.count ?? 0,
+        failed: {
+          profilesUsed: !!monthly.error,
+          candidates: !!candidates.error || candidates.count == null,
+          monitored: !!monitored.error || monitored.count == null,
+        },
       })
-    })().catch(() => { if (alive) setUsage(u => ({ ...u, loading: false })) })
+    })().catch(() => { if (alive) setUsage(u => ({ ...u, loading: false, failed: ALL_FAILED })) })
     return () => { alive = false }
   }, [user?.id])
 
@@ -506,17 +521,17 @@ export default function Settings() {
   const heroStats = useMemo(() => ([
     {
       label: 'PROFILES LEFT',
-      value: usage.loading ? '—'
-        : profileLimit === Infinity ? 'Unlimited'
+      value: profileLimit === Infinity && !usage.loading ? 'Unlimited'
+        : usage.loading || usage.failed.profilesUsed ? '—'
         : String(Math.max(0, profileLimit - usage.profilesUsed)),
     },
     {
       label: 'MONITORING',
-      value: usage.loading ? '—'
+      value: usage.loading || usage.failed.monitored ? '—'
         : maxSlots === Infinity ? String(usage.monitored)
         : `${usage.monitored} / ${maxSlots}`,
     },
-    { label: 'CANDIDATES', value: usage.loading ? '—' : String(usage.candidates) },
+    { label: 'CANDIDATES', value: usage.loading || usage.failed.candidates ? '—' : String(usage.candidates) },
   ]), [usage, profileLimit, maxSlots])
 
   const railItem = (item, chip) => {
@@ -695,7 +710,9 @@ export default function Settings() {
               onDigest={handleDigest}
               digestMsg={digestMsg}
               monitoredCount={usage.monitored}
-              monitoringLoading={usage.loading}
+              // A failed count stays in the neutral "checking" state rather
+              // than claiming nothing is monitored.
+              monitoringLoading={usage.loading || usage.failed.monitored}
             />
           )}
 

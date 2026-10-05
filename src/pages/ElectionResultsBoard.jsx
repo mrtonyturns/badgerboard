@@ -702,9 +702,16 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
   // One read per signed-in user, cached in state for the life of the board.
   // RLS already restricts the table to the caller's own rows; the explicit
   // user_id filter keeps the query honest and the payload small.
+  // `cancelled` drops a response for a user/election that's no longer on
+  // screen. notifyTouchedRef covers the other race: a bell toggled while this
+  // read is in flight — the read reflects the row before that write, so the
+  // optimistic value for every contest touched since the read began wins.
+  const notifyTouchedRef = useRef(new Set())
   useEffect(() => {
     let cancelled = false
     if (!user?.id) { setNotifyModes({}); return }
+    const touched = new Set()
+    notifyTouchedRef.current = touched
     ;(async () => {
       const { data, error } = await supabase
         .from('election_subscriptions')
@@ -713,7 +720,13 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
       if (cancelled || error) return
       const map = {}
       for (const s of data || []) map[s.contest_id] = s.mode
-      setNotifyModes(map)
+      setNotifyModes(prev => {
+        for (const contestId of touched) {
+          if (prev[contestId]) map[contestId] = prev[contestId]
+          else delete map[contestId]
+        }
+        return map
+      })
     })()
     return () => { cancelled = true }
   }, [user?.id, electionId])
@@ -730,6 +743,7 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
     const userId = userIdRef.current
     if (!userId || !contestId) return
     const previous = notifyModesRef.current[contestId]
+    notifyTouchedRef.current.add(contestId)
     setNotifyModes(prev => {
       const next = { ...prev }
       if (mode === 'off') delete next[contestId]

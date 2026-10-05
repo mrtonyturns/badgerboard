@@ -345,8 +345,15 @@ export default function VoterLists() {
   const [addToListModal, setAddToListModal] = useState(null) // { voter, mode: 'new'|'existing' }
   const [addToExistingId, setAddToExistingId] = useState('')
   const [newListColor, setNewListColor]   = useState('#3B82F6')
+  const [addingToList, setAddingToList]   = useState(false)
   const fileInputRef = useRef(null)
   const exportMenuRef = useRef(null)
+  // Latest fetchVoters call — a slower response for a list the user has
+  // already switched away from must not overwrite the current list's voters.
+  const votersReqRef = useRef(0)
+  // Serializes saved-list writes: each add is a read-modify-write of the
+  // voter_ids array, so two rapid adds racing each other dropped one.
+  const addChainRef = useRef(Promise.resolve())
 
   useEffect(() => { fetchAll() }, [])
 
@@ -401,8 +408,10 @@ export default function VoterLists() {
   const VOTER_DISPLAY_LIMIT = 1000   // LOAD
   const VOTER_TABLE_ROWS    = 500    // TABLE
   const fetchVoters = async (listId) => {
+    const reqId = ++votersReqRef.current
     setLoading(true)
     const { data } = await getVoters(listId, VOTER_DISPLAY_LIMIT + 1)
+    if (reqId !== votersReqRef.current) return
     const rows = data || []
     setVotersTruncated(rows.length > VOTER_DISPLAY_LIMIT)
     setVoters(rows.slice(0, VOTER_DISPLAY_LIMIT))
@@ -560,7 +569,9 @@ export default function VoterLists() {
       // Select the new list in the sidebar but do NOT auto-fetch voters —
       // large lists would freeze the browser. User can click "Load voters" themselves.
       setSelectedList(newList)
+      votersReqRef.current++ // drop any in-flight fetch for the previous list
       setVoters([])
+      setLoading(false)
     } catch (err) {
       alert('Upload failed: ' + err.message)
       setUploadProgress(null)
@@ -574,36 +585,65 @@ export default function VoterLists() {
     await deleteVoterList(listId)
     if (selectedList?.id === listId) {
       setSelectedList(null)
+      votersReqRef.current++
       setVoters([])
+      setLoading(false)
     }
     fetchAll()
   }
 
-  const handleAddToList = useCallback(async (voter, savedListId) => {
-    const sl = savedLists.find(s => s.id === savedListId)
-    if (!sl) return
-    const ids = sl.voter_ids || []
-    if (!ids.includes(voter.id)) {
-      await updateVoterSavedList(savedListId, { voter_ids: [...ids, voter.id] })
-      fetchAll()
+  // Chained onto addChainRef so adds run one at a time, and each one re-reads
+  // the list from the server right before writing — the voter_ids in local
+  // state can be a write behind.
+  const handleAddToList = useCallback((voter, savedListId) => {
+    const run = async () => {
+      const { data: lists, error: readErr } = await getVoterSavedLists()
+      if (readErr) throw readErr
+      const sl = (lists || []).find(s => s.id === savedListId)
+      if (!sl) return
+      const ids = sl.voter_ids || []
+      if (ids.includes(voter.id)) return
+      const { data: updated, error: writeErr } = await updateVoterSavedList(savedListId, { voter_ids: [...ids, voter.id] })
+      if (writeErr) throw writeErr
+      if (updated) setSavedLists(prev => prev.map(s => (s.id === updated.id ? updated : s)))
     }
-  }, [savedLists])
+    const next = addChainRef.current.then(run, run)
+    addChainRef.current = next.catch(() => {})
+    // Resolves true on success, false (after telling the user) on failure.
+    return next.then(() => true, err => {
+      console.error('[VoterLists] add to saved list failed:', err)
+      alert('Could not add the voter to that list: ' + (err?.message || 'unknown error'))
+      return false
+    })
+  }, [])
 
   const handleAddToListFromModal = async () => {
-    if (!addToListModal) return
+    if (!addToListModal || addingToList) return
     const { voter, mode } = addToListModal
     if (mode === 'new') {
       if (!newListName.trim()) return
-      await createVoterSavedList({
-        name: newListName.trim(),
-        color: newListColor,
-        voter_ids: [voter.id],
-        created_by: user?.id,
-      })
     } else {
       if (!addToExistingId) return
-      await handleAddToList(voter, addToExistingId)
     }
+    setAddingToList(true)
+    let ok = false
+    try {
+      if (mode === 'new') {
+        const { error: createErr } = await createVoterSavedList({
+          name: newListName.trim(),
+          color: newListColor,
+          voter_ids: [voter.id],
+          created_by: user?.id,
+        })
+        if (createErr) alert('Could not create the list: ' + createErr.message)
+        ok = !createErr
+      } else {
+        ok = await handleAddToList(voter, addToExistingId)
+      }
+    } finally {
+      setAddingToList(false)
+    }
+    if (!ok) return   // keep the modal open so the user can retry
     setAddToListModal(null)
     setNewListName('')
     fetchAll()
@@ -614,6 +654,8 @@ export default function VoterLists() {
   // feedback. One reason string drives both the disabled state and the hint.
   const addToListBlockReason = !addToListModal
     ? null
+    : addingToList
+      ? 'Saving…'   // also blocks a double-submit while the write is in flight
     : addToListModal.mode === 'new'
       ? (newListName.trim() ? null : 'Name the new list to continue.')
       : savedLists.length === 0
@@ -1278,7 +1320,7 @@ export default function VoterLists() {
                 disabled={!!addToListBlockReason}
                 className="btn-primary flex-1 text-sm"
               >
-                Add to List
+                {addingToList ? 'Adding…' : 'Add to List'}
               </button>
             </div>
           </div>

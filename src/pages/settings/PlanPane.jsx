@@ -40,22 +40,25 @@ const nextResetLabel = () => {
  * account. It now gets a thin flat rule and an explicit "Unlimited — N used".
  * The fraction itself lives in ./planMath so it can be tested.
  */
-function Meter({ label, used, cap, note, loading }) {
+// `unavailable`: the count's query failed. Rendered as "—" with an empty bar —
+// drawing it as 0 used read as the full allowance still available.
+function Meter({ label, used, cap, note, loading, unavailable }) {
   const frac  = meterFraction(used, cap)
   const uncapped = frac == null
   const pct   = uncapped ? 0 : Math.round(frac * 100)
-  const tight = !uncapped && pct >= 85
+  const blank = loading || unavailable
+  const tight = !uncapped && !blank && pct >= 85
   const fill  = tight ? T.red : T.navy
-  const lit   = loading ? 0 : meterTicks(used, cap, TICKS)
-  const value = loading ? '—' : uncapped ? `Unlimited — ${used} used` : `${used} of ${cap}`
+  const lit   = blank ? 0 : meterTicks(used, cap, TICKS)
+  const value = blank ? '—' : uncapped ? `Unlimited — ${used} used` : `${used} of ${cap}`
 
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, marginBottom: 7 }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: T.ink3 }}>{label}</span>
-        <span style={{ marginLeft: 'auto', fontSize: 12.5, fontWeight: 700, color: tight && !loading ? T.red : T.ink }}>{value}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 12.5, fontWeight: 700, color: tight ? T.red : T.ink }}>{value}</span>
       </div>
-      {uncapped && !loading ? (
+      {uncapped && !blank ? (
         // Deliberately NOT a gauge: a full 18-tick bar reads as "you are at your
         // limit". A 2px rule says "there is no limit to draw".
         <div aria-hidden="true" style={{ height: 16, display: 'flex', alignItems: 'center' }}>
@@ -73,7 +76,9 @@ function Meter({ label, used, cap, note, loading }) {
           ))}
         </div>
       )}
-      <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>{loading ? 'Counting…' : note}</div>
+      <div style={{ fontSize: 11, color: T.muted, marginTop: 6 }}>
+        {loading ? 'Counting…' : unavailable ? 'Usage unavailable right now — reload to try again' : note}
+      </div>
     </div>
   )
 }
@@ -140,6 +145,7 @@ export default function PlanPane({
     {
       label: 'Profiles generated',
       used: usage.profilesUsed,
+      unavailable: !!usage.failed?.profilesUsed,
       cap: profileLimit === Infinity ? null : profileLimit,
       // "on your account", not "on your plan": admin / beta / enterprise
       // entitlements are what lift the cap, and the plan cards below still
@@ -151,6 +157,7 @@ export default function PlanPane({
     {
       label: 'Monitoring slots',
       used: usage.monitored,
+      unavailable: !!usage.failed?.monitored,
       cap: maxSlots === Infinity ? null : maxSlots,
       note: maxSlots === Infinity
         ? `${UNLIMITED_ACCOUNT} · refreshes Mondays`
@@ -161,6 +168,7 @@ export default function PlanPane({
     {
       label: 'Candidates tracked',
       used: usage.candidates,
+      unavailable: !!usage.failed?.candidates,
       cap: scoutCandidateCap,
       note: scoutCandidateCap
         ? `Scout tracks up to ${plural(scoutCandidateCap, 'candidate')}`

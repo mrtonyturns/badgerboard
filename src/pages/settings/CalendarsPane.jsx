@@ -43,6 +43,7 @@ export default function CalendarsPane({ user }) {
   const [saving, setSaving]         = useState(false)
   const [rotating, setRotating]     = useState(false)
   const [rotateMsg, setRotateMsg]   = useState(null)
+  const [saveErr, setSaveErr]       = useState(null)
   const [local, setLocal]           = useState({
     reminder: meta.cal_reminder ?? 60,
     ask: meta.cal_ask !== false,
@@ -74,19 +75,36 @@ export default function CalendarsPane({ user }) {
   const localRef = useRef(local)
   useEffect(() => { localRef.current = local }, [local])
 
-  const persist = async (patch) => {
-    setSaving(true)
+  // Returns true once the write lands. On failure the optimistic change is
+  // rolled back (only the keys this call set, and only if a later click hasn't
+  // already changed them) and the error is shown — it used to report nothing
+  // and leave the pills showing a choice that was never saved.
+  // `where` picks which card shows the error ('prefs' | 'calendars').
+  const persist = async (patch, where = 'prefs') => {
+    setSaving(true); setSaveErr(null)
     // Merge against the LATEST local state (ref), not the render-time closure —
     // prevents a rapid second click (e.g. connect → reminder) from reverting the first.
-    const next = { ...localRef.current, ...patch }
+    const prev = localRef.current
+    const next = { ...prev, ...patch }
     localRef.current = next
     setLocal(next)
-    const { data } = await supabase.auth.updateUser({ data: {
-      cal_google: next.connected.google, cal_apple: next.connected.apple, cal_outlook: next.connected.outlook,
-      cal_defaults: next.defaults, cal_reminder: next.reminder, cal_ask: next.ask,
-    } })
+    let error = null
+    try {
+      ;({ error } = await supabase.auth.updateUser({ data: {
+        cal_google: next.connected.google, cal_apple: next.connected.apple, cal_outlook: next.connected.outlook,
+        cal_defaults: next.defaults, cal_reminder: next.reminder, cal_ask: next.ask,
+      } }))
+    } catch (e) { error = e }
     setSaving(false)
-    return data
+    if (!error) return true
+    const rolled = { ...localRef.current }
+    for (const k of Object.keys(patch)) {
+      if (rolled[k] === next[k]) rolled[k] = prev[k]
+    }
+    localRef.current = rolled
+    setLocal(rolled)
+    setSaveErr({ where, text: `Couldn't save your calendar settings${error.message ? ` — ${error.message}` : ''}. Please try again.` })
+    return false
   }
 
   const toggleConnected = async (key, value) => {
@@ -94,8 +112,9 @@ export default function CalendarsPane({ user }) {
     const defaults = value
       ? [...new Set([...localRef.current.defaults, key])]
       : localRef.current.defaults.filter(d => d !== key)
-    await persist({ connected, defaults })
-    if (!value) setConnecting(null)
+    const ok = await persist({ connected, defaults }, 'calendars')
+    if (ok && !value) setConnecting(null)
+    return ok
   }
 
   const copy = () => {
@@ -140,18 +159,22 @@ export default function CalendarsPane({ user }) {
       const log = Array.isArray(data?.fetch_log) ? data.fetch_log : []
       const hit = log.find(f => matcher.test(f.ua || '') && new Date(f.at).getTime() >= startedAt)
       if (hit) {
-        await toggleConnected(key, true)
+        const saved = await toggleConnected(key, true)
         setVerifying(null)
-        setVerifyMsg({ key, ok: true, text: `Verified — ${CAL_PROVIDERS.find(p => p.key === key).name} fetched your feed at ${new Date(hit.at).toLocaleTimeString()}` })
+        setVerifyMsg(saved
+          ? { key, ok: true, text: `Verified — ${CAL_PROVIDERS.find(p => p.key === key).name} fetched your feed at ${new Date(hit.at).toLocaleTimeString()}` }
+          : { key, ok: false, text: 'Your feed was fetched, but the connection could not be saved. Verify again to retry.' })
         return
       }
       // any fetch at all (unknown client) after start also counts on later passes
       if (i > 10) {
         const anyHit = log.find(f => new Date(f.at).getTime() >= Date.now() - 5 * 60 * 1000)
         if (anyHit) {
-          await toggleConnected(key, true)
+          const saved = await toggleConnected(key, true)
           setVerifying(null)
-          setVerifyMsg({ key, ok: true, text: 'Verified — your feed was fetched by a calendar client' })
+          setVerifyMsg(saved
+            ? { key, ok: true, text: 'Verified — your feed was fetched by a calendar client' }
+            : { key, ok: false, text: 'Your feed was fetched, but the connection could not be saved. Verify again to retry.' })
           return
         }
       }
@@ -240,6 +263,7 @@ export default function CalendarsPane({ user }) {
             <ChoicePill label="Use my default calendar" on={!local.ask} onClick={() => persist({ ask: false })} />
           </div>
           {saving && <Note style={{ marginTop: 8, fontSize: 11.5, color: T.muted }}>Saving…</Note>}
+          {saveErr?.where === 'prefs' && !saving && <div style={{ marginTop: 10 }}><Msg type="error">{saveErr.text}</Msg></div>}
         </div>
       </Card>
 
@@ -261,7 +285,7 @@ export default function CalendarsPane({ user }) {
                 control={(
                   <div className="st-ctl" style={{ marginLeft: 'auto', flex: 'none', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     {isConn && (
-                      <Btn onClick={() => persist({ defaults: isDflt ? local.defaults.filter(d => d !== p.key) : [...local.defaults, p.key] })}>
+                      <Btn onClick={() => persist({ defaults: isDflt ? local.defaults.filter(d => d !== p.key) : [...local.defaults, p.key] }, 'calendars')}>
                         {isDflt ? 'Unset default' : 'Set default'}
                       </Btn>
                     )}
@@ -320,6 +344,9 @@ export default function CalendarsPane({ user }) {
             </div>
           )
         })}
+        {saveErr?.where === 'calendars' && !saving && (
+          <div style={{ padding: '0 24px 16px' }}><Msg type="error">{saveErr.text}</Msg></div>
+        )}
       </Card>
     </>
   )

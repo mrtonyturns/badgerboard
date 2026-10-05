@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Users, Plus, Search, ExternalLink, Trash2, X, Phone, Mail, Globe, Telescope, Lock, Wand2, CheckCircle, AlertCircle, Map, LayoutList, Upload, Zap, FileText } from 'lucide-react'
 import { supabase, getCandidates, getOffices, getElections, createCandidate, deleteCandidate, updateCandidate } from '../lib/supabase'
@@ -377,7 +377,12 @@ export default function Candidates() {
 
   // Keyed on the four primitive filter strings, so its identity (and the
   // effect above) changes only when a filter actually changes.
+  // fetchSeqRef: only the newest call may write — flipping party/office quickly
+  // overlaps requests, and an older one resolving last showed the wrong list.
+  const fetchSeqRef = useRef(0)
   const fetchData = useCallback(async () => {
+    const seq = ++fetchSeqRef.current
+    const isStale = () => seq !== fetchSeqRef.current
     setLoading(true)
     try {
       const { data, error } = await getCandidates({
@@ -386,6 +391,7 @@ export default function Candidates() {
         status: undefined,   // status filter removed — monitoring filters are client-side
         office_id: officeFilter || undefined,
       })
+      if (isStale()) return
       if (error) { console.error('Failed to load candidates:', error); setLoading(false); return }
       // Client-side monitoring filters
       const filtered = statusFilter === '__monitored__'
@@ -395,6 +401,7 @@ export default function Candidates() {
           : (data || [])
       setCandidates(filtered)
     } catch (err) {
+      if (isStale()) return
       console.error('fetchData error:', err)
     }
     setLoading(false)

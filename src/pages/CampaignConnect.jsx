@@ -193,7 +193,15 @@ function TeamPanel({ flash }) {
     try { const r = await api('campaign-connect', { action: 'invite', email, relationship_type: relType }); setEmail(''); setLastCode(r.link?.invite_code || null); flash(r.invitee_has_account ? 'Invitation sent — it will appear in their app' : 'Invitation created — share the connect code'); load() }
     catch (e) { flash(e.message, true) } finally { setBusy(false) }
   }
-  const revoke = async (id) => { try { await api('campaign-connect', { action: 'revoke', link_id: id }); flash('Link removed'); load() } catch (e) { flash(e.message, true) } }
+  // Destructive actions confirm first (window.confirm, as elsewhere in the app) —
+  // one stray click on the hover trash icon used to cut a live connection.
+  const revoke = async (l) => {
+    const msg = l.status === 'active'
+      ? `Disconnect from ${l.candidate_email}?\n\nYou lose access to their metrics and workspace immediately. Reconnecting needs a new invite.`
+      : `Cancel the pending invite to ${l.candidate_email}?\n\nThe connect code stops working.`
+    if (!window.confirm(msg)) return
+    try { await api('campaign-connect', { action: 'revoke', link_id: l.id }); flash('Link removed'); load() } catch (e) { flash(e.message, true) }
+  }
 
   if (active) return <Workspace link={active} onBack={() => { setActive(null); load() }} flash={flash} />
 
@@ -266,7 +274,7 @@ function TeamPanel({ flash }) {
                 {l.status === 'active'
                   ? <button onClick={() => setActive(l)} className="text-sm font-bold text-white bg-brand-red rounded-xl px-3 py-2 flex items-center gap-1 hover:bg-brand-red/90">Manage <ChevronRight className="w-4 h-4" /></button>
                   : (l.invite_code && <button onClick={() => { navigator.clipboard?.writeText(l.invite_code); flash('Code copied') }} title="Copy connect code" className="text-xs font-black tracking-widest text-brand-navy bg-brand-navy/5 border border-brand-navy/20 px-2.5 py-2 rounded-xl flex items-center gap-1 hover:bg-brand-navy/10"><Copy className="w-3 h-3" /> {l.invite_code}</button>)}
-                <button onClick={() => revoke(l.id)} className="text-gray-300 hover:text-red-500 p-1 opacity-0 group-hover:opacity-100 transition-opacity" title="Remove"><Trash2 className="w-4 h-4" /></button>
+                <button onClick={() => revoke(l)} className="text-gray-300 hover:text-red-500 p-1 opacity-0 group-hover:opacity-100 transition-opacity" title="Remove"><Trash2 className="w-4 h-4" /></button>
               </div>
             ))}
           </div>
@@ -395,7 +403,10 @@ function InvitesPanel({ flash, isPaidCandidate }) {
   useEffect(() => { load() }, [load])
 
   const accept = async (id) => { try { await api('campaign-connect', { action: 'accept', link_id: id }); flash('Manager connected'); load() } catch (e) { flash(e.message, true) } }
-  const decline = async (id) => { try { await api('campaign-connect', { action: 'decline', link_id: id }); flash('Invite declined'); load() } catch (e) { flash(e.message, true) } }
+  const decline = async (id) => {
+    if (!window.confirm('Decline this invitation?\n\nIt will be removed — to connect later they will need to send a new invite.')) return
+    try { await api('campaign-connect', { action: 'decline', link_id: id }); flash('Invite declined'); load() } catch (e) { flash(e.message, true) }
+  }
   const redeem = async () => { if (!code.trim()) return; try { await api('campaign-connect', { action: 'redeem', code }); setCode(''); flash('Connected!'); load() } catch (e) { flash(e.message, true) } }
 
   return (
@@ -441,7 +452,10 @@ function ManagersPanel({ flash }) {
   const [managers, setManagers] = useState([])
   const load = useCallback(async () => { try { const r = await api('campaign-connect', { action: 'my_managers' }); setManagers(r.managers) } catch (e) { flash(e.message, true) } }, [flash])
   useEffect(() => { load() }, [load])
-  const revoke = async (id) => { try { await api('campaign-connect', { action: 'revoke', link_id: id }); flash('Access revoked'); load() } catch (e) { flash(e.message, true) } }
+  const revoke = async (id) => {
+    if (!window.confirm('Revoke this manager\'s access?\n\nThey immediately lose access to your metrics and tasks. Reconnecting needs a new invite or connect code.')) return
+    try { await api('campaign-connect', { action: 'revoke', link_id: id }); flash('Access revoked'); load() } catch (e) { flash(e.message, true) }
+  }
   return (
     <div className="rounded-2xl border border-gray-100 bg-white shadow-sm p-5">
       <h2 className="font-bold text-gray-900 mb-3">Who can access your account</h2>
@@ -473,7 +487,10 @@ function SharedPanel({ isAction, flash }) {
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t) }, [load])
 
   const openProfile = async (h) => { try { const r = await api('profile-handoff', { action: 'open', handoff_id: h.id }); setOpen(r) } catch (e) { flash(e.message, true) } }
-  const revoke = async (h) => { try { await api('profile-handoff', { action: 'revoke', handoff_id: h.id }); flash('Recalled'); load() } catch (e) { flash(e.message, true) } }
+  const revoke = async (h) => {
+    if (!window.confirm(`Recall "${h.title || 'this profile'}"?\n\nThe recipient can no longer open it. This can't be undone — you'd need to send it again.`)) return
+    try { await api('profile-handoff', { action: 'revoke', handoff_id: h.id }); flash('Recalled'); load() } catch (e) { flash(e.message, true) }
+  }
 
   return (
     <div className="rounded-2xl border border-gray-100 bg-white shadow-sm p-5">

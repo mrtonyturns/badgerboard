@@ -125,6 +125,14 @@ export default function Dossiers() {
   // they're read from this snapshot (useRef keeps its first value) rather than
   // the live params, which openDossier/rememberSection rewrite as you read.
   const mountParamsRef  = useRef(searchParams)
+  // Live ?view= for the URL ↔ reader sync. Read through a ref inside
+  // openDossier so its identity doesn't change on every URL write.
+  const viewParam        = searchParams.get('view')
+  const viewParamRef     = useRef(viewParam)
+  viewParamRef.current   = viewParam
+  const prevViewParamRef = useRef(viewParam)
+  // True while the ?view= entry on top of history is one openDossier pushed.
+  const pushedViewRef    = useRef(false)
 
   const userTier  = getUserTier(user)
   const limit     = getEffectiveProfileLimit(user)
@@ -161,6 +169,7 @@ export default function Dossiers() {
 
   // ── View ──────────────────────────────────────────────────────────────────
   const [selected, setSelected]   = useState(null)
+  const selectedId = selected?.id || null
   const [query, setQuery]         = useState('')
   const [shown, setShown]         = useState(PAGE_SIZE)
 
@@ -246,13 +255,23 @@ export default function Dossiers() {
   // openDossier (and fetchData + the effects below) a new identity on every
   // open. navigate() only changes identity when the route pathname changes.
   // Everything else it touches is a ref, a state setter or a module function.
-  const openDossier = useCallback(async (id, section = null) => {
+  //
+  // History: only an open from the library PUSHES an entry (so browser Back
+  // closes the reader — see the URL → reader sync below). Switching profiles
+  // while a ?view= is already in the URL, or landing on a ?view= deep link,
+  // REPLACES, so no duplicate entries pile up. `fromUrl` is the sync effect
+  // opening what the URL already says (Back/Forward) — no URL write at all.
+  const openDossier = useCallback(async (id, section = null, { fromUrl = false } = {}) => {
     const { data } = await getDossier(id)
     if (!data || !aliveRef.current) return
     setSelected(data)
     setShowReviewer(false); setShowNotes(false); setMoreOpen(false); setShowEmpty(false)
-    // Refresh-proof: the open profile (and section) live in the URL.
-    navigate({ search: `?${createSearchParams(section ? { view: id, section } : { view: id })}` }, { replace: false })
+    if (!fromUrl) {
+      // Refresh-proof: the open profile (and section) live in the URL.
+      const hadView = !!viewParamRef.current
+      navigate({ search: `?${createSearchParams(section ? { view: id, section } : { view: id })}` }, { replace: hadView })
+      if (!hadView) pushedViewRef.current = true
+    }
     scrollPageTop()
     if (section) {
       const jump = () => {
@@ -369,6 +388,38 @@ export default function Dossiers() {
     // initSection is a real input. Once deepLinkedRef is set every re-run
     // returns at the guard, so openDossier rewriting ?section= can't loop.
   }, [dossiers, initCandidateId, initSection, openDossier])
+
+  // ── URL → reader sync ─────────────────────────────────────────────────────
+  // openDossier pushes ?view=, but nothing used to read it back: browser Back
+  // changed the URL and left the reader open. Acts only when ?view= itself
+  // changes (prevViewParamRef), so the reader's own writes are no-ops here.
+  useEffect(() => {
+    const prev = prevViewParamRef.current
+    prevViewParamRef.current = viewParam
+    if (prev === viewParam) return
+    if (!viewParam) {
+      pushedViewRef.current = false
+      if (selectedId) { setSelected(null); scrollPageTop() }
+      return
+    }
+    // Forward (or any external nav) to a ?view= that isn't on screen.
+    if (selectedId !== viewParam) {
+      openDossier(viewParam, new URLSearchParams(window.location.search).get('section'), { fromUrl: true })
+    }
+  }, [viewParam, selectedId, openDossier])
+
+  // Leave the reader. If our own open pushed the ?view= entry, step back over
+  // it (one entry, no duplicate); otherwise (deep link) replace it in place.
+  const closeReader = useCallback(() => {
+    setSelected(null)
+    scrollPageTop()
+    if (pushedViewRef.current) {
+      pushedViewRef.current = false
+      navigate(-1)
+    } else if (viewParamRef.current) {
+      navigate({ search: '' }, { replace: true })
+    }
+  }, [navigate])
 
   // As the reader scrolls or the rail navigates, remember the section in the
   // URL (replace, so history isn't spammed) — refresh lands where you were.
@@ -657,7 +708,7 @@ export default function Dossiers() {
       setError(`Could not delete this profile: ${delErr.message || 'unknown error'}`)
       return
     }
-    if (selected?.id === confirmDelete) setSelected(null)
+    if (selected?.id === confirmDelete) closeReader()
     setConfirmDelete(null); setDeleting(false)
     fetchData()
   }
@@ -844,7 +895,7 @@ export default function Dossiers() {
           back={(
             <button
               type="button"
-              onClick={() => { setSelected(null); setSearchParams({}, { replace: false }); scrollPageTop() }}
+              onClick={closeReader}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6, background: 'none',
                 border: 0, padding: '0 0 16px', cursor: 'pointer', fontFamily: 'inherit',

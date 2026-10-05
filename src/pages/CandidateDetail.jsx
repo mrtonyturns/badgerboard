@@ -100,10 +100,16 @@ export default function CandidateDetail() {
   const districtCounties = useDistrictCounties(candidate?.office)
 
   // ── data ────────────────────────────────────────────────────────────────────
+  // The candidate currently routed to. fetchAll / refreshCandidate check it
+  // after their awaits: the component stays mounted across :id changes, so a
+  // slow response for candidate A could otherwise land on top of B.
+  const idRef = useRef(id)
+  idRef.current = id
   const fetchAll = useCallback(async () => {
     const [{ data: c }, { data: d }, { data: ir }] = await Promise.all([
       getCandidate(id), getDossiers(id), getIncumbentRecords(id),
     ])
+    if (idRef.current !== id) return null
     setCandidate(c)
     setForm(c || {})
     setDossiers(d || [])
@@ -141,7 +147,9 @@ export default function CandidateDetail() {
   // Refresh just the candidate row — used after the AI lock endpoint returns so
   // ai_access_notes / ai_access_locked_at are re-read from the server.
   const refreshCandidate = async () => {
-    const { data: c } = await getCandidate(id)
+    const reqId = id
+    const { data: c } = await getCandidate(reqId)
+    if (idRef.current !== reqId) return
     if (c) { setCandidate(c); if (!editing) setForm(c) }
   }
 

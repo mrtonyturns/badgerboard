@@ -252,6 +252,11 @@ export default function Polling() {
   const [intelMsg, setIntelMsg]     = useState(null)
   const [intelDirty, setIntelDirty] = useState(false)
   const intelFileRef = useRef(null)
+  // Stale-response guard for loadIntel: a slow response for the district the
+  // user just left (or a reload kicked off by an upload/delete there) must not
+  // overwrite the current district's intel.
+  const intelReqRef = useRef(0)
+  const intelDistrictRef = useRef(district)
 
   const api = useCallback(async (action, extra = {}) => {
     const { data: { session } } = await supabase.auth.getSession()
@@ -333,11 +338,16 @@ export default function Polling() {
 
   // ── Local intel CRUD (RLS-scoped: users only ever see their own rows) ──
   const loadIntel = useCallback(async (d) => {
+    const req = ++intelReqRef.current
     if (!d) { setIntel([]); return }
     const { data } = await supabase.from('poll_intel').select('*').eq('district', d).order('created_at', { ascending: true })
+    if (req !== intelReqRef.current || d !== intelDistrictRef.current) return
     setIntel(data || [])
   }, [])
-  useEffect(() => { loadIntel(district); setIntelDirty(false); setIntelMsg(null) }, [district, loadIntel])
+  useEffect(() => {
+    intelDistrictRef.current = district
+    loadIntel(district); setIntelDirty(false); setIntelMsg(null)
+  }, [district, loadIntel])
 
   const addNote = async () => {
     if (!noteText.trim() || !district) return

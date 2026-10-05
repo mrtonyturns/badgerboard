@@ -8,7 +8,7 @@
 // netlify/functions/monitoring-digest.js (the producer). Nothing here defines a
 // second copy of a category, status, party or plan value.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { sanitizeHtml } from '../../lib/sanitize'
 import { getDossier } from '../../lib/supabase'
 import { digestCategory } from '../../lib/campaignEnums'
@@ -579,20 +579,26 @@ export function useDossierSection(dossiers, sectionNums) {
   const [error, setError] = useState('')
   const key = JSON.stringify(sectionNums)
   useEffect(() => {
-    if (!dossiers || dossiers.length === 0) return
+    if (!dossiers || dossiers.length === 0) { setLoading(false); return }
     const latest = dossiers[0]
     const doExtract = (raw) => {
       const sections = {}
       for (const n of JSON.parse(key)) sections[n] = parseSection(raw, n)
       setContent(sections)
     }
-    if (latest.content) { doExtract(latest.content); return }
+    if (latest.content) { setLoading(false); doExtract(latest.content); return }
+    // `cancelled`: a newer dossier list (e.g. the next candidate) replaced this
+    // one while getDossier was in flight — its content must not land.
+    let cancelled = false
     setLoading(true)
+    setError('')
     getDossier(latest.id).then(({ data, error: err }) => {
+      if (cancelled) return
       setLoading(false)
       if (err || !data?.content) { setError('Could not load profile content'); return }
       doExtract(data.content)
     })
+    return () => { cancelled = true }
   }, [dossiers, key])
   return { content, loading, error }
 }
@@ -604,12 +610,16 @@ export function useBioSummary(dossiers, candidateName, session, candidateId) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [triggered, setTriggered] = useState(false)
+  // Bumped on every generate and on every candidate change, so a slow summary
+  // for candidate A (or an older click) can't land on top of B's.
+  const reqRef = useRef(0)
 
   // /candidates/:id re-renders this hook in place when the user moves from one
   // candidate to the next, so the auto-fire-once flag has to be scoped to the
   // candidate. Without this reset the second candidate kept showing (or kept
   // erroring with) the first candidate's snapshot and never regenerated.
   useEffect(() => {
+    reqRef.current += 1
     setSummary(null)
     setError(null)
     setLoading(false)
@@ -619,6 +629,8 @@ export function useBioSummary(dossiers, candidateName, session, candidateId) {
   const generate = useCallback(async () => {
     if (!dossiers || dossiers.length === 0) return
     const latestId = dossiers[0].id
+    const req = ++reqRef.current
+    const isStale = () => reqRef.current !== req
     setLoading(true)
     setError(null)
     try {
@@ -628,6 +640,7 @@ export function useBioSummary(dossiers, candidateName, session, candidateId) {
         body: JSON.stringify({ dossier_id: latestId, candidate_name: candidateName }),
       })
       const data = await res.json()
+      if (isStale()) return
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       const raw = data.summary || null
       const stripped = raw
@@ -640,18 +653,23 @@ export function useBioSummary(dossiers, candidateName, session, candidateId) {
         : null
       setSummary(stripped || null)
     } catch (e) {
-      setError(e.message)
+      if (!isStale()) setError(e.message)
     } finally {
-      setLoading(false)
+      if (!isStale()) setLoading(false)
     }
   }, [dossiers, candidateName, session])
 
+  // Right after an :id change the previous candidate's dossiers are still in
+  // state until the new fetch lands — don't spend the auto-fire on them.
+  const dossiersMatch = !candidateId || !dossiers?.[0]?.candidate_id ||
+    String(dossiers[0].candidate_id) === String(candidateId)
+
   useEffect(() => {
-    if (!triggered && dossiers && dossiers.length > 0 && session?.access_token) {
+    if (!triggered && dossiersMatch && dossiers && dossiers.length > 0 && session?.access_token) {
       setTriggered(true)
       generate()
     }
-  }, [dossiers, session, triggered, generate])
+  }, [dossiers, dossiersMatch, session, triggered, generate])
 
   return { summary, loading, error, generate }
 }

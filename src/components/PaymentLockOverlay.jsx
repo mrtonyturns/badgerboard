@@ -5,8 +5,10 @@ import { isNativeApp } from '../lib/native'
 
 // Pages that remain accessible even when payment is locked.
 // /profiler is included so downgrade-locked users can still read their existing
-// profiles during the 30-day grace period before data deletion.
-const UNLOCKED_PATHS = ['/settings', '/login', '/terms', '/plans', '/dossier-disclaimer', '/profiler']
+// profiles during the 30-day grace period before data deletion. /dossiers is
+// the same page (App.jsx renders <Dossiers/> for both routes), so it gets the
+// same exemption — older links and nav still point there.
+const UNLOCKED_PATHS = ['/settings', '/login', '/terms', '/plans', '/dossier-disclaimer', '/profiler', '/dossiers']
 
 // Days until account data is deleted after downgrade
 const DELETION_GRACE_DAYS = 30
