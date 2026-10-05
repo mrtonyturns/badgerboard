@@ -54,6 +54,15 @@ exports.handler = async () => {
 
   const now = Date.now()
   let expired = 0, warned = 0, errors = 0
+  // Emails were fire-and-forget: the function could return (container frozen)
+  // before they sent — and the trial fields are already cleared, so a dropped
+  // email is never retried. Collect and settle them before returning;
+  // allSettled so one failure doesn't abort the rest.
+  const pendingEmails = []
+  // A no-op handler is attached at push time: a send that rejected while the
+  // loop was still awaiting other users would otherwise be an unhandled
+  // rejection (fatal by default on Node 15+). allSettled still sees it.
+  const queueEmail = (p) => { p.catch(() => {}); pendingEmails.push(p) }
 
   let users
   try { users = await listAllUsers() } catch (err) {
@@ -85,7 +94,7 @@ exports.handler = async () => {
         expired++
         console.log(`[trial-expiry] expired ${planLabel} trial for ${user.email}`)
 
-        sendEmail({
+        queueEmail(sendEmail({
           to: user.email,
           subject: 'Your Badger Board trial has ended',
           title: 'Your trial has ended',
@@ -94,7 +103,7 @@ exports.handler = async () => {
                  <p>Keep the momentum going — pick up right where you left off.</p>`,
           ctaText: 'Choose your plan',
           ctaUrl: 'https://badgerboardwi.com/plans',
-        }).catch(() => {})
+        }))
 
       } else if (endsAt - now <= WARNING_WINDOW_MS && !meta.trial_warning_sent) {
         // ── Ending soon: one-time warning email
@@ -103,7 +112,7 @@ exports.handler = async () => {
         warned++
         console.log(`[trial-expiry] warned ${user.email} — ${daysLeft}d left on ${planLabel} trial`)
 
-        sendEmail({
+        queueEmail(sendEmail({
           to: user.email,
           subject: `Your Badger Board trial ends in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`,
           title: `${daysLeft} day${daysLeft === 1 ? '' : 's'} left on your trial`,
@@ -112,13 +121,16 @@ exports.handler = async () => {
                  <p>After that your account moves to ${paidPlan ? 'your regular plan' : 'the free Scout plan'}. Your data stays safe either way — but if you want to keep the full toolkit, now's the time to pick a plan.</p>`,
           ctaText: 'Keep my access',
           ctaUrl: 'https://badgerboardwi.com/plans',
-        }).catch(() => {})
+        }))
       }
     } catch (err) {
       errors++
       console.error(`[trial-expiry] failed for ${user.email}:`, err.message)
     }
   }
+
+  const emailFailures = (await Promise.allSettled(pendingEmails)).filter(r => r.status === 'rejected').length
+  if (emailFailures) console.error(`[trial-expiry] ${emailFailures} email(s) failed to send`)
 
   console.log(`[trial-expiry] done — expired: ${expired}, warned: ${warned}, errors: ${errors}, scanned: ${users.length}`)
   return { statusCode: 200, body: JSON.stringify({ expired, warned, errors, scanned: users.length }) }

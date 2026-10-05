@@ -10,6 +10,26 @@ import Stripe from 'stripe'
 const SUPABASE_URL  = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
 
+// Audit fix: resolve the Stripe customer from the stored
+// app_metadata.stripe_customer_id first (same order as delete-account.js /
+// admin-billing.js resolveCustomerIds), then the verified email. After a
+// support email change the Stripe customer keeps the OLD email, so the
+// email-only lookup 404'd billing management. caller is the /auth/v1/user
+// record — app_metadata is service-role-writable only, so it's trusted.
+async function resolveCustomerIds(stripe, caller, callerEmail) {
+  const ids = []
+  const storedId = caller?.app_metadata?.stripe_customer_id
+  if (storedId) {
+    try {
+      const c = await stripe.customers.retrieve(storedId)
+      if (c && !c.deleted) ids.push(c.id)
+    } catch { /* stale/foreign id — fall back to email */ }
+  }
+  const customers = await stripe.customers.list({ email: callerEmail, limit: 1 })
+  for (const c of customers.data) if (!ids.includes(c.id)) ids.push(c.id)
+  return ids
+}
+
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) }
@@ -45,11 +65,10 @@ export const handler = async (event) => {
   const stripe  = new Stripe(stripeKey)
   const siteUrl = process.env.SITE_URL || 'https://www.badgerboardwi.com'
 
-  // Look up Stripe customer by verified email only — ignore any client-supplied email/customerId
+  // Stored customer id, else verified email — ignore any client-supplied email/customerId
   let stripeCustomerId
   try {
-    const customers = await stripe.customers.list({ email: callerEmail, limit: 1 })
-    stripeCustomerId = customers.data[0]?.id
+    stripeCustomerId = (await resolveCustomerIds(stripe, caller, callerEmail))[0]
   } catch (err) {
     console.error('Customer lookup error:', err.message)
   }

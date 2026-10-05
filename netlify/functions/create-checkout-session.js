@@ -385,7 +385,9 @@ export const handler = async (event) => {
 
   const product = sanitize(body.product)
   const userId  = authedUserId  // use the authenticated user id, not body.userId
-  const email   = sanitize(body.email, 320)
+  // Verified token email, not body.email — a client-supplied address put the
+  // Stripe customer (receipts, later portal/email lookups) under any address
+  const email   = authedUser?.email || ''
 
   // Credit packs are a plan feature (tiers.js features.creditPacks /
   // features.bulkCredits). The Pricing page hides them for plans that don't
@@ -574,7 +576,8 @@ export const handler = async (event) => {
         },
       },
 
-      success_url: `${siteUrl}/settings?billing=success&plan=${plan}${bracket ? `&bracket=${bracket}` : ''}`,
+      // The billing banner only renders in the Plan pane, not /settings
+      success_url: `${siteUrl}/settings/plan?billing=success&plan=${plan}${bracket ? `&bracket=${bracket}` : ''}`,
       cancel_url:  `${siteUrl}/plans?billing=cancelled`,
 
       allow_promotion_codes: true,

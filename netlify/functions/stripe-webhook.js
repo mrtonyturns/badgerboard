@@ -489,7 +489,11 @@ function getCreditsForPack(product, pack) {
 // carry their quantity directly rather than a pack key).
 async function addProfileCredits(userId, qty) {
   const existingUser = await getSupabaseUser(userId)
-  const existingMeta = existingUser?.app_metadata ?? {}
+  // getSupabaseUser returns null on ANY non-OK read (5xx included). Treating
+  // that as empty metadata recomputed the balance from 0 and wiped banked
+  // credits — throw instead so the handler 500s and Stripe retries.
+  if (!existingUser) throw new Error(`Supabase user read failed for ${userId} — refusing to recompute credits from 0`)
+  const existingMeta = existingUser.app_metadata ?? {}
   const metadata = { ...existingMeta, profile_credits: (existingMeta.profile_credits || 0) + qty }
   const res = await fetch(
     `${process.env.SUPABASE_URL}/auth/v1/admin/users/${userId}`,
@@ -512,7 +516,9 @@ async function addProfileCredits(userId, qty) {
 
 async function addCreditsToUser(userId, product, pack) {
   const existingUser = await getSupabaseUser(userId)
-  const existingMeta = existingUser?.app_metadata ?? {}
+  // Same as addProfileCredits: a failed read must not zero the balance.
+  if (!existingUser) throw new Error(`Supabase user read failed for ${userId} — refusing to recompute credits from 0`)
+  const existingMeta = existingUser.app_metadata ?? {}
   const amount = getCreditsForPack(product, pack)
   if (amount === 0) return
 
@@ -709,8 +715,18 @@ exports.handler = async (event) => {
             stripe_subscription_id: sub.id,
           }, statusFields)
 
+          // Only email on a REAL plan change. subscription.updated also fires on
+          // every renewal, cancel-at-period-end toggle and past_due transition,
+          // each of which used to send "plan updated". On API 2025+ renewals put
+          // `items` in previous_attributes too (the period moved onto items), so
+          // compare the price id rather than just checking for the key.
+          const prev        = stripeEvent.data.previous_attributes || {}
+          const prevPriceId = prev.items?.data?.[0]?.price?.id
+          const planChanged = Boolean(prevPriceId && prevPriceId !== priceId)
+            || ['plan', 'bracket'].some(k => prev.metadata && k in prev.metadata && prev.metadata[k] !== sub.metadata?.[k])
+
           // Send plan updated email
-          try {
+          if (planChanged) try {
             const user = await getSupabaseUser(supabaseUserId)
             const prefs = await getNotificationPrefs(supabaseUserId)
             if (user?.email && prefs.plan_changed) {
@@ -755,13 +771,16 @@ exports.handler = async (event) => {
         const existingUser = await getSupabaseUser(supabaseUserId)
         if (existingUser?.app_metadata?.voluntary_downgrade) {
           console.log(`Voluntary downgrade for ${supabaseUserId} — Scout in good standing, no lockout`)
-          const cleanMeta = { ...existingUser.app_metadata, plan: 'scout', plan_type: 'candidate', payment_status: 'active', downgraded_at: null, stripe_subscription_id: null }
-          delete cleanMeta.voluntary_downgrade
-          await fetch(`${process.env.SUPABASE_URL}/auth/v1/admin/users/${supabaseUserId}`, {
+          // voluntary_downgrade: null, not `delete` — the admin PUT MERGES
+          // app_metadata, so a deleted key was never actually removed.
+          const cleanMeta = { ...existingUser.app_metadata, plan: 'scout', plan_type: 'candidate', payment_status: 'active', downgraded_at: null, stripe_subscription_id: null, voluntary_downgrade: null }
+          const res = await fetch(`${process.env.SUPABASE_URL}/auth/v1/admin/users/${supabaseUserId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json', apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` },
             body: JSON.stringify({ app_metadata: cleanMeta }),
           })
+          // Throw into the 500 path (releases the idempotency row) so Stripe retries
+          if (!res.ok) throw new Error(`Supabase voluntary-downgrade update failed (${res.status}): ${await res.text()}`)
           break
         }
 

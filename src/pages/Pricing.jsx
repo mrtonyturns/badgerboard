@@ -523,7 +523,8 @@ export default function Pricing() {
         // Use billingMsg-style success via checkoutError repurposed as success, or navigate to settings
         await refreshSession?.()
         setCheckoutLoading(null)   // clear BEFORE navigating so the button never sticks
-        navigate('/settings?billing=success&plan=' + (payload.plan || ''))
+        // Plan pane — the billing success banner doesn't render on /settings
+        navigate('/settings/plan?billing=success&plan=' + (payload.plan || ''))
         return
       }
 

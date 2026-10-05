@@ -77,8 +77,11 @@ export const handler = async (event) => {
       }
     );
 
+    // A failed write must not report success — the sender would never retry
+    // and the account would silently stay locked/unlocked.
     if (!updateRes.ok) {
       console.error('Failed to update user metadata:', await updateRes.text());
+      return { statusCode: 500, body: JSON.stringify({ error: 'Failed to update payment status' }) };
     }
 
     // Send payment issue email if locking and Resend is configured

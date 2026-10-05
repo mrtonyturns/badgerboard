@@ -199,6 +199,26 @@ const STRIPE_PRICES = {
   STRIPE_PRICE_A_CAMPAIGN_B51_A:   'price_1TYwdfHGi9vK03bukudhHfG4',
 }
 
+// Audit fix: resolve the Stripe customer from the stored
+// app_metadata.stripe_customer_id first (same order as delete-account.js /
+// admin-billing.js resolveCustomerIds), then the verified email. After a
+// support email change the Stripe customer keeps the OLD email, so the
+// email-only lookup 404'd billing management. caller is the /auth/v1/user
+// record — app_metadata is service-role-writable only, so it's trusted.
+async function resolveCustomerIds(stripe, caller, callerEmail) {
+  const ids = []
+  const storedId = caller?.app_metadata?.stripe_customer_id
+  if (storedId) {
+    try {
+      const c = await stripe.customers.retrieve(storedId)
+      if (c && !c.deleted) ids.push(c.id)
+    } catch { /* stale/foreign id — fall back to email */ }
+  }
+  const customers = await stripe.customers.list({ email: callerEmail, limit: 5 })
+  for (const c of customers.data) if (!ids.includes(c.id)) ids.push(c.id)
+  return ids
+}
+
 function sanitize(str, maxLen = 200) {
   if (str == null) return ''
   return String(str).replace(/[<>"'`]/g, '').slice(0, maxLen)
@@ -291,16 +311,18 @@ export const handler = async (event) => {
   }
 
   try {
-    // Find the customer by the server-verified email (never body.email)
-    const customers = await stripe.customers.list({ email: callerEmail, limit: 1 })
-    const customer  = customers.data[0]
-    if (!customer) {
+    // Stored customer id first, then the server-verified email (never body.email)
+    const customerIds = await resolveCustomerIds(stripe, caller, callerEmail)
+    if (!customerIds.length) {
       return { statusCode: 404, body: JSON.stringify({ error: 'No Stripe customer found for this account. Please subscribe first.' }) }
     }
 
-    // Find active subscription
-    const subs = await stripe.subscriptions.list({ customer: customer.id, status: 'active', limit: 1 })
-    const sub  = subs.data[0]
+    // Find active subscription across the user's customer records
+    let sub = null
+    for (const customerId of customerIds) {
+      const subs = await stripe.subscriptions.list({ customer: customerId, status: 'active', limit: 1 })
+      if ((sub = subs.data[0])) break
+    }
     if (!sub) {
       return { statusCode: 404, body: JSON.stringify({ error: 'No active subscription found. Please subscribe first.' }) }
     }
@@ -310,6 +332,9 @@ export const handler = async (event) => {
     await stripe.subscriptions.update(sub.id, {
       items: [{ id: item.id, price: priceId }],
       proration_behavior: 'create_prorations',
+      // Choosing a new plan un-schedules a pending cancellation — otherwise the
+      // upgraded sub still ended at period end and dropped them to Scout
+      cancel_at_period_end: false,
       metadata: {
         plan,
         plan_type: planType(plan),

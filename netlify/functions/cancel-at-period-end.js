@@ -11,6 +11,26 @@ import Stripe from 'stripe'
 const SUPABASE_URL  = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
 
+// Audit fix: resolve the Stripe customer from the stored
+// app_metadata.stripe_customer_id first (same order as delete-account.js /
+// admin-billing.js resolveCustomerIds), then the verified email. After a
+// support email change the Stripe customer keeps the OLD email, so the
+// email-only lookup 404'd billing management. caller is the /auth/v1/user
+// record — app_metadata is service-role-writable only, so it's trusted.
+async function resolveCustomerIds(stripe, caller, callerEmail) {
+  const ids = []
+  const storedId = caller?.app_metadata?.stripe_customer_id
+  if (storedId) {
+    try {
+      const c = await stripe.customers.retrieve(storedId)
+      if (c && !c.deleted) ids.push(c.id)
+    } catch { /* stale/foreign id — fall back to email */ }
+  }
+  const customers = await stripe.customers.list({ email: callerEmail, limit: 5 })
+  for (const c of customers.data) if (!ids.includes(c.id)) ids.push(c.id)
+  return ids
+}
+
 function sanitize(str, maxLen = 200) {
   if (str == null) return ''
   return String(str).replace(/[<>"'`]/g, '').slice(0, maxLen)
@@ -60,16 +80,18 @@ export const handler = async (event) => {
     return { statusCode: 403, body: JSON.stringify({ error: 'You can only cancel your own subscription' }) }
   }
 
-  // Use the server-verified email for the Stripe lookup (never body.email)
+  // Stored customer id first, then the server-verified email (never body.email)
   try {
-    const customers = await stripe.customers.list({ email: callerEmail, limit: 1 })
-    const customer  = customers.data[0]
-    if (!customer) {
+    const customerIds = await resolveCustomerIds(stripe, caller, callerEmail)
+    if (!customerIds.length) {
       return { statusCode: 404, body: JSON.stringify({ error: 'No Stripe customer found.' }) }
     }
 
-    const subs = await stripe.subscriptions.list({ customer: customer.id, status: 'active', limit: 1 })
-    const sub  = subs.data[0]
+    let sub = null
+    for (const customerId of customerIds) {
+      const subs = await stripe.subscriptions.list({ customer: customerId, status: 'active', limit: 1 })
+      if ((sub = subs.data[0])) break
+    }
     if (!sub) {
       return { statusCode: 404, body: JSON.stringify({ error: 'No active subscription found.' }) }
     }
