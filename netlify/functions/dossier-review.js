@@ -214,8 +214,14 @@ export const handler = async (event) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing required fields' }) }
     }
     const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-    if (!UUID.test(dossier_id) || !UUID.test(section_id)) {
+    // section_id is a text slug from the reader ('overview', 'section-6'), not
+    // a UUID — the old UUID check 400'd every real save.
+    const SECTION_ID = /^[\w-]{1,64}$/
+    if (!UUID.test(dossier_id) || typeof section_id !== 'string' || !SECTION_ID.test(section_id)) {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid dossier_id or section_id' }) }
+    }
+    if (typeof claim_text !== 'string') {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid claim_text' }) }
     }
 
     const validStatuses = ['confirmed', 'rejected', 'needs_research']
@@ -223,25 +229,35 @@ export const handler = async (event) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid status' }) }
     }
 
-    const claimKey = claim_text.slice(0, 100)
+    // Exact match on the stored (500-char) text. The old `like.<prefix>*`
+    // treated % and _ in the claim as wildcards and could hit — and then
+    // overwrite — a different claim's review.
+    const storedText = claim_text.slice(0, 500)
 
     // Try update first, then insert (upsert via unique index)
     const checkRes = await supabaseQuery(
       `dossier_claim_reviews`,
       'GET',
       null,
-      `?dossier_id=eq.${encodeURIComponent(dossier_id)}&user_id=eq.${user.id}&section_id=eq.${encodeURIComponent(section_id)}&claim_text=like.${encodeURIComponent(claimKey + '*')}&limit=1`
+      `?dossier_id=eq.${encodeURIComponent(dossier_id)}&user_id=eq.${user.id}&section_id=eq.${encodeURIComponent(section_id)}&claim_text=eq.${encodeURIComponent(storedText)}&limit=1`
     )
+    if (!checkRes.ok) {
+      return { statusCode: 500, headers, body: JSON.stringify({ error: 'Failed to save review' }) }
+    }
 
     const existing = Array.isArray(checkRes.data) ? checkRes.data[0] : null
 
     if (existing) {
-      // Update existing
-      await supabaseQuery(
+      // Update existing — the result was ignored before, so a failed write
+      // still answered ok:true and the client showed it as saved.
+      const upd = await supabaseQuery(
         `dossier_claim_reviews?id=eq.${existing.id}`,
         'PATCH',
         { status, note: note || null, updated_at: new Date().toISOString() }
       )
+      if (!upd.ok) {
+        return { statusCode: 500, headers, body: JSON.stringify({ error: 'Failed to save review' }) }
+      }
       return { statusCode: 200, headers, body: JSON.stringify({ ok: true, id: existing.id }) }
     }
 
@@ -250,7 +266,7 @@ export const handler = async (event) => {
       dossier_id,
       user_id:    user.id,
       section_id,
-      claim_text: claim_text.slice(0, 500),
+      claim_text: storedText,
       status,
       note: note || null,
     })

@@ -146,8 +146,10 @@ exports.handler = async (event) => {
     return { statusCode: 404, headers: CORS, body: JSON.stringify({ error: 'Profile not found or access denied' }) }
   }
 
-  // Enforce per-dossier active share limit (max 5 active shares per dossier)
-  const existing = await supa('dossier_shares', 'GET', null, `?dossier_id=eq.${encodeURIComponent(dossier_id)}&created_by=eq.${user.id}&is_active=eq.true&select=id`)
+  // Enforce per-dossier active share limit (max 5 active shares per dossier).
+  // Expired links stay is_active=true, so without the expires_at filter they
+  // counted forever and the cap became a permanent 429.
+  const existing = await supa('dossier_shares', 'GET', null, `?dossier_id=eq.${encodeURIComponent(dossier_id)}&created_by=eq.${user.id}&is_active=eq.true&expires_at=gt.${encodeURIComponent(new Date().toISOString())}&select=id`)
   if (existing.ok && Array.isArray(existing.data) && existing.data.length >= 5) {
     return { statusCode: 429, headers: CORS, body: JSON.stringify({ error: 'Maximum of 5 active share links per profile. Deactivate an existing link first.' }) }
   }

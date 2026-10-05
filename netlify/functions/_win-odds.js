@@ -48,6 +48,17 @@ function clamp(n, lo = 0, hi = 1) {
   return v < lo ? lo : v > hi ? hi : v
 }
 
+/**
+ * Number() for a possibly-missing input: null/undefined/'' are UNMEASURED and
+ * return null (Number(null) === 0 would score them as a measured even race,
+ * inflating confidence and blocking the primary_won fallback).
+ */
+function toMeasured(v) {
+  if (v === null || v === undefined) return null
+  if (typeof v === 'string' && v.trim() === '') return null
+  return Number(v)
+}
+
 const MODEL_VERSION = 'win-odds-v1 (gameplan §4a weights; fundraising withheld pending §11.1304(12) legal read)'
 
 /**
@@ -97,7 +108,7 @@ function scoreIncumbency(i) {
  * whole score.
  */
 function scoreDistrictLean(i) {
-  const lean = Number(i.district_lean)
+  const lean = toMeasured(i.district_lean)
   if (!Number.isFinite(lean)) return null
   const value = clamp(0.5 + clamp(lean, -40, 40) / 80, 0, 1)
   const dir = lean > 0 ? 'toward' : lean < 0 ? 'against' : 'even for'
@@ -108,7 +119,7 @@ function scoreDistrictLean(i) {
 }
 
 function scorePrimaryMargin(i) {
-  const m = Number(i.primary_margin)
+  const m = toMeasured(i.primary_margin)
   if (Number.isFinite(m)) {
     const value = clamp(0.5 + clamp(m, -40, 40) / 80, 0, 1)
     return m >= 0

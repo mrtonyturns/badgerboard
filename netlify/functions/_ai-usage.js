@@ -23,8 +23,8 @@ const PRICING = {
   'claude-opus-4-8':           { in: 5.00, out: 25.00 },
   'claude-sonnet-4':           { in: 3.00, out: 15.00 },
   'claude-sonnet':             { in: 3.00, out: 15.00 },
-  'claude-haiku-4-5-20251001': { in: 0.80, out: 4.00  },
-  'claude-haiku':              { in: 0.80, out: 4.00  },
+  'claude-haiku-4-5-20251001': { in: 1.00, out: 5.00  },
+  'claude-haiku':              { in: 1.00, out: 5.00  },  // only Haiku 4.5 is in use
   'sonar-pro':                 { in: 3.00, out: 15.00, flat: 0.006 },
   'sonar':                     { in: 1.00, out: 1.00,  flat: 0.005 },
   'grok-4.3':                  { in: 3.00, out: 15.00, flat: 0.02 },  // + server-side search tools

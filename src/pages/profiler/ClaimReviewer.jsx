@@ -69,7 +69,7 @@ export default function ClaimReviewer({ dossier, onClose }) {
     try {
       const token = await getToken()
       if (!token) throw new Error('Not signed in')
-      await fetch('/.netlify/functions/dossier-review', {
+      const res = await fetch('/.netlify/functions/dossier-review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
@@ -77,6 +77,12 @@ export default function ClaimReviewer({ dossier, onClose }) {
           claim_text: claim.text, status, note: reviews[claim.id]?.note || '',
         }),
       })
+      // A rejected save used to be marked as reviewed anyway.
+      if (!res.ok) {
+        let msg = 'Save failed'
+        try { const j = await res.json(); msg = j.error || msg } catch { /* no body */ }
+        throw new Error(msg)
+      }
       setReviews(prev => ({ ...prev, [claim.id]: { status, note: prev[claim.id]?.note || '' } }))
       setSavedIds(prev => new Set([...prev, claim.id]))
     } catch (err) {

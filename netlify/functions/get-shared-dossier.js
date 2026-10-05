@@ -93,8 +93,10 @@ exports.handler = async (event) => {
 
     const dossier = dossierRes.data[0]
 
-    // Increment view count (fire and forget — don't block the response)
-    supa(
+    // Increment view count. Awaited: an un-awaited request can be frozen with
+    // the Lambda once we return, silently dropping the count. A failure still
+    // must not break the viewer, hence the catch.
+    await supa(
       `dossier_shares?id=eq.${share.id}`, 'PATCH',
       { view_count: share.view_count + 1 },
       '', 'return=minimal'
@@ -140,9 +142,17 @@ exports.handler = async (event) => {
       const { dossier_id } = body
       if (!dossier_id || !UUID.test(dossier_id)) return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'valid dossier_id required' }) }
 
-      // Verify ownership
-      const own = await supa('dossiers', 'GET', null, `?id=eq.${encodeURIComponent(dossier_id)}&generated_by=eq.${user.id}&select=id`)
-      if (!own.ok || !Array.isArray(own.data) || own.data.length === 0) {
+      // Verify ownership — same rule as create-dossier-share: generated_by,
+      // created_by, or owner of the dossier's candidate. Auto-refreshed
+      // dossiers carry generated_by = null, which 403'd their owners here.
+      const own = await supa('dossiers', 'GET', null, `?id=eq.${encodeURIComponent(dossier_id)}&select=id,generated_by,created_by,candidate_id`)
+      const drow = own.ok && Array.isArray(own.data) ? own.data[0] : null
+      let owned = !!drow && (drow.generated_by === user.id || drow.created_by === user.id)
+      if (!owned && drow?.candidate_id) {
+        const candRes = await supa('candidates', 'GET', null, `?id=eq.${encodeURIComponent(drow.candidate_id)}&created_by=eq.${user.id}&select=id`)
+        owned = candRes.ok && Array.isArray(candRes.data) && candRes.data.length > 0
+      }
+      if (!owned) {
         return { statusCode: 403, headers: CORS, body: JSON.stringify({ error: 'Access denied' }) }
       }
 

@@ -526,6 +526,7 @@ function matchCandidate(name, roster) {
  *   · an unmatched name may be INSERTED only in a contest this run just
  *     bootstrapped; in an established contest it is quarantined
  *   · precincts reporting is clamped to precincts total, and never moves backwards
+ *   · precincts total never drops below the stored total
  *   · a contest whose merged total reaches MAX_TOTAL_VOTES is quarantined whole
  *
  * @param {Object} payload   { office, candidates:[{name,votes}], precincts_reporting, precincts_total, source }
@@ -614,6 +615,13 @@ function validateContestUpdate(payload, existing = {}, opts = {}) {
     notes.push(`${office}: implausible precincts_total ${total} — ignored`)
     total = storedTotal
   }
+  // A total below the stored one is a partial/other-scope page, not a real
+  // revision. Accepting it while rptg stays monotonic produced rptg >= total,
+  // which determineStatus reads as fully counted → a false 'called' + emails.
+  if (storedTotal > 0 && total !== null && total < storedTotal) {
+    notes.push(`${office}: precincts_total ${total} is below the stored ${storedTotal} — kept ${storedTotal}`)
+    total = storedTotal
+  }
   const anyVotes =
     updates.some(u => (u.votes || 0) > 0) ||
     (existing.results || []).some(r => (toInt(r.votes) || 0) > 0)
@@ -625,13 +633,14 @@ function validateContestUpdate(payload, existing = {}, opts = {}) {
   let precincts = null
   if (anyVotes && (rptg !== null || total !== storedTotal)) {
     let nextRptg = rptg === null ? storedRptg : rptg
-    if (total > 0 && nextRptg > total) {
-      notes.push(`${office}: precincts reporting ${nextRptg} exceeded the ${total} total — clamped to ${total}`)
-      nextRptg = total
-    }
     if (nextRptg < storedRptg) {
       notes.push(`${office}: precincts reporting ${nextRptg} is below the stored ${storedRptg} — precinct count left alone`)
       nextRptg = storedRptg
+    }
+    // Clamp last so the monotonic floor above can never push rptg past total.
+    if (total > 0 && nextRptg > total) {
+      notes.push(`${office}: precincts reporting ${nextRptg} exceeded the ${total} total — clamped to ${total}`)
+      nextRptg = total
     }
     precincts = { precincts_rptg: nextRptg, precincts_total: total }
     if (precincts.precincts_rptg === storedRptg && precincts.precincts_total === storedTotal) precincts = null

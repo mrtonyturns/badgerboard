@@ -75,8 +75,18 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
 
-  // Test mode — verify keys are set
+  // Verify auth — reject unauthenticated callers before firing any background work
+  const user = await verifyUser(event.headers?.authorization || event.headers?.Authorization)
+  if (!user) {
+    return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authenticated' }) }
+  }
+
+  // Test mode — ADMIN ONLY (pings Claude, which costs money, and reveals key
+  // config). Mirrors generate-dossier-background's gate; it used to run before auth.
   if (body.test === true) {
+    if (!ADMIN_EMAILS.includes((user.email || '').toLowerCase())) {
+      return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authorized' }) }
+    }
     if (!ANTHROPIC_API_KEY) {
       return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: 'ANTHROPIC_API_KEY is not set.' }) }
     }
@@ -118,11 +128,6 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Candidate name is required' }) }
   }
 
-  // Verify auth — reject unauthenticated callers before firing any background work
-  const user = await verifyUser(event.headers?.authorization || event.headers?.Authorization)
-  if (!user) {
-    return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authenticated' }) }
-  }
   const entitlement = await getUserEntitlement(user)
   const userPlan = toLegacyBucket(entitlement.plan)
   const isAdminCaller = ADMIN_EMAILS.includes(user.email?.toLowerCase())
@@ -130,6 +135,29 @@ exports.handler = async (event) => {
   // ── Durable per-user rate limit ───────────────────────────────────────────────
   const limited = await enforceRateLimit(user.id, 'generate-dossier', headers)
   if (limited) return limited
+
+  // ── IDOR guard: candidate_id must be one the caller created ─────────────────
+  // The background run reads that candidate's team AI notes, links the dossier
+  // to it and PATCHes it with service-role rights. 404 (not 403) so a probe
+  // can't tell another user's candidate from a nonexistent one.
+  if (candidate_id) {
+    let owned
+    try {
+      const cRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/candidates?id=eq.${encodeURIComponent(candidate_id)}&created_by=eq.${encodeURIComponent(user.id)}&select=id`,
+        { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
+      )
+      if (!cRes.ok) throw new Error(`candidate lookup failed (${cRes.status})`)
+      const rows = await cRes.json()
+      owned = Array.isArray(rows) && rows.length > 0
+    } catch (e) {
+      console.error('[generate-dossier] Candidate ownership check failed:', e.message)
+      return { statusCode: 503, headers, body: JSON.stringify({ error: 'Could not verify candidate — please try again in a moment.' }) }
+    }
+    if (!owned) {
+      return { statusCode: 404, headers, body: JSON.stringify({ error: 'Candidate not found' }) }
+    }
+  }
 
   // ── Audit fix (#1): server-side monthly profile-limit check ──────────────────
   // This is the synchronous leg the user actually sees (the background function

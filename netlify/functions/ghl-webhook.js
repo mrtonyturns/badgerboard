@@ -174,15 +174,21 @@ exports.handler = async (event) => {
   // ── Look up user in Supabase ──────────────────────────────────────────────
   const supabase = getSupabaseAdmin()
 
-  // listUsers is paginated; for most accounts one page is sufficient.
-  // If you have >1000 users, implement pagination here.
-  const { data: listData, error: listError } = await supabase.auth.admin.listUsers({ perPage: 1000 })
-  if (listError) {
-    console.error('[ghl-webhook] listUsers error:', listError)
-    return { statusCode: 500, headers, body: JSON.stringify({ error: 'Failed to query users' }) }
+  // listUsers is paginated — walk pages until the user turns up or a short
+  // page ends the list. Reading page 1 only reported anyone past the first
+  // 1000 users as "not found" (with a 200, so GHL never retried).
+  const PER_PAGE = 1000
+  let user = null
+  for (let page = 1; !user; page++) {
+    const { data: listData, error: listError } = await supabase.auth.admin.listUsers({ page, perPage: PER_PAGE })
+    if (listError) {
+      console.error('[ghl-webhook] listUsers error:', listError)
+      return { statusCode: 500, headers, body: JSON.stringify({ error: 'Failed to query users' }) }
+    }
+    const users = listData?.users || []
+    user = users.find(u => u.email?.toLowerCase() === email) || null
+    if (users.length < PER_PAGE) break
   }
-
-  const user = listData?.users?.find(u => u.email?.toLowerCase() === email)
   if (!user) {
     // User doesn't exist in Supabase yet (possible if they haven't signed up).
     // Return 200 so GHL doesn't keep retrying; log for visibility.

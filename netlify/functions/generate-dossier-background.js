@@ -65,6 +65,25 @@ async function getCandidateOwner(candidateId) {
   }
 }
 
+// ─── Candidate ownership (IDOR guard) ─────────────────────────────────────────
+// candidate_id drives service-role reads (team AI notes), the dossier's
+// candidate link and candidate PATCHes, so a user call may only name a
+// candidate the caller created. true = owned, false = not, null = lookup error.
+async function userOwnsCandidate(candidateId, userId) {
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/candidates?id=eq.${encodeURIComponent(candidateId)}&created_by=eq.${encodeURIComponent(userId)}&select=id`,
+      { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
+    )
+    if (!res.ok) return null
+    const rows = await res.json()
+    return Array.isArray(rows) && rows.length > 0
+  } catch (e) {
+    console.warn('[dossier-bg] userOwnsCandidate failed:', e.message)
+    return null
+  }
+}
+
 // ─── Verify Supabase JWT and return user ──────────────────────────────────────
 async function verifyUser(authHeader) {
   if (!authHeader?.startsWith('Bearer ')) return null
@@ -932,6 +951,18 @@ exports.handler = async (event) => {
   if (!isInternalTrigger) {
     const limited = await enforceRateLimit(user.id, 'generate-dossier-background', headers)
     if (limited) return limited
+
+    // IDOR guard, before any quota/LLM spend. Admins get no cross-account
+    // bypass — nothing else here lets them act on another user's candidate.
+    if (body.candidate_id) {
+      const owns = await userOwnsCandidate(body.candidate_id, user.id)
+      if (owns === null) {
+        return { statusCode: 503, headers, body: JSON.stringify({ error: 'Could not verify candidate — please try again in a moment.' }) }
+      }
+      if (!owns) {
+        return { statusCode: 404, headers, body: JSON.stringify({ error: 'Candidate not found' }) }
+      }
+    }
   }
 
   // ── Audit fix (#1): server-side monthly profile-limit enforcement ──────────
@@ -1682,6 +1713,10 @@ OUTPUT DISCIPLINE: your dossier output must begin DIRECTLY with "## SECTION 1" �
   // null so auto-regenerated dossiers stay excluded from the monthly quota
   // count and never consume purchased credits.
   const user_id = isInternalTrigger ? null : (user?.id || null)
+  // Ownership is separate from quota: quota counts generated_by (kept null for
+  // cron runs above), but created_by drives RLS. A null created_by left the
+  // owner unable to share or manage their own weekly-refreshed profile.
+  const owner_id = user_id || (isInternalTrigger ? (user?.id || null) : null)
 
   try {
     const perplexityCount = [perplexityNews, identityData, financeData, politicalData, affiliationsData, perplexityIncumbent, socialMediaData].filter(Boolean).length
@@ -1827,7 +1862,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
         content,
         research_note: researchNote,
         user_id: user_id || null,
-        created_by: user_id || null,
+        created_by: owner_id,
         generated_by: user_id || null,
         // Extended metadata stored as JSON in notes field (if column exists)
         change_summary: changeSummary || null,
@@ -1844,7 +1879,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
       const baseRes = await fetch(`${SUPABASE_URL}/rest/v1/dossiers`, {
         method: 'POST',
         headers: { 'apikey': SUPABASE_SERVICE_KEY, 'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
-        body: JSON.stringify({ candidate_id: candidate_id || null, title: `Political Profile — ${safe.name}`, content, user_id: user_id || null, created_by: user_id || null, generated_by: user_id || null }),
+        body: JSON.stringify({ candidate_id: candidate_id || null, title: `Political Profile — ${safe.name}`, content, user_id: user_id || null, created_by: owner_id, generated_by: user_id || null }),
       })
       if (!baseRes.ok) {
         const baseErr = await baseRes.text()

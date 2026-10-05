@@ -595,7 +595,9 @@ exports.handler = async (event) => {
           'Content-Type':  'application/json',
           'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
           'apikey':        SUPABASE_SERVICE_ROLE_KEY,
-          'Prefer':        'resolution=ignore-duplicates',
+          // return=representation so the inserted rows come back to count;
+          // without it PostgREST answers 201 with an empty body.
+          'Prefer':        'resolution=ignore-duplicates,return=representation',
         },
         body: JSON.stringify(batch),
       })
@@ -606,7 +608,11 @@ exports.handler = async (event) => {
         throw new Error(`Batch ${Math.floor(i / BATCH) + 1}: ${err}`)
       }
 
-      const result = await res.json()
+      // Never res.json() blindly: an empty body threw and aborted every batch
+      // after the first.
+      const text = await res.text()
+      let result = null
+      try { result = text ? JSON.parse(text) : null } catch { /* count as 0 */ }
       totalInserted += Array.isArray(result) ? result.length : 0
     }
 
