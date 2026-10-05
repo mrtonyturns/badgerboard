@@ -39,6 +39,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { getUserTier, hasFeature } from '../lib/tiers'
 import UpgradePrompt from '../components/UpgradePrompt'
 import { parseCsvRows } from '../lib/csv'
+import { pickNameColumns, rowName } from '../lib/candidateImport'
 import { buildProspectCsv, confidenceBand, csvFilename, factorSummary } from '../lib/prospectCsv'
 import { DB_PARTIES } from '../lib/party'
 import { T, cardStyle, Btn, Pill, Spinner, EmptyNote } from './profiler/shared.jsx'
@@ -848,13 +849,15 @@ export default function Prospecting() {
         if (rows.length < 2) { setError('That CSV has no data rows.'); return }
         const headers = rows[0].map(h => lower(h).trim())
         const find = (...names) => headers.findIndex(h => names.some(n => h.includes(n)))
-        const iName = find('name', 'full name', 'candidate')
+        // Exact name / full name / candidate name first, then First+Last
+        // joined, then the old "first header containing name" fallback.
+        const nameCols = pickNameColumns(headers)
         const iEmail = find('email', 'e-mail')
         const iPhone = find('phone', 'mobile', 'cell')
-        if (iName < 0) { setError('That CSV has no recognisable name column.'); return }
+        if (!nameCols) { setError('That CSV has no recognisable name column.'); return }
         const parsed = rows.slice(1)
           .map(r => ({
-            name: String(r[iName] ?? '').trim(),
+            name: rowName(r, nameCols),
             email: iEmail >= 0 ? String(r[iEmail] ?? '').trim() : '',
             phone: iPhone >= 0 ? String(r[iPhone] ?? '').trim() : '',
             note: `Imported from ${file.name}`,

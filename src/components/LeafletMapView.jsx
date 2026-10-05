@@ -11,6 +11,7 @@ import {
 } from '../lib/wiDistricts'
 import { loadPlaceDemographics, placeKey, displayName, fmtNum, fmtMoney, fmtPct } from '../lib/placeDemographics'
 import { partyMapHex } from '../lib/party'
+import { escapeHtml } from '../lib/sanitize'
 
 // Wisconsin's bounding box, taken from the bundled statewide polygon
 // (/geodata/wi-statewide.geojson — the union of the 33 senate districts, islands
@@ -454,12 +455,13 @@ export default function LeafletMapView({
         const jFn = (seed) => ((seed * 7919 + i * 1237) % 1000 - 500) / 2000
         coords = [WI_CENTROID[0] + jFn(i), WI_CENTROID[1] + jFn(i + 99)]
       }
+      // bindPopup takes HTML — every user/AI-supplied value is escaped.
       L.marker(coords, { icon: dotIcon(partyColor(c.party)) })
         .bindPopup(
-          `<b>${c.name}</b>` +
-          (c.party        ? `<br><small>${c.party}</small>` : '') +
-          (c.office?.name ? `<br><small>${c.office.name}</small>` : '') +
-          (c.status       ? `<br><small style="color:#888">${c.status.replace(/_/g,' ')}</small>` : '')
+          `<b>${escapeHtml(c.name)}</b>` +
+          (c.party        ? `<br><small>${escapeHtml(c.party)}</small>` : '') +
+          (c.office?.name ? `<br><small>${escapeHtml(c.office.name)}</small>` : '') +
+          (c.status       ? `<br><small style="color:#888">${escapeHtml(c.status.replace(/_/g,' '))}</small>` : '')
         ).addTo(layer)
     })
 
@@ -530,9 +532,9 @@ export default function LeafletMapView({
         const color = DISTRICT_LAYERS[activeLayer]?.color || levelColor(level)
         const icon  = count > 1 ? countBadgeIcon(color, count) : dotIcon(color)
         const popup = count === 1
-          ? `<b>${names[0]}</b><br><small>${level}</small>`
-          : `<b>${count} ${level} offices</b>` +
-            (names.length ? `<br><small style="color:#555">${names.slice(0,5).join('<br>')}</small>` : '')
+          ? `<b>${escapeHtml(names[0])}</b><br><small>${escapeHtml(level)}</small>`
+          : `<b>${count} ${escapeHtml(level)} offices</b>` +
+            (names.length ? `<br><small style="color:#555">${names.slice(0,5).map(escapeHtml).join('<br>')}</small>` : '')
         const marker = L.marker(coords, { icon }).addTo(layer)
         if (capturedLayer) {
           // A district layer is showing: dots sit on top of the polygons, so make a

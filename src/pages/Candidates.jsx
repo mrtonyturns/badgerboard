@@ -15,6 +15,10 @@ import { partyGroup, partyBadgeClasses, normalizePartyForDb } from '../lib/party
 import { SCOUT_CAP_MESSAGE, scoutCapMessage, monitoringToggleError } from '../lib/capErrors'
 import { useDialog } from '../lib/useDialog'
 import OnboardingStepHint from '../components/onboarding/OnboardingStepHint'
+import { parseCsvRows } from '../lib/csv'
+import { normalizeStatus } from './profiler/bulkCsv'
+import { matchImportOffice } from '../lib/candidateImport'
+import { safeHttpUrl } from '../lib/safeUrl'
 
 // How long the search box waits before it queries the server. The input itself
 // stays instant — only the network call is debounced, because keying it on
@@ -553,6 +557,8 @@ export default function Candidates() {
   }
 
   const handleAddToCandidate = async (candidate, key) => {
+    // A second click while the insert is in flight created a duplicate row.
+    if (saveProgress[key] === true || saveProgress[key] === 'success') return
     setSaveProgress(p => ({ ...p, [key]: true }))
     try {
       const { error } = await createCandidate({
@@ -562,7 +568,9 @@ export default function Candidates() {
         // insert and the Add button just flashes red. Same normalizer as the
         // two CSV paths.
         party: normalizePartyForDb(candidate.party),
-        status: candidate.status || 'exploring',
+        // Same story for status: the model says 'unknown' (or 'running') and
+        // the status CHECK rejects it. Alias map shared with the bulk CSV.
+        status: normalizeStatus(candidate.status) || 'exploring',
         notes: notesToV2(candidate.notes, user?.email || 'You'),
       })
       if (!error) {
@@ -1131,8 +1139,9 @@ export default function Candidates() {
                                   <Phone className="w-4 h-4" />
                                 </a>
                               )}
-                              {c.website && (
-                                <a href={c.website} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-brand-red transition-colors">
+                              {/* http(s) only — React 18 renders a javascript: href as-is. */}
+                              {safeHttpUrl(c.website) && (
+                                <a href={safeHttpUrl(c.website)} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-brand-red transition-colors">
                                   <Globe className="w-4 h-4" />
                                 </a>
                               )}
@@ -1358,7 +1367,7 @@ export default function Candidates() {
                           </div>
                           <button
                             onClick={() => handleAddToCandidate(cand, `result_${i}`)}
-                            disabled={saveProgress[`result_${i}`] === 'success'}
+                            disabled={saveProgress[`result_${i}`] === true || saveProgress[`result_${i}`] === 'success'}
                             className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
                               saveProgress[`result_${i}`] === true ? 'bg-gray-200 text-gray-500 cursor-not-allowed' :
                               saveProgress[`result_${i}`] === 'success' ? 'bg-green-100 text-green-700' :
@@ -1640,33 +1649,15 @@ export default function Candidates() {
                       const reader = new FileReader()
                       reader.onload = (ev) => {
                         try {
-                          const text = ev.target.result
-                          const lines = text.split(/\r?\n/).filter(l => l.trim())
-                          if (lines.length < 2) { setCsvError('CSV must have a header row and at least one data row.'); return }
-                          // Parse CSV manually (handles quoted fields)
-                          const parseRow = (line) => {
-                            const result = []
-                            let cur = '', inQ = false
-                            for (let i = 0; i < line.length; i++) {
-                              const ch = line[i]
-                              if (ch === '"') {
-                                if (inQ && line[i+1] === '"') { cur += '"'; i++ }
-                                else inQ = !inQ
-                              } else if (ch === ',' && !inQ) {
-                                result.push(cur.trim()); cur = ''
-                              } else {
-                                cur += ch
-                              }
-                            }
-                            result.push(cur.trim())
-                            return result
-                          }
-                          const headers = parseRow(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'))
+                          // Shared tokenizer: splitting on newlines first broke
+                          // any row with a quoted multi-line cell (notes).
+                          const table = parseCsvRows(ev.target.result).filter(r => r.some(c => String(c || '').trim()))
+                          if (table.length < 2) { setCsvError('CSV must have a header row and at least one data row.'); return }
+                          const headers = table[0].map(h => String(h || '').trim().toLowerCase().replace(/\s+/g, '_'))
                           if (!headers.includes('name')) { setCsvError('CSV must have a "name" column.'); return }
-                          const rows = lines.slice(1).map(line => {
-                            const vals = parseRow(line)
+                          const rows = table.slice(1).map(vals => {
                             const obj = {}
-                            headers.forEach((h, i) => { obj[h] = vals[i] || '' })
+                            headers.forEach((h, i) => { obj[h] = String(vals[i] ?? '').trim() })
                             return obj
                           }).filter(r => r.name)
                           setCsvHeaders(headers)
@@ -1710,7 +1701,7 @@ export default function Candidates() {
                     </table>
                   </div>
                   <p className="text-xs text-gray-400">
-                    Columns detected: {csvHeaders.join(', ')}. The <strong>office</strong> column will be matched by name to existing offices.
+                    Columns detected: {csvHeaders.join(', ')}. The <strong>office</strong> column will be matched by exact name to existing offices — add a <strong>district</strong> or <strong>city</strong> column to tell same-named offices apart; ambiguous rows are imported without an office.
                   </p>
                 </>
               )}
@@ -1760,8 +1751,24 @@ export default function Candidates() {
                       }
                     }
 
-                    // Build a set of existing candidate names for deduplication
-                    const existingNames = new Set(candidates.map(c => c.name?.toLowerCase().trim()).filter(Boolean))
+                    // Dedupe against ALL of this user's candidates — `candidates`
+                    // is the filtered table view — and add each name as it is
+                    // inserted so a repeated row in the same file is skipped too.
+                    const existingNames = new Set()
+                    for (let from = 0; ; from += 1000) {
+                      const { data: page, error: nameErr } = await supabase
+                        .from('candidates')
+                        .select('name')
+                        .eq('created_by', user.id)
+                        .range(from, from + 999)
+                      if (nameErr) {
+                        setCsvError('Could not check your existing candidates for duplicates — nothing was imported. Try again.')
+                        setCsvImporting(false)
+                        return
+                      }
+                      for (const c of page || []) { const n = c.name?.toLowerCase().trim(); if (n) existingNames.add(n) }
+                      if (!page || page.length < 1000) break
+                    }
                     for (const row of csvRows) {
                       // Stop importing once the Scout slot limit is reached —
                       // either by our own count, or because the server trigger
@@ -1769,13 +1776,13 @@ export default function Candidates() {
                       if (capHit || inserted >= slotsRemaining) { skipped++; continue }
                       if (!row.name?.trim()) { skipped++; continue }
                       if (existingNames.has(row.name.trim().toLowerCase())) { skipped++; continue }
-                      // Match office by name if column exists
-                      let officeId = null
-                      if (row.office || row.office_name) {
-                        const oName = (row.office || row.office_name || '').toLowerCase().trim()
-                        const match = offices.find(o => o.name.toLowerCase().includes(oName) || oName.includes(o.name.toLowerCase()))
-                        if (match) officeId = match.id
-                      }
+                      // Exact office name, disambiguated by district/city when the
+                      // CSV has them; ambiguous or blank → no office (never guess).
+                      const officeId = matchImportOffice(offices, {
+                        office: row.office || row.office_name,
+                        district: row.district || row.district_number || row.office_district,
+                        city: row.office_city || row.city,
+                      })?.id ?? null
                       const validStatuses = ['exploring','declared','primary_winner','general','elected','lost','withdrawn']
                       // null, not '' — the party CHECK constraint rejects an empty
                       // string. normalizePartyForDb does exact-name-then-family
@@ -1803,7 +1810,7 @@ export default function Candidates() {
                         if (scoutCapMessage(error)) { capHit = true; skipped++; continue }
                         errors++
                       }
-                      else inserted++
+                      else { inserted++; existingNames.add(row.name.trim().toLowerCase()) }
                     }
                     setCsvResult({ inserted, skipped, errors })
                     setCsvImporting(false)

@@ -35,6 +35,7 @@ import {
 } from '../lib/recruit'
 import UpgradePrompt from '../components/UpgradePrompt'
 import { T, cardStyle, Btn, Pill, Spinner, EmptyNote, ProfilerShell } from './profiler/shared'
+import { csvEscape } from '../lib/prospectCsv'
 
 // Mirrors the stage constants in netlify/functions/recruit-research-background.js
 const PHASE_LABELS = {
@@ -194,6 +195,9 @@ export default function Recruit() {
   const [expanded, setExpanded]   = useState(() => new Set())
   const pollGenRef = useRef(0)
   useEffect(() => () => { pollGenRef.current++ }, [])
+  // The search whose prospects the table is showing. A late loadProspects()
+  // for any other search (an old poll, a slow fetch) is dropped.
+  const activeSearchIdRef = useRef(null)
 
   const monthlyLimit = getRecruitLookupLimit(userTier)
 
@@ -275,6 +279,7 @@ export default function Recruit() {
   const loadProspects = useCallback(async (searchId) => {
     if (!searchId) return []
     const { data } = await getRecruitmentProspects(searchId)
+    if (activeSearchIdRef.current !== searchId) return data || []
     setProspects(data || [])
     return data || []
   }, [])
@@ -379,6 +384,7 @@ export default function Recruit() {
         const { error: pErr } = await createRecruitmentProspects(rows.slice(i, i + 200))
         if (pErr) throw pErr
       }
+      activeSearchIdRef.current = search.id
       setActiveSearch(search)
       setSearches(prev => [search, ...prev])
       await loadProspects(search.id)
@@ -402,7 +408,7 @@ export default function Recruit() {
         const { data: updated } = await updateRecruitmentSearch(activeSearch.id, {
           attested_use: true, attested_at: new Date().toISOString(), status: 'researching',
         })
-        if (updated) setActiveSearch(updated)
+        if (updated && alive()) setActiveSearch(updated)
       }
       const { data: { session } } = await supabase.auth.getSession()
       const res = await fetch('/.netlify/functions/recruit-research-background', {
@@ -452,7 +458,9 @@ export default function Recruit() {
       'research_error', 'researched_at', 'model_version',
     ]
     const header = [...cols, 'evidence'].join(',')
-    const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
+    // Shared escaper: quotes as needed and guards =, +, -, @, tab, CR against
+    // spreadsheet formula injection (names/summaries are web-sourced).
+    const cell = csvEscape
     const rows = view.map(p => [
       ...cols.map(c => cell(p[c])),
       cell((p.evidence || []).map(e => `${e.title || ''} <${e.url}>`).join('; ')),
@@ -465,6 +473,14 @@ export default function Recruit() {
   }
 
   const openSearch = async (s) => {
+    // Switching searches stops the previous search's research poll — it kept
+    // calling loadProspects(A) and painted A's rows under B's header (and into
+    // B's CSV). The run itself carries on server-side; Refresh picks it up.
+    if (s.id !== activeSearchIdRef.current) {
+      pollGenRef.current++
+      setBusy(false)
+    }
+    activeSearchIdRef.current = s.id
     setActiveSearch(s)
     setPhase(''); setProgress(null); setError(null)
     await loadProspects(s.id)

@@ -321,14 +321,19 @@ export default function CandidateDetail() {
 
   const handleDelete = async () => {
     if (!window.confirm(`Delete ${candidate.name}? This cannot be undone.`)) return
+    setSaveError('')
+    const { error } = await deleteCandidate(id)
+    // Stay on the page if it failed — navigating away read as a success.
+    if (error) { setSaveError(`Could not delete ${candidate.name}: ${error.message || 'unknown error'}`); return }
     logActivity('delete', 'candidate', id, { candidate_name: candidate.name }).catch(() => {})
-    await deleteCandidate(id)
     nav('/candidates')
   }
 
+  // Throws on failure so StatusSuggestionCard keeps itself up and shows why,
+  // instead of dismissing as though the status had changed.
   const handleAcceptStatus = async (newStatus) => {
     const { error } = await updateCandidate(id, { status: newStatus })
-    if (error) { console.error('[CandidateProfile] status update failed:', error); return }
+    if (error) throw new Error(error.message || 'Could not update the status.')
     await fetchAll()
   }
 

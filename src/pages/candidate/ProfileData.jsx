@@ -10,6 +10,7 @@ import { candidateStatusLabel } from '../../lib/campaignEnums'
 import { DB_PARTIES } from '../../lib/party'
 import { hasFindings } from '../../lib/profileContent'
 import { T, Card, EmptyState, fmtDate } from './shared'
+import { safeHttpUrl } from '../../lib/safeUrl'
 
 // The party picker must offer exactly what `candidates.party` accepts — this
 // list was hand-maintained and had fallen a value behind (no 'Working
@@ -166,15 +167,21 @@ export default function ProfileData({ candidate, editing, form, setForm, timesta
               <Row key={e} k={i === 0 ? 'Email' : 'Email (alt)'} v={<a className="cp-a" href={`mailto:${e}`}>{e}</a>} />
             ))}
             <Row k="Phone" v={candidate.phone ? <a className="cp-a" href={`tel:${candidate.phone}`}>{candidate.phone}</a> : null} />
+            {/* Links are http(s) only — React 18 renders a javascript: href as-is.
+                An unsafe value still shows, as plain text. */}
             <Row k="Website" v={candidate.website
-              ? <a className="cp-a" href={candidate.website} target="_blank" rel="noopener noreferrer">{candidate.website}</a>
+              ? (safeHttpUrl(candidate.website)
+                ? <a className="cp-a" href={safeHttpUrl(candidate.website)} target="_blank" rel="noopener noreferrer">{candidate.website}</a>
+                : candidate.website)
               : null} />
             <Row k="Address" v={[candidate.campaign_address, candidate.campaign_city, candidate.campaign_zip].filter(Boolean).join(', ') || null} />
             <Row k="X / Twitter" v={candidate.twitter_handle
               ? <a className="cp-a" href={`https://x.com/${String(candidate.twitter_handle).replace('@', '')}`} target="_blank" rel="noopener noreferrer">{candidate.twitter_handle}</a>
               : null} />
             <Row k="Facebook" v={candidate.facebook_url
-              ? <a className="cp-a" href={candidate.facebook_url} target="_blank" rel="noopener noreferrer">Facebook page</a>
+              ? (safeHttpUrl(candidate.facebook_url)
+                ? <a className="cp-a" href={safeHttpUrl(candidate.facebook_url)} target="_blank" rel="noopener noreferrer">Facebook page</a>
+                : candidate.facebook_url)
               : null} />
             <Row k="Instagram" v={candidate.instagram_handle
               ? <a className="cp-a" href={`https://instagram.com/${String(candidate.instagram_handle).replace('@', '')}`} target="_blank" rel="noopener noreferrer">{candidate.instagram_handle}</a>

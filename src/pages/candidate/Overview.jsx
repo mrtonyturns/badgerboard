@@ -49,6 +49,7 @@ function StatusSuggestionCard({ candidate, dossiers, onAccept }) {
   const [rec, setRec] = useState(null)
   const [done, setDone] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
 
   // This card stays mounted when the user moves between candidates, so a
   // Confirm/Dismiss on one candidate used to permanently suppress the
@@ -57,6 +58,7 @@ function StatusSuggestionCard({ candidate, dossiers, onAccept }) {
     setRec(null)
     setDone(false)
     setBusy(false)
+    setErr('')
   }, [candidate?.id])
 
   useEffect(() => {
@@ -89,12 +91,16 @@ function StatusSuggestionCard({ candidate, dossiers, onAccept }) {
           kind="primary"
           disabled={busy}
           onClick={async () => {
-            setBusy(true)
-            try { await onAccept(rec); setDone(true) } finally { setBusy(false) }
+            setBusy(true); setErr('')
+            // A rejected update keeps the card up with the reason.
+            try { await onAccept(rec); setDone(true) }
+            catch (e) { setErr(e?.message || 'Could not update the status — try again.') }
+            finally { setBusy(false) }
           }}
         >{busy ? 'Updating…' : `Confirm ${statusLabel(rec)}`}</Btn>
         <Btn kind="warm" onClick={() => setDone(true)}>Dismiss</Btn>
       </div>
+      {err && <div style={{ fontSize: 11.5, color: T.redHot, marginTop: 8 }}>{err}</div>}
     </div>
   )
 }

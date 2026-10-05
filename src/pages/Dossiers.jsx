@@ -488,9 +488,16 @@ export default function Dossiers() {
     return () => { stopped = true; resumeRef.current = false }
   }, [dossierPhase, pendingCandidateId, fetchData, openDossier, setDossierReady, clearDossierStatus])
 
-  // Pre-fill research context from the candidate record
+  // Pre-fill research context from the candidate record — once per selected
+  // candidate. `candidates` refetches on window refocus; re-filling on every
+  // refetch wiped whatever the user had typed. It stays a dep only so the
+  // fill can land when the list arrives after the selection (deep link).
+  const researchFilledForRef = useRef(null)
   useEffect(() => {
+    if (researchFilledForRef.current === candidateId) return
     const cand = candidates.find(c => c.id === candidateId)
+    if (candidateId && !cand) { setResearchContext(''); return }   // list not loaded yet
+    researchFilledForRef.current = candidateId
     setResearchContext(cand?.research_context || '')
   }, [candidateId, candidates])
 
@@ -643,7 +650,13 @@ export default function Dossiers() {
   const handleDelete = async () => {
     if (!confirmDelete) return
     setDeleting(true)
-    await deleteDossier(confirmDelete)
+    const { error: delErr } = await deleteDossier(confirmDelete)
+    if (delErr) {
+      // Don't close as if it worked — the profile is still there.
+      setConfirmDelete(null); setDeleting(false)
+      setError(`Could not delete this profile: ${delErr.message || 'unknown error'}`)
+      return
+    }
     if (selected?.id === confirmDelete) setSelected(null)
     setConfirmDelete(null); setDeleting(false)
     fetchData()

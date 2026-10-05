@@ -160,7 +160,9 @@ function matchOffices(district, allOffices) {
     const countyName = norm(name)
     if (!countyName) return []
     return allOffices.filter(o => {
-      if (o.county  && norm(o.county)        === countyName) return true
+      // A set county is authoritative — the substring fallbacks are only for
+      // offices imported without one (else Green County lists Green Bay).
+      if (o.county) return norm(o.county) === countyName
       if (o.district_name && norm(o.district_name).includes(countyName)) return true
       if (o.name    && norm(o.name).includes(countyName))   return true
       return false

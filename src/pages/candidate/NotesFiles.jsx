@@ -76,6 +76,15 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
   const [busyId, setBusyId] = useState(null)
   const [dragOver, setDragOver] = useState(false)
   const fileRef = useRef(null)
+  // Latest notes/files value, read at WRITE time. Every action used to build the
+  // whole JSON from the `data` its closure captured, so an upload that finished
+  // after a note was added (or two overlapping uploads) wrote back a stale copy
+  // — dropping the other change and orphaning its storage object. Writes are
+  // also chained so each one merges into the result of the one before it.
+  const dataRef = useRef(data)
+  const writeChainRef = useRef(Promise.resolve())
+  const uploadingRef = useRef(false)
+  const commitData = (next) => { dataRef.current = next; setData(next) }
 
   // Lock UI state
   const [lockBusy, setLockBusy] = useState(false)
@@ -85,7 +94,11 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
   const [pwError, setPwError] = useState('')
   const [, forceTick] = useState(0)
 
-  useEffect(() => { setData(parseNotesData(candidate.notes)) }, [candidate.notes])
+  useEffect(() => {
+    const next = parseNotesData(candidate.notes)
+    dataRef.current = next
+    setData(next)
+  }, [candidate.notes])
 
   // ── lock state is read here, from the candidate row ──
   const lock = readLockState(candidate)
@@ -100,8 +113,19 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
   // Optimistic write with a hard rollback: if the row update fails the UI goes
   // back to exactly what the server still holds and the error is surfaced —
   // a failed save is never reported as a success.
-  const persist = async (newData) => {
-    const previous = data
+  //
+  // `update` is a function of the LATEST data (dataRef), applied when this
+  // write's turn in the chain comes up — never a snapshot from call time.
+  const persist = (update) => {
+    const run = () => persistNow(update)
+    const p = writeChainRef.current.then(run, run)
+    writeChainRef.current = p
+    return p
+  }
+
+  const persistNow = async (update) => {
+    const previous = dataRef.current
+    const newData = update(previous)
     // Any entry that predates the AI switch (legacy import, older client) is
     // written back with ai_access: false so the UI chip and the server-side
     // AI filter (_candidate-context.js) read the same value.
@@ -110,11 +134,11 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
       notes: (newData.notes || []).map(n => ({ ...n, ai_access: n.ai_access === true })),
       files: (newData.files || []).map(f => ({ ...f, ai_access: f.ai_access === true })),
     }
-    setData(stamped)
+    commitData(stamped)
     setSaveError('')
     const { error } = await updateCandidate(candidate.id, { notes: JSON.stringify(stamped) })
     if (error) {
-      setData(previous)
+      commitData(previous)
       setSaveError(error.message || 'Could not save — your change was not stored. Try again.')
       return { error }
     }
@@ -133,7 +157,7 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
       by: userName || 'You',
       ai_access: false,   // AI never sees a note unless the user turns it on
     }
-    const { error } = await persist({ ...data, notes: [note, ...(data.notes || [])] })
+    const { error } = await persist(d => ({ ...d, notes: [note, ...(d.notes || [])] }))
     setSavingNote(false)
     if (error) return   // keep the draft so the note isn't lost
     setDraft('')
@@ -141,24 +165,25 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
 
   const deleteNote = async (noteId) => {
     setBusyId(noteId)
-    await persist({ ...data, notes: (data.notes || []).filter(n => n.id !== noteId) })
+    await persist(d => ({ ...d, notes: (d.notes || []).filter(n => n.id !== noteId) }))
     setBusyId(null)
   }
 
   const toggleNoteAi = async (noteId) => {
     setTogglingId(noteId)
-    await persist({ ...data, notes: (data.notes || []).map(n => n.id === noteId ? { ...n, ai_access: !n.ai_access } : n) })
+    await persist(d => ({ ...d, notes: (d.notes || []).map(n => n.id === noteId ? { ...n, ai_access: !n.ai_access } : n) }))
     setTogglingId(null)
   }
 
   // ── files ──
   const uploadFile = async (file) => {
-    if (!file) return
+    if (!file || uploadingRef.current) return
     setUploadError('')
     if (file.size > MAX_BYTES) {
       setUploadError(`${file.name} is ${formatBytes(file.size)} — the limit is 25 MB.`)
       return
     }
+    uploadingRef.current = true
     setUploading(true)
     const fileId = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
@@ -168,15 +193,15 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
         .from('candidate-files')
         .upload(path, file, { cacheControl: '3600', upsert: false })
       if (upErr) throw new Error(upErr.message)
-      const { error: rowErr } = await persist({
-        ...data,
-        files: [...(data.files || []), {
+      const { error: rowErr } = await persist(d => ({
+        ...d,
+        files: [...(d.files || []), {
           id: fileId, name: file.name, path,
           size: file.size, type: file.type || 'application/octet-stream',
           by: userName || 'You',
           ai_access: false, ts: new Date().toISOString(),
         }],
-      })
+      }))
       if (rowErr) {
         // The object landed in storage but the row write failed — remove it so
         // the bucket never accumulates files nothing references.
@@ -187,12 +212,13 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
     } catch (err) {
       setUploadError(err.message || 'Upload failed')
     }
+    uploadingRef.current = false
     setUploading(false)
   }
 
   const toggleFileAi = async (fileId) => {
     setTogglingId(fileId)
-    await persist({ ...data, files: (data.files || []).map(f => f.id === fileId ? { ...f, ai_access: !f.ai_access } : f) })
+    await persist(d => ({ ...d, files: (d.files || []).map(f => f.id === fileId ? { ...f, ai_access: !f.ai_access } : f) }))
     setTogglingId(null)
   }
 
@@ -200,7 +226,7 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
     if (!window.confirm(`Remove "${file.name}"? This cannot be undone.`)) return
     setBusyId(file.id)
     try { await supabase.storage.from('candidate-files').remove([file.path]) } catch { /* row is removed regardless */ }
-    await persist({ ...data, files: (data.files || []).filter(f => f.id !== file.id) })
+    await persist(d => ({ ...d, files: (d.files || []).filter(f => f.id !== file.id) }))
     setBusyId(null)
   }
 
@@ -462,22 +488,26 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
             </span>
           </div>
 
+          {/* Disabled while an upload is in flight — one upload at a time. */}
           <div
             role="button"
-            tabIndex={0}
-            onClick={() => fileRef.current?.click()}
-            onKeyDown={e => { if (e.key === 'Enter') fileRef.current?.click() }}
-            onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+            tabIndex={uploading ? -1 : 0}
+            aria-disabled={uploading}
+            onClick={() => { if (!uploading) fileRef.current?.click() }}
+            onKeyDown={e => { if (e.key === 'Enter' && !uploading) fileRef.current?.click() }}
+            onDragOver={e => { e.preventDefault(); if (!uploading) setDragOver(true) }}
             onDragLeave={() => setDragOver(false)}
             onDrop={e => {
               e.preventDefault(); setDragOver(false)
+              if (uploading) return
               const file = e.dataTransfer?.files?.[0]
               if (file) uploadFile(file)
             }}
             style={{
               border: `1.5px dashed ${dragOver ? T.red : '#DEDEDA'}`,
               background: dragOver ? '#FEFAFA' : 'transparent',
-              borderRadius: 12, padding: '22px 16px', textAlign: 'center', cursor: 'pointer',
+              borderRadius: 12, padding: '22px 16px', textAlign: 'center',
+              cursor: uploading ? 'wait' : 'pointer', opacity: uploading ? 0.6 : 1,
             }}
           >
             <div style={{ fontSize: 12.5, fontWeight: 600 }}>
@@ -490,6 +520,7 @@ export default function NotesFiles({ candidate, userId, userName, onSaved, onLoc
           <input
             ref={fileRef}
             type="file"
+            disabled={uploading}
             style={{ display: 'none' }}
             accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.png,.jpg,.jpeg,.gif,.webp"
             onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; uploadFile(file) }}
