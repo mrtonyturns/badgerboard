@@ -770,6 +770,7 @@ export async function countVotersInDistrict(boundary) {
       .not('latitude', 'is', null)
       .gte('latitude',  box.minLat).lte('latitude',  box.maxLat)
       .gte('longitude', box.minLng).lte('longitude', box.maxLng)
+      .order('id')   // unique, stable order — unordered .range() pages can repeat/skip rows
       .range(offset, offset + PAGE - 1)
     if (error) return hits
     if (!data?.length) break

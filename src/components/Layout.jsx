@@ -15,7 +15,10 @@ import { isNativeApp } from '../lib/native'
 
 // ── Offline banner ─────────────────────────────────────────────────────────────
 // Shown while the device has no connection. Reads (recently viewed data) are
-// served from the on-device cache; door-knock logging queues via offlineQueue.
+// served from the on-device cache. Writes are NOT queued: nothing currently
+// calls offlineQueue.queueKnock (door knocking is parked). The queue is kept —
+// DoorKnocking's sync and sign-out (AuthContext) still flush it — for records
+// left on devices by older builds.
 function OfflineBanner() {
   const [offline, setOffline] = React.useState(
     typeof navigator !== 'undefined' && navigator.onLine === false

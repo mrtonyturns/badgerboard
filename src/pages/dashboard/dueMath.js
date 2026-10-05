@@ -4,39 +4,30 @@
 // import surface.
 //
 // ── COUNTDOWN PARITY (UI audit round 2, item 1) ──────────────────────────────
-// The dashboards counted with `differenceInCalendarDays`, the calendar pages
-// count with `differenceInDays`:
-//     src/pages/Elections.jsx:249   differenceInDays(safeISO(d), new Date())
-//     src/pages/GamePlan.jsx:110    differenceInDays(parseISO(d), new Date())
-// Those disagree by one for every date after midnight today, which is why the
-// same four elections read 79/184/233/359 on the dashboard and 78/183/232/358
-// on the calendar. The calendar pages are the published convention and are out
-// of scope for this pass, so the dashboards adopt `differenceInDays`: both
-// screens now say the same number, and election day itself is 0 on both.
-//
-// KNOWN COST OF THAT CONVENTION: `differenceInDays` counts whole elapsed 24h
-// periods, so a date one calendar day out also returns 0. The NUMBER stays in
-// parity with the calendar; `countdownLabel` below keeps the WORDS honest by
-// naming today and tomorrow from the calendar day rather than from the count.
+// The dashboards and the calendar pages (Elections.jsx, GamePlan.jsx) must say
+// the same number for the same election. Round 2 aligned the dashboards on the
+// calendar pages' then-convention, `differenceInDays` — but that counts whole
+// elapsed 24h periods, so after midnight a date two calendar days out read
+// "1 day" and tomorrow counted 0. The calendar pages have since switched to
+// `differenceInCalendarDays`, so the dashboards follow: every count here is in
+// calendar days from the start of today (election day 0, tomorrow 1), which
+// keeps parity AND makes the words and the number agree.
 
-import { differenceInDays, differenceInCalendarDays, format, isPast, isToday } from 'date-fns'
+import { differenceInCalendarDays, format, isPast, isToday } from 'date-fns'
 import { safeISO } from '../../lib/date.js'
 
 /**
- * Days from `now` until `d`, using the calendar pages' convention.
- * Negative = in the past. null when the date is missing/unparseable — callers
- * MUST branch on that (see isUpcoming).
+ * Calendar days from the start of today until `d` (the calendar pages'
+ * convention). Negative = in the past. null when the date is
+ * missing/unparseable — callers MUST branch on that (see isUpcoming).
  */
 export const daysUntil = (d, now = new Date()) => {
   const t = safeISO(d)
-  return t ? differenceInDays(t, now) : null
-}
-
-/** Whole calendar days between today and `d` — for today/tomorrow wording only. */
-export const calendarDaysUntil = (d, now = new Date()) => {
-  const t = safeISO(d)
   return t ? differenceInCalendarDays(t, now) : null
 }
+
+/** Same count as daysUntil; kept as a named export for existing callers. */
+export const calendarDaysUntil = daysUntil
 
 // A row with a missing or unparseable date is NOT upcoming. Guarding this
 // explicitly matters because `daysUntil` returns null and `null >= 0` is true
@@ -56,8 +47,7 @@ export const countdownLabel = (d, now = new Date(), { short = false } = {}) => {
   if (cal === 0) return 'today'
   if (cal === 1) return 'tomorrow'
   if (cal < 0) return 'past'
-  const n = daysUntil(d, now)
-  return short ? `${n}d` : `${n} day${n === 1 ? '' : 's'}`
+  return short ? `${cal}d` : `${cal} days`
 }
 
 // ── Milestone due dates (UI audit round 2, item 12) ──────────────────────────

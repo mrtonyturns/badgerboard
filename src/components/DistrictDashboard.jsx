@@ -7,6 +7,7 @@ import 'leaflet/dist/leaflet.css'
 import { X, Sparkles, ChevronRight, Loader2, Users, MapPin, RefreshCw } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { pointInGeometry } from '../lib/geo'
+import { geometryBBox } from '../pages/dashboard/shared'
 import { loadPlaceDemographics, placeKey, placePath } from '../lib/placeDemographics'
 import DistrictElectionHistory from './DistrictElectionHistory'
 import { partyGroup, isRep, isDem, partyAbbrev, partyColorHex } from '../lib/party'
@@ -238,8 +239,13 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
         .then(({ data }) => { if (alive) setContests(data || []) })
     } else {
       const chamberWord = idChamber === 'assembly' ? 'Assembly' : idChamber === 'senate' ? 'Senate' : 'Congressional'
-      baseSel.or(`office.ilike.%${chamberWord}%District ${num}%,district.ilike.%District ${num}%`)
-        .limit(40)
+      // The chamber filter has to run server-side: `district ILIKE '%District 5%'`
+      // alone also matches every county board's / other chamber's District 5
+      // (and 50–59), and those could fill the limit before this district's rows.
+      baseSel.ilike('office', `%${chamberWord}%`)
+        .or(`office.ilike.%District ${num}%,district.ilike.%District ${num}%`)
+        .order('id', { ascending: false })
+        .limit(200)
         .then(({ data }) => {
           if (!alive) return
           const filtered = (data || []).filter(c =>
@@ -252,11 +258,38 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
     supabase.from('district_intel').select('history').eq('district_key', idKey || '').maybeSingle()
       .then(({ data }) => { if (alive && data?.history) setHistory(data.history) })
 
-    supabase.from('voters').select('id, full_name, first_name, last_name, address, city, latitude, longitude, voter_list_id').not('latitude', 'is', null).limit(5000)
-      .then(({ data }) => { if (alive) setVoters(data || []) })
-
     return () => { alive = false }
   }, [idKey, idChamber, idNum, idCountyName])
+
+  // Voters inside the district's bounding box, paged in a stable id order:
+  // PostgREST caps a response at 1000 rows whatever .limit() asks for, so the
+  // old single `.limit(5000)` silently undercounted eligible residents.
+  // The exact point-in-polygon test still runs client-side (see `eligible`).
+  useEffect(() => {
+    let alive = true
+    const box = geometryBBox(district.geometry)
+    setVoters(null)
+    if (!box) return
+    ;(async () => {
+      const PAGE = 1000
+      const rows = []
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase.from('voters')
+          .select('id, full_name, first_name, last_name, address, city, latitude, longitude, voter_list_id')
+          .not('latitude', 'is', null)
+          .gte('latitude',  box.minLat).lte('latitude',  box.maxLat)
+          .gte('longitude', box.minLng).lte('longitude', box.maxLng)
+          .order('id')
+          .range(from, from + PAGE - 1)
+        if (!alive) return
+        if (error || !data?.length) break
+        rows.push(...data)
+        if (data.length < PAGE) break
+      }
+      if (alive) setVoters(rows)
+    })()
+    return () => { alive = false }
+  }, [district.geometry])
 
   const demo = statics?.demo?.[id?.key]
 

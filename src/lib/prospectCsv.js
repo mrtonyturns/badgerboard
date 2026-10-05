@@ -21,8 +21,12 @@ export function csvEscape(value) {
   if (value === null || value === undefined) return ''
   const s = String(value)
   if (s === '') return ''
-  // Leading =, +, -, @ are spreadsheet formula injection vectors.
-  const guarded = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s
+  // Leading =, +, -, @ are spreadsheet formula injection vectors — also after
+  // leading whitespace/newlines, which some spreadsheets skip before parsing.
+  // A leading tab/CR is guarded outright. Plain numbers (-12.5) are data, not
+  // formulas, and are left untouched so they still import as numbers.
+  const isNumber = /^[-+]?(\d+(\.\d*)?|\.\d+)(e[-+]?\d+)?$/i.test(s)
+  const guarded = !isNumber && /^(\s*[=+\-@]|[\t\r])/.test(s) ? `'${s}` : s
   return /[",\n\r]/.test(guarded) ? `"${guarded.replace(/"/g, '""')}"` : guarded
 }
 

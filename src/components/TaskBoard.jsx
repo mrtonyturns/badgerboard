@@ -55,7 +55,7 @@ import {
   primeTaskCaches,
   subscribeTaskChanges,
 } from '../lib/supabase'
-import { recurrenceLabel, nextOccurrence } from '../lib/recurrence.js'
+import { recurrenceLabel, nextOccurrence, withAnchor } from '../lib/recurrence.js'
 import SearchableSelect from './SearchableSelect'
 import { parseQuickAdd } from '../lib/quickAdd'
 import LoadingBar from './LoadingBar'
@@ -315,11 +315,13 @@ function TaskDetailModal({ task, tasks, projects, sections, labels, onClose, onS
       project_id: projectId || null,
       section_id: (projectId && projectSections.some(s => s.id === sectionId)) ? sectionId : null,
       labels: taskLabels,
-      recurrence: recFreq ? {
+      // Monthly/yearly rules remember their day (and month) so short months
+      // don't make them drift; an unchanged clamped date keeps the old anchor
+      recurrence: recFreq ? withAnchor({
         freq: recFreq,
         interval: Math.max(1, parseInt(recInterval) || 1),
         ...(recFreq === 'weekly' && dueDate ? { weekday: new Date(dueDate + 'T12:00:00').getDay() } : {}),
-      } : null,
+      }, dueDate || null, task.recurrence) : null,
     })
     setSaving(false)
     onClose()
@@ -746,12 +748,16 @@ export default function TaskBoard() {
     if (nowDone && task.recurrence?.freq && !task.parent_id) {
       // Recurring task: advance to the next occurrence instead of completing,
       // and reset its subtasks for the next cycle (Todoist behavior).
-      const nextDue = nextOccurrence(task.recurrence, task.due_date)
+      // Rules saved before anchors existed pick one up from this due date
+      const rec = withAnchor(task.recurrence, task.due_date)
+      const nextDue = nextOccurrence(rec, task.due_date)
+      const patch = JSON.stringify(rec) === JSON.stringify(task.recurrence)
+        ? { due_date: nextDue } : { due_date: nextDue, recurrence: rec }
       setTasks(prev => prev.map(t =>
-        t.id === task.id ? { ...t, due_date: nextDue }
+        t.id === task.id ? { ...t, ...patch }
         : t.parent_id === task.id ? { ...t, completed: false, completed_at: null }
         : t))
-      const { error } = await updateTask(task.id, { due_date: nextDue })
+      const { error } = await updateTask(task.id, patch)
       if (error) { failOp("Couldn't advance the recurring task — are you online?"); return }
       for (const s of (subsByParent[task.id] || []).filter(s => s.completed)) {
         await updateTask(s.id, { completed: false, completed_at: null })
@@ -825,12 +831,13 @@ export default function TaskBoard() {
 
   const handleQuickAdd = async (parsed, ctx = {}) => {
     if (!canEdit) return
+    const dueDate = parsed.dueDate || ctx.dueDate || null
     const payload = {
       content: parsed.content,
       priority: parsed.priority,
       labels: parsed.labels,
-      recurrence: parsed.recurrence || null,
-      due_date: parsed.dueDate || ctx.dueDate || null,
+      recurrence: withAnchor(parsed.recurrence || null, dueDate),
+      due_date: dueDate,
       project_id: parsed.projectId || ctx.projectId || null,
       section_id: parsed.projectId ? null : (ctx.sectionId || null),
     }

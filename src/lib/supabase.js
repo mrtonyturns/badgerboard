@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { withOffline, cachePut } from './offlineCache'
+import { likeContains } from './pgFilter'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -74,7 +75,7 @@ const fetchOffices = async (filters = {}) => {
     if (filters.level)       query = query.eq('level', filters.level)
     if (filters.office_type) query = query.eq('office_type', filters.office_type)
     if (filters.county)      query = query.eq('county', filters.county)
-    if (filters.search)      query = query.ilike('name', `%${filters.search}%`)
+    if (filters.search)      query = query.ilike('name', likeContains(filters.search))   // % _ \ literal
     const { data, error } = await query
     if (error) return { data: all, error }
     if (!data || data.length === 0) break
@@ -176,7 +177,7 @@ export const getCandidates = async (filters = {}) => {
   if (filters.election_id) query = query.eq('election_id', filters.election_id)
   if (filters.party) query = query.eq('party', filters.party)
   if (filters.status) query = query.eq('status', filters.status)
-  if (filters.search) query = query.ilike('name', `%${filters.search}%`)
+  if (filters.search) query = query.ilike('name', likeContains(filters.search))   // % _ \ literal
   return withOffline(`candidates:${uid}:${JSON.stringify(filters)}`, () => query)
 }
 
@@ -487,7 +488,7 @@ export const getKnockHistoryByAddress = async (address) =>
   supabase
     .from('door_knocks')
     .select('*, list:door_knock_lists(id, name)')
-    .ilike('address', `%${address.trim()}%`)
+    .ilike('address', likeContains(address.trim()))
     .order('knocked_at', { ascending: false })
     .limit(20)
 
@@ -704,10 +705,16 @@ export const primeTaskCaches = async (ownerId, snap) => {
 
 // Realtime: change events for one plan's tables (RLS applies to events).
 // Returns an unsubscribe function.
+// supabase.channel() hands back the EXISTING channel for a repeated topic, so
+// two subscribers (two TaskBoards, or a StrictMode remount racing the async
+// removeChannel) would share one already-joined channel — the second's
+// bindings never reach the server and the first unmount tears down both.
+// A per-call suffix keeps each subscription its own channel.
+let taskChannelSeq = 0
 export const subscribeTaskChanges = async (ownerId, onChange) => {
   const owner = await planOwner(ownerId)
   if (!owner) return () => {}
-  const channel = supabase.channel(`gp-plan-${owner}`)
+  const channel = supabase.channel(`gp-plan-${owner}-${++taskChannelSeq}`)
   for (const table of ['gp_projects', 'gp_sections', 'gp_tasks', 'gp_labels']) {
     channel.on('postgres_changes',
       { event: '*', schema: 'public', table, filter: `owner_id=eq.${owner}` },
@@ -813,16 +820,25 @@ export async function getVoterFileCount() {
 }
 
 // ─── Door knock stats (for Live Dashboard) — uses existing door_knocks table ──
+// Paged in id order: a single select stops at PostgREST's 1000-row cap, so a
+// busy list's totals silently froze at 1000.
 export async function getDoorKnockStats(listId) {
-  const { data, error } = await supabase
-    .from('door_knocks')
-    .select('status')
-    .eq('list_id', listId)
-  if (error) return { data: null, error }
-  const total = data.length
+  const PAGE = 1000
   const byStatus = {}
-  for (const row of data) {
-    byStatus[row.status] = (byStatus[row.status] || 0) + 1
+  let total = 0
+  for (let offset = 0; ; offset += PAGE) {
+    const { data, error } = await supabase
+      .from('door_knocks')
+      .select('status')
+      .eq('list_id', listId)
+      .order('id')
+      .range(offset, offset + PAGE - 1)
+    if (error) return { data: null, error }
+    for (const row of data || []) {
+      byStatus[row.status] = (byStatus[row.status] || 0) + 1
+    }
+    total += data?.length || 0
+    if (!data || data.length < PAGE) break
   }
   return { data: { total, byStatus }, error: null }
 }
@@ -836,13 +852,27 @@ export async function getDoorKnockFeed(listId, limit = 20) {
 }
 
 // ── Door Knocks export query (range + list) ───────────────────────
+// fromDate/toDate are ISO instants (pass local-midnight Date#toISOString());
+// toDate is EXCLUSIVE. Pages past the 1000-row cap, with id as the tiebreaker
+// so rows sharing a knocked_at can't repeat or drop across pages.
 export const getDoorKnocksForExport = async (listId, fromDate, toDate) => {
-  let query = supabase
-    .from('door_knocks')
-    .select('*')
-    .order('knocked_at', { ascending: true })
-  if (listId) query = query.eq('list_id', listId)
-  if (fromDate) query = query.gte('knocked_at', fromDate)
-  if (toDate) query = query.lte('knocked_at', toDate)
-  return query
+  const PAGE = 1000
+  let all = []
+  for (let offset = 0; ; offset += PAGE) {
+    let query = supabase
+      .from('door_knocks')
+      .select('*')
+      .order('knocked_at', { ascending: true })
+      .order('id')
+      .range(offset, offset + PAGE - 1)
+    if (listId) query = query.eq('list_id', listId)
+    if (fromDate) query = query.gte('knocked_at', fromDate)
+    if (toDate) query = query.lt('knocked_at', toDate)
+    const { data, error } = await query
+    if (error) return { data: all, error }
+    if (!data || data.length === 0) break
+    all = all.concat(data)
+    if (data.length < PAGE) break   // last page
+  }
+  return { data: all, error: null }
 }

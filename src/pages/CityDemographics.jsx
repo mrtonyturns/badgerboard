@@ -8,6 +8,7 @@ import {
   loadPlaceDemographics, findPlaceBySlugs, fmtNum, fmtMoney, fmtPct, displayName,
 } from '../lib/placeDemographics'
 import { supabase } from '../lib/supabase'
+import { escapeLike, likeContains, quoteFilterValue } from '../lib/pgFilter'
 
 // ── District (county/state) demographics — separate file, separate contract ──
 // Keys look like "county-Marathon" and "state-wi". Fields available there:
@@ -184,17 +185,24 @@ export default function CityDemographics() {
     // `district_name` ("City of Wausau", "Town of Grant"). Filtering on `city`
     // alone reported "No offices tracked" for every district_name-style import,
     // even though clicking the same municipality on the map listed them.
-    // Commas, parens and quotes would be read as PostgREST `or` syntax — strip
-    // them, then double-quote each value so names with spaces ("Eau Claire")
-    // parse as one literal.
-    const term = bareName.replace(/["'(),*]/g, ' ').replace(/\s+/g, ' ').trim()
+    // Each value is LIKE-escaped and double-quoted (pgFilter) so commas,
+    // parens, quotes, % and _ in a name are literal rather than `or` syntax.
+    const term = bareName.replace(/\*/g, ' ').replace(/\s+/g, ' ').trim()   // PostgREST reads * as %
     if (!term) { setOffices([]); return }
+    const name = quoteFilterValue(likeContains(term))
+    // Scope to the place's county: Wisconsin has many same-named towns
+    // ("Town of Washington" exists in several counties), and a name-only match
+    // listed every one of them. Offices imported without a county still match.
+    const countyBase = (place.county || '').replace(/\s+county$/i, '').trim()
+    const countyTree = countyBase
+      ? `,or(county.is.null,county.ilike.${quoteFilterValue(escapeLike(countyBase))},county.ilike.${quoteFilterValue(escapeLike(`${countyBase} County`))})`
+      : ''
     let cancelled = false
     setOfficesLoading(true)
     supabase
       .from('offices')
       .select('id, name, level, office_type, city, county, district_name')
-      .or(`city.ilike."%${term}%",district_name.ilike."%${term}%"`)
+      .or(`and(or(city.ilike.${name},district_name.ilike.${name})${countyTree})`)
       .limit(10)
       .then(({ data, error }) => {
         if (cancelled) return

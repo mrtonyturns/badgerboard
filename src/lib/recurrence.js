@@ -1,9 +1,14 @@
 // ─── Recurring task helpers ───────────────────────────────────────────────────
-// recurrence shape: { freq: 'daily'|'weekly'|'monthly'|'yearly', interval: N, weekday?: 0-6 }
+// recurrence shape: { freq: 'daily'|'weekly'|'monthly'|'yearly', interval: N, weekday?: 0-6,
+//                     anchorDay?: 1-31, anchorMonth?: 1-12 (yearly only) }
+// anchorDay/anchorMonth pin monthly/yearly rules to the day they were set on,
+// so a 31st-of-the-month task comes back to the 31st after a short month
+// instead of drifting (Oct 31 → Nov 30 → Dec 30 …). Rules saved before the
+// anchor existed fall back to the due date's own day.
 // Completing a recurring task advances due_date to the next occurrence
 // (strictly after today), Todoist-style, instead of completing it.
 
-import { addDays, addWeeks, addMonths, addYears, format, parseISO, nextDay } from 'date-fns'
+import { addDays, addWeeks, addMonths, addYears, format, parseISO, nextDay, getDaysInMonth, setDate } from 'date-fns'
 
 const fmt = (d) => format(d, 'yyyy-MM-dd')
 
@@ -19,6 +24,38 @@ export function recurrenceLabel(rec) {
   return n === 1 ? `every ${unit}` : `every ${n} ${unit}s`
 }
 
+const ANCHORED = new Set(['monthly', 'yearly'])
+
+/**
+ * True when `date` is where an anchored rule would land: on its anchor day,
+ * or on the last day of a month too short for it (Nov 30 for a 31st anchor).
+ * A task rescheduled off its anchor no longer fits, and re-anchors on its new day.
+ */
+function anchorFits(rec, date) {
+  if (rec?.anchorDay == null) return false
+  const day = date.getDate()
+  const dayOk = day === rec.anchorDay || (day === getDaysInMonth(date) && rec.anchorDay > day)
+  const monthOk = rec.freq !== 'yearly' || rec.anchorMonth == null || date.getMonth() + 1 === rec.anchorMonth
+  return dayOk && monthOk
+}
+
+/**
+ * The rule with its monthly/yearly anchor set from the due date (call when a
+ * task's recurrence or due date is saved). Keeps `prev`'s anchor while the due
+ * date still fits it, so re-saving a task sitting on a clamped Nov 30 keeps its
+ * 31st anchor. Non-anchored frequencies / no due date → anchor fields stripped.
+ */
+export function withAnchor(rec, dueDateStr, prev = rec) {
+  if (!rec?.freq) return rec ?? null
+  const { anchorDay: _d, anchorMonth: _m, ...base } = rec
+  if (!ANCHORED.has(rec.freq) || !dueDateStr) return base
+  const due = parseISO(dueDateStr)
+  const keep = prev?.freq === rec.freq && anchorFits(prev, due)
+  const anchorDay = keep ? prev.anchorDay : due.getDate()
+  const anchorMonth = keep && prev.anchorMonth != null ? prev.anchorMonth : due.getMonth() + 1
+  return { ...base, anchorDay, ...(rec.freq === 'yearly' ? { anchorMonth } : {}) }
+}
+
 /**
  * Next occurrence after completing the task today.
  * Anchored on the task's due date when it has one (keeps cadence), otherwise today.
@@ -29,6 +66,10 @@ export function nextOccurrence(rec, dueDateStr) {
   const n = Math.max(1, rec.interval || 1)
   const today = parseISO(fmt(new Date()))
   let d = dueDateStr ? parseISO(dueDateStr) : today
+  // Monthly/yearly: snap each step to the anchor day, clamped to short months.
+  // No (or stale) anchor → the due date's own day.
+  const anchorDay = anchorFits(rec, d) ? rec.anchorDay : d.getDate()
+  const snap = (date) => setDate(date, Math.min(anchorDay, getDaysInMonth(date)))
 
   const step = (date) => {
     switch (rec.freq) {
@@ -38,8 +79,8 @@ export function nextOccurrence(rec, dueDateStr) {
       case 'weekly':  return rec.weekday != null
         ? addWeeks(nextDay(date, rec.weekday), n - 1)
         : addWeeks(date, n)
-      case 'monthly': return addMonths(date, n)
-      case 'yearly':  return addYears(date, n)
+      case 'monthly': return snap(addMonths(date, n))
+      case 'yearly':  return snap(addYears(date, n))
       default:        return null
     }
   }

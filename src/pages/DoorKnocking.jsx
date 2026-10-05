@@ -23,6 +23,7 @@ import {
   Database,
 } from 'lucide-react'
 import maplibregl from 'maplibre-gl'
+import { format } from 'date-fns'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useAuth } from '../contexts/AuthContext'
 import { getUserPlan } from '../lib/tiers'
@@ -1439,7 +1440,7 @@ function ShiftsTab({ listId }) {
   const [saveError, setSaveError]   = useState('')
   const [form, setForm]             = useState({
     volunteer_name: '', volunteer_email: '', volunteer_phone: '',
-    shift_date: new Date().toISOString().slice(0, 10),
+    shift_date: format(new Date(), 'yyyy-MM-dd'),   // local date, not UTC's
     start_time: '09:00', end_time: '13:00', notes: '', status: 'scheduled',
   })
 
@@ -1466,7 +1467,7 @@ function ShiftsTab({ listId }) {
       if (error) throw error
       setShowForm(false)
       setForm({ volunteer_name:'', volunteer_email:'', volunteer_phone:'',
-        shift_date: new Date().toISOString().slice(0, 10),
+        shift_date: format(new Date(), 'yyyy-MM-dd'),
         start_time:'09:00', end_time:'13:00', notes:'', status:'scheduled' })
       load()
     } catch (err) {
@@ -1664,9 +1665,9 @@ const EXPORT_COLUMNS = [
 function ExportTab({ listId, candidateName }) {
   const [fromDate, setFromDate] = useState(() => {
     const d = new Date(); d.setDate(d.getDate() - 7)
-    return d.toISOString().slice(0, 10)
+    return format(d, 'yyyy-MM-dd')   // local date — toISOString() is UTC's
   })
-  const [toDate, setToDate]     = useState(new Date().toISOString().slice(0, 10))
+  const [toDate, setToDate]     = useState(() => format(new Date(), 'yyyy-MM-dd'))
   const [generating, setGenerating] = useState(false)
   const [previewData, setPreviewData] = useState(null)
   const [selectedCols, setSelectedCols] = useState(() => EXPORT_COLUMNS.map(c => c.key))
@@ -1677,7 +1678,14 @@ function ExportTab({ listId, candidateName }) {
     if (fromDate && toDate && fromDate > toDate) return
     setGenerating(true)
     try {
-      const { data } = await getDoorKnocksForExport(listId, fromDate + 'T00:00:00', toDate + 'T23:59:59')
+      // knocked_at is timestamptz: a bare 'YYYY-MM-DDT23:59:59' is read as UTC,
+      // cutting off the user's evening. Send real instants for local midnight
+      // at the start of fromDate and the start of the day after toDate.
+      const [fy, fm, fd] = fromDate.split('-').map(Number)
+      const [ty, tm, td] = toDate.split('-').map(Number)
+      const { data } = await getDoorKnocksForExport(listId,
+        fromDate ? new Date(fy, fm - 1, fd).toISOString() : null,
+        toDate ? new Date(ty, tm - 1, td + 1).toISOString() : null)
       setPreviewData(Array.isArray(data) ? data : [])
     } catch (_) {
       setPreviewData([])
@@ -1876,8 +1884,8 @@ ${knocks.slice(0, 200).map(k =>
               return (
                 <button key={label} onClick={() => {
                     const from = new Date(); from.setDate(from.getDate() - days)
-                    setFromDate(from.toISOString().slice(0,10))
-                    setToDate(new Date().toISOString().slice(0,10))
+                    setFromDate(format(from, 'yyyy-MM-dd'))
+                    setToDate(format(new Date(), 'yyyy-MM-dd'))
                   }}
                   style={{ marginRight:6, padding:'5px 10px', borderRadius:6, fontSize:11, fontWeight:600, border:'1px solid #E5E7EB', background:'#f9fafb', cursor:'pointer' }}>
                   {label}

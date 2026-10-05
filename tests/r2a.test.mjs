@@ -13,7 +13,7 @@
 import { readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { differenceInDays, parseISO } from 'date-fns'
+import { differenceInCalendarDays, parseISO } from 'date-fns'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (p) => readFileSync(join(root, p), 'utf8')
@@ -41,25 +41,27 @@ const NOW = new Date(2026, 7, 16, 10, 30)
 console.log('D1 — dashboard countdown matches Elections.jsx / GamePlan.jsx')
 
 // The four elections the audit compared side by side. The dashboard read
-// 79/184/233/359; the calendar read 78/183/232/358.
+// 79/184/233/359; the calendar read 78/183/232/358. The calendar pages have
+// since moved to calendar days (lib-sweep), so parity is now 79/184/233/359 on
+// both — the old 24h-period count read "1 day" for a date two days out.
 const ELECTIONS = [
-  ['2026-11-03', 78],
-  ['2027-02-16', 183],
-  ['2027-04-06', 232],
-  ['2027-08-10', 358],
+  ['2026-11-03', 79],
+  ['2027-02-16', 184],
+  ['2027-04-06', 233],
+  ['2027-08-10', 359],
 ]
 for (const [date, expected] of ELECTIONS) {
   eq(`daysUntil(${date})`, daysUntil(date, NOW), expected)
   // …and it is the calendar's own expression, not a hand-tuned constant.
-  t(`${date} equals the calendar's differenceInDays`,
-    daysUntil(date, NOW) === differenceInDays(parseISO(date), NOW))
+  t(`${date} equals the calendar's differenceInCalendarDays`,
+    daysUntil(date, NOW) === differenceInCalendarDays(parseISO(date), NOW))
 }
-t('every dashboard count is now one lower than the old calendar-day count',
-  ELECTIONS.every(([d]) => calendarDaysUntil(d, NOW) - daysUntil(d, NOW) === 1))
+t('calendarDaysUntil and daysUntil agree',
+  ELECTIONS.every(([d]) => calendarDaysUntil(d, NOW) === daysUntil(d, NOW)))
 
 // Election day itself is 0 — the convention, applied consistently.
 eq('daysUntil(today)', daysUntil('2026-08-16', NOW), 0)
-eq('daysUntil(tomorrow)', daysUntil('2026-08-17', NOW), 0)   // whole 24h periods
+eq('daysUntil(tomorrow)', daysUntil('2026-08-17', NOW), 1)   // calendar days, not 24h periods
 eq('daysUntil(yesterday)', daysUntil('2026-08-15', NOW), -1)
 eq('daysUntil(no date)', daysUntil(null, NOW), null)
 eq('daysUntil(garbage)', daysUntil('not a date', NOW), null)
@@ -69,13 +71,13 @@ t('today is upcoming', isUpcoming('2026-08-16', NOW) === true)
 t('yesterday is not upcoming', isUpcoming('2026-08-15', NOW) === false)
 t('a dateless row is not upcoming', isUpcoming(null, NOW) === false)
 
-// The count is in parity with the calendar, so the WORDS have to disambiguate
-// today from tomorrow — both count 0.
+// Words and count now agree: today 0, tomorrow 1, two days out "2 days"
+// (the old 24h-period count printed "1 day" here).
 eq('countdownLabel(today)', countdownLabel('2026-08-16', NOW), 'today')
 eq('countdownLabel(tomorrow)', countdownLabel('2026-08-17', NOW), 'tomorrow')
-eq('countdownLabel(election day + 2)', countdownLabel('2026-08-18', NOW), '1 day')
-eq('countdownLabel(Nov 3)', countdownLabel('2026-11-03', NOW), '78 days')
-eq('countdownLabel(Nov 3, short)', countdownLabel('2026-11-03', NOW, { short: true }), '78d')
+eq('countdownLabel(election day + 2)', countdownLabel('2026-08-18', NOW), '2 days')
+eq('countdownLabel(Nov 3)', countdownLabel('2026-11-03', NOW), '79 days')
+eq('countdownLabel(Nov 3, short)', countdownLabel('2026-11-03', NOW, { short: true }), '79d')
 eq('countdownLabel(past)', countdownLabel('2026-08-01', NOW), 'past')
 eq('countdownLabel(no date)', countdownLabel(null, NOW), '')
 t('no future election can ever render the word "today"',
@@ -93,9 +95,9 @@ eq('fmtDueDate(2026-09-02) does not', fmtDueDate('2026-09-02', NOW), 'Sep 2')
 eq('fmtDueDate(no date)', fmtDueDate(null, NOW), '—')
 
 // A due date in the future is never "overdue".
-eq('dueChipLabel(2026-09-02)', dueChipLabel('2026-09-02', NOW), 'due in 16d')
+eq('dueChipLabel(2026-09-02)', dueChipLabel('2026-09-02', NOW), 'due in 17d')
 eq('dueChipLabel(today)', dueChipLabel('2026-08-16', NOW), 'due today')
-eq('dueChipLabel(tomorrow)', dueChipLabel('2026-08-17', NOW), 'due today')
+eq('dueChipLabel(tomorrow)', dueChipLabel('2026-08-17', NOW), 'due in 1d')
 eq('dueChipLabel(yesterday)', dueChipLabel('2026-08-15', NOW), '1d overdue')
 eq('dueChipLabel(no date)', dueChipLabel(null, NOW), 'no due date')
 t('a future due date never contains the word "overdue"',

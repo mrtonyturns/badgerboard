@@ -1,6 +1,8 @@
 // ─── Badger Board Offline Queue ───────────────────────────────────────────────
 // IndexedDB-backed queue for door_knock records created while offline.
 // When the volunteer's signal returns, call flushQueue() to sync to Supabase.
+// NOTE: nothing calls queueKnock() today (door knocking is parked); the module
+// stays so pendingCount()/flushQueue() can drain records from older builds.
 
 const DB_NAME    = 'badgerboard-offline'
 const DB_VERSION = 1
