@@ -4,7 +4,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
-  format, differenceInDays,
+  format, differenceInCalendarDays,
   isPast, isFuture, parseISO, isToday,
 } from 'date-fns'
 
@@ -138,7 +138,7 @@ function ElectionModalBody({ onClose, editing, onSave, saving, error }) {
 // ElectionRow
 // ─────────────────────────────────────────────────────────────────────────────
 function ElectionRow({ election, onEdit, onDelete, deleting, onViewResults }) {
-  const daysUntil  = differenceInDays(parseISO(election.election_date), new Date())
+  const daysUntil  = differenceInCalendarDays(parseISO(election.election_date), new Date()) // calendar days, not 24h periods
   const isUpcoming = isFuture(parseISO(election.election_date))
   const isOngoing  = isToday(parseISO(election.election_date))
   const colors     = ELECTION_TYPE_COLORS[election.type] || ELECTION_TYPE_COLORS.general
@@ -171,7 +171,7 @@ function ElectionRow({ election, onEdit, onDelete, deleting, onViewResults }) {
                 {isUpcoming && !isOngoing && (
                   <span className={`flex items-center gap-1 text-xs font-semibold ${daysUntil <= 30 ? 'text-brand-red' : daysUntil <= 90 ? 'text-orange-600' : 'text-gray-500'}`}>
                     <Clock className="w-3 h-3" />
-                    {daysUntil === 0 ? 'Today!' : `${daysUntil} days away`}
+                    {daysUntil === 0 ? 'Today!' : `${daysUntil} day${daysUntil === 1 ? '' : 's'} away`}
                   </span>
                 )}
                 {!isUpcoming && !isOngoing && (

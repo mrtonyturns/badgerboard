@@ -1,7 +1,8 @@
 // src/lib/csv.js
 // ─── Robust CSV tokenizer ─────────────────────────────────────────────────────
 // Handles: quoted fields, escaped quotes (""), commas and newlines inside
-// quotes, CRLF/CR line endings, and a leading BOM. Returns an array of rows,
+// quotes, CRLF/CR line endings, and a leading BOM. A quote only opens a quoted
+// field at the start of a field; mid-field (5'10") it is literal. Returns an array of rows,
 // each an array of raw field strings (callers trim/normalize as needed).
 export function parseCsvRows(text) {
   const s = String(text ?? '').replace(/^\uFEFF/, '')
@@ -14,8 +15,9 @@ export function parseCsvRows(text) {
         if (s[i + 1] === '"') { cur += '"'; i++ }
         else inQ = false
       } else cur += ch
-    } else if (ch === '"') {
-      inQ = true
+    } else if (ch === '"' && cur.trim() === '') {
+      // only leading whitespace so far (`a, "b, c"`) — drop it and open the quote
+      inQ = true; cur = ''
     } else if (ch === ',') {
       row.push(cur); cur = ''
     } else if (ch === '\n' || ch === '\r') {

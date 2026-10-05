@@ -158,8 +158,8 @@ export function dateBadgeParts(dateStr) {
 // SEARCH time and never revisited. These two helpers make "upcoming" and
 // "fresh" both relative to render time instead of fetch time. ─────────────
 // ─── R4 PURE HELPERS BEGIN ───
-/** Drops events whose date is before today (local day boundary — an event
- * happening today is kept). Events with a missing/unparseable date are never
+/** Drops events that ended before today (local day boundary — an event
+ * happening today, or a multi-day event still running per date_end, is kept). Events with a missing/unparseable date are never
  * dropped — silently disappearing events is worse than a missing filter — but
  * they're sorted after every dated event so a stale/bad date can't lead the
  * list. */
@@ -170,7 +170,8 @@ export function filterUpcoming(events, now = new Date()) {
   for (const ev of events) {
     const t = Date.parse(`${ev?.date_start}T00:00:00`)
     if (!Number.isFinite(t)) { undated.push(ev); continue }
-    if (t >= todayStart) dated.push(ev)
+    const end = Date.parse(`${ev?.date_end}T00:00:00`)
+    if ((Number.isFinite(end) ? Math.max(end, t) : t) >= todayStart) dated.push(ev)
   }
   dated.sort((a, b) => Date.parse(`${a.date_start}T00:00:00`) - Date.parse(`${b.date_start}T00:00:00`))
   return [...dated, ...undated]

@@ -95,14 +95,16 @@ export function extractDistrictColumns(row) {
 
 /**
  * Normalise a district value for comparison/display.
- * Numeric-ish values ("District 04", "04", "4th") collapse to "4" so the CSV's
- * own string matches offices.district_number. Everything else (school district
- * NAMES, ward labels like "Ward 3B") keeps its text, whitespace-collapsed.
+ * Numeric-ish values ("District 04", "Ward 4", "04", "4th") collapse to "4" so
+ * the CSV's own string matches offices.district_number. Only a bare district/ward
+ * prefix is stripped: everything else (school district NAMES, "Ward 3B", or
+ * "Village of Weston Ward 3" vs "City of Wausau Ward 3") keeps its text,
+ * whitespace-collapsed, so distinct seats never merge.
  */
 export function normalizeDistrictValue(v) {
   const s = cleanCell(v)
   if (!s) return ''
-  const m = s.match(/^\D*?(\d+)(?:st|nd|rd|th)?\D*$/i)
+  const m = s.match(/^(?:(?:supervisory|aldermanic)\s+)?(?:district|dist\.?|ward|ad|sd)?\s*#?\s*(\d+)(?:st|nd|rd|th)?$/i)
   if (m) return String(parseInt(m[1], 10))
   return s
 }

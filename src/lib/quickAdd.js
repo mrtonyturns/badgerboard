@@ -8,16 +8,21 @@
 //                 multi-word projects match greedily against known names)
 //   @label      — one or more labels
 //   p1…p4       — priority (1 highest)
-//   date words  — today, tomorrow, tod, tmr, next week, weekday names
-//                 ("friday", "next friday"), "in N days/weeks", "Jul 20",
-//                 "July 20", "7/20", "2026-07-20"
+//   date words  — today, tomorrow, tmr, next week, weekday names
+//                 ("friday", "next friday", "by fri"), "in N days/weeks",
+//                 "Jul 20", "July 20", "7/20", "2026-07-20"
+//                 Short weekdays (sun, mon…) need a lead-in (on/due/by/next/this)
+//                 so "Sun Prairie" stays text; N/N must be a real month/day.
 
 import { addDays, addWeeks, format, nextDay, parse, isValid } from 'date-fns'
 import { parseRecurrence } from './recurrence.js'
 
-const WEEKDAYS = {
+const FULL_WEEKDAYS = {
   sunday: 0, monday: 1, tuesday: 2, wednesday: 3,
   thursday: 4, friday: 5, saturday: 6,
+}
+const WEEKDAYS = {
+  ...FULL_WEEKDAYS,
   sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6,
 }
 
@@ -32,10 +37,10 @@ export function parseDatePhrase(text) {
   let cleaned = text
 
   const patterns = [
-    // "today" / "tod" / "tonight"
-    { re: /\b(today|tod|tonight)\b/i, fn: () => today },
-    // "tomorrow" / "tmr" / "tom"
-    { re: /\b(tomorrow|tmr|tom)\b/i, fn: () => addDays(today, 1) },
+    // "today" / "tonight" ("tod"/"tom" dropped: "Call Tom" is a name, not a date)
+    { re: /\b(today|tonight)\b/i, fn: () => today },
+    // "tomorrow" / "tmr"
+    { re: /\b(tomorrow|tmr)\b/i, fn: () => addDays(today, 1) },
     // "next week" → next Monday
     { re: /\bnext week\b/i, fn: () => nextDay(today, 1) },
     // "in N days" / "in N weeks"
@@ -44,17 +49,22 @@ export function parseDatePhrase(text) {
     // "next friday"
     { re: new RegExp(`\\bnext (${Object.keys(WEEKDAYS).join('|')})\\b`, 'i'),
       fn: (m) => addWeeks(nextDay(today, WEEKDAYS[m[1].toLowerCase()]), 1) },
-    // bare weekday "friday" → the coming one
-    { re: new RegExp(`\\b(${Object.keys(WEEKDAYS).join('|')})\\b`, 'i'),
+    // short weekday only after a lead-in: "by fri", "on sat" → the coming one
+    { re: new RegExp(`\\b(?:on|due|by|this) (${Object.keys(WEEKDAYS).join('|')})\\b`, 'i'),
       fn: (m) => nextDay(today, WEEKDAYS[m[1].toLowerCase()]) },
+    // bare full weekday "friday" → the coming one
+    { re: new RegExp(`\\b(${Object.keys(FULL_WEEKDAYS).join('|')})\\b`, 'i'),
+      fn: (m) => nextDay(today, FULL_WEEKDAYS[m[1].toLowerCase()]) },
     // ISO date 2026-07-20
     { re: /\b(\d{4}-\d{2}-\d{2})\b/, fn: (m) => {
         const d = parse(m[1], 'yyyy-MM-dd', today); return isValid(d) ? d : null } },
-    // US numeric 7/20 or 7/20/2026
-    { re: /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/, fn: (m) => {
+    // US numeric 7/20 or 7/20/2026 — not a fraction before a unit ("1/2 page")
+    { re: /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b(?![-\s]*(?:pages?|sheets?|size|sized|inch(?:es)?|off)\b)/i, fn: (m) => {
         const yr = m[3] ? (m[3].length === 2 ? 2000 + parseInt(m[3]) : parseInt(m[3])) : today.getFullYear()
-        const d = new Date(yr, parseInt(m[1]) - 1, parseInt(m[2]))
-        if (!isValid(d)) return null
+        const mo = parseInt(m[1]) - 1, day = parseInt(m[2])
+        const d = new Date(yr, mo, day)
+        // reject overflow (13/45, 2/30) instead of letting Date roll it forward
+        if (!isValid(d) || d.getMonth() !== mo || d.getDate() !== day) return null
         if (!m[3] && d < addDays(today, -1)) d.setFullYear(d.getFullYear() + 1)  // "7/2" already past → next year
         return d } },
     // "Jul 20" / "July 20" / "20 July"

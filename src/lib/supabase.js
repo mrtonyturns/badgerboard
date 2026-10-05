@@ -69,6 +69,7 @@ const fetchOffices = async (filters = {}) => {
       .select('*')
       .order('level')
       .order('name')
+      .order('id') // unique tiebreaker so rows can't shift across page boundaries
       .range(offset, offset + PAGE - 1)
     if (filters.level)       query = query.eq('level', filters.level)
     if (filters.office_type) query = query.eq('office_type', filters.office_type)
@@ -162,7 +163,7 @@ export const getCandidates = async (filters = {}) => {
     .from('candidates')
     .select(`
       *,
-      office:offices(id, name, level, office_type, district_number, district_name, county),
+      office:offices(id, name, level, office_type, district_number, district_name, county, city),
       election:elections(id, name, election_date, type, year)
     `)
     .order('name')
@@ -246,11 +247,11 @@ export const getDossier = async (id) => {
   return withOffline(`dossier:${uid}:${id}`, () => q.single())
 }
 
+// RLS (dossiers_delete_own) scopes to the creator or the candidate's owner. A
+// generated_by filter here silently matched 0 rows for auto-regenerated
+// profiles (generated_by is null), so their owners could never delete them.
 export const deleteDossier = async (id) => {
-  const uid = await currentUserId()
-  let q = supabase.from('dossiers').delete().eq('id', id)
-  if (uid) q = q.eq('generated_by', uid)
-  return q
+  return supabase.from('dossiers').delete().eq('id', id)
 }
 
 // ── Prospecting Lists (USER-SCOPED) ───────────────────────────

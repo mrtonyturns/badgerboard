@@ -33,8 +33,10 @@ export function nextOccurrence(rec, dueDateStr) {
   const step = (date) => {
     switch (rec.freq) {
       case 'daily':   return addDays(date, n)
+      // nextDay is strictly after `date`: already on the weekday → n weeks out;
+      // off-weekday anchor → the coming weekday, then n-1 more weeks
       case 'weekly':  return rec.weekday != null
-        ? addWeeks(nextDay(addDays(date, -1), rec.weekday), n - 1)
+        ? addWeeks(nextDay(date, rec.weekday), n - 1)
         : addWeeks(date, n)
       case 'monthly': return addMonths(date, n)
       case 'yearly':  return addYears(date, n)
@@ -50,9 +52,9 @@ export function nextOccurrence(rec, dueDateStr) {
 
 /**
  * Extract a recurrence phrase from quick-add text.
- * Supports: "every day"/"daily", "every week"/"weekly", "every month"/"monthly",
- * "every year"/"yearly"/"annually", "every N days/weeks/months/years",
- * "every monday" (any weekday), "every weekday-name".
+ * Supports: "every day", "every week", "every month", "every year",
+ * "every N days/weeks/months/years", "every monday" (any weekday, short or full).
+ * Bare "daily"/"weekly"/… are left as text ("Draft weekly newsletter").
  * Returns { recurrence, cleaned, impliedDueDate }.
  */
 const WD = {
@@ -76,9 +78,6 @@ export function parseRecurrence(text) {
         interval: parseInt(m[1]) }) },
     { re: /\bevery (day|week|month|year)\b/i, fn: (m) => ({
         freq: { day: 'daily', week: 'weekly', month: 'monthly', year: 'yearly' }[m[1].toLowerCase()],
-        interval: 1 }) },
-    { re: /\b(daily|weekly|monthly|yearly|annually)\b/i, fn: (m) => ({
-        freq: m[1].toLowerCase() === 'annually' ? 'yearly' : m[1].toLowerCase(),
         interval: 1 }) },
   ]
 

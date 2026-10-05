@@ -14,6 +14,8 @@
 // deliberately, not inherited by a `for (const key of Object.keys(row))` loop.
 // That is why COLUMNS below is an explicit allowlist.
 
+import { format } from 'date-fns'
+
 /** RFC-4180 field escaping: quote when needed, double any inner quotes. */
 export function csvEscape(value) {
   if (value === null || value === undefined) return ''
@@ -136,10 +138,10 @@ export function buildProspectCsv(rows) {
   return lines.join('\r\n')
 }
 
-/** Filename-safe stamp for the download, e.g. prospects_2026-08-12.csv */
+/** Filename-safe stamp for the download, e.g. prospects_2026-08-12.csv (local date) */
 export function csvFilename(prefix = 'prospects', date = new Date()) {
   const iso = date instanceof Date && !Number.isNaN(+date)
-    ? date.toISOString().slice(0, 10)
+    ? format(date, 'yyyy-MM-dd')
     : String(date).slice(0, 10)
   return `${String(prefix).replace(/[^\w-]+/g, '_').slice(0, 60) || 'prospects'}_${iso}.csv`
 }

@@ -4,7 +4,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { format, differenceInDays, isPast, isFuture, parseISO, isToday } from 'date-fns'
+import { format, differenceInCalendarDays, isPast, isFuture, parseISO, isToday } from 'date-fns'
 
 // Crash-proof parseISO: null/undefined/malformed dates → epoch (renders as
 // past) instead of Invalid Date, which crashes format() and comparisons.
@@ -293,7 +293,7 @@ export default function Elections() {
 
   // ── Election card ───────────────────────────────────────────────────────────
   const ElectionRow = ({ election }) => {
-    const daysUntil  = differenceInDays(safeISO(election.election_date), new Date())
+    const daysUntil  = differenceInCalendarDays(safeISO(election.election_date), new Date()) // calendar days, not 24h periods
     const isUpcoming = isFuture(safeISO(election.election_date))
     const isOngoing  = isToday(safeISO(election.election_date))
     const colors     = TYPE_COLORS[election.type] || TYPE_COLORS.general
@@ -329,7 +329,7 @@ export default function Elections() {
                   {isUpcoming && !isOngoing && (
                     <span className={`flex items-center gap-1 text-xs font-semibold ${daysUntil <= 30 ? 'text-brand-red' : daysUntil <= 90 ? 'text-orange-600' : 'text-gray-500'}`}>
                       <Clock className="w-3 h-3" />
-                      {daysUntil === 0 ? 'Today!' : `${daysUntil} days away`}
+                      {daysUntil === 0 ? 'Today!' : `${daysUntil} day${daysUntil === 1 ? '' : 's'} away`}
                     </span>
                   )}
                   {!isUpcoming && !isOngoing && (

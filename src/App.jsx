@@ -6,15 +6,18 @@ import { BrowserRouter, Routes, Route, Navigate, useParams, useLocation } from '
 // lazy-route chunk hashes no longer exist on the CDN. The import then fails
 // ("Failed to fetch dynamically imported module" / Safari: "Importing a module
 // script failed") and the user sees the error screen. Recovery: reload ONCE —
-// the fresh shell carries the new hashes. A sessionStorage guard prevents a
-// reload loop when the failure is something else (e.g. genuinely offline).
+// the fresh shell carries the new hashes. A timestamped sessionStorage guard
+// prevents a reload loop when the failure is something else (e.g. genuinely
+// offline): no second reload within RELOAD_WINDOW_MS of the last one.
 const CHUNK_ERR = /failed to fetch dynamically imported module|importing a module script failed|error loading dynamically imported module|chunkloaderror|failed to load module script/i
 const RELOAD_GUARD = 'bb-chunk-reload'
+const RELOAD_WINDOW_MS = 30_000
 
 function reloadOnceForStaleChunk(err) {
   try {
     if (!CHUNK_ERR.test(String(err?.message || err || ''))) return false
-    if (sessionStorage.getItem(RELOAD_GUARD)) return false
+    const last = Number(sessionStorage.getItem(RELOAD_GUARD)) || 0
+    if (Date.now() - last < RELOAD_WINDOW_MS) return false
     sessionStorage.setItem(RELOAD_GUARD, String(Date.now()))
     window.location.reload()
     return true
@@ -49,9 +52,6 @@ class ErrorBoundary extends React.Component {
   componentDidCatch(error, info) {
     console.error('[ErrorBoundary] Unhandled error:', error, info)
     reloadOnceForStaleChunk(error)
-  }
-  componentDidMount() {
-    try { sessionStorage.removeItem(RELOAD_GUARD) } catch { /* noop */ }
   }
   render() {
     if (this.state.hasError) {
