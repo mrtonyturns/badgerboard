@@ -443,6 +443,10 @@ async function updatePlan(stripe, userId, plan, bracket) {
     if (isFree) {
       delete meta.bracket;
       delete meta.beta_mode;
+      // An admin move to free is not non-payment: when the cancelled sub ends,
+      // stripe-webhook's subscription.deleted honors this flag (Scout in good
+      // standing) instead of the inactive lockout + deletion countdown.
+      meta.voluntary_downgrade = true;
       for (const k of ['trial_plan', 'trial_bracket', 'trial_started_at', 'trial_ends_at', 'trial_granted_by', 'trial_warning_sent']) {
         delete meta[k];
       }
@@ -457,7 +461,13 @@ async function updatePlan(stripe, userId, plan, bracket) {
     // Downgrading to free: cancel Stripe sub at period end if one exists
     const found = await findLiveSubscription(stripe, customerIds);
     if (found) {
-      await stripe.subscriptions.update(found.subscription.id, { cancel_at_period_end: true });
+      // metadata too: stripe-webhook's subscription.updated reads plan from
+      // sub.metadata first, so leaving the old paid plan there re-granted it
+      // the moment this update's webhook landed.
+      await stripe.subscriptions.update(found.subscription.id, {
+        cancel_at_period_end: true,
+        metadata: { plan: 'scout', plan_type: planTypeFor('scout'), bracket: '' },
+      });
       return { updated: true, stripe: 'subscription_scheduled_for_cancellation' };
     }
     return { updated: true, stripe: customerIds.length ? 'no_active_subscription' : 'no_stripe_customer' };
@@ -468,9 +478,19 @@ async function updatePlan(stripe, userId, plan, bracket) {
   // and in that case the price was already resolved above — it cannot be missing here.)
   if (!stripeTarget) return { updated: true, stripe: customerIds.length ? 'no_active_subscription' : 'no_stripe_customer' };
 
+  // metadata must move with the price (as update-subscription does):
+  // stripe-webhook's subscription.updated trusts sub.metadata.plan over the
+  // price, so the old plan in metadata reverted this change on the next event.
+  // An empty string deletes a Stripe metadata key (Candidate plans: no bracket).
   await stripe.subscriptions.update(stripeTarget.subscription.id, {
     items: [{ id: stripeTarget.itemId, price: stripeTarget.priceId }],
     proration_behavior: 'create_prorations',
+    metadata: {
+      plan,
+      plan_type: planTypeFor(planKey),
+      bracket: bracket || '',
+      billing: stripeTarget.billing,
+    },
   });
 
   return { updated: true, stripe: 'subscription_updated', billing: stripeTarget.billing };
