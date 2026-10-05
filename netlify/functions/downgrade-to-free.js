@@ -161,7 +161,9 @@ export const handler = async (event) => {
       const subs = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 20 })
       for (const sub of subs.data) {
         if (!CANCELLABLE.includes(sub.status)) continue
-        await stripe.subscriptions.cancel(sub.id)
+        // invoice_now: bill pending proration items (from earlier plan changes)
+        // instead of silently dropping them; prorate:false = no unused-time credit
+        await stripe.subscriptions.cancel(sub.id, { invoice_now: true, prorate: false })
         console.log(`Cancelled subscription ${sub.id} (${sub.status}, customer ${customerId})`)
       }
     }

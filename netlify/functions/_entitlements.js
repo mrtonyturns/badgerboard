@@ -11,7 +11,8 @@
 //   (app_settings key 'beta_mode_enabled') is not 'off'. Grants the top plan
 //   (a_campaign, 'ent' bracket → every feature, unlimited slots).
 // • Free trial: app_metadata.trial_plan + trial_ends_at (ISO). Active while
-//   trial_ends_at is in the future; overlays the paid plan when it outranks it.
+//   trial_ends_at is in the future; overlays the paid plan when it outranks it
+//   (Scout, or a lower plan in the SAME family — see trialOutranksPaid).
 //   The daily trial-expiry cron clears expired fields, but this resolver ALSO
 //   treats past dates as inactive, so access ends on time regardless.
 //
@@ -54,6 +55,22 @@ function normalizePlan(p) {
 
 function planRank(p) {
   return PLAN_ORDER.indexOf(normalizePlan(p))
+}
+
+// Does an active trial override the paid plan? Ranking on the concatenated
+// PLAN_ORDER put every a_* above every c_*, so a c_campaign payer handed an
+// a_monitor trial resolved to a_monitor (lower limits). The families are
+// different ladders: a trial wins only over Scout, or over a LOWER plan in
+// its own family. Mirrors src/lib/tiers.js trialOutranksPaid.
+function trialOutranksPaid(trialPlan, paidPlan) {
+  const trial = normalizePlan(trialPlan)
+  const paid  = normalizePlan(paidPlan)
+  if (trial === 'scout') return false
+  if (paid === 'scout') return true
+  for (const order of [CANDIDATE_PLAN_ORDER, ACTION_PLAN_ORDER]) {
+    if (order.includes(trial) && order.includes(paid)) return order.indexOf(trial) > order.indexOf(paid)
+  }
+  return false  // cross-family: keep the plan they pay for
 }
 
 // ── Global beta switch ────────────────────────────────────────────────────────
@@ -112,7 +129,7 @@ async function resolveEntitlement(user, opts = {}) {
   const trial  = getActiveTrial(meta)
   const paidBracket = VALID_BRACKETS.includes(meta.bracket) ? meta.bracket : 'b1'
 
-  if (trial && planRank(trial.plan) > planRank(paid)) {
+  if (trial && trialOutranksPaid(trial.plan, paid)) {
     return { plan: trial.plan, bracket: trial.bracket, source: 'trial', trialEndsAt: trial.endsAt }
   }
   if (paid !== 'scout') {
@@ -128,6 +145,7 @@ module.exports = {
   getMonthlyProfileBase,
   normalizePlan,
   planRank,
+  trialOutranksPaid,
   BETA_PLAN,
   BETA_BRACKET,
   PLAN_ORDER,

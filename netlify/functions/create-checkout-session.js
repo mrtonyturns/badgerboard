@@ -545,6 +545,36 @@ export const handler = async (event) => {
     }
   }
 
+  // One subscription per account. Nothing stopped a second subscription
+  // checkout (stale tab, hand-crafted POST), double-billing the user with the
+  // webhook tracking only the newest sub. Credit packs (payment mode) are
+  // handled above and never reach this check.
+  const existingSubId = authedUser?.app_metadata?.stripe_subscription_id
+  if (existingSubId) {
+    let existing = null
+    try {
+      existing = await stripe.subscriptions.retrieve(existingSubId)
+    } catch (err) {
+      // A stale/foreign id is fine to replace; anything else is a Stripe
+      // outage — don't risk a duplicate sub while blind.
+      if (err?.code !== 'resource_missing') {
+        console.error('Existing-subscription check failed:', err.message)
+        return { statusCode: 503, body: JSON.stringify({ error: 'Could not verify your current subscription. Please try again in a moment.' }) }
+      }
+    }
+    if (['active', 'trialing', 'past_due'].includes(existing?.status)) {
+      return {
+        statusCode: 409,
+        body: JSON.stringify({
+          error: existing.status === 'past_due'
+            ? 'Your subscription has a past-due payment. Update your payment method in Settings → Billing instead of starting a new subscription.'
+            : 'You already have an active subscription. Change plans from Settings → Plan (or the Plans page while signed in) instead of starting a new checkout.',
+          code: 'subscription_exists',
+        }),
+      }
+    }
+  }
+
   const planLabel    = PLAN_DISPLAY[plan] || plan
   const bracketLabel = bracket ? (BRACKET_DISPLAY[bracket] || bracket) : ''
   const billingLabel = { monthly: 'Monthly', quarterly: 'Quarterly', semiannual: '6-Month', annual: 'Annual' }[billing] || billing

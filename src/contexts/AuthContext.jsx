@@ -170,12 +170,21 @@ export const AuthProvider = ({ children }) => {
   // read is treated as OFF; a missing row still means ON, because that is the
   // documented "migration not yet run" state and the query succeeds with data
   // === null.
-  const [globalBetaEnabled, setGlobalBetaState] = useState(true)
+  // Starts OFF to match tiers.js; the false→true flip once the row loads is a
+  // real state change, so beta users re-render into access (an initial `true`
+  // made the flip a no-op and left gates computed with the flag still off).
+  const [globalBetaEnabled, setGlobalBetaState] = useState(false)
   // Keyed on the id, not the user object: the background token refresh swaps
   // the object identity and this used to fire twice per boot (measured).
   const userId = user?.id
   useEffect(() => {
-    if (!userId) return
+    if (!userId) {
+      // Signed out (explicitly, SIGNED_OUT, or an expired session): the next
+      // account on this tab must not inherit the previous read.
+      setGlobalBetaEnabled(false)
+      setGlobalBetaState(false)
+      return
+    }
     let cancelled = false
     supabase
       .from('app_settings')
@@ -301,6 +310,9 @@ export const AuthProvider = ({ children }) => {
       }
     } catch (_) {}
     const { error } = await supabase.auth.signOut()
+    // Fail closed between accounts — re-read on the next sign-in
+    setGlobalBetaEnabled(false)
+    setGlobalBetaState(false)
     return { error }
   }
 

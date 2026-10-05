@@ -565,7 +565,9 @@ function ent(user) {
 export const BETA_PLAN    = 'a_campaign'
 export const BETA_BRACKET = 'ent'
 
-let _globalBetaEnabled = true  // optimistic default until AuthContext fetches the setting
+// Off until AuthContext has actually read app_settings (and reset to off on
+// sign-out) — an optimistic `true` granted beta access before/without the read.
+let _globalBetaEnabled = false
 
 // Fail CLOSED. The old body was `v !== false`, so anything that was not a
 // literal `false` — including the `undefined` a failed/short-circuited
@@ -608,6 +610,22 @@ export function getActiveTrial(user) {
 // ─── Resolver ─────────────────────────────────────────────────────────────────
 // Priority: admin > beta > trial (if it outranks paid) > paid > scout
 
+// Does an active trial override the paid plan? Same family rule as isUpgrade:
+// ranking on the concatenated PLAN_ORDER let an a_monitor trial beat a
+// c_campaign payer (lower limits). A trial wins only over Scout or a LOWER
+// plan in its own family. Mirror of _entitlements.js trialOutranksPaid —
+// keep the two in lockstep (tests/tiers.test.mjs checks parity).
+export function trialOutranksPaid(trialPlan, paidPlan) {
+  const trial = normalizePlan(trialPlan)
+  const paid  = normalizePlan(paidPlan)
+  if (trial === 'scout') return false
+  if (paid === 'scout') return true
+  for (const order of [CANDIDATE_PLAN_ORDER, ACTION_PLAN_ORDER]) {
+    if (order.includes(trial) && order.includes(paid)) return order.indexOf(trial) > order.indexOf(paid)
+  }
+  return false  // cross-family: keep the plan they pay for
+}
+
 // Raw app_metadata.plan is the ONLY place an un-normalized key enters the app,
 // so it is normalized here — every consumer downstream (rank comparisons,
 // getNextPlan, isUpgrade, PlanPane's current-plan card) sees a canonical key.
@@ -622,7 +640,7 @@ export function getUserPlan(user) {
   if (isBetaActive(user)) return BETA_PLAN
   const paid  = rawPaidPlan(user)
   const trial = getActiveTrial(user)
-  if (trial && PLAN_ORDER.indexOf(trial.plan) > PLAN_ORDER.indexOf(paid)) return trial.plan
+  if (trial && trialOutranksPaid(trial.plan, paid)) return trial.plan
   return paid
 }
 
@@ -633,7 +651,7 @@ export function getEntitlementSource(user) {
   if (isBetaActive(user)) return 'beta'
   const paid  = rawPaidPlan(user)
   const trial = getActiveTrial(user)
-  if (trial && PLAN_ORDER.indexOf(trial.plan) > PLAN_ORDER.indexOf(paid)) return 'trial'
+  if (trial && trialOutranksPaid(trial.plan, paid)) return 'trial'
   return paid === 'scout' ? 'free' : 'paid'
 }
 

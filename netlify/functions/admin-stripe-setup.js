@@ -20,7 +20,8 @@ import Stripe from 'stripe'
 // ── Pricing tables ────────────────────────────────────────────────────────────
 
 // v1.18 pricing update (approved 2026-07-21). Running this again creates NEW
-// Stripe prices at these amounts (getOrCreatePrice matches on amount, so the
+// Stripe prices at these amounts (getOrCreatePrice matches on amount AND
+// plan/bracket/billing metadata, so the
 // old founder-era prices remain untouched in Stripe — existing subscriptions
 // stay grandfathered on them). Apply the printed env vars to Netlify so
 // checkout starts selling at the new rates.
@@ -80,11 +81,20 @@ async function getOrCreateProduct(stripe, name, metadata) {
 }
 
 async function getOrCreatePrice(stripe, productId, amountCents, billing, nickname, metadata) {
-  const existing = await stripe.prices.list({ product: productId, active: true, limit: 100 })
-  const match = existing.data.find(p =>
+  // Match on plan + bracket + billing metadata as well as amount. Every
+  // bracket of a plan shares one product, so amount alone reused an old price
+  // from a DIFFERENT bracket that happened to cost the same (founder-era
+  // a_monitor b6 $129 was handed out as the new b2_5 $129). Auto-paginate:
+  // two catalog generations exceed one 100-row page.
+  const existing = await stripe.prices.list({ product: productId, active: true, limit: 100 }).autoPagingToArray({ limit: 1000 })
+  const match = existing.find(p =>
     p.unit_amount === amountCents &&
+    p.currency === 'usd' &&
     p.recurring?.interval === billing.interval &&
-    p.recurring?.interval_count === billing.interval_count
+    p.recurring?.interval_count === billing.interval_count &&
+    p.metadata?.plan_key === metadata.plan_key &&
+    (p.metadata?.bracket || null) === (metadata.bracket || null) &&
+    p.metadata?.billing === metadata.billing
   )
   if (match) return { price: match, created: false }
 

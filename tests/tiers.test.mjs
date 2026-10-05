@@ -53,6 +53,67 @@ t('entitlement source stays "paid" when the trial cannot outrank',
 t('an expired trial is ignored',
   getUserPlan(userWith({ plan: 'monitor', trial_plan: 'a_campaign', trial_ends_at: '2020-01-01T00:00:00Z' })) === 'c_monitor')
 
+// ─── trial vs paid across plan families ──────────────────────────────────────
+console.log('2B — a trial only outranks Scout or a lower plan in its own family')
+
+const { getUserBracket, trialOutranksPaid } = await import('../src/lib/tiers.js')
+const { createRequire } = await import('module')
+const srv = createRequire(import.meta.url)('../netlify/functions/_entitlements.js')
+
+t('c_campaign payer + a_monitor trial keeps c_campaign',
+  getUserPlan(userWith({ plan: 'c_campaign', trial_plan: 'a_monitor', trial_ends_at: inAWeek })) === 'c_campaign')
+t('…source stays "paid"',
+  getEntitlementSource(userWith({ plan: 'c_campaign', trial_plan: 'a_monitor', trial_ends_at: inAWeek })) === 'paid')
+t('…and the trial bracket is not applied',
+  getUserBracket(userWith({ plan: 'c_campaign', trial_plan: 'a_monitor', trial_bracket: 'b6', trial_ends_at: inAWeek })) === 'b1')
+t('a_monitor payer + c_campaign trial keeps a_monitor',
+  getUserPlan(userWith({ plan: 'a_monitor', bracket: 'b6', trial_plan: 'c_campaign', trial_ends_at: inAWeek })) === 'a_monitor')
+t('a_monitor payer + a_campaign trial → a_campaign (same family, higher)',
+  getUserPlan(userWith({ plan: 'a_monitor', trial_plan: 'a_campaign', trial_bracket: 'b11', trial_ends_at: inAWeek })) === 'a_campaign' &&
+  getUserBracket(userWith({ plan: 'a_monitor', trial_plan: 'a_campaign', trial_bracket: 'b11', trial_ends_at: inAWeek })) === 'b11')
+t('scout + any trial → trial (either family)',
+  getUserPlan(userWith({ plan: 'scout', trial_plan: 'a_monitor', trial_ends_at: inAWeek })) === 'a_monitor' &&
+  getUserPlan(userWith({ trial_plan: 'c_monitor', trial_ends_at: inAWeek })) === 'c_monitor')
+t('legacy "agency" trial counts as a_campaign (Action family)',
+  getUserPlan(userWith({ plan: 'a_active', trial_plan: 'agency', trial_ends_at: inAWeek })) === 'a_campaign' &&
+  getUserPlan(userWith({ plan: 'c_active', trial_plan: 'agency', trial_ends_at: inAWeek })) === 'c_active')
+
+// Client and server resolvers must agree on every paid × trial pair
+const ALL = [...PLAN_ORDER, 'monitor', 'campaign', 'agency']
+let parityMiss = []
+for (const paid of ALL) {
+  for (const trial of ALL) {
+    if (trialOutranksPaid(trial, paid) !== srv.trialOutranksPaid(trial, paid)) parityMiss.push(`${paid}/${trial}`)
+  }
+}
+t(`trialOutranksPaid: tiers.js ≡ _entitlements.js for all ${ALL.length ** 2} pairs${parityMiss.length ? ' — ' + parityMiss.join(', ') : ''}`, parityMiss.length === 0)
+let resolverMiss = []
+for (const paid of ALL) {
+  for (const trial of ALL) {
+    const u = userWith({ plan: paid, trial_plan: trial, trial_ends_at: inAWeek })
+    const s = await srv.resolveEntitlement(u, { globalBeta: false })
+    if (s.plan !== getUserPlan(u) || s.source !== getEntitlementSource(u)) resolverMiss.push(`${paid}/${trial}`)
+  }
+}
+t(`resolveEntitlement ≡ getUserPlan/getEntitlementSource for every pair${resolverMiss.length ? ' — ' + resolverMiss.join(', ') : ''}`, resolverMiss.length === 0)
+
+// ─── global beta switch fails closed ─────────────────────────────────────────
+console.log('2B — global beta switch starts OFF until AuthContext reads it')
+{
+  const { getGlobalBetaEnabled, setGlobalBetaEnabled, isBetaActive } = await import('../src/lib/tiers.js')
+  const betaUser = userWith({ plan: 'c_monitor', beta_mode: true })
+  t('module default is OFF', getGlobalBetaEnabled() === false)
+  t('beta user resolves to their paid plan before the setting loads', getUserPlan(betaUser) === 'c_monitor')
+  setGlobalBetaEnabled(true)
+  t('once enabled, beta user gets the top plan', isBetaActive(betaUser) && getUserPlan(betaUser) === 'a_campaign')
+  setGlobalBetaEnabled(false)
+  t('reset (sign-out) drops it again', getUserPlan(betaUser) === 'c_monitor')
+  const ctx = (await import('fs')).readFileSync(new URL('../src/contexts/AuthContext.jsx', import.meta.url), 'utf8')
+  t('AuthContext state starts false (so the flip re-renders)', /useState\(false\)/.test(ctx.slice(ctx.indexOf('const [globalBetaEnabled'), ctx.indexOf('const [globalBetaEnabled') + 80)))
+  const so = ctx.slice(ctx.indexOf('const signOut = async'), ctx.indexOf('const resetPassword'))
+  t('signOut resets the switch', /setGlobalBetaEnabled\(false\)/.test(so) && /setGlobalBetaState\(false\)/.test(so))
+}
+
 t('getNextPlan("monitor") → c_active', getNextPlan('monitor') === 'c_active')
 t('getNextPlan("campaign") → null (top of the Action ladder)', getNextPlan('campaign') === null)
 t('getNextPlan("scout") → c_monitor', getNextPlan('scout') === 'c_monitor')

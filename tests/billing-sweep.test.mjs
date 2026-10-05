@@ -71,6 +71,10 @@ global.fetch = async (url, opts = {}) => {
 // ── stripe-webhook ───────────────────────────────────────────────────────────
 const Stripe = require('stripe')
 const stripeSdk = new Stripe('sk_test_dummy')
+// subscription.updated confirms an off-file subscription with Stripe before
+// writing (out-of-order guard). Resource methods live on a prototype shared by
+// every client, so this stub reaches the handler's own instance — no network.
+Object.getPrototypeOf(stripeSdk.subscriptions).retrieve = async (id) => ({ id, status: 'active' })
 const { handler: webhook } = require('../netlify/functions/stripe-webhook.js')
 let evtN = 0
 async function deliver(type, object, previous_attributes) {

@@ -327,11 +327,18 @@ export const handler = async (event) => {
       return { statusCode: 404, body: JSON.stringify({ error: 'No active subscription found. Please subscribe first.' }) }
     }
 
-    // Update the subscription item to the new price (with immediate proration)
+    // Update the subscription item to the new price and bill the proration NOW.
+    // 'create_prorations' only queued invoice items for the next renewal (an
+    // upgrade-then-cancel never paid for the upgrade). 'pending_if_incomplete'
+    // would be ideal but Stripe rejects it alongside metadata /
+    // cancel_at_period_end, both required here — so 'error_if_incomplete':
+    // if the proration charge fails, Stripe rejects the whole update (402) and
+    // the plan stays unchanged. Downgrades produce a credit, never a charge.
     const item = sub.items.data[0]
     await stripe.subscriptions.update(sub.id, {
       items: [{ id: item.id, price: priceId }],
-      proration_behavior: 'create_prorations',
+      proration_behavior: 'always_invoice',
+      payment_behavior: 'error_if_incomplete',
       // Choosing a new plan un-schedules a pending cancellation — otherwise the
       // upgraded sub still ended at period end and dropped them to Scout
       cancel_at_period_end: false,
@@ -353,6 +360,17 @@ export const handler = async (event) => {
       body: JSON.stringify({ success: true, message: `Plan updated to ${plan}` }),
     }
   } catch (err) {
+    // error_if_incomplete: the prorated charge was declined / needs 3DS
+    if (err?.statusCode === 402 || err?.type === 'StripeCardError') {
+      console.warn(`Subscription update payment failed for ${callerId}: ${err.code || err.message}`)
+      return {
+        statusCode: 402,
+        body: JSON.stringify({
+          error: 'Your payment method was declined for the prorated upgrade charge, so your plan was not changed. Update your payment method in Settings → Billing and try again.',
+          code: err.code || 'payment_failed',
+        }),
+      }
+    }
     console.error('Subscription update error:', err.message)
     return { statusCode: 500, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }

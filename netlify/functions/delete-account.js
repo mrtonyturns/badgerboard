@@ -162,7 +162,11 @@ exports.handler = async (event) => {
         for (const sub of subs.data) {
           if (!CANCELLABLE.includes(sub.status)) continue
           try {
-            await stripe.subscriptions.cancel(sub.id)
+            // Deliberately NO invoice_now (unlike downgrade-to-free / admin
+            // cancel): charging a final invoice to an account we are about to
+            // erase leaves the user no receipt trail or in-app billing to
+            // dispute it. Pending proration items are written off.
+            await stripe.subscriptions.cancel(sub.id, { prorate: false })
             console.log(`Cancelled subscription ${sub.id} (${sub.status}) for deleted user ${userId}`)
           } catch (subErr) {
             console.error(`Failed to cancel subscription ${sub.id}:`, subErr.message)

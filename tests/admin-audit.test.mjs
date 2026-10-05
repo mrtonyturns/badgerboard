@@ -250,7 +250,7 @@ t('#1b cancel covers every cancellable status, not just active',
 t('#1b subscription lookups use status: \'all\' and filter locally',
   /status: 'all'/.test(F.billing) && !/status: 'active', limit: 1/.test(F.billing))
 t('#1c an immediate cancel really calls stripe.subscriptions.cancel',
-  /stripe\.subscriptions\.cancel\(subscription\.id\)/.test(F.billing))
+  /stripe\.subscriptions\.cancel\(subscription\.id(, \{[^}]*\})?\)/.test(F.billing))
 t('#1c end-of-period cancel is still available as a mode',
   /mode === 'period_end'/.test(F.billing) && /cancel_at_period_end: true/.test(F.billing))
 t('#1c the handler passes the mode through, defaulting to period_end',

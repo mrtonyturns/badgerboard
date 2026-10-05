@@ -243,7 +243,10 @@ async function cancelSubscription(stripe, userId, mode = 'period_end') {
   }
 
   // ── (c) Immediate: billing stops now, access drops now ─────────────────────
-  const cancelled = await stripe.subscriptions.cancel(subscription.id);
+  // invoice_now: bill any still-pending proration items (from pre-always_invoice
+  // plan changes) — a plain cancel silently dropped them. prorate:false = no
+  // unused-time credit, same as the default immediate cancel.
+  const cancelled = await stripe.subscriptions.cancel(subscription.id, { invoice_now: true, prorate: false });
 
   // Mirror EXACTLY what stripe-webhook.js writes on customer.subscription.deleted
   // (updateSupabasePlan('scout', null, null, …) + the extraFields below), so the
@@ -482,9 +485,13 @@ async function updatePlan(stripe, userId, plan, bracket) {
   // stripe-webhook's subscription.updated trusts sub.metadata.plan over the
   // price, so the old plan in metadata reverted this change on the next event.
   // An empty string deletes a Stripe metadata key (Candidate plans: no bracket).
+  // always_invoice: bill/credit the proration now — 'create_prorations' left
+  // pending items that were only billed at renewal (and lost on cancel).
+  // Default payment_behavior (allow_incomplete): an admin change always
+  // applies; a failed charge goes through normal dunning.
   await stripe.subscriptions.update(stripeTarget.subscription.id, {
     items: [{ id: stripeTarget.itemId, price: stripeTarget.priceId }],
-    proration_behavior: 'create_prorations',
+    proration_behavior: 'always_invoice',
     metadata: {
       plan,
       plan_type: planTypeFor(planKey),

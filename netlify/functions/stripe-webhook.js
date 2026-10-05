@@ -311,6 +311,10 @@ function buildPriceMap() {
 
 // ── Supabase helpers ──────────────────────────────────────────────────────────
 
+// Returns null ONLY when the account does not exist (404 — e.g. removed via
+// delete-account). Any other failure THROWS: a 5xx used to read as "no
+// metadata", which e.g. dropped a voluntary downgrader into the involuntary
+// lockout branch. Throwing 500s the handler so Stripe retries.
 async function getSupabaseUser(supabaseUserId) {
   const res = await fetch(
     `${process.env.SUPABASE_URL}/auth/v1/admin/users/${supabaseUserId}`,
@@ -321,7 +325,8 @@ async function getSupabaseUser(supabaseUserId) {
       },
     }
   )
-  if (!res.ok) return null
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(`Supabase user read failed (${res.status}) for ${supabaseUserId}`)
   return res.json()
 }
 
@@ -340,7 +345,12 @@ async function isAdminUser(supabaseUserId) {
 async function updateSupabasePlan(supabaseUserId, plan, bracket, billing, stripeIds, extraFields = {}) {
   // GET existing user metadata first to avoid clobbering unrelated fields
   const existingUser = await getSupabaseUser(supabaseUserId)
-  const existingMeta = existingUser?.app_metadata ?? {}
+  if (!existingUser) {
+    // Account deleted — nothing to update; acknowledge rather than retry-storm
+    console.log(`[stripe-webhook] user ${supabaseUserId} no longer exists — skipping plan write`)
+    return null
+  }
+  const existingMeta = existingUser.app_metadata ?? {}
 
   const newFields = { plan, plan_type: planType(plan) }
   if (bracket) newFields.bracket = bracket
@@ -378,8 +388,19 @@ async function updateSupabasePlan(supabaseUserId, plan, bracket, billing, stripe
 
 // Updates payment_status in app_metadata (e.g. 'active', 'past_due')
 async function updateSupabasePaymentStatus(supabaseUserId, paymentStatus) {
-  // GET existing user metadata first to avoid clobbering unrelated fields
-  const existingUser = await getSupabaseUser(supabaseUserId)
+  // GET existing user metadata first to avoid clobbering unrelated fields.
+  // A failed read still writes: the admin PUT MERGES app_metadata, so sending
+  // only payment_status is safe, and dropping a lock/unlock on a transient
+  // read error is worse (callers log-and-continue).
+  let existingUser
+  try { existingUser = await getSupabaseUser(supabaseUserId) } catch (e) {
+    console.warn(`[stripe-webhook] ${e.message} — writing payment_status alone`)
+    existingUser = undefined
+  }
+  if (existingUser === null) {
+    console.log(`[stripe-webhook] user ${supabaseUserId} no longer exists — skipping payment_status write`)
+    return null
+  }
   const existingMeta = existingUser?.app_metadata ?? {}
 
   const metadata = { ...existingMeta, payment_status: paymentStatus }
@@ -488,11 +509,14 @@ function getCreditsForPack(product, pack) {
 // Bank a raw number of profile credits (used by dossier credit packs, which
 // carry their quantity directly rather than a pack key).
 async function addProfileCredits(userId, qty) {
+  // A 5xx read throws inside getSupabaseUser (handler 500s, Stripe retries) —
+  // treating it as empty metadata recomputed the balance from 0 and wiped
+  // banked credits. null means the account was deleted: nothing to credit.
   const existingUser = await getSupabaseUser(userId)
-  // getSupabaseUser returns null on ANY non-OK read (5xx included). Treating
-  // that as empty metadata recomputed the balance from 0 and wiped banked
-  // credits — throw instead so the handler 500s and Stripe retries.
-  if (!existingUser) throw new Error(`Supabase user read failed for ${userId} — refusing to recompute credits from 0`)
+  if (!existingUser) {
+    console.error(`[stripe-webhook] paid credits for deleted user ${userId} (${qty}) — not banked; refund manually`)
+    return null
+  }
   const existingMeta = existingUser.app_metadata ?? {}
   const metadata = { ...existingMeta, profile_credits: (existingMeta.profile_credits || 0) + qty }
   const res = await fetch(
@@ -515,9 +539,12 @@ async function addProfileCredits(userId, qty) {
 }
 
 async function addCreditsToUser(userId, product, pack) {
+  // Same as addProfileCredits: a failed read throws, a deleted account is a no-op.
   const existingUser = await getSupabaseUser(userId)
-  // Same as addProfileCredits: a failed read must not zero the balance.
-  if (!existingUser) throw new Error(`Supabase user read failed for ${userId} — refusing to recompute credits from 0`)
+  if (!existingUser) {
+    console.error(`[stripe-webhook] paid ${product}/${pack} for deleted user ${userId} — not banked; refund manually`)
+    return null
+  }
   const existingMeta = existingUser.app_metadata ?? {}
   const amount = getCreditsForPack(product, pack)
   if (amount === 0) return
@@ -680,10 +707,38 @@ exports.handler = async (event) => {
           break
         }
 
+        // Stripe does not guarantee delivery order: an updated snapshot can
+        // land AFTER customer.subscription.deleted and re-grant the paid plan.
+        // A dead subscription never writes a plan — deleted owns the downgrade.
+        if (['canceled', 'incomplete_expired'].includes(sub.status)) {
+          console.log(`customer.subscription.updated: ${sub.id} is ${sub.status} — ignoring for ${supabaseUserId}`)
+          break
+        }
+
         if (await isAdminUser(supabaseUserId)) {
           console.log(`Admin account ${supabaseUserId} — enforcing a_campaign/b6`)
           await updateSupabasePlan(supabaseUserId, 'a_campaign', 'b6', 'monthly')
           break
+        }
+
+        const currentUser = await getSupabaseUser(supabaseUserId)
+        if (!currentUser) {
+          console.log(`customer.subscription.updated: user ${supabaseUserId} no longer exists — acknowledging`)
+          break
+        }
+        // Not the subscription on file (deleted already cleared it, or it is a
+        // stale/other sub): the snapshot may be stale (e.g. a cancel-at-period-end
+        // toggle delivered after the deletion), so confirm with Stripe and only
+        // let a sub that is still alive write. Not skipped outright: accounts
+        // from before stripe_subscription_id was stored have nothing on file,
+        // and their past_due→unpaid lock must still apply. A brand-new sub whose
+        // updated beats checkout.session.completed is live and passes.
+        if (currentUser.app_metadata?.stripe_subscription_id !== sub.id) {
+          const live = await stripe.subscriptions.retrieve(sub.id)
+          if (!live || ['canceled', 'incomplete_expired'].includes(live.status)) {
+            console.log(`customer.subscription.updated: ${sub.id} is now ${live?.status} — ignoring stale snapshot`)
+            break
+          }
         }
 
         // Try metadata first (most reliable), fall back to price-ID reverse lookup
@@ -703,12 +758,16 @@ exports.handler = async (event) => {
           // invoice.payment_failed, on past_due→unpaid, and when the customer
           // toggles cancel-at-period-end) cleared the past_due lockout and
           // restored access without payment.
+          // 'past_due' writes NOTHING: Stripe is still retrying, and
+          // invoice.payment_failed deliberately locks only from attempt 2 —
+          // locking here cut users off on the FIRST failed renewal. It must not
+          // write 'active' either (that would clear an attempt-2 lock).
           const subStatus = sub.status
           const statusFields = ['active', 'trialing'].includes(subStatus)
             ? { payment_status: 'active', downgraded_at: null }
-            : ['past_due', 'unpaid'].includes(subStatus)
-              ? { payment_status: 'past_due' }
-              : {}  // incomplete/canceled etc. — leave payment_status untouched
+            : subStatus === 'unpaid'
+              ? { payment_status: 'past_due' }  // retries exhausted
+              : {}  // past_due/incomplete/paused — leave payment_status untouched
           console.log(`Updating to ${plan}/${bracket}/${billing} (sub status: ${subStatus}) for user ${supabaseUserId}`)
           await updateSupabasePlan(supabaseUserId, plan, bracket, billing, {
             stripe_customer_id: sub.customer,
@@ -768,8 +827,33 @@ exports.handler = async (event) => {
         // voluntary downgrader into the deletion-countdown lockout.
         // downgrade-to-free.js now sets voluntary_downgrade=true before
         // cancelling; when we see it, honor the good-standing Scout state.
+        // Throws on a 5xx (→ 500, Stripe retries) instead of reading as "no
+        // metadata", which used to drop a voluntary downgrader into the lockout.
         const existingUser = await getSupabaseUser(supabaseUserId)
-        if (existingUser?.app_metadata?.voluntary_downgrade) {
+        if (!existingUser) {
+          // Account deleted (delete-account cancels the sub, firing this event)
+          console.log(`customer.subscription.deleted: user ${supabaseUserId} no longer exists — acknowledging`)
+          break
+        }
+
+        // An OLD subscription ending (duplicate sub, or one replaced by a
+        // resubscribe) must not downgrade a user whose sub on file is still live.
+        const storedSubId = existingUser.app_metadata?.stripe_subscription_id
+        if (storedSubId && storedSubId !== sub.id) {
+          let storedLive = false
+          try {
+            const stored = await stripe.subscriptions.retrieve(storedSubId)
+            storedLive = ['active', 'trialing', 'past_due', 'unpaid'].includes(stored?.status)
+          } catch (e) {
+            if (e?.code !== 'resource_missing') throw e  // transient — let Stripe retry
+          }
+          if (storedLive) {
+            console.log(`customer.subscription.deleted: ${sub.id} is not the live sub on file (${storedSubId}) — no downgrade`)
+            break
+          }
+        }
+
+        if (existingUser.app_metadata?.voluntary_downgrade) {
           console.log(`Voluntary downgrade for ${supabaseUserId} — Scout in good standing, no lockout`)
           // voluntary_downgrade: null, not `delete` — the admin PUT MERGES
           // app_metadata, so a deleted key was never actually removed.
