@@ -1,7 +1,7 @@
 // Campaign Connect — links Action accounts (managers/consultants/parties) to Candidate
 // accounts. Redesigned visual layer (v2): hero, connection motif, gradient stat tiles,
 // card grids, modern empty states. Logic/endpoints unchanged.
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Users, UserPlus, Send, Clock, Check, X, Shield, AlertTriangle, RefreshCw, ChevronRight, Inbox, Trash2, Eye, ArrowLeft, Copy, Link2, Sparkles, CheckCircle2, ListChecks, FileText, Zap } from 'lucide-react'
 import { supabase } from '../lib/supabase'
@@ -74,7 +74,17 @@ export default function CampaignConnect() {
   const isPaidCandidate = plan !== 'scout'
 
   const [toast, setToast] = useState(null)
-  const flash = (m, err) => { setToast({ m, err }); setTimeout(() => setToast(null), 3500) }
+  // Stable identity: every panel's load = useCallback(…, [flash]) feeds a
+  // useEffect, so a fresh flash per render turned a failed load (or a toast)
+  // into an infinite reload loop. One timer at a time so an older toast's
+  // timeout can't cut a newer one short.
+  const toastTimer = useRef(null)
+  const flash = useCallback((m, err) => {
+    setToast({ m, err })
+    clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 3500)
+  }, [])
+  useEffect(() => () => clearTimeout(toastTimer.current), [])
 
   const tabs = [
     isAction && { k: 'team', icon: Users, label: 'My Team' },

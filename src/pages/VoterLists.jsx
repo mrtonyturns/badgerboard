@@ -132,6 +132,22 @@ const UPLOAD_CHUNK_SIZE = 200
 const UPLOAD_CONCURRENCY = 4
 
 // ─── CSV parser ───────────────────────────────────────────────────────────────
+// ─── PSWEEP PURE HELPERS BEGIN ─── (no JSX/imports — sliced by tests/pages-sweep.test.mjs)
+export const compactKey = (k) => k.replace(/[^a-z0-9]/g, '')
+
+// First non-empty value among `keys`. Lookups go through the same compaction
+// as the headers: the aliases are written with underscores, so "State Assembly
+// District" (stored only as 'state assembly district' / 'stateassemblydistrict')
+// used to miss 'state_assembly_district' and the column was silently dropped.
+export function pickField(row, ...keys) {
+  for (const k of keys) {
+    const v = row[k] || row[compactKey(k)]
+    if (v) return v
+  }
+  return ''
+}
+// ─── PSWEEP PURE HELPERS END ───
+
 function parseCSV(text) {
   // parseCsvRows handles quoted commas, escaped quotes, embedded newlines,
   // and CRLF — the old header split(',') broke on quoted headers and left
@@ -149,9 +165,10 @@ function parseCSV(text) {
       // Space/underscore-insensitive alias: "First Name", "first_name" and
       // "FirstName" all land on 'firstname' (live-QA fix: spaced headers
       // previously lost every name field).
-      const compact = h.replace(/[^a-z0-9]/g, '')
+      const compact = compactKey(h)
       if (!(compact in row)) row[compact] = v
     })
+    const pick = (...keys) => pickField(row, ...keys)
 
     // Sub-municipal district columns the WEC "Badger Voters"/WisVote export
     // carries (County Supervisory District, Aldermanic District, School
@@ -164,23 +181,23 @@ function parseCSV(text) {
 
     // Normalize common Wisconsin voter file column names
     return {
-      first_name: row['firstname'] || row['first_name'] || row['first'] || '',
-      last_name:  row['lastname']  || row['last_name']  || row['last']  || '',
-      full_name:  row['name'] || row['full_name'] || row['fullname'] || `${row['firstname'] || row['first_name'] || ''} ${row['lastname'] || row['last_name'] || ''}`.trim(),
-      address:    row['address'] || row['res_address'] || row['street_address'] || row['address1'] || '',
-      city:       row['city'] || row['municipality'] || row['muni'] || '',
-      state:      row['state'] || 'WI',
-      zip:        row['zip'] || row['zipcode'] || row['zip_code'] || row['postalcode'] || '',
-      county:     row['county'] || row['countyname'] || '',
-      ward:       row['ward'] || row['precinct'] || row['wardname'] || districts.ward || '',
-      congressional_district:   row['con_dist'] || row['congressional_district'] || row['cong_dist'] || '',
-      state_senate_district:    row['senate_dist'] || row['state_senate_district'] || row['sen_dist'] || '',
-      state_assembly_district:  row['assembly_dist'] || row['state_assembly_district'] || row['assem_dist'] || '',
+      first_name: pick('firstname', 'first_name', 'first'),
+      last_name:  pick('lastname', 'last_name', 'last'),
+      full_name:  pick('name', 'full_name', 'fullname') || `${pick('firstname', 'first_name')} ${pick('lastname', 'last_name')}`.trim(),
+      address:    pick('address', 'res_address', 'street_address', 'address1'),
+      city:       pick('city', 'municipality', 'muni'),
+      state:      pick('state') || 'WI',
+      zip:        pick('zip', 'zipcode', 'zip_code', 'postalcode'),
+      county:     pick('county', 'countyname'),
+      ward:       pick('ward', 'precinct', 'wardname') || districts.ward || '',
+      congressional_district:   pick('con_dist', 'congressional_district', 'cong_dist'),
+      state_senate_district:    pick('senate_dist', 'state_senate_district', 'sen_dist'),
+      state_assembly_district:  pick('assembly_dist', 'state_assembly_district', 'assem_dist'),
       // Sub-municipal districts — the seat-level columns Recruit matches on.
       county_supervisory_district: districts.county_supervisory_district,
       aldermanic_district:         districts.aldermanic_district,
       school_district:             districts.school_district,
-      party:      row['party'] || row['party_affiliation'] || row['party_pref'] || '',
+      party:      pick('party', 'party_affiliation', 'party_pref'),
       raw_data: row,
     }
   }).filter(r => r.full_name || r.address)

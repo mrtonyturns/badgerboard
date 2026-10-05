@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { Eye, EyeOff, CheckCircle, AlertCircle, KeyRound } from 'lucide-react'
-import { useAuth } from '../contexts/AuthContext'
+import { useAuth, isRecoveryPending } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import BadgerBoardLogo from '../components/BadgerBoardLogo'
 // Same scorer Login.jsx and settings/SecurityPane.jsx use — one copy, in lib.
@@ -72,7 +72,10 @@ export default function ResetPassword() {
   // PASSWORD_RECOVERY event the Supabase client emits when it parses that link.
   const [recoveryEvent, setRecoveryEvent] = useState(false)
   // Read once on mount — the client strips the hash as soon as it parses it.
+  // isRecoveryPending() covers the lazy-load race: AuthContext captured the
+  // marker / event at app boot, before this chunk existed to see either.
   const [recoveryInUrl] = useState(() => {
+    if (isRecoveryPending()) return true
     if (typeof window === 'undefined') return false
     return /type=recovery/.test(window.location.hash || '') ||
            /type=recovery/.test(window.location.search || '')

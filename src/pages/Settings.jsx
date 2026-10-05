@@ -120,16 +120,22 @@ export default function Settings() {
 
   // ── Which pane ──────────────────────────────────────────────────────────────
   const hashPane = HASH_TO_PANE[location.hash.replace('#', '')] || null
-  const pane = PANE_IDS.includes(paneParam) ? paneParam : (hashPane || DEFAULT_PANE)
+  // A Stripe return (?billing=success|cancelled) that lands on bare /settings
+  // belongs on Plan & billing — billingMsg only renders in PlanPane, so the
+  // default Account pane swallowed the confirmation.
+  const billingReturn = !paneParam && !hashPane && new URLSearchParams(location.search).has('billing')
+  const pane = PANE_IDS.includes(paneParam) ? paneParam : (hashPane || (billingReturn ? 'plan' : DEFAULT_PANE))
 
   useEffect(() => {
     // Normalise legacy hash links and unknown panes onto a real URL.
     if (hashPane) { navigate(`/settings/${hashPane}`, { replace: true }); return }
+    // Keep the search: the billing effect below reads (then strips) it.
+    if (billingReturn) { navigate(`/settings/plan${location.search}`, { replace: true }); return }
     if (paneParam && !PANE_IDS.includes(paneParam)) navigate('/settings', { replace: true })
     // navigate only changes identity when the pathname does, which here always
     // coincides with a paneParam change. Converges in one step: the normalised
     // URL has no hash and a valid (or no) pane, so the re-run is a no-op.
-  }, [hashPane, paneParam, navigate])
+  }, [hashPane, paneParam, billingReturn, location.search, navigate])
 
   const goPane = (id) => {
     navigate(id === DEFAULT_PANE ? '/settings' : `/settings/${id}`)

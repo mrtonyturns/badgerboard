@@ -6,6 +6,23 @@ import { cacheClearAll } from '../lib/offlineCache'
 
 const AuthContext = createContext({})
 
+// ── Password-recovery landing, captured at boot ──────────────────────────────
+// ResetPassword is lazy-loaded. By the time its chunk mounts, supabase-js may
+// already have parsed the reset link, fired PASSWORD_RECOVERY and stripped the
+// hash — so the page saw neither, treated the visit as a direct URL hit and
+// bounced the user away signed in without ever setting a password. This module
+// is imported eagerly by App.jsx, and the client only clears the hash after a
+// network round-trip, so a synchronous read here still sees the marker; the
+// listener (registered in the same tick as createClient) catches the event.
+let recoveryPending = typeof window !== 'undefined' &&
+  /type=recovery/.test(`${window.location.hash || ''}${window.location.search || ''}`)
+supabase.auth.onAuthStateChange((event) => {
+  if (event === 'PASSWORD_RECOVERY') recoveryPending = true
+  else if (event === 'SIGNED_OUT') recoveryPending = false
+})
+/** True while this tab arrived via a password-reset link that hasn't been used yet. */
+export const isRecoveryPending = () => recoveryPending
+
 export const useAuth = () => useContext(AuthContext)
 
 export const AuthProvider = ({ children }) => {
@@ -300,6 +317,8 @@ export const AuthProvider = ({ children }) => {
 
   const updatePassword = async (newPassword) => {
     const { data, error } = await supabase.auth.updateUser({ password: newPassword })
+    // The reset link is spent — a later visit to /reset-password needs a new one.
+    if (!error) recoveryPending = false
     return { data, error }
   }
 

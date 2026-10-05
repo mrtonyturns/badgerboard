@@ -607,6 +607,10 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
   // Epoch ms of the last realtime event — the 60s fallback poll stands down
   // while replication is clearly alive.
   const lastRealtimeRef = useRef(0)
+  // The election currently on screen, read by loadData after each await so a
+  // slow response for election A can't land after the user switched to B.
+  const electionIdRef = useRef(electionId)
+  electionIdRef.current = electionId
 
   // ── Load contests + results ─────────────────────────────────────────────────
   // Errors are captured, not swallowed: a transient failure during the 60s poll
@@ -614,6 +618,7 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
   // state unless the query actually succeeded.
   const loadData = useCallback(async (id, quiet = false) => {
     if (!id) return
+    const isStale = () => electionIdRef.current !== id
     if (!quiet) setLoading(true)
     try {
       // select('*') deliberately — it already carries the Phase 1 status
@@ -627,6 +632,7 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
         .order('office')
 
       if (contestErr) throw contestErr
+      if (isStale()) return
 
       const rows = contestRows || []
       setContests(rows)
@@ -640,16 +646,27 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
 
       // FK-join filter instead of a 250-id `.in()` — the id list becomes a
       // ~16KB URL on a November general and falls off the gateway's limit.
-      const { data: resultRows, error: resultErr } = await supabase
-        .from('election_results')
-        .select('*, election_contests!inner(election_id)')
-        .eq('election_contests.election_id', id)
-        .order('votes', { ascending: false })
-
-      if (resultErr) throw resultErr
+      // Paged like ElectionResultsAdmin: PostgREST caps a response at 1,000
+      // rows, and ordered by votes desc the low-vote candidates were the ones
+      // silently dropped on a big ballot. `id` keeps page boundaries stable.
+      const PAGE = 1000
+      const resultRows = []
+      for (let from = 0; ; from += PAGE) {
+        const { data: page, error: resultErr } = await supabase
+          .from('election_results')
+          .select('*, election_contests!inner(election_id)')
+          .eq('election_contests.election_id', id)
+          .order('votes', { ascending: false })
+          .order('id')
+          .range(from, from + PAGE - 1)
+        if (resultErr) throw resultErr
+        if (isStale()) return
+        resultRows.push(...(page || []))
+        if (!page || page.length < PAGE) break
+      }
 
       const map = {}
-      for (const raw of resultRows || []) {
+      for (const raw of resultRows) {
         // Strip the joined key so rows stay shaped exactly like realtime payloads.
         const { election_contests: _join, ...r } = raw
         if (!map[r.contest_id]) map[r.contest_id] = []
@@ -659,6 +676,7 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
       setLastSync(new Date())
       setStaleFetch(false)
     } catch (err) {
+      if (isStale()) return
       console.error('[ElectionResultsBoard] load error:', err)
       setStaleFetch(true)   // keep last-known-good data on screen
     }
@@ -673,6 +691,9 @@ export default function ElectionResultsBoard({ elections, selectedId, onSelectEl
     setQuery('')
     setGroupOpen({})
     setStaleFetch(false)
+    // A superseded load returns without touching `loading`; reset it here and
+    // let the new election's load (if any) raise it again.
+    setLoading(false)
     lastRealtimeRef.current = 0
     if (electionId) loadData(electionId)
   }, [electionId, loadData])

@@ -92,6 +92,17 @@ const loadSession = () => {
 
 const clearSession = () => localStorage.removeItem(VOLUNTEER_SESSION_KEY)
 
+// Self-service actions authorize with the durable session_token (magic-link
+// login) or a Supabase JWT whose email matches the volunteer. The emailed-OTP
+// path stores no session_token, so fall back to the live access token as the
+// Bearer header — otherwise those calls went out unauthenticated and 401'd.
+const callVolunteerApi = async (action, params = {}) => {
+  const sessionToken = loadSession()?.session_token
+  if (sessionToken) return callApi(action, { ...params, session_token: sessionToken })
+  const { data: { session } } = await supabase.auth.getSession()
+  return callApi(action, params, session?.access_token || null)
+}
+
 const avatarInitials = (name = '') =>
   name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
 
@@ -364,13 +375,12 @@ function DoorsTab({ volunteer }) {
     // session token), which saves the knock AND updates stats in one call —
     // and we only celebrate if the server says it worked.
     try {
-      const res = await callApi('log_knock', {
+      const res = await callVolunteerApi('log_knock', {
         volunteer_id: volunteer.id,
         address: address.trim(),
         status: outcome,
         support_level: support,
         notes: notes.trim() || null,
-        session_token: loadSession()?.session_token,
       })
 
       if (!res?.logged) {
@@ -1158,10 +1168,9 @@ export default function VolunteerPortal() {
     let alive = true
 
     const loadData = async () => {
-      const token = loadSession()?.session_token
       const [msgsRes, notifsRes] = await Promise.all([
-        callApi('get_messages', { volunteer_id: volunteer.id, session_token: token }),
-        callApi('get_notifications', { volunteer_id: volunteer.id, session_token: token }),
+        callVolunteerApi('get_messages', { volunteer_id: volunteer.id }),
+        callVolunteerApi('get_notifications', { volunteer_id: volunteer.id }),
       ])
       if (!alive) return
 
@@ -1216,10 +1225,9 @@ export default function VolunteerPortal() {
   const handleSendMessage = async (content) => {
     if (!volunteer?.list_id) return
     // Audit fix (#15): authorized service-role send; append on confirmed success
-    const res = await callApi('send_message', {
+    const res = await callVolunteerApi('send_message', {
       volunteer_id: volunteer.id,
       content,
-      session_token: loadSession()?.session_token,
     })
     if (res?.sent && res.message) {
       setMessages(prev => prev.some(m => m.id === res.message.id) ? prev : [...prev, res.message])
@@ -1231,10 +1239,9 @@ export default function VolunteerPortal() {
   const handleMarkNotifRead = async (notifId) => {
     const notif = notifications.find(n => n.id === notifId)
     if (!notif || notif.read_by?.includes(volunteer.id)) return
-    const res = await callApi('mark_notif_read', {
+    const res = await callVolunteerApi('mark_notif_read', {
       volunteer_id: volunteer.id,
       notif_id: notifId,
-      session_token: loadSession()?.session_token,
     })
     if (!res?.read) return
     const newReadBy = [...(notif.read_by || []), volunteer.id]
@@ -1248,7 +1255,7 @@ export default function VolunteerPortal() {
   const handleRefresh = useCallback(async () => {
     if (!volunteer?.id) return
     const cached = loadSession()
-    const res = await callApi('get_volunteer', { volunteer_id: volunteer.id, session_token: cached?.session_token })
+    const res = await callVolunteerApi('get_volunteer', { volunteer_id: volunteer.id })
     if (res.volunteer) {
       const updated = { ...res.volunteer, list: volunteer.list }
       saveSession({ volunteer: updated, list: cached?.list, session_token: cached?.session_token })

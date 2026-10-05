@@ -163,7 +163,12 @@ export function ElectionResultsView({ candidate, nav }) {
           {results.map(({ result, contest, election }) => {
             const pct = result.vote_pct != null ? Number(result.vote_pct) : null
             const won = result.winner && result.declared
-            const outcome = won ? 'Won' : result.votes > 0 ? 'Lost' : 'Pending'
+            // 'Lost' only once the race is actually over. `declared` is set on
+            // the winner's row alone, so the contest status is the signal for
+            // everyone else — a leading candidate in an uncalled race used to
+            // read "Lost" just for having votes.
+            const raceFinal = contest?.status === 'called' || contest?.status === 'certified'
+            const outcome = won ? 'Won' : raceFinal && !result.winner ? 'Lost' : 'Pending'
             const oc = won ? { c: '#15803D', bg: '#E6F5EC' }
               : outcome === 'Lost' ? { c: '#DC2626', bg: '#FDECEC' }
               : { c: T.muted, bg: T.chip }

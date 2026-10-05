@@ -593,9 +593,14 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast }) => {
   const filteredUsers = users
     .filter((u) => !(hideTestAccounts && isTestAccountEmail(u.email)))
     .filter((u) => (u.email || '').toLowerCase().includes(searchQuery.toLowerCase()))
+  // Bulk actions (and their counts) only ever cover selected rows the admin
+  // can currently see — a search that hides a selected user used to leave it
+  // silently included in "Bulk Lock Payment" / "Bulk Send Reset". Hidden
+  // selections are kept, and come back into play when the filter is cleared.
+  const visibleSelectedIds = filteredUsers.filter((u) => selected.has(u.id)).map((u) => u.id)
 
   const handleSelectAll = () => {
-    if (selected.size === filteredUsers.length) {
+    if (visibleSelectedIds.length === filteredUsers.length) {
       setSelected(new Set())
     } else {
       setSelected(new Set(filteredUsers.map((u) => u.id)))
@@ -623,9 +628,10 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast }) => {
   const emailForUser = (userId) => users.find(u => u.id === userId)?.email || null
 
   const handleBulkAction = async (action) => {
-    if (!window.confirm(`Are you sure you want to ${action.replace('_', ' ')} for ${selected.size} user(s)?`)) return
+    const ids = visibleSelectedIds
+    if (!ids.length) return
+    if (!window.confirm(`Are you sure you want to ${action.replace('_', ' ')} for ${ids.length} user(s)?`)) return
 
-    const ids = Array.from(selected)
     let ok = 0, failed = 0
     for (const uid of ids) {
       try {
@@ -645,7 +651,7 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast }) => {
         failed++
       }
     }
-    setSelected(new Set())
+    setSelected((prev) => new Set([...prev].filter((id) => !ids.includes(id))))
     try {
       const data = await apiCall('users')
       setUsers(Array.isArray(data) ? data : (data?.users || []))
@@ -865,9 +871,9 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast }) => {
       )}
 
       {/* Bulk Actions */}
-      {selected.size > 0 && (
+      {visibleSelectedIds.length > 0 && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center gap-4">
-          <span className="text-sm font-medium text-blue-900">{selected.size} selected</span>
+          <span className="text-sm font-medium text-blue-900">{visibleSelectedIds.length} selected</span>
           <button
             onClick={() => handleBulkAction('lock_payment')}
             className="px-3 py-1 bg-red-700 text-white text-sm rounded hover:bg-red-800 transition"
@@ -899,7 +905,7 @@ const AccountManagementTab = ({ apiCall, accessCall, showToast }) => {
               <th className="px-4 py-3 text-left w-8">
                 <input
                   type="checkbox"
-                  checked={selected.size === filteredUsers.length && filteredUsers.length > 0}
+                  checked={visibleSelectedIds.length === filteredUsers.length && filteredUsers.length > 0}
                   onChange={handleSelectAll}
                   className="w-4 h-4"
                 />
