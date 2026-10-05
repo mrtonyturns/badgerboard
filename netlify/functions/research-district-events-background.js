@@ -13,7 +13,9 @@
 // progress row; without it a failure is invisible and the client spins forever.
 
 import COUNTY_SOURCES from './_county-sources.json'
+import DISTRICT_PLACES from '../../public/geodata/wi-district-places.json'
 import { matchPartisanSignals } from './_partisan-signals.js'
+import { safeFetch } from './_safe-fetch.js'
 
 const CACHE_HOURS = 24
 
@@ -58,6 +60,47 @@ Do NOT try to enumerate every town, village, school and county board in it — t
  (1) MAJOR BODY — a county board of supervisors of a county in the district, or the common council or school board of one of the district's largest communities.
  (2) NOTABLE ATTENTION — the meeting is drawing real public attention or buzz: local news has previewed or covered it, its agenda carries a contested or high-stakes item (referendum, budget or levy vote, school closure or boundary change, major development, ordinance fight, controversial appointment), or organized turnout is being promoted for it.
 Routine, uncontested small-board meetings are noise at this district size — skip them entirely.`
+}
+
+// ── Canonical area identity ──────────────────────────────────────────────────
+// district_events is ONE row per district_key shared by every user, so the
+// name, community list and counties that fence the prompts must be derived
+// from the key — never taken from the client, which could otherwise cache
+// another area's events (or prompt-injection text) under a key everyone reads.
+// Mirrors buildPlaceIndex() in src/pages/Events.jsx over the same
+// public/geodata/wi-district-places.json. Returns null for unknown keys.
+const DISTRICT_LABEL = { assembly: 'Assembly District', senate: 'State Senate District', congress: 'Congressional District' }
+const hasPlace = (k) => Object.prototype.hasOwnProperty.call(DISTRICT_PLACES, k)
+export function canonicalEventArea(districtKey) {
+  const key = String(districtKey ?? '')
+  const m = /^(assembly|senate|congress)-([1-9]\d?)$/.exec(key)
+  if (m && hasPlace(key)) {
+    const { places: pls = [], counties: cts = [] } = DISTRICT_PLACES[key]
+    const name = `${DISTRICT_LABEL[m[1]]} ${m[2]}`
+    return {
+      name, counties: cts,
+      area: pls.length ? `${pls.join(', ')}${cts.length ? ` (${cts.join(', ')} ${cts.length > 1 ? 'counties' : 'county'})` : ''}` : name,
+    }
+  }
+  if (key.startsWith('county-') && hasPlace(key)) {
+    const cty = key.slice(7)
+    const pls = DISTRICT_PLACES[key].places || []
+    return { name: `${cty} County`, counties: [cty], area: pls.length ? `${pls.slice(0, 8).join(', ')} (${cty} County)` : `${cty} County` }
+  }
+  if (key.startsWith('city-')) {
+    // city-<City>-<County>; city names can contain '-' (Fontana-on-Geneva Lake),
+    // so match the county suffix against the known county keys.
+    for (const ck of Object.keys(DISTRICT_PLACES)) {
+      if (!ck.startsWith('county-')) continue
+      const cty = ck.slice(7)
+      if (!key.endsWith(`-${cty}`)) continue
+      const city = key.slice(5, -(cty.length + 1))
+      if ((DISTRICT_PLACES[ck].places || []).includes(city)) {
+        return { name: `${city}, WI`, counties: [cty], area: `${city}, WI (${cty} County)` }
+      }
+    }
+  }
+  return null
 }
 
 /** Build a per-county source brief for the research prompts. */
@@ -210,15 +253,18 @@ export const handler = async (event) => {
   try { body = JSON.parse(event.body || '{}') } catch {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
-  const { district_key, district_name: rawName, area_description: rawArea, district_lean, counties: rawCounties, force: rawForce } = body
-  if (!district_key || !rawName) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: 'district_key, district_name required' }) }
+  // district_name / area_description / counties / district_lean in the body
+  // are IGNORED — see canonicalEventArea. Older clients still send them.
+  const { district_key, force: rawForce } = body
+  if (!district_key) {
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'district_key required' }) }
   }
   // Audit fix (#17/#18): district_key is the sole PK of a shared cache table —
-  // validate its shape, cap the free-text fields that fence the prompts, and
-  // only allow admins to force-refresh (each force run is real LLM spend and
-  // last-write-wins on a row every user reads).
-  if (!/^[\w:.-]{1,80}$/.test(district_key)) {
+  // only real areas may mint rows, everything that fences the prompts is
+  // derived from it, and only admins may force-refresh (each force run is real
+  // LLM spend and last-write-wins on a row every user reads).
+  const canonical = canonicalEventArea(district_key)
+  if (!canonical) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid district_key' }) }
   }
 
@@ -233,9 +279,12 @@ export const handler = async (event) => {
     return limited
   }
 
-  const district_name    = String(rawName).slice(0, 120)
-  const area_description = rawArea ? String(rawArea).slice(0, 600) : null
-  const counties         = (Array.isArray(rawCounties) ? rawCounties : []).slice(0, 8).map(c => String(c).slice(0, 40))
+  const district_name    = canonical.name
+  const area_description = canonical.area
+  const counties         = canonical.counties.slice(0, 8)
+  // No trusted per-district lean source here; a client-supplied value would
+  // steer the lean labels cached for every user, so the prompts say 'unknown'.
+  const district_lean    = null
   const wantsForce       = Boolean(rawForce)
   const force            = wantsForce && isAdmin
   const sourceBrief = countySourceBrief(counties)
@@ -620,13 +669,14 @@ ${extra}` }],
   // dates, venue, address, AND an image. Fall back to og/twitter meta tags.
   // Images are later served through the Netlify Image CDN proxy, so any
   // https URL works — but skip expiring CDNs (Facebook) that die in days.
+  // e.url is LLM output steered by arbitrary web pages, so it is fetched via
+  // safeFetch (public hosts only, every redirect hop re-validated) — never
+  // into the function's own network.
   const withUrls = events.filter(e => e.url).slice(0, 30)
   await Promise.all(withUrls.map(async (e) => {
     try {
-      const ctrl = new AbortController()
-      setTimeout(() => ctrl.abort(), 5000)
-      const res = await fetch(e.url, {
-        signal: ctrl.signal, redirect: 'follow',
+      const res = await safeFetch(e.url, {
+        timeoutMs: 5000,
         headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BadgerBoard/1.0; +https://badgerboardwi.com)' },
       })
       if (!res.ok || !/text\/html/i.test(res.headers.get('content-type') || '')) return

@@ -74,7 +74,9 @@ exports.handler = async (event) => {
   if (!UUID.test(candidateId || '')) return json(400, { error: 'candidate_id required' }, HEADERS)
   if (action !== 'lock' && action !== 'unlock') return json(400, { error: 'action must be lock or unlock' }, HEADERS)
 
-  // The caller must own the candidate.
+  // The caller must own the candidate. A NULL created_by (legacy/seeded row)
+  // is NOT a free-for-all: the old `created_by && …` guard let any signed-in
+  // user lock or unlock AI access on every ownerless candidate.
   const sb = serviceClient()
   const { data: cand, error: qErr } = await sb
     .from('candidates')
@@ -82,7 +84,7 @@ exports.handler = async (event) => {
     .eq('id', candidateId)
     .single()
   if (qErr || !cand) return json(404, { error: 'Candidate not found' }, HEADERS)
-  if (cand.created_by && cand.created_by !== user.id) {
+  if (!cand.created_by || cand.created_by !== user.id) {
     return json(403, { error: 'Not your candidate' }, HEADERS)
   }
 
@@ -92,6 +94,7 @@ exports.handler = async (event) => {
       .from('candidates')
       .update({ ai_access_notes: false, ai_access_locked_at: lockedAt })
       .eq('id', candidateId)
+      .eq('created_by', user.id)
     if (error) return json(500, { error: 'Lock failed' }, HEADERS)
     await audit(user.id, 'ai_lock', candidateId, { candidate_name: cand.name })
     return json(200, { locked: true, locked_at: lockedAt }, HEADERS)
@@ -117,6 +120,7 @@ exports.handler = async (event) => {
     .from('candidates')
     .update({ ai_access_notes: true, ai_access_locked_at: null })
     .eq('id', candidateId)
+    .eq('created_by', user.id)
   if (error) return json(500, { error: 'Unlock failed' }, HEADERS)
   await audit(user.id, 'ai_unlock', candidateId, {
     candidate_name: cand.name,

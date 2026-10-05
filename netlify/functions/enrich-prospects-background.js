@@ -50,6 +50,7 @@ const { logAiUsage } = require('./_ai-usage')
 const { computeWinOdds, primaryMarginFromResults } = require('./_win-odds')
 const { ADMIN_EMAILS } = require('./_config')
 const { partyGroup } = require('./_party')
+const { safeFetch } = require('./_safe-fetch')
 
 const SUPABASE_URL         = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -459,12 +460,18 @@ async function gatherWinOddsInputs(candidate) {
 
   if (!needle) return { inputs, notes }
 
-  // Contests for this seat, newest first, with their election dates.
-  const contests = await sbJson(
+  // Contests for this seat, newest first, with their election dates. The
+  // ilike is a coarse substring prefilter — "District 1" also matches
+  // "District 10".."District 19" (and "Assembly District 1" matches 100+
+  // style labels) — so the rows are re-checked with a word/number boundary
+  // and only exact seat matches feed the odds. The wider limit keeps the
+  // true seat from being crowded out by its 1x siblings.
+  const rawContests = await sbJson(
     `election_contests?office=ilike.*${encodeURIComponent(needle)}*` +
-    `&select=id,office,district,election_id,election:elections(election_date,type,year)&limit=25`
+    `&select=id,office,district,election_id,election:elections(election_date,type,year)&limit=200`
   )
-  if (!Array.isArray(contests) || !contests.length) return { inputs, notes }
+  const contests = Array.isArray(rawContests) ? rawContests.filter(c => officeMatchesSeat(c.office, needle)) : []
+  if (!contests.length) return { inputs, notes }
 
   const dated = contests
     .map(c => ({ ...c, date: c.election?.election_date || null }))
@@ -671,18 +678,31 @@ ${String(researchText).slice(0, 6000)}`,
 }
 
 /**
+ * Exact seat match for a contest office label: the needle must appear as a
+ * whole phrase, not glued to a preceding word character and not followed by
+ * another digit ("District 1" ≠ "District 12").
+ */
+function officeMatchesSeat(office, needle) {
+  const n = String(needle || '').trim()
+  if (!n) return false
+  const esc = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${esc}(?![\\p{N}])`, 'iu').test(String(office || ''))
+}
+
+/**
  * Existence check: actually FETCH the claimed URL server-side. A URL an LLM
  * produced is a claim; a 200 is evidence. 2s timeout, status < 400 required.
+ * The URL is user-set (candidate.website) or LLM-produced, so it goes through
+ * safeFetch: public http(s) hosts only, every redirect hop re-validated —
+ * plain fetch with redirect:'follow' was an SSRF into the function's network
+ * (loopback, RFC 1918, 169.254.169.254 metadata).
  */
 async function verifyWebsite(url) {
   const target = normalizeUrl(url)
   if (!target) return { ok: false, status: null, url: null, html: '' }
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), SITE_TIMEOUT_MS)
   try {
-    const res = await fetch(target, {
-      signal: ctrl.signal,
-      redirect: 'follow',
+    const res = await safeFetch(target, {
+      timeoutMs: SITE_TIMEOUT_MS,
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BadgerBoard/1.0; +https://badgerboardwi.com)' },
     })
     if (!res.ok || res.status >= 400) return { ok: false, status: res.status, url: res.url || target, html: '' }
@@ -691,8 +711,6 @@ async function verifyWebsite(url) {
     return { ok: true, status: res.status, url: res.url || target, html }
   } catch (e) {
     return { ok: false, status: null, url: target, html: '', error: e.name === 'AbortError' ? 'timeout' : e.message }
-  } finally {
-    clearTimeout(timer)
   }
 }
 
@@ -1097,6 +1115,7 @@ exports.handler = async (event) => {
 // module has no side effects beyond reading env vars.
 module.exports.sanitize = sanitize
 module.exports.normalizeUrl = normalizeUrl
+module.exports.officeMatchesSeat = officeMatchesSeat
 module.exports.classifySocial = classifySocial
 module.exports.extractSocialsFromHtml = extractSocialsFromHtml
 module.exports.detectAgencySignals = detectAgencySignals

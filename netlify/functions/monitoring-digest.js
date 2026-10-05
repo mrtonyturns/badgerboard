@@ -24,6 +24,26 @@ const SERVICE_KEY    = process.env.SUPABASE_SERVICE_ROLE_KEY
 const RESEND_API_KEY = process.env.RESEND_API_KEY
 const APP_URL        = 'https://badgerboardwi.com'
 
+// A stored weekly_digest older than this is last week's news (Monday cron + slack).
+const DIGEST_MAX_AGE_DAYS = 8
+const OWNER_CONCURRENCY   = 5
+const SEND_SPACING_MS     = 550
+const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+
+// Run fn over items with at most `limit` in flight; results keep input order.
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length)
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++
+      out[i] = await fn(items[i], i)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return out
+}
+
 const nodeCrypto = require('crypto')
 function safeEqual(a, b) {
   const A = nodeCrypto.createHash('sha256').update(String(a ?? '')).digest()
@@ -133,64 +153,81 @@ exports.handler = async (event) => {
     ;(byOwner[c.created_by] ||= []).push(c)
   }
 
-  // 2. Resolve owner emails
+  // 2. Resolve owner emails — one lookup per owner, a few at a time.
   const owners = {}
-  for (const ownerId of Object.keys(byOwner)) {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${ownerId}`, {
-      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
-    })
-    if (res.ok) owners[ownerId] = await res.json()
-  }
+  await mapLimit(Object.keys(byOwner), OWNER_CONCURRENCY, async (ownerId) => {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${ownerId}`, {
+        headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+      })
+      if (res.ok) owners[ownerId] = await res.json()
+    } catch (e) { console.warn('[monitoring-digest] owner lookup failed:', e.message) }
+  })
 
   const weekLabel = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
-  const results = []
 
-  for (const [ownerId, cands] of Object.entries(byOwner)) {
+  // Each owner costs several sequential round-trips (suppression check, prefs,
+  // dossiers, Resend). Run strictly one-by-one, a few dozen owners could
+  // exceed the scheduled-function time limit and the tail of the list would
+  // silently get no digest; a bounded pool keeps PostgREST load modest, and
+  // the Resend POSTs themselves are spaced to stay under its default 2 req/s.
+  let sendChain = Promise.resolve()
+  const spacedSend = (fn) => {
+    const p = sendChain.then(fn)
+    sendChain = p.then(() => sleep(SEND_SPACING_MS), () => sleep(SEND_SPACING_MS))
+    return p
+  }
+  const processOwner = async (ownerId, cands) => {
     const owner = owners[ownerId]
     const email = owner?.email
-    if (!email) { results.push({ owner: ownerId, status: 'no_email' }); continue }
+    if (!email) return { owner: ownerId, status: 'no_email' }
     if (opts.only_email && email.toLowerCase() !== String(opts.only_email).toLowerCase()) {
-      results.push({ owner: email, status: 'filtered' }); continue
+      return { owner: email, status: 'filtered' }
     }
 
     // Admin mute outranks everything (v1.40.0) — this sender talks to Resend
     // directly, so it must consult the suppression list itself.
-    if (await isEmailSuppressed(email)) { results.push({ owner: email, status: 'suppressed' }); continue }
+    if (await isEmailSuppressed(email)) return { owner: email, status: 'suppressed' }
 
     // Respect notification preferences (weekly_digest, default on)
     try {
       const prefs = await getNotificationPrefs(ownerId)
-      if (prefs.weekly_digest === false) { results.push({ owner: email, status: 'opted_out' }); continue }
+      if (prefs.weekly_digest === false) return { owner: email, status: 'opted_out' }
     } catch {}
 
-    // 3. Latest dossier per candidate (digest + snapshot), only if refreshed in the last 8 days
-    const entries = []
-    for (const c of cands) {
+    // 3. Latest dossier per candidate (digest + snapshot). The stored
+    // weekly_digest is only THIS week's news when the dossier was refreshed in
+    // the last DIGEST_MAX_AGE_DAYS — after a failed/skipped refresh it is last
+    // week's digest and must not be resent as new.
+    const entries = (await Promise.all(cands.map(async (c) => {
       const rows = await sb(`/dossiers?candidate_id=eq.${c.id}&order=generated_at.desc&limit=1&select=id,generated_at,weekly_digest,content`)
       const d = rows?.[0]
-      if (!d) continue
+      if (!d) return null
       const ageDays = (Date.now() - new Date(d.generated_at).getTime()) / 86400000
-      entries.push({
+      const fresh = Number.isFinite(ageDays) && ageDays <= DIGEST_MAX_AGE_DAYS
+      return {
         candidate: c,
-        digest: d.weekly_digest || (ageDays <= 8 ? { summary: 'Profile refreshed this week — open it for the full picture.', items: [] } : { summary: `Last refreshed ${Math.round(ageDays)} days ago — a new refresh is scheduled for Monday.`, items: [] }),
+        digest: fresh
+          ? (d.weekly_digest || { summary: 'Profile refreshed this week — open it for the full picture.', items: [] })
+          : { summary: `No refresh this week — the profile was last updated ${Number.isFinite(ageDays) ? Math.round(ageDays) : 'some'} days ago.`, items: [] },
         snapshot: snapshotOf(d.content),
         generatedAt: d.generated_at,
-      })
-    }
-    if (!entries.length) { results.push({ owner: email, status: 'no_dossiers' }); continue }
+      }
+    }))).filter(Boolean)
+    if (!entries.length) return { owner: email, status: 'no_dossiers' }
 
     entries.sort((a, b) => a.candidate.name.localeCompare(b.candidate.name))
     const first = (owner.user_metadata?.display_name || '').split(' ')[0] || null
     const html = buildEmailHtml(first, entries, weekLabel)
 
     if (opts.dry_run) {
-      results.push({ owner: email, status: 'dry_run', candidates: entries.length, html_bytes: html.length })
-      if (opts.return_html) results[results.length - 1].html = html
-      continue
+      const r = { owner: email, status: 'dry_run', candidates: entries.length, html_bytes: html.length }
+      if (opts.return_html) r.html = html
+      return r
     }
 
-    if (!RESEND_API_KEY) { results.push({ owner: email, status: 'no_resend_key' }); continue }
-    const send = await fetch('https://api.resend.com/emails', {
+    if (!RESEND_API_KEY) return { owner: email, status: 'no_resend_key' }
+    const send = await spacedSend(() => fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -199,9 +236,14 @@ exports.handler = async (event) => {
         subject: `Weekly Active Monitoring digest — ${entries.length === 1 ? entries[0].candidate.name : `${entries.length} candidates`} · ${weekLabel}`,
         html,
       }),
-    })
-    results.push({ owner: email, status: send.ok ? 'sent' : `error_${send.status}`, candidates: entries.length })
+    }))
+    return { owner: email, status: send.ok ? 'sent' : `error_${send.status}`, candidates: entries.length }
   }
+
+  const results = await mapLimit(Object.entries(byOwner), OWNER_CONCURRENCY, async ([ownerId, cands]) => {
+    try { return await processOwner(ownerId, cands) }
+    catch (e) { return { owner: ownerId, status: 'error', error: e.message } }
+  })
 
   const sent = results.filter(r => r.status === 'sent').length
   console.log(`[monitoring-digest] done: ${sent} sent`, JSON.stringify(results))

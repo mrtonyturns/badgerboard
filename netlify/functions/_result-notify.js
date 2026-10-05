@@ -624,6 +624,29 @@ function resolveEmail(sb, userId, cache) {
   return p
 }
 
+// PostgREST caps every response at max_rows (1000 on Supabase), silently: an
+// un-ranged select over a statewide race's subscribers just stopped at row
+// 1000 and everyone past it was never notified. selectAllPages() re-runs
+// build() — a fresh query each call — over .order('id').range() windows
+// until a short page comes back. A client without range() (test doubles) gets
+// a single read.
+const PAGE_SIZE = 1000
+const MAX_PAGES = 100
+async function selectAllPages(build, pageSize = PAGE_SIZE) {
+  const all = []
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const q = build()
+    if (typeof q.range !== 'function') return q
+    const from = page * pageSize
+    const { data, error } = await q.order('id', { ascending: true }).range(from, from + pageSize - 1)
+    if (error) return { data: null, error }
+    const rows = data || []
+    all.push(...rows)
+    if (rows.length < pageSize) break
+  }
+  return { data: all, error: null }
+}
+
 /**
  * Run `worker` over `items`, `size` at a time, in order. Each item's errors are
  * the worker's problem — this never rejects and never lets one bad row stop the
@@ -672,10 +695,10 @@ async function notifyContestChanges(sb, contestIds, { trigger = 'unknown', now =
       return out
     }
 
-    const { data: subs, error: sErr } = await sb
+    const { data: subs, error: sErr } = await selectAllPages(() => sb
       .from('election_subscriptions')
       .select('id, user_id, contest_id, mode, last_notified_at, last_snapshot, winner_notified_at')
-      .in('contest_id', ids)
+      .in('contest_id', ids))
     if (sErr) { out.notes.push(`subscription load failed: ${sErr.message}`); return out }
     if (!subs || !subs.length) return out
 
@@ -689,10 +712,10 @@ async function notifyContestChanges(sb, contestIds, { trigger = 'unknown', now =
       .in('id', liveIds)
     if (cErr) { out.notes.push(`contest load failed: ${cErr.message}`); return out }
 
-    const { data: results, error: rErr } = await sb
+    const { data: results, error: rErr } = await selectAllPages(() => sb
       .from('election_results')
-      .select('contest_id, candidate_name, party, votes, vote_pct, winner, declared')
-      .in('contest_id', liveIds)
+      .select('id, contest_id, candidate_name, party, votes, vote_pct, winner, declared')
+      .in('contest_id', liveIds))
     if (rErr) { out.notes.push(`results load failed: ${rErr.message}`); return out }
 
     const electionIds = [...new Set((contests || []).map(c => c.election_id).filter(isUuid))]
@@ -884,6 +907,7 @@ module.exports = {
   winnerEmbargoActive,
   sendStatusUpdateNow,
   notifyContestChanges,
+  selectAllPages,
   // pure, testable, previewable
   decideNotification,
   buildUpdateEmail,

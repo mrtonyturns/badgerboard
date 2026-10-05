@@ -7,17 +7,28 @@
 //   SUPABASE_URL            — or VITE_SUPABASE_URL
 //   SUPABASE_ANON_KEY       — or VITE_SUPABASE_ANON_KEY
 //
-// POST body: { candidateName, handle?, district? }
+// POST body: { candidateName, handle?, district?, candidate_id? }
 //   candidateName — full name e.g. "Jane Smith"
 //   handle        — X handle without @, e.g. "janesmith4wi"  (optional)
 //   district      — e.g. "Assembly District 32"             (optional)
+//   candidate_id  — when sent, the caller must own that candidate (optional)
+//
+// Every search spends the paid X API quota, so callers need a plan that
+// includes the socialLinks feature (any paid plan; admin/beta/trial resolve
+// through _entitlements) and are rate limited per user.
 //
 // Returns: { tweets: [ { id, text, author_name, author_username,
 //                        author_image, created_at, public_metrics } ] }
 
+import { enforceRateLimit } from './_rate-limit.js'
+import { resolveEntitlement } from './_entitlements.js'
+import { hasFeature } from '../../src/lib/tiers.js'
+
 const SUPABASE_URL  = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
+const SERVICE_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY
 const X_BEARER      = process.env.X_BEARER_TOKEN
+const UUID_RE       = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const CORS = {
   'Access-Control-Allow-Origin':  '*',
@@ -70,6 +81,22 @@ export const handler = async (event) => {
   if (!authRes.ok) {
     return { statusCode: 401, headers: CORS, body: JSON.stringify({ error: 'Invalid or expired token' }) }
   }
+  const user = await authRes.json().catch(() => null)
+  if (!user?.id) {
+    return { statusCode: 401, headers: CORS, body: JSON.stringify({ error: 'Invalid or expired token' }) }
+  }
+
+  // ── Plan gate ───────────────────────────────────────────────────────────────
+  // Any free signup used to be able to drain the paid X quota. The live feed
+  // sits with the social features, so it follows socialLinks (off on Scout).
+  const { plan } = await resolveEntitlement(user)
+  if (!hasFeature(plan, 'socialLinks')) {
+    return { statusCode: 403, headers: CORS, body: JSON.stringify({ error: 'The live X feed is included with paid plans. Upgrade to load posts.', upgrade: true }) }
+  }
+
+  // ── Durable per-user rate limit ─────────────────────────────────────────────
+  const limited = await enforceRateLimit(user.id, 'fetch-candidate-x-feed', CORS)
+  if (limited) return limited
 
   // ── Check X API key ─────────────────────────────────────────────────────────
   if (!X_BEARER) {
@@ -98,6 +125,28 @@ export const handler = async (event) => {
 
   if (!candidateName) {
     return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'candidateName is required' }) }
+  }
+
+  // ── Ownership (when a candidate is named) ───────────────────────────────────
+  const candidateId = body.candidate_id ?? body.candidateId
+  if (candidateId != null && candidateId !== '') {
+    if (!UUID_RE.test(String(candidateId))) {
+      return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'Invalid candidate_id' }) }
+    }
+    if (!SERVICE_KEY) {
+      return { statusCode: 500, headers: CORS, body: JSON.stringify({ error: 'Server misconfigured' }) }
+    }
+    const own = await fetch(
+      `${SUPABASE_URL}/rest/v1/candidates?id=eq.${encodeURIComponent(candidateId)}&created_by=eq.${encodeURIComponent(user.id)}&select=id`,
+      { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }
+    ).catch(() => null)
+    if (!own?.ok) {
+      return { statusCode: 502, headers: CORS, body: JSON.stringify({ error: 'Could not verify candidate' }) }
+    }
+    const rows = await own.json().catch(() => [])
+    if (!Array.isArray(rows) || !rows.length) {
+      return { statusCode: 404, headers: CORS, body: JSON.stringify({ error: 'Candidate not found' }) }
+    }
   }
 
   // ── Call X API v2 recent search ─────────────────────────────────────────────

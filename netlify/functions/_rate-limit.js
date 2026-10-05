@@ -61,6 +61,9 @@ const RATE_LIMITS = {
   // attempts are cheap but password-verifying, so the per-minute cap doubles as
   // brute-force friction.
   'candidate-ai-lock':           { perMinute: 10, perDay: 100 },
+  // Live X recent-search proxy: every call spends the paid X API quota
+  // (on-demand "Load posts" / "Refresh" clicks), so per-minute is tight.
+  'fetch-candidate-x-feed':      { perMinute: 5,  perDay: 60  },
 }
 
 const DEFAULT_LIMITS = { perMinute: 10, perDay: 100 }

@@ -128,7 +128,11 @@ exports.handler = async (event) => {
         if (!link) return reply({ error: 'Link not found.' }, 404)
         const isParty = [link.action_user_id, link.candidate_user_id].includes(user.id)
         if (!isParty) return reply({ error: 'Not authorized.' }, 403)
-        await H.sb(`account_links?id=eq.${enc(link_id)}`, 'PATCH', { status: 'revoked', revoked_at: new Date().toISOString() })
+        const upd = await H.sb(`account_links?id=eq.${enc(link_id)}`, 'PATCH', { status: 'revoked', revoked_at: new Date().toISOString() })
+        if (!upd.ok) return reply({ error: 'Could not revoke.' }, 500)
+        // Profiles handed off over this link stop being viewable with it
+        // (profile-handoff also re-checks the link on every open).
+        await H.sb(`profile_handoffs?link_id=eq.${enc(link.id)}&status=eq.active`, 'PATCH', { status: 'revoked' })
         await H.logActivity(link_id, user.id, link.candidate_user_id, 'link_revoked', { by: user.id === link.candidate_user_id ? 'candidate' : 'action' })
         return reply({ ok: true })
       }

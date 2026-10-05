@@ -7,6 +7,7 @@ import crypto from 'crypto'
 import { logAiUsage } from './_ai-usage.js'
 import { enforceRateLimit } from './_rate-limit.js'
 import { ADMIN_EMAILS } from './_config.js'
+import { WI_ASSEMBLY_CENTROIDS, WI_SENATE_CENTROIDS, WI_CD_CENTROIDS, WI_COUNTY_CENTROIDS } from '../../src/lib/wiDistricts.js'
 
 // Audit fix (#17): the two-step flow (research → structure) round-trips the
 // Perplexity research through the CLIENT to dodge the gateway timeout — which
@@ -26,7 +27,43 @@ const sigOk = (districtKey, research, sig) => {
   return A.length === B.length && crypto.timingSafeEqual(A, B)
 }
 
-const DISTRICT_KEY_RE = /^[\w:.-]{1,80}$/
+// ─── Canonical district identity ──────────────────────────────────────────────
+// district_intel is ONE row per district_key shared by every user, so the
+// district/office labels that go into the research prompts and the cached row
+// must come from the key, never from the client: a caller could otherwise
+// cache "Assembly District 12" research under assembly-85 or smuggle prompt-
+// injection text through office_label. Keys are formed client-side by
+// DistrictDashboard.districtKeyFor(); labels mirror its CHAMBER_META. Real
+// districts/counties are checked against src/lib/wiDistricts.js. Returns
+// null for anything that isn't a real Wisconsin seat.
+const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k)
+export function canonicalDistrict(districtKey) {
+  const key = String(districtKey ?? '')
+  if (key === 'state-wi') {
+    return { layer: 'ussenate', name: 'Wisconsin', office: 'U.S. Senator for Wisconsin' }
+  }
+  const m = /^(assembly|senate|congress)-([1-9]\d?)$/.exec(key)
+  if (m) {
+    const n = Number(m[2])
+    if (m[1] === 'assembly' && own(WI_ASSEMBLY_CENTROIDS, n)) {
+      return { layer: 'assembly', name: `Assembly District ${n}`, office: `State Representative, Assembly District ${n}` }
+    }
+    if (m[1] === 'senate' && own(WI_SENATE_CENTROIDS, n)) {
+      return { layer: 'senate', name: `State Senate District ${n}`, office: `State Senator, Senate District ${n}` }
+    }
+    if (m[1] === 'congress' && own(WI_CD_CENTROIDS, n)) {
+      return { layer: 'congress', name: `Congressional District ${n}`, office: `U.S. Representative, Congressional District ${n}` }
+    }
+    return null
+  }
+  if (key.startsWith('county-')) {
+    const county = key.slice(7)
+    if (own(WI_COUNTY_CENTROIDS, county)) {
+      return { layer: 'county', name: `${county} County`, office: `County Sheriff of ${county} County` }
+    }
+  }
+  return null
+}
 
 export const handler = async (event) => {
   const headers = {
@@ -65,17 +102,19 @@ export const handler = async (event) => {
   try { body = JSON.parse(event.body || '{}') } catch {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
-  const { district_key, layer, district_name: rawDistrictName, office_label: rawOfficeLabel, force: rawForce, step, research: providedResearch, research_sig } = body
-  if (!district_key || !rawDistrictName || !rawOfficeLabel) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: 'district_key, district_name, office_label required' }) }
+  // district_name / office_label / layer in the body are IGNORED (see
+  // canonicalDistrict) — older clients still send them, harmlessly.
+  const { district_key, force: rawForce, step, research: providedResearch, research_sig } = body
+  if (!district_key) {
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'district_key required' }) }
   }
   // Audit fix (#17): district_key is the sole PK of a shared cache table —
-  // validate its shape so arbitrary strings can't mint or overwrite rows.
-  if (!DISTRICT_KEY_RE.test(district_key)) {
+  // only real districts may mint or overwrite rows.
+  const canonical = canonicalDistrict(district_key)
+  if (!canonical) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid district_key' }) }
   }
-  const district_name = String(rawDistrictName).slice(0, 120)
-  const office_label  = String(rawOfficeLabel).slice(0, 120)
+  const { layer, name: district_name, office: office_label } = canonical
   // Signed pass-through: reject tampered/foreign research outright
   if (providedResearch && !sigOk(district_key, providedResearch, research_sig)) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid research payload — restart the research' }) }
@@ -201,7 +240,7 @@ ${research}`,
     headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
     body: JSON.stringify({
       district_key,
-      layer: layer || null,
+      layer,
       name: district_name,
       history,
       history_at: history.researched_at,

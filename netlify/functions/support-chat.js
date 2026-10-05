@@ -124,6 +124,29 @@ Instructions:
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
+// Validate and STRIP a client-supplied conversation before it is forwarded to
+// Anthropic: only role+content pass through, roles whitelisted, sizes bounded,
+// last MAX_TURNS kept. Never forward arbitrary client JSON to the model API.
+// The window can start on an assistant turn (slice(-30) of a long chat cuts
+// wherever it lands) and the Messages API rejects a conversation whose first
+// message isn't from the user, so leading non-user turns are dropped.
+// Returns { messages } or { error }.
+const MAX_TURNS = 30
+export function cleanConversation(messages) {
+  const out = []
+  for (const m of (Array.isArray(messages) ? messages : []).slice(-MAX_TURNS)) {
+    if (!m || typeof m !== 'object') continue
+    if (m.role !== 'user' && m.role !== 'assistant') return { error: 'Invalid message role' }
+    if (typeof m.content !== 'string' || !m.content.trim()) return { error: 'Invalid message content' }
+    out.push({ role: m.role, content: m.content.slice(0, 4000) })
+  }
+  while (out.length && out[0].role !== 'user') out.shift()
+  if (!out.length || out[out.length - 1].role !== 'user') {
+    return { error: 'Conversation must end with a user message' }
+  }
+  return { messages: out }
+}
+
 export const handler = async (event) => {
   const CORS_HEADERS = corsHeaders(event.headers?.origin || event.headers?.Origin)
 
@@ -183,22 +206,12 @@ export const handler = async (event) => {
   if (limited) return limited
 
   // Validate and STRIP the client-supplied messages array before forwarding
-  // to Anthropic: only role+content pass through, roles whitelisted, sizes
-  // bounded. Never forward arbitrary client JSON to the model API.
-  const cleanMessages = []
-  for (const m of messages.slice(-30)) {
-    if (!m || typeof m !== 'object') continue
-    if (m.role !== 'user' && m.role !== 'assistant') {
-      return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Invalid message role' }) }
-    }
-    if (typeof m.content !== 'string' || !m.content.trim()) {
-      return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Invalid message content' }) }
-    }
-    cleanMessages.push({ role: m.role, content: m.content.slice(0, 4000) })
+  // to Anthropic (see cleanConversation).
+  const conv = cleanConversation(messages)
+  if (conv.error) {
+    return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: conv.error }) }
   }
-  if (!cleanMessages.length || cleanMessages[cleanMessages.length - 1].role !== 'user') {
-    return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: 'Conversation must end with a user message' }) }
-  }
+  const cleanMessages = conv.messages
 
   // ── 2. Fetch user context (RLS-enforced, PRIVACY-WHITELISTED) ──────────────
   // The support agent's context is a hard whitelist of aggregate COUNTS only.

@@ -10,6 +10,7 @@
 // tolerates but which makes the file lie about what it is.
 
 import nodeCrypto from 'crypto'
+import { resolveEntitlement, getGlobalBetaEnabled } from './_entitlements.js'
 
 const SUPABASE_URL         = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -22,6 +23,40 @@ const STALE_DAYS = 6
 // Safety cap per run — prevents runaway API costs if many candidates are toggled on at once
 const MAX_REGEN_PER_RUN = 20
 
+
+// ─── Monitoring slot entitlement ────────────────────────────────────────────
+// Mirrors enforce_monitoring_cap (migration 20261005000000): Scout and
+// c_monitor include 0 Active Monitoring slots, c_active 1, c_campaign 3, and
+// every Action plan (incl. the admin/beta a_campaign grant) is unlimited. The
+// trigger only fires when monitoring is switched ON, so an owner who later
+// downgrades (or whose trial lapses) keeps the flag — this cron must re-check
+// the owner's CURRENT plan or it keeps buying them paid Opus refreshes.
+const MONITORING_SLOTS = { scout: 0, c_monitor: 0, c_active: 1, c_campaign: 3 }
+export function monitoringSlotLimit(plan) {
+  return plan in MONITORING_SLOTS ? MONITORING_SLOTS[plan] : Infinity
+}
+
+// Keep at most slotsByOwner[owner] candidates per owner, oldest monitored
+// candidate first (created_at, then id — deterministic week to week).
+// Ownerless rows and owners with no resolved slot count are skipped.
+export function selectEntitledCandidates(candidates, slotsByOwner) {
+  const byOwner = new Map()
+  for (const c of candidates) {
+    if (!c.created_by) continue
+    if (!byOwner.has(c.created_by)) byOwner.set(c.created_by, [])
+    byOwner.get(c.created_by).push(c)
+  }
+  const selected = []
+  for (const [owner, list] of byOwner) {
+    const slots = slotsByOwner[owner] ?? 0
+    if (slots <= 0) continue
+    list.sort((a, b) =>
+      String(a.created_at || '').localeCompare(String(b.created_at || '')) ||
+      String(a.id).localeCompare(String(b.id)))
+    selected.push(...list.slice(0, slots))
+  }
+  return selected
+}
 
 // Constant-time secret comparison (L2): hash both sides to equal length, then
 // crypto.timingSafeEqual — a plain !== comparison leaks timing information.
@@ -66,7 +101,7 @@ export const handler = async (event) => {
     // Fetch full candidate fields + office join so we can pass a complete candidate object
     // to generate-dossier-background (which requires body.candidate with name/party/office etc.)
     const candRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/candidates?select=id,name,party,status,occupation,employer,website,email,phone,campaign_committee,campaign_manager,bio_summary,twitter_handle,facebook_url,instagram_handle,is_incumbent,section_timestamps,office:offices(id,name,level,district_name,district_number)&section_timestamps->>monitoring=eq.true&order=name`,
+      `${SUPABASE_URL}/rest/v1/candidates?select=id,created_by,created_at,name,party,status,occupation,employer,website,email,phone,campaign_committee,campaign_manager,bio_summary,twitter_handle,facebook_url,instagram_handle,is_incumbent,section_timestamps,office:offices(id,name,level,district_name,district_number)&section_timestamps->>monitoring=eq.true&order=name`,
       { headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` } }
     )
     if (!candRes.ok) throw new Error(`Candidates fetch failed: ${candRes.status}`)
@@ -85,11 +120,38 @@ export const handler = async (event) => {
     }
   }
 
-  // ── 2. For each candidate, check dossier age ─────────────────────────────────
+  // ── 2. Drop candidates beyond each owner's CURRENT monitoring slots ─────────
+  // One auth lookup per distinct owner (not per candidate), run in parallel,
+  // with the global beta switch fetched once for the whole run.
+  const slotsByOwner = {}
+  try {
+    const globalBeta = await getGlobalBetaEnabled()
+    const ownerIds = [...new Set(candidates.map(c => c.created_by).filter(Boolean))]
+    await Promise.all(ownerIds.map(async (ownerId) => {
+      try {
+        const uRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(ownerId)}`, {
+          headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
+        })
+        if (!uRes.ok) return   // unresolved owner → 0 slots (fail closed on paid spend)
+        const { plan } = await resolveEntitlement(await uRes.json(), { globalBeta })
+        slotsByOwner[ownerId] = monitoringSlotLimit(plan)
+      } catch (e) {
+        console.warn(`[auto-regen] Owner lookup failed for ${ownerId}:`, e.message)
+      }
+    }))
+  } catch (e) {
+    console.error('[auto-regen] Entitlement resolution failed:', e.message)
+    return { statusCode: 502, headers, body: JSON.stringify({ error: 'An internal error occurred' }) }
+  }
+  const entitled = selectEntitledCandidates(candidates, slotsByOwner)
+  const notEntitled = candidates.length - entitled.length
+  if (notEntitled) console.log(`[auto-regen] Skipping ${notEntitled} monitored candidate(s) beyond their owner's current plan slots`)
+
+  // ── 3. For each entitled candidate, check dossier age ───────────────────────
   const staleThresholdMs = STALE_DAYS * 24 * 60 * 60 * 1000
   const toRegenerate = []
 
-  await Promise.all(candidates.map(async (c) => {
+  await Promise.all(entitled.map(async (c) => {
     try {
       const dosRes = await fetch(
         `${SUPABASE_URL}/rest/v1/dossiers?candidate_id=eq.${c.id}&order=generated_at.desc&limit=1&select=id,generated_at`,
@@ -123,16 +185,16 @@ export const handler = async (event) => {
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ message: 'All active candidate profiles are fresh', regenerated: 0, candidates_checked: candidates.length }),
+      body: JSON.stringify({ message: 'All active candidate profiles are fresh', regenerated: 0, candidates_checked: entitled.length, not_entitled: notEntitled }),
     }
   }
 
-  // ── 3. Sort by stalest first, cap at MAX_REGEN_PER_RUN ──────────────────────
+  // ── 4. Sort by stalest first, cap at MAX_REGEN_PER_RUN ──────────────────────
   toRegenerate.sort((a, b) => b.ageDays - a.ageDays)
   const batch = toRegenerate.slice(0, MAX_REGEN_PER_RUN)
   console.log(`[auto-regen] Queuing ${batch.length} of ${toRegenerate.length} stale candidates for regeneration`)
 
-  // ── 4. Trigger background dossier generation for each ───────────────────────
+  // ── 5. Trigger background dossier generation for each ───────────────────────
   // Audit fix (#11): the old code sent the raw service-role key as a Bearer
   // token, which verifyUser() (GoTrue) REJECTS — every trigger 401'd inside the
   // background handler while the platform-level 202 made this cron log
@@ -190,7 +252,7 @@ export const handler = async (event) => {
   const errored  = results.filter(r => r.status !== 'queued').length
   const skipped  = toRegenerate.length - batch.length
 
-  console.log(`[auto-regen] Run complete: ${queued} queued, ${errored} errors, ${skipped} skipped (cap), ${candidates.length - toRegenerate.length} already fresh`)
+  console.log(`[auto-regen] Run complete: ${queued} queued, ${errored} errors, ${skipped} skipped (cap), ${notEntitled} not entitled, ${entitled.length - toRegenerate.length} already fresh`)
 
   return {
     statusCode: 200,
@@ -200,7 +262,8 @@ export const handler = async (event) => {
       queued,
       errored,
       skipped,
-      already_fresh: candidates.length - toRegenerate.length,
+      not_entitled: notEntitled,
+      already_fresh: entitled.length - toRegenerate.length,
       results,
       ran_at: new Date().toISOString(),
     }),
