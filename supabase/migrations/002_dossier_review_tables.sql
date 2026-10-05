@@ -77,4 +77,8 @@ CREATE INDEX IF NOT EXISTS dossier_ack_current_idx    ON public.dossier_acknowle
 CREATE INDEX IF NOT EXISTS dossier_review_dossier_idx ON public.dossier_claim_reviews (dossier_id);
 CREATE INDEX IF NOT EXISTS dossier_review_user_idx    ON public.dossier_claim_reviews (user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS dossier_review_unique_idx
-  ON public.dossier_claim_reviews (dossier_id, user_id, section_id, claim_text(100));
+  -- Full claim_text (stored capped at 500 chars, so it fits a btree entry).
+  -- This line was MySQL prefix syntax — claim_text(100) — which Postgres
+  -- rejects, so it can never have run; and a 100-char prefix would make two
+  -- claims sharing an opening collide now that reviews match the full text.
+  ON public.dossier_claim_reviews (dossier_id, user_id, section_id, claim_text);

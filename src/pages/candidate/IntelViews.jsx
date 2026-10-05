@@ -192,6 +192,8 @@ function XFeed({ candidate }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
         body: JSON.stringify({
+          // lets the server check the candidate is the caller's own
+          candidate_id: candidate?.id || undefined,
           candidateName: candidate?.name || '',
           handle: candidate?.twitter_handle || '',
           district: candidate?.office?.district_name || '',

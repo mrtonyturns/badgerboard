@@ -128,7 +128,9 @@ exports.handler = async (event) => {
 
       case 'activity': {
         need('view')
-        const { data } = await H.sb(`cc_activity?candidate_user_id=eq.${enc(candidate_user_id)}&select=*&order=created_at.desc&limit=50`)
+        // Scoped to THIS link: a candidate can work with several agencies, and
+        // keying on candidate_user_id alone showed each agency the others' activity.
+        const { data } = await H.sb(`cc_activity?candidate_user_id=eq.${enc(candidate_user_id)}&link_id=eq.${enc(link.id)}&select=*&order=created_at.desc&limit=50`)
         return reply({ ok: true, activity: Array.isArray(data) ? data : [] })
       }
 

@@ -79,8 +79,12 @@ t('AI-lock guard compares ai_access_notes', guard.includes('NEW.ai_access_notes 
 t('AI-lock guard compares ai_access_locked_at', guard.includes('NEW.ai_access_locked_at IS NOT DISTINCT FROM OLD.ai_access_locked_at'))
 t('AI-lock guard allows service_role only', guard.includes("role IN ('service_role', 'supabase_admin')") && /RAISE EXCEPTION/.test(guard))
 t('AI-lock guard is not SECURITY DEFINER (needs caller current_user)', !/SECURITY DEFINER/.test(guard))
-t('AI-lock guard trigger is BEFORE UPDATE on candidates',
-  /CREATE TRIGGER candidates_ai_lock_guard\s+BEFORE UPDATE ON candidates/.test(sweep))
+t('AI-lock guard trigger is BEFORE INSERT OR UPDATE on candidates',
+  /CREATE TRIGGER candidates_ai_lock_guard\s+BEFORE INSERT OR UPDATE ON candidates/.test(sweep))
+t('AI-lock guard resets forged lock fields on API-role inserts',
+  /TG_OP = 'INSERT'[\s\S]*NEW\.ai_access_locked_at := NULL/.test(sweep))
+t('002 unique index uses Postgres syntax (no MySQL prefix claim_text(100))',
+  !/claim_text\(100\)\);/.test(read('002_dossier_review_tables.sql')))
 
 t('exec_sql: every overload found via pg_proc', /p\.proname = 'exec_sql'/.test(sweep) && /n\.nspname = 'public'/.test(sweep))
 t('exec_sql: revoked from PUBLIC, anon, authenticated', sweep.includes("REVOKE EXECUTE ON ROUTINE %s FROM PUBLIC, anon, authenticated"))

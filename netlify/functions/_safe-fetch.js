@@ -13,16 +13,17 @@
 //   • follows redirects MANUALLY (max 5), re-validating every hop — the old
 //     redirect:'follow' let a public URL 302 to http://169.254.169.254/,
 //   • aborts after timeoutMs (covers the body read too).
-// Residual risk: fetch() re-resolves the name after our check, so a DNS-
-// rebinding host with a ~0s TTL could still race it. Pinning would need a
-// custom undici dispatcher; the check above stops every non-adversarial-DNS
-// case and all redirect-based pivots.
+//   • pins the check to the connection: requests go through an undici Agent
+//     whose socket lookup re-validates the addresses it actually connects to,
+//     so a DNS-rebinding host (public for the pre-check, private ~0s later)
+//     can't slip through between the check and the connect.
 //
 // Import (CJS):  const { safeFetch } = require('./_safe-fetch')
 // Import (ESM):  import { safeFetch } from './_safe-fetch.js'
 
 const dns = require('dns')
 const net = require('net')
+const { Agent, fetch: undiciFetch } = require('undici')
 
 class SafeFetchError extends Error {
   constructor(message) { super(message); this.name = 'SafeFetchError' }
@@ -144,6 +145,25 @@ async function assertPublicUrl(raw, { lookup = dns.promises.lookup } = {}) {
   return u
 }
 
+// Socket-level lookup for the pinned agent: the addresses the connection will
+// really use are checked here, after the URL-level pre-check, so a resolver
+// answer that changed in between (DNS rebinding) is refused at connect time.
+function guardedLookup(hostname, options, cb) {
+  dns.lookup(hostname, { ...options, all: true, verbatim: true }, (err, addrs) => {
+    if (err) return cb(err)
+    if (!addrs.length || addrs.some(a => isBlockedAddress(a.address))) {
+      return cb(new SafeFetchError('Address not allowed'))
+    }
+    if (options && options.all) return cb(null, addrs)
+    cb(null, addrs[0].address, addrs[0].family)
+  })
+}
+let pinnedAgent = null
+const pinnedFetch = (url, init) => {
+  pinnedAgent ||= new Agent({ connect: { lookup: guardedLookup } })
+  return undiciFetch(url, { ...init, dispatcher: pinnedAgent })
+}
+
 /**
  * fetch() for untrusted URLs. Same init as fetch, plus:
  *   timeoutMs (default 8000), maxRedirects (default 5).
@@ -161,10 +181,13 @@ async function safeFetch(url, opts = {}) {
   }
   let current = String(url)
   let reqInit = { ...init }
+  // A caller-supplied lookup (tests) owns DNS, so the pinned agent — which
+  // resolves with the real resolver — would contradict it; use plain fetch.
+  const doFetch = lookup ? (...a) => globalThis.fetch(...a) : pinnedFetch
   try {
     for (let hop = 0; ; hop++) {
       const u = await assertPublicUrl(current, lookup ? { lookup } : undefined)
-      const res = await fetch(u.href, { ...reqInit, redirect: 'manual', signal: ctrl.signal })
+      const res = await doFetch(u.href, { ...reqInit, redirect: 'manual', signal: ctrl.signal })
       const location = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null
       if (!location) return res
       try { await res.body?.cancel() } catch { /* already drained */ }

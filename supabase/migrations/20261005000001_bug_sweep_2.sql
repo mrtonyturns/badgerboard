@@ -158,14 +158,29 @@ DECLARE
   jwt  jsonb;
   role text;
 BEGIN
-  IF NEW.ai_access_notes     IS NOT DISTINCT FROM OLD.ai_access_notes
+  IF TG_OP = 'UPDATE'
+     AND NEW.ai_access_notes     IS NOT DISTINCT FROM OLD.ai_access_notes
      AND NEW.ai_access_locked_at IS NOT DISTINCT FROM OLD.ai_access_locked_at THEN
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'INSERT' AND NEW.ai_access_notes IS NULL AND NEW.ai_access_locked_at IS NULL THEN
     RETURN NEW;
   END IF;
 
   jwt  := NULLIF(current_setting('request.jwt.claims', true), '')::jsonb;
   role := coalesce(NULLIF(jwt ->> 'role', ''),
                    NULLIF(current_setting('request.jwt.claim.role', true), ''));
+
+  -- INSERT from an API role: reset to the defaults (NULL = follow the org AI
+  -- default) rather than erroring — no client path sets these on create, and a
+  -- forged future ai_access_locked_at would open the no-password grace window.
+  IF TG_OP = 'INSERT' AND coalesce(role, '') NOT IN ('service_role', 'supabase_admin')
+     AND (role IS NOT NULL OR current_user IN ('anon', 'authenticated')) THEN
+    NEW.ai_access_notes := NULL;
+    NEW.ai_access_locked_at := NULL;
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'INSERT' THEN RETURN NEW; END IF;
 
   IF role IS NULL THEN
     -- No JWT at all: direct DB session (SQL editor, migrations, cron) — allowed,
@@ -186,7 +201,7 @@ $$;
 
 DROP TRIGGER IF EXISTS candidates_ai_lock_guard ON candidates;
 CREATE TRIGGER candidates_ai_lock_guard
-  BEFORE UPDATE ON candidates
+  BEFORE INSERT OR UPDATE ON candidates
   FOR EACH ROW EXECUTE FUNCTION guard_candidate_ai_lock();
 
 -- ── 3. exec_sql: service role only (every overload, if any exist) ───────────
