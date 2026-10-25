@@ -35,12 +35,12 @@ import { districtKeyForOffice } from './candidate/shared'
 // The municipalities list (1,893 rows) is only fetched when City mode is used.
 let _placesCache = null
 async function loadPlaces() {
-  if (!_placesCache) _placesCache = await fetch('/geodata/wi-district-places.json').then(r => r.json()).catch(() => ({}))
+  if (!_placesCache) _placesCache = await fetch(`/geodata/wi-district-places.json?v=${GEODATA_VERSION}`).then(r => r.json()).catch(() => ({}))
   return _placesCache
 }
 let _munisCache = null
 async function loadMunicipalities() {
-  if (!_munisCache) _munisCache = await fetch('/geodata/wi-municipalities.json').then(r => r.json()).catch(() => [])
+  if (!_munisCache) _munisCache = await fetch(`/geodata/wi-municipalities.json?v=${GEODATA_VERSION}`).then(r => r.json()).catch(() => [])
   return _munisCache
 }
 
@@ -146,6 +146,10 @@ const POLL_MS            = 3000
 // background" then if a heartbeat arrived in the last 3 min.
 const MAX_WAIT_MS        = 12 * 60 * 1000
 const HEARTBEAT_STALE_MS = 3 * 60 * 1000    // no updated_at change this long ⇒ the run died
+const ERROR_SHOW_MS      = 6 * 3600 * 1000  // stored failures older than this are history, not news
+// Bump when public/geodata area files are regenerated (scripts/build-district-places.py):
+// the service worker caches /geodata/ cache-first, keyed by full URL.
+const GEODATA_VERSION    = '2026-10-25'
 const clampStage = (stage) => Math.min(Math.max(Number(stage) || 1, 1), PHASE_LABELS.length)
 // Used ONLY to decide whether a running row seen on page open is live enough
 // to attach to. Polling never compares server timestamps to this clock.
@@ -553,8 +557,11 @@ export default function Events() {
         await followRun(key, { attachTo: prog, cacheSnapshot: cached?.fetched_at ?? null, alive })
       } else if (prog?.status === 'error') {
         const errMs = Date.parse(prog.updated_at || ''), cacheMs = Date.parse(cached?.fetched_at || '')
-        // Only surface the failure if nothing succeeded after it.
-        if (!Number.isFinite(cacheMs) || !Number.isFinite(errMs) || errMs > cacheMs) {
+        // Only surface the failure if nothing succeeded after it AND it is
+        // recent — an old failure (e.g. a rate-limit hit weeks ago) is history
+        // and must not hide the "out of date — run a new search" prompt.
+        const recent = Number.isFinite(errMs) && freshMs(prog.updated_at) < ERROR_SHOW_MS
+        if (recent && (!Number.isFinite(cacheMs) || errMs > cacheMs)) {
           setRunError(prog.message || 'The last search for this area failed.')
         }
       }

@@ -255,7 +255,7 @@ export function districtKeyForOffice(office) {
 let _placesPromise = null
 function loadDistrictPlaces() {
   if (!_placesPromise) {
-    _placesPromise = fetch('/geodata/wi-district-places.json')
+    _placesPromise = fetch('/geodata/wi-district-places.json?v=2026-10-25')  // keep in step with GEODATA_VERSION in Events.jsx
       .then(r => (r.ok ? r.json() : null))
       .catch(() => null)
   }
