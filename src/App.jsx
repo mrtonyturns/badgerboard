@@ -86,6 +86,7 @@ class ErrorBoundary extends React.Component {
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { isBetaActive, hasFeature, getUserPlan } from './lib/tiers'
 import { supabaseConfigured } from './lib/supabase'
+import { COMPARE_ENABLED, ELECTIONS_ENABLED, RESULTS_ENABLED } from './lib/featureFlags'
 import { DossierStatusProvider } from './contexts/DossierStatusContext'
 import Layout from './components/Layout'
 import Login from './pages/Login'
@@ -251,9 +252,11 @@ const AppRoutes = () => {
         <Route index element={<Dashboard />} />
         <Route path="offices" element={<Offices />} />
         <Route path="places/:countySlug/:nameSlug" element={<CityDemographics />} />
-        <Route path="elections" element={<Elections />} />
-        <Route path="elections/results/:id" element={<ElectionResultsRedirect />} />
-        <Route path="elections/results" element={<Navigate to="/elections?tab=results" replace />} />
+        {/* Elections / Results / Compare are switched off in lib/featureFlags.js —
+            old links and bookmarks land on the dashboard instead of a dead page. */}
+        <Route path="elections" element={ELECTIONS_ENABLED ? <Elections /> : <Navigate to="/" replace />} />
+        <Route path="elections/results/:id" element={RESULTS_ENABLED ? <ElectionResultsRedirect /> : <Navigate to="/" replace />} />
+        <Route path="elections/results" element={<Navigate to={RESULTS_ENABLED ? "/elections?tab=results" : "/"} replace />} />
         <Route path="game-plan" element={<GamePlan />} />
         <Route path="candidates" element={<Candidates />} />
         <Route path="candidates/:id" element={<CandidateDetail />} />
@@ -269,7 +272,7 @@ const AppRoutes = () => {
         {/* Compare is sold as a plan feature (tiers.js features.compare) and the
             page has no in-page gate of its own — without this any Scout/Monitor
             account could reach it by URL. */}
-        <Route path="compare" element={<FeatureRoute feature="compare"><Compare /></FeatureRoute>} />
+        <Route path="compare" element={COMPARE_ENABLED ? <FeatureRoute feature="compare"><Compare /></FeatureRoute> : <Navigate to="/" replace />} />
         <Route path="events" element={<Events />} />
         <Route path="campaign-connect" element={<CampaignConnect />} />
         {/* Settings panes are deep-linkable: /settings/plan, /settings/security, …

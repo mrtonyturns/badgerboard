@@ -8,6 +8,7 @@
 // empty state from SPEC.md rule 4 — never as a zero, a dash dressed up as data,
 // or an invented score.
 
+import { ELECTIONS_ENABLED } from '../../lib/featureFlags'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { format, differenceInCalendarDays } from 'date-fns'
@@ -1041,7 +1042,7 @@ export default function ActionDashboard() {
           <Card style={{ padding: '18px 20px' }}>
             <CardHead
               title="Election calendar"
-              right={<TextLink onClick={() => nav('/elections')}>View all →</TextLink>}
+              right={ELECTIONS_ENABLED ? <TextLink onClick={() => nav('/elections')}>View all →</TextLink> : null}
             />
             <ElectionRows elections={upcoming.slice(0, 4)} hotId={nextRace?.id} />
           </Card>

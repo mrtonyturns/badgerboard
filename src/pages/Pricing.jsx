@@ -5,6 +5,7 @@ import {
   ArrowLeft, AlertCircle, Loader2, Lock,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { COMPARE_ENABLED, ELECTIONS_ENABLED } from '../lib/featureFlags'
 import { isNativeApp } from '../lib/native'
 import {
   CANDIDATE_PLAN_CONFIG, ACTION_PLAN_CONFIG,
@@ -237,13 +238,13 @@ const C_FEATURES = [
       { label: 'Dashboard',                   scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Active candidate slots',      scout: '0',         c_monitor: '0',    c_active: '1',    c_campaign: '3'    },
       { label: 'Game Plan',                   scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
-      { label: 'Compare tool',                scout: false,       c_monitor: false,  c_active: true,   c_campaign: true   },
+      ...(COMPARE_ENABLED ? [{ label: 'Compare tool',                scout: false,       c_monitor: false,  c_active: true,   c_campaign: true   }] : []),
       { label: 'CSV bulk import',             scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       // Social handles are plain fields on the candidate record (Candidates.jsx
       // add/edit form) with no gate anywhere — every plan can enter and read
       // them, so the table says so rather than selling an unlock that isn't one.
       { label: 'Social media links',          scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
-      { label: 'Elections tracking',          scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
+      ...(ELECTIONS_ENABLED ? [{ label: 'Elections tracking',          scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   }] : []),
     ],
   },
   { section: 'Account',
@@ -280,14 +281,14 @@ const A_FEATURES = [
       // lets any plan file a milestone under any candidate. Labelled plainly so
       // the table stops implying an Action-only capability.
       { label: 'Game Plan',                   a_monitor: true,           a_active: true,             a_campaign: true           },
-      { label: 'Compare tool',                a_monitor: false,          a_active: true,             a_campaign: true           },
+      ...(COMPARE_ENABLED ? [{ label: 'Compare tool',                a_monitor: false,          a_active: true,             a_campaign: true           }] : []),
       { label: 'Prospecting lists',           a_monitor: true,           a_active: true,             a_campaign: true           },
       // Reputation lookups are a monthly allowance, not a metered SKU — the
       // numbers come straight from RECRUIT_MONTHLY_LOOKUPS in tiers.js.
       { label: 'Recruit from voter list',     a_monitor: recruitCell('a_monitor'), a_active: recruitCell('a_active'),
         a_campaign: recruitCell('a_campaign') },
       { label: 'CSV bulk import',             a_monitor: true,           a_active: true,             a_campaign: true           },
-      { label: 'Elections tracking',          a_monitor: true,           a_active: true,             a_campaign: true           },
+      ...(ELECTIONS_ENABLED ? [{ label: 'Elections tracking',          a_monitor: true,           a_active: true,             a_campaign: true           }] : []),
     ],
   },
   { section: 'Offices',
@@ -323,7 +324,7 @@ const FAQS = [
   },
   {
     q: 'Which plans include the Game Plan?',
-    a: 'Game Plan — the campaign milestone timeline, election calendar, and task board — is included on every paid plan, starting with Monitor. The free Scout plan does not include Game Plan.',
+    a: 'Game Plan — the campaign milestone timeline and task board — is included on every paid plan, starting with Monitor. The free Scout plan does not include Game Plan.',
   },
   {
     q: "What's in a full AI profile?",
@@ -363,7 +364,7 @@ const FAQS = [
 const C_CARD_FEATURES = {
   scout: [
     '1 lite profile per month',
-    'Elections tracking',
+    ...(ELECTIONS_ENABLED ? ['Elections tracking'] : []),
     'Wisconsin district map',
   ],
   c_monitor: [
@@ -376,7 +377,7 @@ const C_CARD_FEATURES = {
     '2 profiles per month',
     '1 active candidate slot',
     'Campaign Intel briefs',
-    'Compare tool',
+    ...(COMPARE_ENABLED ? ['Compare tool'] : []),
   ],
   c_campaign: [
     '6 profiles per month',
@@ -398,7 +399,7 @@ const A_CARD_FEATURES = {
   ],
   a_active: [
     '2 profiles per candidate / month',
-    'Compare tool',
+    ...(COMPARE_ENABLED ? ['Compare tool'] : []),
     'Weekly auto-refresh',
     '2 user seats',
   ],
@@ -864,7 +865,7 @@ export default function Pricing() {
                   ctaLabel={cardState.ctaLabel}
                   loading={checkoutLoading}
                   onSelect={(key) => checkout({ plan: key, billing }, key)}
-                  note={pk === 'scout' ? 'Includes a lite profile — biography and political record sections visible. Game Plan, Compare, full 14-section profiles, and CSV import unlock on paid plans.' : null}
+                  note={pk === 'scout' ? 'Includes a lite profile — biography and political record sections visible. Game Plan, full 14-section profiles, and CSV import unlock on paid plans.' : null}
                 />
               )
             })}

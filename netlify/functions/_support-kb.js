@@ -51,11 +51,6 @@ Mission: never get surprised by your own race.
 Execution: profiles on monitored candidates refresh automatically every Monday. New articles, podcasts, posts, controversies get captured and summarized. Monday afternoon the Weekly Active Monitoring digest email goes out — one summary per monitored candidate, with buttons deep-linking into the full update in the app. Read it. Every week. Consistency wins.
 Availability: weekly auto-refresh requires Candidate Campaign or Agency Active and above. Digest email can be toggled in Settings.
 
-── COMPARE (BETA) ──
-Mission: two candidates. Side by side. No spin.
-Execution: open Compare, pick a candidate for each side from the searchable pickers. Their profiles line up section against section. Use it for debate prep and contrast messaging.
-Availability: Active tier and above. Beta — expect rough edges, report them.
-
 ── POLLING (BETA) ──
 Mission: a directional read on district opinion when no fresh poll exists.
 Execution:
@@ -94,9 +89,8 @@ Execution:
 Privacy: voter data is yours alone. Row-level security walls it off from every other account, and the support AI cannot see it at all. Period.
 Availability: CSV import on Monitor and above.
 
-── ELECTIONS ──
-Mission: every date that matters, plus results.
-Execution: the calendar holds WI elections — add your own, tie candidates and tasks to them. Results appear on the results board when entered. Filter results by county.
+── TEMPORARILY OFF ──
+The Compare tool, the Elections page, the election-results board and the Campaign Calendar tab are switched off for now while the app is simplified. If someone asks for them: they are temporarily unavailable, not gone for good. The dashboard still shows the next race countdown and upcoming elections. Do not send anyone to /compare, /elections, or a Calendar or Results tab.
 
 ── EVENTS ──
 Mission: show up where the voters already are.
@@ -128,13 +122,13 @@ Execution: display name, connected calendars, default calendars, event reminders
 ── PLANS & BILLING ──
 Two tracks. Pick your lane:
 CANDIDATE PLANS (one campaign, flat monthly):
-- Scout — Free. Dashboard, elections, one lite profile a month. The recon tier.
+- Scout — Free. Dashboard, one lite profile a month. The recon tier.
 - Monitor — $79/mo. Game Plan, full profiles (1/mo), CSV import, Broadside.
-- Active — $119/mo. Adds Compare, Campaign Intel, Discover, 2 profiles/mo.
+- Active — $119/mo. Adds Campaign Intel, Discover, 2 profiles/mo.
 - Campaign — $189/mo. Adds weekly auto-refresh monitoring, 6 profiles/mo. The full kit.
 ACTION PLANS (orgs running multiple candidates, priced by roster bracket: 1 / 2–5 / 6–10 / 11–25 / 26–50 / 51–100 / 100+ enterprise):
 - Monitor — from $89/mo. Multi-candidate Game Plan, Prospecting, Offices, Campaign Intel.
-- Active — from $149/mo. Adds Compare, weekly monitoring, more profiles per candidate.
+- Active — from $149/mo. Adds weekly monitoring, more profiles per candidate.
 - Campaign — from $219/mo. Everything, maximum profile volume.
 Billing periods: monthly, quarterly (5% off), semiannual (10% off), annual (2 months free). Trials available — the app warns you 3 days before a trial ends. Credit packs cover extra profile generations. Upgrades are instant; downgrades prorate.
 Manage all of it in Plans & Pricing. Billing questions the app cannot answer: support@badgerboardwi.com.

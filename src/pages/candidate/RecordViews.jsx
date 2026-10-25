@@ -7,6 +7,7 @@
 // filter pills and the AI-research extract/add-all flow. Profile History lists
 // every generated profile newest-first with Auto/Manual and its item count.
 
+import { ELECTIONS_ENABLED, RESULTS_ENABLED } from '../../lib/featureFlags'
 import { useEffect, useState, useRef } from 'react'
 import { format } from 'date-fns'
 import {
@@ -156,7 +157,7 @@ export function ElectionResultsView({ candidate, nav }) {
         <EmptyState
           title="No election results on file"
           body={`Results populate automatically from the WEC feed when ${candidate.name} appears in a Wisconsin election that Badger Board is tracking.`}
-          action={<CtaButton onClick={() => nav('/elections')}>Open elections calendar</CtaButton>}
+          action={ELECTIONS_ENABLED ? <CtaButton onClick={() => nav('/elections')}>Open elections calendar</CtaButton> : null}
         />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -197,7 +198,7 @@ export function ElectionResultsView({ candidate, nav }) {
                 {pct == null && result.votes != null && (
                   <div style={{ fontSize: 10.5, color: T.faint }}>{fmtInt(Number(result.votes))} votes · share not reported</div>
                 )}
-                {election?.id && (
+                {RESULTS_ENABLED && election?.id && (
                   <div style={{ marginTop: 8 }}>
                     <TextLink onClick={() => nav(`/elections?tab=results&election=${election.id}`)}>
                       View full race results →

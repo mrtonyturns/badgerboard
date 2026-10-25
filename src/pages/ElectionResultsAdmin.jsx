@@ -2,6 +2,7 @@
 // Manual election results entry for the admin panel.
 // Replaces the fake WEC poller — an admin enters results by hand on election night.
 
+import { RESULTS_ENABLED } from '../lib/featureFlags'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { format, parseISO } from 'date-fns'
@@ -566,12 +567,14 @@ export default function ElectionResultsAdmin({ showToast }) {
             Election Results — Manual Entry
           </h2>
           <p className="text-sm text-gray-500 mt-1">
-            Enter results by hand on election night. Changes appear live on the public results board.
+            Enter results by hand on election night.{RESULTS_ENABLED ? ' Changes appear live on the public results board.' : ' The public results board is switched off right now — results are saved for when it returns.'}
           </p>
         </div>
+        {RESULTS_ENABLED && (
         <Link to="/elections?tab=results" className="btn-secondary flex items-center gap-1.5 text-sm py-2">
           <Radio className="w-4 h-4" /> View Live Board
         </Link>
+        )}
       </div>
 
       {/* Election picker */}

@@ -8,6 +8,7 @@
 // the card renders the honest empty state instead of a zero or a placeholder
 // chart (SPEC rule 4 / §4 "never render zero-filled charts").
 
+import { COMPARE_ENABLED } from '../../lib/featureFlags'
 import { useEffect, useState } from 'react'
 import { format } from 'date-fns'
 import { getDossier } from '../../lib/supabase'
@@ -213,12 +214,12 @@ export default function Overview({
       disabled: !newest,
       go: () => newest && nav(`/broadside?dossier=${newest.id}`),
     },
-    {
+    ...(COMPARE_ENABLED ? [{
       label: 'Compare vs. opponent',
       sub: 'Side-by-side with another candidate',
       glyph: 'C', tileBg: '#F3EDFB', tileFg: '#7C3AED',
       go: () => nav(`/compare?a=${candidate.id}`),
-    },
+    }] : []),
     {
       label: 'Add to Game Plan',
       sub: 'Turn this week into dated milestones',

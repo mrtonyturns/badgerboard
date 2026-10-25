@@ -12,6 +12,7 @@ import BluejackLogo from './BluejackLogo'
 import BadgerBoardLogo from './BadgerBoardLogo'
 import { getUserTier, getTierConfig, isBetaActive, getUserPlanType } from '../lib/tiers'
 import { isNativeApp } from '../lib/native'
+import { COMPARE_ENABLED, ELECTIONS_ENABLED, RESULTS_ENABLED, ELECTION_CALENDAR_ENABLED } from '../lib/featureFlags'
 
 // ── Offline banner ─────────────────────────────────────────────────────────────
 // Shown while the device has no connection. Reads (recently viewed data) are
@@ -608,14 +609,14 @@ const NAV_SECTIONS = [
   // way, which is why they are NOT also listed under Beta.
   { key: 'intelligence', label: 'Intelligence', icon: Building2, extra: ['/places', '/dossiers'], items: [
     { to: '/offices',   icon: Building2,    label: 'Offices' },
-    { to: '/elections', icon: CalendarDays, label: 'Elections' },
+    { to: '/elections', icon: CalendarDays, label: 'Elections', disabled: !ELECTIONS_ENABLED },
     { to: '/profiler',  icon: FileText,     label: 'Profiler' },
-    { to: '/compare',   icon: Scale,        label: 'Compare',   feature: 'compare' },
+    { to: '/compare',   icon: Scale,        label: 'Compare',   feature: 'compare', disabled: !COMPARE_ENABLED },
     { to: '/broadside', icon: Swords,       label: 'Broadside', feature: 'broadside', webOnly: true },
   ] },
   { key: 'campaign', label: 'Campaign', icon: CalendarDays, items: [
-    { to: '/game-plan?tab=calendar', icon: CalendarDays, label: 'Calendar', q: { path: '/game-plan', tab: 'calendar' } },
-    { to: '/game-plan?tab=results',  icon: BarChart2,    label: 'Results',  q: { path: '/game-plan', tab: 'results' } },
+    { to: '/game-plan?tab=calendar', icon: CalendarDays, label: 'Calendar', q: { path: '/game-plan', tab: 'calendar' }, disabled: !ELECTION_CALENDAR_ENABLED },
+    { to: '/game-plan?tab=results',  icon: BarChart2,    label: 'Results',  q: { path: '/game-plan', tab: 'results' }, disabled: !RESULTS_ENABLED },
     { to: '/events',      icon: CalendarDays, label: 'Events', badge: 'New' },
     { to: '/voter-lists', icon: UserCheck,    label: 'Voter Lists' },
   ] },
@@ -636,6 +637,8 @@ const NAV_SECTIONS = [
 
 function navItemVisible(item, { isAdmin, isBeta, isPaid, isActionPlan, tierConfig }) {
   if (!item) return false
+  // featureFlags.js kill-switch — hidden from every account, admins included
+  if (item.disabled) return false
   if (item.adminOnly && !isAdmin) return false
   if (item.paidOnly && !(isPaid || isAdmin)) return false
   if (item.hideForActionPlan && isActionPlan && !isAdmin) return false
@@ -669,7 +672,7 @@ function itemBasePath(item) {
 function sectionForLocation(pathname, tab) {
   if (pathname === '/') return NAV_SECTIONS[0]
   if (pathname === '/game-plan' || pathname.startsWith('/game-plan/')) {
-    return (tab === 'calendar' || tab === 'results')
+    return ((tab === 'calendar' && ELECTION_CALENDAR_ENABLED) || (tab === 'results' && RESULTS_ENABLED))
       ? NAV_SECTIONS.find(x => x.key === 'campaign')
       : NAV_SECTIONS.find(x => x.key === 'todo')
   }
@@ -1305,7 +1308,8 @@ function SectionTabs({ items, pathname, tab }) {
   const isItemActive = (item) => {
     if (item.q) return (pathname === item.q.path || pathname.startsWith(item.q.path + '/')) && tab === item.q.tab
     const base = item.to.split('?')[0]
-    if (base === '/game-plan') return pathname.startsWith('/game-plan') && tab !== 'calendar' && tab !== 'results'
+    if (base === '/game-plan') return pathname.startsWith('/game-plan')
+      && !(tab === 'calendar' && ELECTION_CALENDAR_ENABLED) && !(tab === 'results' && RESULTS_ENABLED)
     // /dossiers and /profiler are the same page on two routes (see App.jsx).
     if (base === '/profiler') return pathname.startsWith('/profiler') || pathname.startsWith('/dossiers')
     return pathname === base || pathname.startsWith(base + '/')
@@ -1372,8 +1376,8 @@ export default function Layout() {
     { match: /^\/offices/,          title: 'Offices & Districts',    sub: 'All political offices tracked across Wisconsin' },
     { match: /^\/elections/,        title: 'Elections',              sub: 'Wisconsin election calendar & live results' },
     { match: /^\/places/,           title: 'City demographics',      sub: 'Census profile & comparisons' },
-    { match: /^\/game-plan\?.*tab=calendar/, title: 'Calendar',       sub: 'Election calendar & key dates', useSearch: true },
-    { match: /^\/game-plan\?.*tab=results/,  title: 'Results',        sub: 'Election night results', useSearch: true },
+    ...(ELECTION_CALENDAR_ENABLED ? [{ match: /^\/game-plan\?.*tab=calendar/, title: 'Calendar', sub: 'Election calendar & key dates', useSearch: true }] : []),
+    ...(RESULTS_ENABLED ? [{ match: /^\/game-plan\?.*tab=results/, title: 'Results', sub: 'Election night results', useSearch: true }] : []),
     { match: /^\/game-plan/,        title: 'Todo',                   sub: 'Campaign tasks & priorities' },
     { match: /^\/candidates\/.+/,  title: 'Candidates',             sub: 'Candidate profile' },
     { match: /^\/candidates/,       title: 'Candidates',             sub: 'All tracked candidates across Wisconsin' },

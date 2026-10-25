@@ -579,7 +579,7 @@ function TemplateModal({ onClose, onGenerate }) {
         {loading ? (
           <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>
         ) : elections.length === 0 ? (
-          <p className="text-sm text-gray-500 py-4">No elections found — add one on the Calendar tab first.</p>
+          <p className="text-sm text-gray-500 py-4">No upcoming elections on file yet.</p>
         ) : (
           <div className="mb-5">
             <SearchableSelect value={electionId} onChange={setElectionId}

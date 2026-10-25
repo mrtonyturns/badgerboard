@@ -10,6 +10,7 @@
 // reads or counts now lives in src/pages/profiler/reportModel.js so the reader,
 // the table, the print document and the public share view can't disagree.
 
+import { COMPARE_ENABLED } from '../lib/featureFlags'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams, createSearchParams, Link, useNavigate } from 'react-router-dom'
 import { Search } from 'lucide-react'
@@ -852,7 +853,7 @@ export default function Dossiers() {
                   }}
                 >Spar</Link>
               )}
-              <Btn onClick={() => navigate('/compare')} tap={false} style={{ minHeight: 40 }}>Compare</Btn>
+              {COMPARE_ENABLED && <Btn onClick={() => navigate('/compare')} tap={false} style={{ minHeight: 40 }}>Compare</Btn>}
               <Btn onClick={() => setShowShare(true)} tap={false} style={{ minHeight: 40 }}>Share</Btn>
               <div style={{ position: 'relative' }}>
                 <Btn onClick={() => setMoreOpen(v => !v)} tap={false} style={{ minHeight: 40 }}>More</Btn>

@@ -6,6 +6,7 @@
 // for a value the card renders the honest empty state from SPEC.md rule 4
 // instead of a zero, a dash, or a fabricated metric.
 
+import { COMPARE_ENABLED, ELECTIONS_ENABLED } from '../../lib/featureFlags'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { format, startOfWeek, addWeeks } from 'date-fns'
@@ -813,7 +814,7 @@ export default function CandidateDashboard() {
           <Card style={{ padding: '18px 20px' }}>
             <CardHead
               title="Election calendar"
-              right={<TextLink onClick={() => nav('/elections')}>All →</TextLink>}
+              right={ELECTIONS_ENABLED ? <TextLink onClick={() => nav('/elections')}>All →</TextLink> : null}
             />
             <ElectionRows elections={upcomingElections} hotId={nextElection?.id} />
           </Card>
@@ -894,12 +895,14 @@ export default function CandidateDashboard() {
                 }
                 onClick={() => nav('/dossiers')}
               />
+              {COMPARE_ENABLED && (
               <QuickAction
                 icon="⚖︎" tint="#F3EDFB" ink="#7C3AED"
                 label="Compare vs. opponent"
                 sub={hasFeature(plan, 'compare') ? 'Side-by-side profiles' : 'Available on Active plans'}
                 onClick={() => nav(hasFeature(plan, 'compare') ? '/compare' : '/plans')}
               />
+              )}
               <QuickAction
                 icon="☰" tint="#E6F5EC" ink="#15803D"
                 label="Pull a voter list"

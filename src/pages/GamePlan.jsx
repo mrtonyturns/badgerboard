@@ -31,6 +31,7 @@ import TaskBoard from '../components/TaskBoard'
 import { useDialog } from '../lib/useDialog'
 import UpgradePrompt from '../components/UpgradePrompt'
 import { useAuth } from '../contexts/AuthContext'
+import { ELECTION_CALENDAR_ENABLED, RESULTS_ENABLED } from '../lib/featureFlags'
 import { getUserPlan, hasFeature, PLAN_CONFIG } from '../lib/tiers'
 import { ELECTION_TYPE_LABELS, ELECTION_TYPE_COLORS } from '../lib/campaignEnums'
 
@@ -231,7 +232,9 @@ export default function GamePlan() {
   const [searchParams, setSearchParams] = useSearchParams()
   // Unknown ?tab= values fall back to milestones instead of a blank page.
   const rawTab = searchParams.get('tab')
-  const activeTab = ['milestones', 'calendar', 'results'].includes(rawTab) ? rawTab : 'milestones'
+  // Calendar / Results tabs are switched off in lib/featureFlags.js → ?tab= falls back to the task board
+  const validTabs = ['milestones', ...(ELECTION_CALENDAR_ENABLED ? ['calendar'] : []), ...(RESULTS_ENABLED ? ['results'] : [])]
+  const activeTab = validTabs.includes(rawTab) ? rawTab : 'milestones'
 
   // ── Plan gate — Game Plan unlocks at Monitor (locked on Scout) ────────────
   const userPlan = getUserPlan(user)
