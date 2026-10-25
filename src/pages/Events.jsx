@@ -1,7 +1,12 @@
 // Events.jsx — Outreach → District Events
-// Pick one of your offices → AI researches upcoming community events in that
-// office's district, classifies each event's political lean, and lets you add
-// events to your connected calendars (personal feed) in one click.
+// Pick an area (legislative district, county, or any Wisconsin city, village or
+// town) → AI researches upcoming community events there, classifies each
+// event's political lean, and lets you add events to your connected calendars
+// (personal feed) in one click.
+//
+// Searches are never automatic: a new search can only be started by a click,
+// and only when the area's stored results are EMPTY or OUT OF DATE (see
+// isStaleCache). The server enforces the same rule.
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import {
@@ -14,20 +19,43 @@ import {
   Users,
   CheckSquare,
   Square,
+  AlertTriangle,
+  Clock,
 } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import { supabase, getCandidates } from '../lib/supabase'
 import { getUserPlanType } from '../lib/tiers'
 import { eventImage } from '../lib/imageProxy'
 import { useDialog } from '../lib/useDialog'
+import { useAuth } from '../contexts/AuthContext'
+import LoadingBar from '../components/LoadingBar'
+import SearchableSelect from '../components/SearchableSelect'
+import { districtKeyForOffice } from './candidate/shared'
 
+// Module-level caches: each dataset is fetched at most once per page load.
+// The municipalities list (1,893 rows) is only fetched when City mode is used.
 let _placesCache = null
 async function loadPlaces() {
   if (!_placesCache) _placesCache = await fetch('/geodata/wi-district-places.json').then(r => r.json()).catch(() => ({}))
   return _placesCache
 }
-import { useAuth } from '../contexts/AuthContext'
-import LoadingBar from '../components/LoadingBar'
-import SearchableSelect from '../components/SearchableSelect'
+let _munisCache = null
+async function loadMunicipalities() {
+  if (!_munisCache) _munisCache = await fetch('/geodata/wi-municipalities.json').then(r => r.json()).catch(() => [])
+  return _munisCache
+}
+
+// Last area this viewer picked — { mode, key } — so the page reopens there.
+const AREA_STORAGE_KEY = 'bb.events.area'
+function readSavedArea() {
+  try {
+    const v = JSON.parse(localStorage.getItem(AREA_STORAGE_KEY) || 'null')
+    if (v && ['district', 'county', 'city'].includes(v.mode) && typeof v.key === 'string' && v.key) return v
+  } catch {}
+  return null
+}
+function saveArea(mode, key) {
+  try { localStorage.setItem(AREA_STORAGE_KEY, JSON.stringify({ mode, key })) } catch {}
+}
 
 // ── district derivation from an office row ───────────────────────────────────
 export function officeToDistrict(office) {
@@ -41,10 +69,12 @@ export function officeToDistrict(office) {
   return null
 }
 
-// ── Build selectable district / county / city index from the places dataset ──
+// ── Build selectable district / county index from the places dataset ──────
+// `places` is the FULL list for the area, ordered by population; it is sent to
+// the server as-is. `area` is the short human description.
 export function buildPlaceIndex(places) {
-  if (!places) return { district: [], county: [], city: [] }
-  const districts = [], counties = [], cityMap = new Map()
+  if (!places) return { district: [], county: [] }
+  const districts = [], counties = []
   const labelFor = (key) => {
     const [t, n] = key.split('-')
     if (t === 'assembly') return `Assembly District ${n}`
@@ -53,26 +83,22 @@ export function buildPlaceIndex(places) {
     return key
   }
   for (const [key, v] of Object.entries(places)) {
-    const cts = v.counties || [], pls = v.places || []
+    const cts = v?.counties || [], pls = v?.places || []
     if (key.startsWith('county-')) {
       const cty = key.slice(7)
-      counties.push({ key, name: `${cty} County`, counties: [cty],
-        area: pls.length ? `${pls.slice(0, 8).join(', ')} (${cty} County)` : `${cty} County` })
-      for (const city of pls) if (!cityMap.has(city)) cityMap.set(city, cty)
+      counties.push({ key, name: `${cty} County`, counties: cts.length ? cts : [cty], places: pls,
+        area: areaDescription(pls, cts.length ? cts : [cty]) })
     } else {
-      districts.push({ key, name: labelFor(key), counties: cts,
-        area: `${pls.join(', ')}${cts.length ? ` (${cts.join(', ')} ${cts.length > 1 ? 'counties' : 'county'})` : ''}` })
+      districts.push({ key, name: labelFor(key), counties: cts, places: pls, area: areaDescription(pls, cts) })
     }
   }
   const ord = { congress: 0, senate: 1, assembly: 2 }
   districts.sort((a, b) => {
     const [ta, na] = a.key.split('-'), [tb, nb] = b.key.split('-')
-    return (ord[ta] - ord[tb]) || (parseInt(na) - parseInt(nb))
+    return ((ord[ta] ?? 9) - (ord[tb] ?? 9)) || (parseInt(na) - parseInt(nb))
   })
   counties.sort((a, b) => a.name.localeCompare(b.name))
-  const cities = [...cityMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([city, cty]) => ({ key: `city-${city}-${cty}`, name: `${city}, WI`, counties: [cty], area: `${city}, WI (${cty} County)` }))
-  return { district: districts, county: counties, city: cities }
+  return { district: districts, county: counties }
 }
 
 const PATTERN = `url("data:image/svg+xml,%3Csvg width='44' height='44' viewBox='0 0 44 44' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='0.07'%3E%3Ccircle cx='6' cy='6' r='2.2'/%3E%3Ccircle cx='28' cy='18' r='1.6'/%3E%3Ccircle cx='14' cy='32' r='1.9'/%3E%3Ccircle cx='38' cy='38' r='2.4'/%3E%3C/g%3E%3C/svg%3E")`
@@ -115,13 +141,21 @@ const PHASE_LABELS = [
   'Adding venues, addresses and photos…',
 ]
 const POLL_MS            = 3000
-const MAX_WAIT_MS        = 8 * 60 * 1000    // the function's budget is 15 min; real runs are 1–5
-const HEARTBEAT_STALE_MS = 3 * 60 * 1000    // progress row untouched this long ⇒ the run died
-const CACHE_MS           = 24 * 3600 * 1000 // shared district_events cache is fresh for a day
-const phaseLabel = (stage) => PHASE_LABELS[Math.min(Math.max(Number(stage) || 1, 1), 4) - 1]
+// The function's budget is 15 min and it heartbeats every 30 s; real runs are
+// 2–5 min. We stop polling at 12 min — and only ever say "still running in the
+// background" then if a heartbeat arrived in the last 3 min.
+const MAX_WAIT_MS        = 12 * 60 * 1000
+const HEARTBEAT_STALE_MS = 3 * 60 * 1000    // no updated_at change this long ⇒ the run died
+const clampStage = (stage) => Math.min(Math.max(Number(stage) || 1, 1), PHASE_LABELS.length)
+// Used ONLY to decide whether a running row seen on page open is live enough
+// to attach to. Polling never compares server timestamps to this clock.
 const freshMs = (iso) => {
   const t = Date.parse(iso || '')
   return Number.isFinite(t) ? Date.now() - t : Infinity
+}
+const fmtElapsed = (ms) => {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
 }
 
 // ── lean.basis → a neutral, human badge ──────────────────────────────────────
@@ -153,38 +187,118 @@ export function dateBadgeParts(dateStr) {
 }
 // ─── R2C PURE HELPERS END ───
 
-// ── Sep-21 sweep: cached search results were shown as "upcoming" long after
-// the events already happened, because "next 60 days" was computed once at
-// SEARCH time and never revisited. These two helpers make "upcoming" and
-// "fresh" both relative to render time instead of fetch time. ─────────────
+// ── Upcoming / staleness rules ───────────────────────────────────────────────
+// "Upcoming" and "out of date" are both measured from TODAY in Wisconsin
+// (America/Chicago), never from when the search ran. isStaleCache mirrors the
+// server's rule in research-district-events-background.js exactly — a new
+// search is only allowed (client AND server) when it returns true.
 // ─── R4 PURE HELPERS BEGIN ───
-/** Drops events whose date is before today (local day boundary — an event
- * happening today is kept). Events with a missing/unparseable date are never
- * dropped — silently disappearing events is worse than a missing filter — but
- * they're sorted after every dated event so a stale/bad date can't lead the
- * list. */
-export function filterUpcoming(events, now = new Date()) {
-  if (!Array.isArray(events)) return []
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  const dated = [], undated = []
-  for (const ev of events) {
-    const t = Date.parse(`${ev?.date_start}T00:00:00`)
-    if (!Number.isFinite(t)) { undated.push(ev); continue }
-    if (t >= todayStart) dated.push(ev)
-  }
-  dated.sort((a, b) => Date.parse(`${a.date_start}T00:00:00`) - Date.parse(`${b.date_start}T00:00:00`))
-  return [...dated, ...undated]
+const STALE_AFTER_MS = 7 * 24 * 3600 * 1000
+
+/** Today's date in Wisconsin as YYYY-MM-DD. */
+export function centralTodayIso(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now)
+  const get = (t) => (parts.find(p => p.type === t) || {}).value
+  return `${get('year')}-${get('month')}-${get('day')}`
 }
 
-/** True once a cached search is older than `thresholdDays`. A missing/invalid
- * timestamp is never stale — there's nothing to warn about — so callers don't
- * need to guard this themselves. */
-export function isStale(lastSearchedAt, now = new Date(), thresholdDays = 7) {
-  const t = Date.parse(lastSearchedAt || '')
-  if (!Number.isFinite(t)) return false
-  const nowMs = now instanceof Date ? now.getTime() : Date.parse(now)
-  if (!Number.isFinite(nowMs)) return false
-  return nowMs - t > thresholdDays * 24 * 3600 * 1000
+/** First 10 chars of a date string if they are a real calendar day, else null. */
+export function isoDay(value) {
+  const d = String(value ?? '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null
+  const t = Date.parse(`${d}T12:00:00Z`)
+  if (!Number.isFinite(t) || new Date(t).toISOString().slice(0, 10) !== d) return null
+  return d
+}
+
+/** The day an event is over: (date_end || date_start), or null if unparseable. */
+export function eventEndDay(ev) {
+  return isoDay(ev?.date_end || ev?.date_start)
+}
+
+/** Stale ⇒ the area may be searched again. Stale when the row is missing, has
+ * no events, has no event ending today or later, or was fetched more than 7
+ * days ago (a missing/unparseable fetched_at can't prove freshness). */
+export function isStaleCache(row, todayIso, nowMs = Date.now()) {
+  if (!row || !Array.isArray(row.events) || row.events.length === 0) return true
+  const today = todayIso || centralTodayIso()
+  if (!row.events.some(ev => { const end = eventEndDay(ev); return end !== null && end >= today })) return true
+  const fetched = Date.parse(row.fetched_at || '')
+  if (!Number.isFinite(fetched)) return true
+  return nowMs - fetched > STALE_AFTER_MS
+}
+
+/** Events still worth showing: a valid start date, and (date_end || date_start)
+ * on or after today — so a multi-day fair stays listed until it ends. Events
+ * with unparseable dates are hidden (they would render as "Invalid Date").
+ * Sorted by start date. `today` is a YYYY-MM-DD string or a Date. */
+export function filterUpcoming(events, today = new Date()) {
+  if (!Array.isArray(events)) return []
+  const todayIso = today instanceof Date ? centralTodayIso(today) : String(today)
+  const out = []
+  for (const ev of events) {
+    const start = isoDay(ev?.date_start)
+    const end = eventEndDay(ev)
+    if (!start || !end) continue
+    if (end >= todayIso) out.push({ ev, start })
+  }
+  out.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0))
+  return out.map(x => x.ev)
+}
+
+/** "Oct 3" in Wisconsin time, or '' for a missing/bad timestamp. */
+export function fmtMonDay(iso) {
+  const t = Date.parse(iso || '')
+  if (!Number.isFinite(t)) return ''
+  return new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' })
+}
+
+/** "Wausau, Weston, Kronenwetter and 52 more (Marathon County)". */
+export function areaDescription(places, counties) {
+  const pls = Array.isArray(places) ? places.filter(Boolean) : []
+  const cts = Array.isArray(counties) ? counties.filter(Boolean) : []
+  const head = pls.slice(0, 3).join(', ')
+  const more = pls.length > 3 ? ` and ${pls.length - 3} more` : ''
+  const cty = cts.length === 0 ? ''
+    : cts.length === 1 ? `${cts[0]} County`
+    : cts.length <= 3 ? `${cts.join(', ')} counties`
+    : `${cts.slice(0, 3).join(', ')} and ${cts.length - 3} more counties`
+  if (!head) return cty
+  return cty ? `${head}${more} (${cty})` : `${head}${more}`
+}
+
+/** City-mode options from wi-municipalities.json (already population-sorted).
+ * key = `city-${label}-${county}` (server contract). The picker label always
+ * carries the type and county, so same-named places are distinguishable. If
+ * two rows collide on key (e.g. a city and a village with the same name in one
+ * county), the more populous one wins. */
+export function buildCityOptions(munis) {
+  if (!Array.isArray(munis)) return []
+  const counties = new Map()
+  for (const m of munis) {
+    if (!m?.label || !m?.c) continue
+    if (!counties.has(m.label)) counties.set(m.label, new Set())
+    counties.get(m.label).add(m.c)
+  }
+  const seen = new Set(), out = []
+  for (const m of munis) {
+    if (!m?.label || !m?.c || !m?.n) continue
+    const key = `city-${m.label}-${m.c}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const multi = counties.get(m.label).size > 1
+    out.push({
+      key,
+      name: multi ? `${m.label} (${m.c} Co.)` : `${m.label}, WI`,
+      pickLabel: `${m.n} \u2014 ${m.t}, ${m.c} Co.`,
+      counties: [m.c],
+      places: [m.n],
+      area: `${m.n} (${m.t}, ${m.c} County)`,
+    })
+  }
+  return out
 }
 // ─── R4 PURE HELPERS END ───
 
@@ -201,10 +315,12 @@ function Dialog({ onClose, className = '', onClick, children }) {
 
 function fmtDate(e) {
   const opts = { month: 'short', day: 'numeric' }
-  const s = new Date(e.date_start + 'T12:00:00')
-  let out = s.toLocaleDateString('en-US', opts)
-  if (e.date_end && e.date_end !== e.date_start) {
-    out += `–${new Date(e.date_end + 'T12:00:00').toLocaleDateString('en-US', opts)}`
+  const start = isoDay(e?.date_start)
+  if (!start) return ''
+  let out = new Date(`${start}T12:00:00`).toLocaleDateString('en-US', opts)
+  const end = isoDay(e.date_end)
+  if (end && end !== start) {
+    out += `–${new Date(`${end}T12:00:00`).toLocaleDateString('en-US', opts)}`
   }
   return out
 }
@@ -220,19 +336,26 @@ export default function Events() {
 
   const [mode, setMode]               = useState('district')  // district | county | city
   const [sel, setSel]                 = useState('')
-  const [events, setEvents]           = useState(null)
-  const [fetchedAt, setFetchedAt]     = useState(null)
-  const [cacheChecked, setCacheChecked] = useState(false)  // stored events looked up for this area
-  const [loading, setLoading]         = useState(false)
-  const [phase, setPhase]             = useState('')
-  const [error, setError]             = useState(null)
+  const [areaReady, setAreaReady]     = useState(false)       // default area resolved
+  const [places, setPlaces]           = useState(null)
+  const [munis, setMunis]             = useState(null)        // lazy: City mode only
+  const [row, setRow]                 = useState(null)        // district_events cache row
+  const [cacheChecked, setCacheChecked] = useState(false)     // cache looked up for this area
+  const [loadError, setLoadError]     = useState(null)        // cache/progress query failed
+  const [reloadKey, setReloadKey]     = useState(0)
+  const [run, setRun]                 = useState(null)        // { stage, startedAt } while a search runs
+  const [runError, setRunError]       = useState(null)
+  const [runNotice, setRunNotice]     = useState(null)
+  const [nowMs, setNowMs]             = useState(() => Date.now())
   const [filter, setFilter]           = useState('all')
   const [pickerEvent, setPickerEvent] = useState(null)   // event awaiting calendar choice
   const [pickerChecked, setPickerChecked] = useState({})
   const [pickerRemember, setPickerRemember] = useState(false)
   const [added, setAdded]             = useState({})     // event name → true
   const [toast, setToast]             = useState(null)
-  const [places, setPlaces]           = useState(null)
+
+  const events    = row?.events || null
+  const fetchedAt = row?.fetched_at || null
 
   // ── Campaign Connect: push events to connected candidates (Action plans) ────
   const isAction = getUserPlanType(user) === 'action'
@@ -256,118 +379,230 @@ export default function Events() {
   }, [isAction, user?.id])
 
   useEffect(() => { loadPlaces().then(setPlaces) }, [])
+  useEffect(() => {
+    if (mode === 'city' && !munis) loadMunicipalities().then(setMunis)
+  }, [mode, munis])
 
-  // Poll-generation counter: every new loadEvents run (or unmount) bumps it,
+  // ── Default area ─────────────────────────────────────────────────────────────
+  // (a) the area this viewer last picked, else (b) the district of their first
+  // candidate with an office, else (c) Congressional District 1.
+  useEffect(() => {
+    let cancelled = false
+    const saved = readSavedArea()
+    if (saved) { setMode(saved.mode); setSel(saved.key); setAreaReady(true); return }
+    getCandidates()
+      .then(({ data }) => {
+        if (cancelled) return
+        let key = null
+        for (const c of data || []) {
+          if (!c?.office) continue
+          key = districtKeyForOffice(c.office) || officeToDistrict(c.office)?.key || null
+          if (key) break
+        }
+        if (key) { setMode(key.startsWith('county-') ? 'county' : 'district'); setSel(key) }
+        else { setMode('district'); setSel('congress-1') }
+      })
+      .catch(() => { if (!cancelled) { setMode('district'); setSel('congress-1') } })
+      .finally(() => { if (!cancelled) setAreaReady(true) })
+    return () => { cancelled = true }
+  }, [])
+
+  // Poll-generation counter: every new area/search (or unmount) bumps it,
   // which cancels older in-flight loops — no setState after unmount, and a
-  // slow response for a previously-selected district can never overwrite the
-  // current district's results (stale-response-wins race).
+  // slow response for a previously-selected area can never overwrite the
+  // current area's results (stale-response-wins race).
   const pollGenRef = useRef(0)
   useEffect(() => () => { pollGenRef.current++ }, [])
 
-  const index   = useMemo(() => buildPlaceIndex(places), [places])
-  // Memoized so both keep one identity until places/mode/sel actually change
-  // (the `|| []` fallback used to mint a new array every render).
-  const options = useMemo(() => index[mode] || [], [index, mode])
+  const index       = useMemo(() => buildPlaceIndex(places), [places])
+  const cityOptions = useMemo(() => buildCityOptions(munis), [munis])
+  // Memoized so both keep one identity until the data/mode/sel actually change.
+  const options = useMemo(() => (mode === 'city' ? cityOptions : index[mode]) || [], [index, cityOptions, mode])
+  const pickerOptions = useMemo(() => options.map(o => ({ value: o.key, label: o.pickLabel || o.name })), [options])
   const target  = useMemo(() => options.find(o => o.key === sel) || null, [options, sel])
 
-  // Keep a valid selection when the mode changes or the dataset loads.
-  // sel is a dep (the guard reads it). The only write is setSel(options[0].key),
-  // a key that IS in options, so the re-run it causes passes the guard and
-  // stops — one step to converge, no loop.
+  // Keep a valid selection when the mode changes or a dataset loads (only once
+  // the default area is resolved, so it can't clobber it). The only write is
+  // a key that IS in options, so the effect converges in one step.
   useEffect(() => {
+    if (!areaReady) return
     if (options.length && !options.find(o => o.key === sel)) setSel(options[0].key)
-  }, [options, sel])
+  }, [areaReady, options, sel])
 
+  const chooseArea = (key) => { setSel(key); saveArea(mode, key) }
+
+  // Query errors are THROWN so a failed read can never masquerade as
+  // "nothing has been searched yet".
   const readCache = useCallback(async (key) => {
-    const { data } = await supabase.from('district_events')
+    const { data, error } = await supabase.from('district_events')
       .select('events, fetched_at').eq('district_key', key).maybeSingle()
+    if (error) throw error
     return data || null
   }, [])
 
-  // Returns null when the row doesn't exist AND when the table isn't there yet
-  // (migration not applied) — callers then fall back to watching the cache row,
-  // so this is a pure upgrade, never a new failure mode.
   const readProgress = useCallback(async (key) => {
-    const { data } = await supabase.from('district_events_progress')
+    const { data, error } = await supabase.from('district_events_progress')
       .select('stage, status, message, started_at, updated_at')
       .eq('district_key', key).maybeSingle()
+    if (error) throw error
     return data || null
   }, [])
 
-  /** Watch a run that is already in flight (ours or someone else's) to completion. */
-  const watchRun = useCallback(async (key, startedAt, alive) => {
-    const deadline = startedAt + MAX_WAIT_MS
-    let sawProgress = false
+  /** Poll a run to completion. Resolves 'done' | 'empty' | 'background'; throws
+   * on a server-reported error or a dead run.
+   *  - progSnapshot: the progress row's updated_at read BEFORE we POSTed (or
+   *    null). Rows with updated_at <= it belong to an earlier run and are
+   *    ignored — a server-vs-server comparison, never against this clock.
+   *  - attachTo: a live running row we are joining instead of starting one.
+   *  - cacheSnapshot: the cache row's fetched_at before the run; a newer cache
+   *    row is proof the run finished.
+   * Liveness is judged by LOCAL elapsed time since the last observed change of
+   * updated_at (the server heartbeats every 30 s). */
+  const watchRun = useCallback(async (key, { progSnapshot = null, attachTo = null, cacheSnapshot = null, alive }) => {
+    const startedLocal = Date.now()
+    const snapMs = progSnapshot ? Date.parse(progSnapshot) : -Infinity
+    const cacheSnapMs = cacheSnapshot ? Date.parse(cacheSnapshot) : -Infinity
+    let lastSeen = attachTo?.updated_at ?? null
+    let lastChangeLocal = Date.now()
     for (;;) {
       await new Promise(r => setTimeout(r, POLL_MS))
-      if (!alive()) return
-      const [prog, row] = await Promise.all([readProgress(key), readCache(key)])
-      if (!alive()) return
+      if (!alive()) return 'cancelled'
+      let prog = null, cache = null
+      try {
+        ;[prog, cache] = await Promise.all([readProgress(key), readCache(key)])
+      } catch {
+        // A transient read failure is not a verdict on the run; the heartbeat
+        // timeout below still bounds how long we wait.
+      }
+      if (!alive()) return 'cancelled'
 
-      // The cache row landing is proof the run finished, whatever the status row says.
-      if (row?.fetched_at && new Date(row.fetched_at).getTime() >= startedAt - 5000 && row.events?.length) {
-        setEvents(row.events); setFetchedAt(row.fetched_at); setPhase(''); setLoading(false)
-        return
+      const cacheMs = Date.parse(cache?.fetched_at || '')
+      if (cache?.events?.length && Number.isFinite(cacheMs) && cacheMs > cacheSnapMs) {
+        setRow(cache)
+        return 'done'
       }
 
-      if (prog && freshMs(prog.updated_at) < HEARTBEAT_STALE_MS) {
-        sawProgress = true
-        if (prog.status === 'error') {
-          throw new Error(prog.message || 'Event research failed — try Refresh again.')
-        }
+      const progMs = Date.parse(prog?.updated_at || '')
+      if (prog && Number.isFinite(progMs) && progMs > snapMs) {
+        if (prog.updated_at !== lastSeen) { lastSeen = prog.updated_at; lastChangeLocal = Date.now() }
+        if (prog.status === 'error') throw new Error(prog.message || 'The event search failed.')
         if (prog.status === 'done') {
-          // Includes the "your cache is still good" case, where nothing new is written.
-          if (row?.events?.length) {
-            setEvents(row.events); setFetchedAt(row.fetched_at); setPhase(''); setLoading(false)
-            return
-          }
-          throw new Error('No public events found for this area right now — try Refresh later.')
+          if (cache) setRow(cache)
+          return cache?.events?.length ? 'done' : 'empty'
         }
-        setPhase(phaseLabel(prog.stage))
-      } else if (sawProgress) {
-        // We had a heartbeat and lost it: the function died mid-run. Say so now
-        // instead of sitting on a spinner until the deadline.
-        throw new Error('The event search stopped unexpectedly — try Refresh again.')
+        const stage = clampStage(prog.stage)
+        setRun(r => (r && r.stage !== stage ? { ...r, stage } : r))
       }
 
-      if (Date.now() > deadline) {
-        throw new Error('This area is taking longer than expected. The search is still running in the background — come back in a minute and press Refresh.')
+      if (Date.now() - lastChangeLocal > HEARTBEAT_STALE_MS) {
+        throw new Error('The event search stopped responding — no progress for 3 minutes, so it most likely failed.')
       }
+      // Only reachable with a heartbeat inside the last 3 minutes.
+      if (Date.now() - startedLocal > MAX_WAIT_MS) return 'background'
     }
   }, [readCache, readProgress])
 
-  const loadEvents = useCallback(async (force = false) => {
-    if (!target) return
+  /** Show the progress card for a run and follow it to its outcome. */
+  const followRun = useCallback(async (key, opts) => {
+    const { alive, attachTo } = opts
+    const serverStart = Date.parse(attachTo?.started_at || '')
+    setRunError(null); setRunNotice(null)
+    setRun({
+      stage: clampStage(attachTo?.stage),
+      // Display only (elapsed timer).
+      startedAt: Number.isFinite(serverStart) && serverStart <= Date.now() ? serverStart : Date.now(),
+    })
+    try {
+      const outcome = await watchRun(key, opts)
+      if (!alive()) return
+      if (outcome === 'background') {
+        setRunNotice('This search is taking longer than usual but is still reporting progress. Results are saved for everyone — check back in a few minutes.')
+      } else if (outcome === 'empty') {
+        setRunNotice('The search finished but found no upcoming public events for this area.')
+      }
+    } catch (e) {
+      if (alive()) setRunError(e.message)
+    }
+    if (alive()) setRun(null)
+  }, [watchRun])
+
+  // Area change → show what is stored, attach to a live run if there is one,
+  // and NOTHING else: no search ever starts without a click.
+  useEffect(() => {
+    // Bumping the generation cancels the previous area's watch loop (also when
+    // the new mode's list is still loading and there is no target yet).
+    const gen = ++pollGenRef.current
+    const alive = () => pollGenRef.current === gen
+    setRow(null); setCacheChecked(false); setLoadError(null)
+    setRun(null); setRunError(null); setRunNotice(null)
+    if (!target?.key) return
+    const key = target.key
+    ;(async () => {
+      let cached, prog
+      try {
+        ;[cached, prog] = await Promise.all([readCache(key), readProgress(key)])
+      } catch {
+        if (alive()) { setLoadError("Couldn't load events — retry"); setCacheChecked(true) }
+        return
+      }
+      if (!alive()) return
+      setRow(cached); setCacheChecked(true)
+      // A run already in flight (this viewer's, from before they navigated
+      // away, or anyone else's) is watched, not restarted.
+      if (prog?.status === 'running' && freshMs(prog.updated_at) < HEARTBEAT_STALE_MS) {
+        await followRun(key, { attachTo: prog, cacheSnapshot: cached?.fetched_at ?? null, alive })
+      } else if (prog?.status === 'error') {
+        const errMs = Date.parse(prog.updated_at || ''), cacheMs = Date.parse(cached?.fetched_at || '')
+        // Only surface the failure if nothing succeeded after it.
+        if (!Number.isFinite(cacheMs) || !Number.isFinite(errMs) || errMs > cacheMs) {
+          setRunError(prog.message || 'The last search for this area failed.')
+        }
+      }
+    })()
+  }, [target?.key, reloadKey, readCache, readProgress, followRun])
+
+  // Elapsed-time ticker for the progress card.
+  useEffect(() => {
+    if (!run) return
+    const id = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [run])
+
+  const todayIso = centralTodayIso()
+  const stale    = isStaleCache(row, todayIso)
+  // Owner policy: a new search is only offered when results are empty or out of date.
+  const canSearch = Boolean(target) && cacheChecked && !loadError && !run && stale
+
+  /** The ONLY way a search starts: an explicit click, and only on a stale/empty area. */
+  const startSearch = useCallback(async () => {
+    if (!target || run) return
+    if (!isStaleCache(row, centralTodayIso())) return
     const key = target.key
     const gen = ++pollGenRef.current
     const alive = () => pollGenRef.current === gen
-    setLoading(true); setError(null); setPhase('Checking for cached events…')
+    setRunError(null); setRunNotice(null)
+    setRun({ stage: 1, startedAt: Date.now() })
     try {
-      // 1. Cache first — shared across all users, refreshed daily
-      if (!force) {
-        const row = await readCache(key)
-        if (!alive()) return
-        if (row?.events?.length && row.fetched_at && Date.now() - new Date(row.fetched_at).getTime() < CACHE_MS) {
-          setEvents(row.events); setFetchedAt(row.fetched_at); setPhase(''); setLoading(false)
-          return
-        }
-      }
-
-      // 2. Is a run for this area already in flight? Then attach to it instead of
-      //    starting a second one — this is what makes progress survive leaving
-      //    the page (and stops two users burning double the research spend).
-      const existing = await readProgress(key)
+      // Snapshot both durable channels BEFORE posting (see watchRun).
+      const [prog, cache] = await Promise.all([readProgress(key), readCache(key)])
       if (!alive()) return
-      if (existing?.status === 'running' && freshMs(existing.updated_at) < HEARTBEAT_STALE_MS) {
-        setPhase(phaseLabel(existing.stage))
-        await watchRun(key, Date.parse(existing.started_at || existing.updated_at) || Date.now(), alive)
+      if (prog?.status === 'running' && freshMs(prog.updated_at) < HEARTBEAT_STALE_MS) {
+        await followRun(key, { attachTo: prog, cacheSnapshot: cache?.fetched_at ?? null, alive })
         return
       }
-
-      // 3. Kick off the background research (Netlify answers 202 immediately —
-      //    every real outcome comes back through the progress row).
-      const startedAt = Date.now()
+      if (cache && !isStaleCache(cache, centralTodayIso())) {
+        // Someone else refreshed this area in the meantime.
+        setRow(cache); setRun(null)
+        return
+      }
       const { data: { session } } = await supabase.auth.getSession()
+      // The server silently drops unauthenticated requests (it must not let
+      // them mark a shared area as failed), so report a lost session here.
+      if (!session?.access_token) {
+        setRunError('Your sign-in has expired — refresh the page, sign in again and retry.')
+        setRun(null)
+        return
+      }
       const res = await fetch('/.netlify/functions/research-district-events-background', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
@@ -375,91 +610,25 @@ export default function Events() {
           district_key: key,
           district_name: target.name,
           counties: target.counties || [],
-          force,
+          places: target.places || [],
           area_description: target.area || target.name,
+          force: false,
         }),
       })
       if (!alive()) return
-      if (res.status !== 202 && !res.ok) throw new Error('Could not start event research — try again')
-      setPhase(PHASE_LABELS[0])
-      await watchRun(key, startedAt, alive)
-    } catch (e) {
-      if (alive()) { setError(e.message); setPhase(''); setLoading(false) }
-      return
-    }
-    if (alive()) setLoading(false)
-    // target is memoized on (places, mode, sel), so this changes when the
-    // selected area does — same cadence as the old target?.key key — and it
-    // now reads target.name/counties/area from the current object.
-  }, [target, readCache, readProgress, watchRun])
-
-  // Area change → show what is already stored, and nothing else.
-  //
-  // This used to call loadEvents(false), which on a cache miss kicked off the
-  // ~2-minute server research job on page LOAD, with no user action. The search
-  // now only ever starts from the explicit "Search for new events" button
-  // below; mounting is a single cheap SELECT against the shared cache.
-  useEffect(() => {
-    if (!target?.key) return
-    const key = target.key
-    // Same generation guard loadEvents uses: bumping it cancels the previous
-    // area's watch loop, and makes this one cancellable in turn.
-    const gen = ++pollGenRef.current
-    const alive = () => pollGenRef.current === gen
-    setEvents(null); setFetchedAt(null); setError(null); setPhase(''); setLoading(false); setCacheChecked(false)
-    ;(async () => {
-      const [row, prog] = await Promise.all([readCache(key), readProgress(key)])
-      if (!alive()) return
-      if (row?.events?.length) { setEvents(row.events); setFetchedAt(row.fetched_at) }
-      setCacheChecked(true)
-      // Attaching to a run that is ALREADY in flight (this user's, from before
-      // they navigated away, or another user's) starts nothing — it only
-      // watches — so it keeps the documented "leave the page and come back"
-      // behavior without reintroducing the auto-start.
-      if (prog?.status === 'running' && freshMs(prog.updated_at) < HEARTBEAT_STALE_MS) {
-        setLoading(true); setPhase(phaseLabel(prog.stage))
-        try {
-          await watchRun(key, Date.parse(prog.started_at || prog.updated_at) || Date.now(), alive)
-        } catch (e) {
-          if (alive()) { setError(e.message); setPhase('') }
-        }
-        if (alive()) setLoading(false)
+      if (res.status !== 202 && !res.ok) {
+        const j = await res.json().catch(() => ({}))
+        throw new Error(j.error || 'Could not start the event search — try again.')
       }
-    })()
-  }, [target?.key, readCache, readProgress, watchRun])
+      await followRun(key, { progSnapshot: prog?.updated_at ?? null, cacheSnapshot: cache?.fetched_at ?? null, alive })
+    } catch (e) {
+      if (alive()) { setRunError(e.message || 'Could not start the event search — try again.'); setRun(null) }
+    }
+  }, [target, run, row, readCache, readProgress, followRun])
 
-  // A single flag covers both "the auto-refresh already ran" and "the user
-  // already clicked Search themselves" — either one means we must never kick
-  // off a second, silent run behind their back. Refs (not state) so setting
-  // them can't itself trigger a re-render/effect loop.
-  const searchStartedRef = useRef(false)
-  const startSearch = useCallback(() => {
-    searchStartedRef.current = true
-    loadEvents(true)
-  }, [loadEvents])
-
-  // Sep-21 sweep: a cache older than a week was shown with no warning and no
-  // way to get current data short of noticing the stale date yourself and
-  // clicking Refresh. Once the stored results are in and look stale, kick off
-  // the same search the button would (still subject to loadEvents' own
-  // in-flight guard), while the stale list stays on screen underneath a
-  // banner. `autoRefreshFiredRef` makes sure this only ever happens once per
-  // page mount, however many times `events`/`fetchedAt` change afterward.
-  const autoRefreshFiredRef = useRef(false)
-  useEffect(() => {
-    if (autoRefreshFiredRef.current || searchStartedRef.current) return
-    if (!cacheChecked || loading) return
-    if (!events || !events.length) return
-    if (!isStale(fetchedAt, new Date())) return
-    autoRefreshFiredRef.current = true
-    startSearch()
-  }, [cacheChecked, loading, events, fetchedAt, startSearch])
-
-  // "next 60 days" only means anything if it's measured from now, not from
-  // whenever the cache was last populated — so every rendered list (grid,
-  // select-mode, the lean filters below) is derived from `upcoming`, never
+  // Everything rendered derives from `upcoming` (Central-time today), never
   // straight from `events`.
-  const upcoming = useMemo(() => filterUpcoming(events, new Date()), [events])
+  const upcoming = useMemo(() => filterUpcoming(events, todayIso), [events, todayIso])
 
   const filtered = useMemo(() => {
     if (!upcoming.length) return []
@@ -581,7 +750,7 @@ export default function Events() {
 
   return (
     <div className="space-y-5">
-      <LoadingBar loading={loading} />
+      <LoadingBar loading={Boolean(run) || (Boolean(target) && !cacheChecked)} />
 
       {/* header */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
@@ -601,11 +770,11 @@ export default function Events() {
         </div>
       </div>
 
-      {/* area selector: district / county / city + refresh */}
+      {/* area selector: district / county / city, village or town */}
       <div className="card py-4">
         <div className="flex flex-col gap-3">
-          <div className="flex gap-1.5">
-            {[['district', 'District'], ['county', 'County'], ['city', 'City']].map(([k, label]) => (
+          <div className="flex gap-1.5 flex-wrap">
+            {[['district', 'District'], ['county', 'County'], ['city', 'City / village / town']].map(([k, label]) => (
               <button key={k} onClick={() => setMode(k)}
                 className={`text-xs font-bold px-3.5 py-1.5 rounded-full border-2 transition-colors ${mode === k ? 'bg-brand-navy border-brand-navy text-white' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'}`}>
                 {label}
@@ -616,39 +785,120 @@ export default function Events() {
             <div className="relative flex-1 max-w-xl">
               <SearchableSelect
                 value={sel}
-                onChange={setSel}
-                options={options.map(o => ({ value: o.key, label: o.name }))}
+                onChange={chooseArea}
+                options={pickerOptions}
                 placeholder={options.length ? 'Select an area…' : 'Loading…'}
                 buttonClassName="font-semibold"
                 disabled={!options.length}
-                searchPlaceholder={`Search ${mode === 'district' ? 'districts' : mode === 'county' ? 'counties' : 'cities'}…`}
+                searchPlaceholder={`Search ${mode === 'district' ? 'districts' : mode === 'county' ? 'counties' : 'cities, villages and towns'}…`}
               />
             </div>
             {target && (
               <span className="text-xs font-bold bg-red-50 text-brand-red px-2.5 py-1 rounded-full whitespace-nowrap">{target.name}</span>
             )}
-            {/* The only thing that starts the AI search — never a page load
-                (auto-refresh of a stale cache excepted; see startSearch). */}
-            <button onClick={startSearch} disabled={loading || !target}
-              className="flex items-center gap-1.5 bg-brand-red text-white text-sm font-extrabold px-4 py-2 rounded-xl hover:bg-red-800 disabled:opacity-50 whitespace-nowrap transition-colors">
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              {loading ? 'Searching…' : events ? 'Search for new events' : 'Search for events'}
-            </button>
           </div>
           <p className="text-xs text-gray-400 font-semibold">
-            Browse upcoming public events by legislative district, county, or city — pick any area in Wisconsin.
-            {fetchedAt ? ` Last searched ${new Date(fetchedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.` : ''}
+            Pick a district, county, or any Wisconsin city, village or town
+            {target?.area && target.area !== target.name ? <> — {target.area}</> : null}
           </p>
         </div>
       </div>
 
-      {/* meta + filters */}
-      {events && (
+      {/* Couldn't read the stored results — say so; never show "no events". */}
+      {loadError && (
+        <div className="card py-8 text-center">
+          <AlertTriangle className="w-7 h-7 text-red-500 mx-auto mb-2" />
+          <p className="text-sm font-bold text-red-600">{loadError}</p>
+          <button onClick={() => setReloadKey(k => k + 1)} className="btn-secondary text-sm mt-3">Retry</button>
+        </div>
+      )}
+
+      {/* Running — shown for EVERY running state, including over old results. */}
+      {run && (() => {
+        const activeStage = clampStage(run.stage) - 1
+        return (
+          <div className="card flex flex-col items-center justify-center py-10">
+            <Loader2 className="w-8 h-8 text-brand-red animate-spin mb-3" />
+            <p className="text-sm font-bold text-gray-700">{PHASE_LABELS[activeStage]}</p>
+            <div className="flex gap-1.5 mt-4 w-full max-w-sm px-6">
+              {PHASE_LABELS.map((_, i) => (
+                <span key={i} className={`h-1.5 flex-1 rounded-full ${
+                  i < activeStage ? 'bg-brand-red'
+                  : i === activeStage ? 'bg-brand-red/40 animate-pulse'
+                  : 'bg-gray-200'}`} />
+              ))}
+            </div>
+            <p className="text-xs text-gray-400 font-semibold mt-2 flex items-center gap-1.5">
+              Step {activeStage + 1} of {PHASE_LABELS.length}
+              <span aria-hidden>·</span>
+              <Clock className="w-3 h-3" /> {fmtElapsed(nowMs - run.startedAt)} elapsed
+            </p>
+            <p className="text-xs text-gray-400 font-semibold mt-2 text-center max-w-md">
+              Searches take 2–5 minutes. You can leave this page — results are saved for everyone.
+            </p>
+          </div>
+        )
+      })()}
+
+      {/* A run outlived our polling window while still heartbeating, or finished empty. */}
+      {runNotice && !run && (
+        <div className="card py-6 text-center">
+          <p className="text-sm font-bold text-gray-700 max-w-lg mx-auto">{runNotice}</p>
+          <button onClick={() => setReloadKey(k => k + 1)} className="btn-secondary text-sm mt-3">Check again</button>
+        </div>
+      )}
+
+      {/* The search failed (stored progress error, dead run, or failed start). */}
+      {runError && !run && (
+        <div className="card py-6 text-center">
+          <AlertTriangle className="w-7 h-7 text-red-500 mx-auto mb-2" />
+          <p className="text-sm font-bold text-red-600 max-w-lg mx-auto">{runError}</p>
+          {canSearch && (
+            <button onClick={startSearch} className="btn-secondary text-sm mt-3">Try again</button>
+          )}
+        </div>
+      )}
+
+      {/* Never searched — no stored row, nothing running, no error. */}
+      {cacheChecked && !loadError && !row && !run && !runError && (
+        <div className="card py-14 text-center">
+          <Sparkles className="w-8 h-8 text-brand-red mx-auto mb-3" />
+          <p className="text-[11px] font-extrabold uppercase tracking-wide text-gray-400">Find events in your district</p>
+          <p className="text-base font-extrabold text-gray-900 mt-1">No events for {target?.name || 'this area'} yet</p>
+          <p className="text-sm text-gray-500 font-medium mt-1.5 max-w-md mx-auto leading-relaxed">
+            Badger Board will research public calendars, local news and community sources, then read each crowd&rsquo;s lean.
+          </p>
+          <button onClick={startSearch} disabled={!canSearch}
+            className="mt-5 inline-flex items-center gap-2 bg-brand-red text-white text-sm font-extrabold px-5 py-3 rounded-xl hover:bg-red-800 disabled:opacity-50 transition-colors">
+            <Sparkles className="w-4 h-4" /> Search for events
+          </button>
+          <p className="text-xs text-gray-400 font-semibold mt-3">Takes 2–5 minutes. You can leave this page — results are saved for everyone.</p>
+        </div>
+      )}
+
+      {/* Out of date — stored results exist but nothing is upcoming, or they
+          are more than 7 days old. Prompt; never auto-search. When nothing
+          upcoming is left, this banner IS the empty state. */}
+      {cacheChecked && !loadError && row && stale && !run && !runError && (
+        <div className={`flex items-center gap-3 flex-wrap bg-amber-50 border-2 border-amber-200 text-amber-900 rounded-xl ${upcoming.length ? 'px-4 py-3' : 'px-5 py-8 justify-center text-center'}`}>
+          <RefreshCw className="w-4 h-4 flex-shrink-0" />
+          <span className="text-sm font-semibold">
+            These results are out of date{fetchedAt && fmtMonDay(fetchedAt) ? ` (last searched ${fmtMonDay(fetchedAt)})` : ''}. Run a new search to find upcoming events.
+          </span>
+          <button onClick={startSearch} disabled={!canSearch}
+            className={`${upcoming.length ? 'ml-auto' : ''} inline-flex items-center gap-1.5 bg-amber-900 text-white text-xs font-extrabold px-3.5 py-2 rounded-lg hover:bg-amber-800 disabled:opacity-50 whitespace-nowrap`}>
+            <RefreshCw className="w-3.5 h-3.5" /> Run new search
+          </button>
+        </div>
+      )}
+
+      {/* meta + filters (no re-run control here: fresh results can't be re-searched) */}
+      {upcoming.length > 0 && (
         <div className="flex items-center gap-3 flex-wrap">
           <span className="text-sm font-bold text-gray-900">{filtered.length} event{filtered.length !== 1 ? 's' : ''}</span>
-          <span className="text-xs text-gray-400 font-semibold">
-            next 60 days{fetchedAt ? ` · updated ${new Date(fetchedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : ''}
-          </span>
+          {!stale && fetchedAt && fmtMonDay(fetchedAt) && (
+            <span className="text-xs text-gray-400 font-semibold">Updated {fmtMonDay(fetchedAt)}</span>
+          )}
           <div className="ml-auto flex gap-1.5 flex-wrap">
             {[['all','All'],['conservative','Conservative'],['liberal','Liberal'],['nonpartisan','Nonpartisan']].map(([k, label]) => (
               <button key={k} onClick={() => setFilter(k)}
@@ -681,87 +931,10 @@ export default function Events() {
         </div>
       )}
 
-      {/* loading / error / empty */}
-      {loading && !events && (() => {
-        const activeStage = PHASE_LABELS.indexOf(phase)   // -1 while checking the cache
-        return (
-          <div className="card flex flex-col items-center justify-center py-16">
-            <Loader2 className="w-8 h-8 text-brand-red animate-spin mb-3" />
-            <p className="text-sm font-bold text-gray-700">{phase || 'Checking for cached events…'}</p>
-            {activeStage >= 0 && (
-              <>
-                <div className="flex gap-1.5 mt-4 w-full max-w-sm px-6">
-                  {PHASE_LABELS.map((_, i) => (
-                    <span key={i} className={`h-1.5 flex-1 rounded-full ${
-                      i < activeStage ? 'bg-brand-red'
-                      : i === activeStage ? 'bg-brand-red/40 animate-pulse'
-                      : 'bg-gray-200'}`} />
-                  ))}
-                </div>
-                <p className="text-xs text-gray-400 font-semibold mt-2">Step {activeStage + 1} of {PHASE_LABELS.length}</p>
-              </>
-            )}
-            <p className="text-xs text-gray-400 font-semibold mt-2 text-center max-w-md">
-              This runs on the server — you can leave this page and come back. A first search takes a couple of minutes, then it&rsquo;s cached for everyone.
-            </p>
-          </div>
-        )
-      })()}
-      {error && (
-        <div className="card py-6 text-center">
-          <p className="text-sm font-bold text-red-600">{error}</p>
-          <button onClick={() => loadEvents(false)} className="btn-secondary text-sm mt-3">Try again</button>
-        </div>
-      )}
-      {events && filtered.length === 0 && (
+      {upcoming.length > 0 && filtered.length === 0 && (
         <div className="card py-12 text-center">
           <Sparkles className="w-7 h-7 text-gray-300 mx-auto mb-2" />
           <p className="text-sm font-bold text-gray-500">No {filter !== 'all' ? filter + ' ' : ''}events found</p>
-        </div>
-      )}
-
-      {/* Start state — nothing stored for this area yet, and nothing is running.
-          The search is a couple of minutes of server work, so it waits for a click. */}
-      {cacheChecked && !events && !loading && !error && (
-        <div className="card py-14 text-center">
-          <Sparkles className="w-8 h-8 text-brand-red mx-auto mb-3" />
-          <p className="text-base font-extrabold text-gray-900">Find conservative events in your districts</p>
-          <p className="text-sm text-gray-500 font-medium mt-1.5 max-w-md mx-auto leading-relaxed">
-            Nothing has been searched for {target?.name || 'this area'} yet. Badger Board will research public
-            calendars, local news and community sources, then read each crowd&rsquo;s lean.
-          </p>
-          <button onClick={startSearch} disabled={!target}
-            className="mt-5 inline-flex items-center gap-2 bg-brand-red text-white text-sm font-extrabold px-5 py-3 rounded-xl hover:bg-red-800 disabled:opacity-50 transition-colors">
-            <Sparkles className="w-4 h-4" /> Search for new events
-          </button>
-          <p className="text-xs text-gray-400 font-semibold mt-3">Takes a couple of minutes — it runs on the server, so you can leave this page.</p>
-        </div>
-      )}
-
-      {/* staleness banner — Sep-21 sweep: a week-plus-old cache was rendered
-          with no indication anything was stale, so "next 60 days" quietly
-          meant 60 days from the last search instead of from now. Sits above
-          the list; reuses the exact same click-gated search handler (and its
-          in-flight guard) as the "Search for new events" button, and reflects
-          whether that search is the auto-triggered one already in flight. */}
-      {events && events.length > 0 && isStale(fetchedAt, new Date()) && (
-        <div className="flex items-center gap-3 flex-wrap bg-amber-50 border-2 border-amber-200 text-amber-900 rounded-xl px-4 py-3">
-          <RefreshCw className={`w-4 h-4 flex-shrink-0 ${loading ? 'animate-spin' : ''}`} />
-          {loading ? (
-            <span className="text-sm font-semibold">
-              Results from {new Date(fetchedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} — refreshing now…
-            </span>
-          ) : (
-            <>
-              <span className="text-sm font-semibold">
-                These results are from {new Date(fetchedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}. Search again for current events.
-              </span>
-              <button onClick={startSearch} disabled={loading || !target}
-                className="ml-auto text-xs font-extrabold text-amber-900 underline decoration-2 underline-offset-2 hover:text-amber-700 disabled:opacity-50 whitespace-nowrap">
-                Search again
-              </button>
-            </>
-          )}
         </div>
       )}
 
@@ -876,7 +1049,7 @@ export default function Events() {
         </div>
       )}
 
-      {events && (
+      {upcoming.length > 0 && (
         <p className="text-xs text-gray-400 font-semibold">
           ✦ AI-researched from public sources — verify dates with the organizer before committing your schedule. Lean labels: confirmed = partisan host (100%), likely = 80%+ certainty, otherwise nonpartisan.
         </p>

@@ -1,27 +1,321 @@
 // Netlify Function: research-district-events
-// Finds upcoming community events in a district using Perplexity (web research)
-// + Claude (structuring + political-lean classification), enriches with og:image
-// thumbnails, and caches per district for 24 hours.
+// Finds upcoming community events in an area (legislative district, county or
+// municipality) using Perplexity (web research) + Claude (structuring +
+// political-lean classification), enriches with og:image thumbnails, and
+// caches per area in the shared district_events table.
 //
 // Runs as a Netlify BACKGROUND function (-background suffix → 15 min budget):
 // Netlify answers the browser with 202 BEFORE this handler runs, which means
 // every statusCode returned below is thrown away. So the handler's real output
 // contract is the pair of rows it writes:
-//   district_events           — the result cache (shared, 24 h TTL)
+//   district_events           — the result cache (shared; see isStaleCache)
 //   district_events_progress  — the phase/status row the client polls
 // Every phase boundary and every terminal outcome (done or error) writes the
 // progress row; without it a failure is invisible and the client spins forever.
+//
+// Request body (from src/pages/Events.jsx):
+//   { district_key, district_name, counties: string[], places: string[],
+//     area_description?: string, district_lean?: string, force?: boolean }
+// `places` is the FULL municipality list for the area (ordered by population).
+// Older clients omit it; then area_description ("A, B, C (X, Y counties)") is
+// parsed as before.
+//
+// Re-run policy: a non-admin request only searches when the cached result is
+// STALE (isStaleCache). A fresh cache is a no-op that ends with
+// {status:'done', stage:4, message:'fresh'} and never touches the rate limiter.
+// Admins may pass force:true to always re-run.
+//
+// CommonJS so tests can require() the pure helpers exported at the bottom.
 
-import COUNTY_SOURCES from './_county-sources.json'
-import { matchPartisanSignals } from './_partisan-signals.js'
+const COUNTY_SOURCES = require('./_county-sources.json')
+const { matchPartisanSignals } = require('./_partisan-signals.js')
+const { logAiUsage } = require('./_ai-usage.js')
+const { ADMIN_EMAILS } = require('./_config.js')
 
-const CACHE_HOURS = 24
+// Most of the codebase pins Opus via the literal 'claude-opus-4-8'
+// (generate-dossier*, discover-candidates, generate-campaign-intel, …); this
+// function and research-district-history share the CLAUDE_RESEARCH_MODEL
+// override with the same default.
+const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-8'
 
 // Progress stages, mirrored by PHASE_LABELS in src/pages/Events.jsx.
 const STAGE_SEARCH    = 1   // Perplexity sweep of public calendars & community sources
 const STAGE_NEWS      = 2   // local-news pass
 const STAGE_STRUCTURE = 3   // Claude structuring + lean classification
 const STAGE_ENRICH    = 4   // registry verification, images, addresses
+
+// ── Limits & budgets ─────────────────────────────────────────────────────────
+// Keys look like 'assembly-8', 'county-St. Croix', 'city-Green Bay-Brown',
+// 'city-Weston (town)-Marathon'. Spaces, periods, apostrophes and parentheses
+// are legitimate; anything else (quotes, semicolons, slashes …) is not.
+const DISTRICT_KEY_RE   = /^[\w :.'()-]{1,100}$/
+const STALE_AFTER_DAYS  = 7
+const MAX_PLACES        = 600    // page sends ≤ ~500 (largest district: 491)
+const MAX_PLACE_LEN     = 60
+const MAX_COUNTIES      = 40     // congressional districts span 20+ counties
+const PROMPT_PLACES     = 15     // places named in prompts (population order)
+const RUN_BUDGET_MS     = 12 * 60 * 1000   // well inside Netlify's 15-min cap
+const HEARTBEAT_MS      = 30 * 1000
+const TIMEOUT = {
+  supabase:          15000,
+  perplexityMain:    60000,
+  perplexityNews:    21000,
+  perplexityExtra:   45000,   // was 21 s — sonar-pro routinely needs longer
+  perplexityVerify:  30000,
+  xSearch:           12000,
+  anthropicStructure: 150000, // 16k-token structuring call
+  anthropicSmall:    60000,
+  pageFetch:         5000,
+}
+
+// ── Pure helpers (exported for tests) ────────────────────────────────────────
+
+/** Today's calendar date in Wisconsin (America/Chicago), as YYYY-MM-DD. */
+function centralTodayIso(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now)
+  const get = (t) => parts.find(p => p.type === t)?.value
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
+
+/** First 10 chars of a date-ish value if they form a real YYYY-MM-DD, else null. */
+function isoDateOrNull(v) {
+  if (v == null) return null
+  const s = String(v).slice(0, 10)
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return null
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]))
+  if (d.getUTCFullYear() !== +m[1] || d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) return null
+  return s
+}
+
+/** The last day an event is still happening (date_end || date_start), or null. */
+function eventLastDay(e) {
+  return isoDateOrNull(e?.date_end) || isoDateOrNull(e?.date_start)
+}
+
+/** True when the event has a parseable date and has not finished before today. */
+function isUpcomingEvent(e, todayIso) {
+  const last = eventLastDay(e)
+  return Boolean(last) && last >= todayIso
+}
+
+/**
+ * Should the cached row be re-researched?
+ * Stale when: no row, no events, no event still upcoming (date_end || date_start
+ * ≥ today; unparseable dates don't count), or fetched_at older than 7 days
+ * (or missing/unparseable).
+ */
+function isStaleCache(row, todayIso, nowMs = Date.now()) {
+  if (!row) return true
+  const events = Array.isArray(row.events) ? row.events : []
+  if (!events.length) return true
+  if (!events.some(e => isUpcomingEvent(e, todayIso))) return true
+  const fetchedMs = Date.parse(row.fetched_at)
+  if (!Number.isFinite(fetchedMs)) return true
+  return nowMs - fetchedMs > STALE_AFTER_DAYS * 86400000
+}
+
+function addDaysIso(iso, days) {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10)
+}
+
+/**
+ * Past-date guard for one event. Returns the event (possibly with date_start
+ * rolled forward to the next weekly/biweekly occurrence ≥ today) or null when
+ * it is over or its date cannot be parsed.
+ */
+function upcomingOrNull(e, todayIso) {
+  if (!e || typeof e !== 'object') return null
+  const start = isoDateOrNull(e.date_start)
+  if (!start) return null
+  const end = isoDateOrNull(e.date_end)
+  const step = { weekly: 7, biweekly: 14 }[String(e.recurrence || '').toLowerCase()]
+  if (step && start < todayIso) {
+    let next = start
+    for (let i = 0; i < 60 && next < todayIso; i++) next = addDaysIso(next, step)
+    if (next < todayIso || (end && next > end)) return null
+    return { ...e, date_start: next }
+  }
+  return (end || start) >= todayIso ? e : null
+}
+
+/** Strip "(town)" / periods / extra spaces for whole-word matching. */
+function normalizeForMatch(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/\((?:town|village|city|township)\)/g, ' ')
+    .replace(/\./g, '')
+    .replace(/[^a-z0-9' -]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
+
+/** Validated, de-duplicated place list from the request body (null if absent). */
+function normalizePlaces(raw) {
+  if (!Array.isArray(raw)) return null
+  const seen = new Set()
+  const out = []
+  for (const p of raw) {
+    if (typeof p !== 'string') continue
+    const v = p.replace(/\s+/g, ' ').trim().slice(0, MAX_PLACE_LEN)
+    const k = v.toLowerCase()
+    if (!v || seen.has(k)) continue
+    seen.add(k); out.push(v)
+    if (out.length >= MAX_PLACES) break
+  }
+  return out
+}
+
+/** Legacy clients: "A, B, C (X, Y counties)" → ['A','B','C']. Never returns a
+ *  district label like "Assembly District 8" as a place. */
+function parseAreaDescriptionPlaces(area) {
+  if (!area) return []
+  return String(area).split('(')[0].split(',')
+    .map(x => x.trim().slice(0, MAX_PLACE_LEN))
+    .filter(x => x && !/\bdistrict\b/i.test(x) && !/^(wi|wisconsin)$/i.test(x))
+}
+
+/** County named by a county-/city- key, e.g. 'county-St. Croix' → 'St. Croix'. */
+function countyFromKey(key) {
+  const k = String(key || '')
+  if (k.startsWith('county-')) return k.slice(7) || null
+  if (k.startsWith('city-')) { const i = k.lastIndexOf('-'); return i > 5 ? k.slice(i + 1) : null }
+  return null
+}
+
+function countyPhrase(counties) {
+  if (!counties.length) return null
+  const shown = counties.slice(0, 6)
+  const more = counties.length > shown.length ? ' and neighboring' : ''
+  return `${shown.join(', ')}${more} ${counties.length > 1 ? 'counties' : 'County'}`
+}
+
+/** Area text for prompts: ≤ 15 places + "and other communities in … County". */
+function promptArea(places, counties) {
+  const cp = countyPhrase(counties)
+  if (places.length) {
+    const head = places.slice(0, PROMPT_PLACES).join(', ')
+    if (places.length <= PROMPT_PLACES) return head
+    return `${head}, and other communities in ${cp || 'the area'}`
+  }
+  return cp ? `communities in ${cp}` : ''
+}
+
+/**
+ * In-area filter: whole-word, case-insensitive match of the FULL place list
+ * against the event's city/venue/address. County names are accepted when the
+ * key is a county (or when there is no place list), matched against all of the
+ * event's text. County fairs are county-wide by nature and always kept.
+ */
+function buildAreaMatcher({ places = [], counties = [], districtKey = '' }) {
+  const placeTerms = [...new Set(places.map(normalizeForMatch).filter(t => t && t.length > 1))]
+  const useCounties = String(districtKey).startsWith('county-') || !placeTerms.length
+  const countyTerms = useCounties ? [...new Set(counties.map(normalizeForMatch).filter(Boolean))] : []
+  if (!placeTerms.length && !countyTerms.length) return () => true
+  const wordRe = (terms) => terms.length
+    ? new RegExp(`(?:^|[^a-z0-9])(?:${terms.sort((a, b) => b.length - a.length).map(escapeRe).join('|')})(?=$|[^a-z0-9])`)
+    : null
+  const placeRe  = wordRe(placeTerms)
+  const countyRe = wordRe(countyTerms)
+  return (e) => {
+    if (!e) return false
+    if (e.category === 'fair') return true
+    const loc = normalizeForMatch([e.city, e.venue, e.address].filter(Boolean).join(' '))
+    if (placeRe && placeRe.test(loc)) return true
+    if (countyRe) {
+      const all = normalizeForMatch([e.city, e.venue, e.address, e.name, e.host, e.description].filter(Boolean).join(' '))
+      if (countyRe.test(all)) return true
+    }
+    return false
+  }
+}
+
+/**
+ * Parse JSON out of model output: tolerates preamble, ``` fences and trailing
+ * commentary (parses first '{'/'[' to the matching last '}'/']'). When that
+ * fails (e.g. output truncated at max_tokens) it salvages every COMPLETE object
+ * of the first array. Returns { value, salvaged } or null.
+ */
+function parseModelJson(text) {
+  if (typeof text !== 'string' || !text.trim()) return null
+  const s = text.replace(/^\s*```[a-zA-Z]*\s*$/gm, '')
+  const iObj = s.indexOf('{')
+  const iArr = s.indexOf('[')
+  if (iObj < 0 && iArr < 0) return null
+  const isArr = iArr >= 0 && (iObj < 0 || iArr < iObj)
+  const start = isArr ? iArr : iObj
+  const end = s.lastIndexOf(isArr ? ']' : '}')
+  if (end > start) {
+    try { return { value: JSON.parse(s.slice(start, end + 1)), salvaged: false } } catch { /* salvage below */ }
+  }
+  const items = salvageArrayObjects(s, start)
+  return items.length ? { value: items, salvaged: true } : null
+}
+
+/** Every complete, individually-parseable {…} element of the first array at/after `from`. */
+function salvageArrayObjects(s, from = 0) {
+  const a = s.indexOf('[', from)
+  if (a < 0) return []
+  const out = []
+  let depth = 0, inStr = false, esc = false, objStart = -1
+  for (let i = a + 1; i < s.length; i++) {
+    const ch = s[i]
+    if (inStr) {
+      if (esc) esc = false
+      else if (ch === '\\') esc = true
+      else if (ch === '"') inStr = false
+      continue
+    }
+    if (ch === '"') { inStr = true; continue }
+    if (ch === '{' || ch === '[') {
+      if (depth === 0 && ch === '{') objStart = i
+      depth++
+    } else if (ch === '}' || ch === ']') {
+      if (depth === 0) break                 // end of the array itself
+      depth--
+      if (depth === 0 && ch === '}' && objStart >= 0) {
+        try { out.push(JSON.parse(s.slice(objStart, i + 1))) } catch { /* skip malformed element */ }
+        objStart = -1
+      }
+    }
+  }
+  return out
+}
+
+/** The list under `key` from a parseModelJson result (or the bare array). */
+function listFromParsed(parsed, key) {
+  if (!parsed) return []
+  const v = parsed.value
+  if (Array.isArray(v)) return v
+  return Array.isArray(v?.[key]) ? v[key] : []
+}
+
+/** Rate-limit progress message by which budget tripped. */
+function rateLimitMessage(limitedResponse) {
+  let which = null
+  try { which = JSON.parse(limitedResponse?.body || '{}').limit || null } catch { /* unknown */ }
+  return which === 'day'
+    ? "You've reached today's event-search limit — it resets at midnight."
+    : 'Too many searches in the last minute — try again shortly.'
+}
+
+/** Pull "district_key" out of an unparseable body so the error can still be reported. */
+function sniffDistrictKey(rawBody) {
+  const m = String(rawBody || '').match(/"district_key"\s*:\s*"([^"\\]{1,100})"/)
+  return m ? m[1] : null
+}
+
+/** Run fn(signal) under an AbortController that fires after `ms`. */
+async function withTimeout(ms, fn) {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(new Error(`timed out after ${Math.round(ms / 1000)} s`)), ms)
+  try { return await fn(ctrl.signal) } finally { clearTimeout(timer) }
+}
 
 // ── District size ─────────────────────────────────────────────────────────────
 // A municipal or county district is small enough to enumerate exhaustively: the
@@ -30,7 +324,7 @@ const STAGE_ENRICH    = 4   // registry verification, images, addresses
 // municipalities and hundreds of boards, so an exhaustive sweep is both
 // impossible to research well and useless to the user — those districts get the
 // major bodies plus whatever is actually drawing attention.
-export function classifyDistrictSize(districtKey = '', districtName = '') {
+function classifyDistrictSize(districtKey = '', districtName = '') {
   const type = String(districtKey).split('-')[0].toLowerCase()
   if (['city', 'county', 'municipal', 'town', 'village', 'school'].includes(type)) {
     return { size: 'small', label: type === 'county' ? 'single county' : 'single municipality' }
@@ -48,7 +342,7 @@ export function classifyDistrictSize(districtKey = '', districtName = '') {
 }
 
 /** The government-meetings rule for the research + structuring prompts. */
-export function meetingsDirective(size, label) {
+function meetingsDirective(size, label) {
   if (size === 'small') {
     return `GOVERNMENT MEETINGS — EXHAUSTIVE (this is a ${label}, small enough to cover completely).
 List EVERY upcoming public meeting of EVERY local governing body whose jurisdiction covers these communities. No "major ones only" filter, no exceptions: common council / city council, town board, village board, county board of supervisors AND its standing committees, school board (every district serving these communities), plan commission, zoning board of appeals, police and fire commission, library board, park and recreation board, utility commission, sanitary and lake districts, and any other municipal board or commission that posts a public agenda. Check each municipality's own website and agenda portal plus the statutory public meeting-notice postings. Recurring bodies get ONE entry starting at their next occurrence, with the schedule stated (e.g. "2nd Tuesday, 6:00 PM"). Never omit a board for being small, routine or sparsely attended — in a district this size those rooms are the district.`
@@ -146,145 +440,257 @@ function extractEventMeta(html, pageUrl) {
   return out
 }
 
-import { logAiUsage } from './_ai-usage.js'
-
-export const handler = async (event) => {
+// ── Handler ───────────────────────────────────────────────────────────────────
+const handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Content-Type': 'application/json',
   }
+  const reply = (statusCode, payload) => ({ statusCode, headers, body: JSON.stringify(payload) })
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers, body: '' }
-  if (event.httpMethod !== 'POST') return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) }
+  if (event.httpMethod !== 'POST') return reply(405, { error: 'Method not allowed' })
+
+  const runStartedMs = Date.now()
+  const runDeadlineMs = runStartedMs + RUN_BUDGET_MS
+  const timeLeft = () => runDeadlineMs - Date.now()
 
   const ANTHROPIC_API_KEY    = process.env.ANTHROPIC_API_KEY
-  const CLAUDE_MODEL         = process.env.CLAUDE_RESEARCH_MODEL || 'claude-opus-4-8' // Opus 4.8 (per request)
+  const CLAUDE_MODEL         = process.env.CLAUDE_RESEARCH_MODEL || DEFAULT_CLAUDE_MODEL
   const PERPLEXITY_API_KEY   = process.env.PERPLEXITY_API_KEY
   const SUPABASE_URL         = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
   const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 
-  const authHeader = event.headers?.authorization || event.headers?.Authorization
-  if (!authHeader?.startsWith('Bearer ')) {
-    return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authenticated' }) }
+  // ── Body + key first: once the key is known every exit can be reported ─────
+  let body = null
+  try {
+    const parsedBody = JSON.parse(event.body || '{}')
+    if (parsedBody && typeof parsedBody === 'object' && !Array.isArray(parsedBody)) body = parsedBody
+  } catch { /* reported below, once the caller is authenticated */ }
+  const district_key = typeof body?.district_key === 'string' ? body.district_key : sniffDistrictKey(event.body)
+  // Audit fix (#17/#18): district_key is the sole PK of a shared cache table —
+  // keep its shape strict (but allow the spaces / periods / apostrophes /
+  // "(town)" that real county and municipality names contain).
+  if (!district_key || !DISTRICT_KEY_RE.test(district_key)) {
+    return reply(400, { error: body ? 'Invalid district_key' : 'Invalid JSON' })
   }
-  const authRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-    headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${authHeader.slice(7)}` },
-  })
-  if (!authRes.ok) return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid token' }) }
-  const authUser = await authRes.json()
-  if (!authUser?.id) return { statusCode: 401, headers, body: JSON.stringify({ error: 'Invalid token' }) }
-  const { ADMIN_EMAILS } = await import('./_config.js')
-  const isAdmin = ADMIN_EMAILS.includes((authUser.email || '').toLowerCase())
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+    // No service key → no way to write the progress row either.
+    console.error('[district-events] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing')
+    return reply(500, { error: 'Server not configured' })
+  }
+  const keyEnc = encodeURIComponent(district_key)
 
-  const sb = (path, opts = {}) => fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+  const sb = (path, opts = {}) => withTimeout(TIMEOUT.supabase, (signal) => fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     ...opts,
+    signal,
     headers: {
       apikey: SUPABASE_SERVICE_KEY,
       Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
       'Content-Type': 'application/json',
       ...(opts.headers || {}),
     },
-  })
+  }))
 
   // The client's only window into this run. Best-effort: a failed progress write
   // must never take down a run that is otherwise working.
-  const reportStage = async (key, stage, status = 'running', message = null) => {
-    if (!key) return
+  let currentStage = STAGE_SEARCH
+  const reportStage = async (stage, status = 'running', message = null, { start = false } = {}) => {
+    if (status === 'running') currentStage = stage
+    const now = new Date().toISOString()
     try {
       await sb('district_events_progress', {
         method: 'POST',
         headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
         body: JSON.stringify({
-          district_key: key, stage, status, message,
-          ...(stage === STAGE_SEARCH && status === 'running' ? { started_at: new Date().toISOString() } : {}),
-          updated_at: new Date().toISOString(),
+          district_key, stage, status, message,
+          ...(start ? { started_at: now } : {}),
+          updated_at: now,
         }),
       })
     } catch (e) { console.warn('[district-events] reportStage failed:', e.message) }
   }
+  const reportError = (message, stage = currentStage) => reportStage(stage, 'error', message)
 
-  // Body parse + key validation moved AHEAD of the rate limiter: without a
-  // district_key we cannot tell the client anything, and a 429 answered by
-  // Netlify's 202 used to leave the page spinning for two minutes with no clue.
-  let body
-  try { body = JSON.parse(event.body || '{}') } catch {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) }
+  // ── Auth ────────────────────────────────────────────────────────────────────
+  // An unauthenticated caller can't be attributed, but the page still needs to
+  // hear about it. Don't let such a request clobber somebody else's live run.
+  // Deliberately writes NOTHING: progress rows are shared by every user, so an
+  // unauthenticated request must not be able to mark any area as failed. The
+  // page checks for a session before it POSTs and reports a missing one itself.
+  const reportAuthError = async (message) => {
+    console.warn(`[district-events] rejected unauthenticated request for ${district_key}: ${message}`)
   }
-  const { district_key, district_name: rawName, area_description: rawArea, district_lean, counties: rawCounties, force: rawForce } = body
-  if (!district_key || !rawName) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: 'district_key, district_name required' }) }
+  const AUTH_MSG = 'Your sign-in has expired — refresh the page, sign in again and retry.'
+  const authHeader = event.headers?.authorization || event.headers?.Authorization
+  if (!authHeader?.startsWith('Bearer ')) {
+    await reportAuthError(AUTH_MSG)
+    return reply(401, { error: 'Not authenticated' })
   }
-  // Audit fix (#17/#18): district_key is the sole PK of a shared cache table —
-  // validate its shape, cap the free-text fields that fence the prompts, and
-  // only allow admins to force-refresh (each force run is real LLM spend and
-  // last-write-wins on a row every user reads).
-  if (!/^[\w:.-]{1,80}$/.test(district_key)) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid district_key' }) }
-  }
-
-  // Audit fix (#18): this is the most expensive AI endpoint in the app (up to
-  // 4 Perplexity + 3 Opus calls + 30 page fetches per run) and had NO rate
-  // limit — any free signup could loop it with force:true for unbounded spend.
-  const { enforceRateLimit } = await import('./_rate-limit.js')
-  const limited = await enforceRateLimit(authUser.id, 'research-district-events', headers)
-  if (limited) {
-    await reportStage(district_key, STAGE_SEARCH, 'error',
-      'You have run a lot of event searches recently — give it a few minutes and try again.')
-    return limited
+  let authUser = null
+  try {
+    authUser = await withTimeout(TIMEOUT.supabase, async (signal) => {
+      const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+        signal,
+        headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${authHeader.slice(7)}` },
+      })
+      return r.ok ? r.json() : null
+    })
+  } catch (e) { console.warn('[district-events] auth check failed:', e.message) }
+  if (!authUser?.id) {
+    await reportAuthError(AUTH_MSG)
+    return reply(401, { error: 'Invalid token' })
   }
 
-  const district_name    = String(rawName).slice(0, 120)
-  const area_description = rawArea ? String(rawArea).slice(0, 600) : null
-  const counties         = (Array.isArray(rawCounties) ? rawCounties : []).slice(0, 8).map(c => String(c).slice(0, 40))
-  const wantsForce       = Boolean(rawForce)
-  const force            = wantsForce && isAdmin
-  const sourceBrief = countySourceBrief(counties)
-  // In-district community list (area_description = "Place1, Place2, ... (X, Y counties)").
-  // Used to fence every research + structuring prompt to the district's actual footprint.
-  const communities = (area_description || district_name).split('(')[0].trim().replace(/,\s*$/, '')
-  const countyNames = counties.length ? counties.map(c => `${c} County`).join(', ') : null
+  if (!body) {
+    await reportError('The search request was garbled — refresh the page and try again.', STAGE_SEARCH)
+    return reply(400, { error: 'Invalid JSON' })
+  }
+  if (!body.district_name || typeof body.district_name !== 'string') {
+    await reportError('The search request was missing the area name — refresh the page and try again.', STAGE_SEARCH)
+    return reply(400, { error: 'district_key, district_name required' })
+  }
 
-  // District-size awareness drives how aggressively we sweep local government
-  // meetings — exhaustive for a municipality/county, major-or-newsworthy only
-  // for a legislative/congressional district.
-  const { size: districtSize, label: districtSizeLabel } = classifyDistrictSize(district_key, district_name)
-  const MEETINGS_RULE = meetingsDirective(districtSize, districtSizeLabel)
+  // Earliest point we know WHO is asking for WHAT: tell the page we're alive.
+  await reportStage(STAGE_SEARCH, 'running', null, { start: true })
 
-  await reportStage(district_key, STAGE_SEARCH, 'running')
+  // Heartbeat: keep updated_at moving so the page never mistakes a long but
+  // healthy run for a dead one. Only touches a row that is still 'running'.
+  const heartbeat = setInterval(() => {
+    sb(`district_events_progress?district_key=eq.${keyEnc}&status=eq.running`, {
+      method: 'PATCH',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({ updated_at: new Date().toISOString() }),
+    }).catch(e => console.warn('[district-events] heartbeat failed:', e.message))
+  }, HEARTBEAT_MS)
 
   try {
-  // ── Cache (24h TTL) ─────────────────────────────────────────────────────────
-  // Also the resolution path for a non-admin who pressed Refresh: their force is
-  // downgraded to false above, so without marking the run done here the client
-  // would poll for a fetched_at that is never going to move and time out on a
-  // district whose cache is perfectly good.
-  if (!force) {
-    const cacheRes = await sb(`district_events?district_key=eq.${encodeURIComponent(district_key)}&select=events,fetched_at`)
-    const rows = await cacheRes.json()
-    const row = rows?.[0]
-    if (row?.events && row.fetched_at && (Date.now() - new Date(row.fetched_at).getTime()) < CACHE_HOURS * 3600 * 1000) {
-      await reportStage(district_key, STAGE_ENRICH, 'done')
-      return { statusCode: 200, headers, body: JSON.stringify({ cached: true, events: row.events, fetched_at: row.fetched_at }) }
-    }
+    return await runSearch()
+  } catch (err) {
+    // A background invocation swallows thrown errors entirely — without this the
+    // page would poll a status row that never leaves "running".
+    console.error('[district-events] unhandled error:', err?.stack || err?.message || err)
+    await reportError('Something went wrong while researching this area. Nothing was saved — try again.')
+    return reply(500, { error: 'Event research failed' })
+  } finally {
+    clearInterval(heartbeat)
+    console.log(`[district-events] ${district_key} finished in ${Math.round((Date.now() - runStartedMs) / 1000)} s`)
   }
 
-  // ── Step 1: Perplexity research ─────────────────────────────────────────────
-  let research = null
-  if (PERPLEXITY_API_KEY) {
-    try {
-      const ctrl = new AbortController()
-      setTimeout(() => ctrl.abort(), 60000)
-      const today = new Date().toISOString().slice(0, 10)
-      const pRes = await fetch('https://api.perplexity.ai/chat/completions', {
-        method: 'POST', signal: ctrl.signal,
-        headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'sonar-pro',
-          messages: [
-            { role: 'system', content: 'You are a Wisconsin community events researcher helping a political campaign find public events where a candidate can meet voters. Your goal is VOLUME and COMPLETENESS: small events (church fish fries, service-club breakfasts, library talks, school fundraisers, board meetings) matter exactly as much as big festivals — never skip an event for being minor. Be specific about dates, times, venues, and organizers. Include well-known annual and recurring events (county fairs, farmers markets, festivals, parades) that fall in the window based on their usual schedule even if the current-year page is sparse — note when a date is approximate. Never invent one-off events. STRICT GEOGRAPHY: only report events physically held in the exact communities you are given — never events in neighboring towns or elsewhere "in the area".' },
-            { role: 'user', content: `Today is ${today}. Find upcoming public events in the next 60 days held INSIDE these Wisconsin communities of ${district_name}, and ONLY these communities: ${communities}. An event counts ONLY if its venue is physically located in one of those communities — exclude events in neighboring towns, other parts of the county, or anywhere "nearby".
+  // ───────────────────────────────────────────────────────────────────────────
+  async function runSearch() {
+    const isAdmin = ADMIN_EMAILS.includes((authUser.email || '').toLowerCase())
+    const force   = Boolean(body.force) && isAdmin
+    const todayIso = centralTodayIso()
 
-Run searches for EACH of the larger communities in that list (e.g. "<community> WI events calendar ${today.slice(0, 4)}", "<community> community calendar"), and cover ALL of these event types:
+    // ── Re-run policy: only stale caches are re-researched (before the rate
+    //    limiter, so a no-op never spends a user's budget) ──────────────────
+    if (!force) {
+      let row = null
+      try {
+        const cacheRes = await sb(`district_events?district_key=eq.${keyEnc}&select=events,fetched_at`)
+        if (cacheRes.ok) row = (await cacheRes.json())?.[0] || null
+        else console.warn('[district-events] cache read HTTP', cacheRes.status)
+      } catch (e) { console.warn('[district-events] cache read failed:', e.message) }
+      if (!isStaleCache(row, todayIso)) {
+        await reportStage(STAGE_ENRICH, 'done', 'fresh')
+        return reply(200, { cached: true, events: row.events, fetched_at: row.fetched_at })
+      }
+    }
+
+    if (!ANTHROPIC_API_KEY || !PERPLEXITY_API_KEY) {
+      console.error('[district-events] ANTHROPIC_API_KEY / PERPLEXITY_API_KEY missing')
+      await reportError('Event search is not configured on the server right now — please let support know.')
+      return reply(500, { error: 'Server not configured' })
+    }
+
+    // Audit fix (#18): this is the most expensive AI endpoint in the app (up to
+    // 4 Perplexity + 3 Opus calls + 30 page fetches per run).
+    const { enforceRateLimit } = require('./_rate-limit.js')
+    const limited = await enforceRateLimit(authUser.id, 'research-district-events', headers)
+    if (limited) {
+      await reportError(rateLimitMessage(limited))
+      return limited
+    }
+
+    // ── Inputs ─────────────────────────────────────────────────────────────
+    const district_name    = String(body.district_name).slice(0, 120)
+    const area_description = typeof body.area_description === 'string' ? body.area_description.slice(0, 600) : null
+    const district_lean    = typeof body.district_lean === 'string' ? body.district_lean.slice(0, 40) : null
+    let counties = (Array.isArray(body.counties) ? body.counties : [])
+      .filter(c => typeof c === 'string' && c.trim())
+      .slice(0, MAX_COUNTIES).map(c => c.trim().slice(0, 40))
+    const keyCounty = countyFromKey(district_key)
+    if (keyCounty && !counties.some(c => c.toLowerCase() === keyCounty.toLowerCase())) counties = [keyCounty, ...counties]
+    const bodyPlaces = normalizePlaces(body.places)
+    const places = bodyPlaces ?? parseAreaDescriptionPlaces(area_description)
+
+    const area = promptArea(places, counties)
+    if (!area) {
+      await reportError('This area has no community list to search — refresh the page and try again.')
+      return reply(400, { error: 'No places or counties for this area' })
+    }
+    const countyNames = countyPhrase(counties)
+    const sourceBrief = countySourceBrief(counties)
+    const searchTerms = (places.length ? places : counties).slice(0, 4)
+    const inArea = buildAreaMatcher({ places, counties, districtKey: district_key })
+
+    // District-size awareness drives how aggressively we sweep local government
+    // meetings — exhaustive for a municipality/county, major-or-newsworthy only
+    // for a legislative/congressional district.
+    const { size: districtSize, label: districtSizeLabel } = classifyDistrictSize(district_key, district_name)
+    const MEETINGS_RULE = meetingsDirective(districtSize, districtSizeLabel)
+
+    // ── Provider helpers ───────────────────────────────────────────────────
+    const callPerplexity = async ({ label, model, system, user, maxTokens, timeoutMs }) => {
+      const data = await withTimeout(timeoutMs, async (signal) => {
+        const r = await fetch('https://api.perplexity.ai/chat/completions', {
+          method: 'POST', signal,
+          headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: maxTokens }),
+        })
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      console.log(`[district-events] perplexity ${label} (${model}): prompt_tokens=${data?.usage?.prompt_tokens ?? '?'} completion_tokens=${data?.usage?.completion_tokens ?? '?'}`)
+      logAiUsage({ userId: authUser.id, endpoint: 'events', provider: 'perplexity', model, inputTokens: data?.usage?.prompt_tokens || 0, outputTokens: data?.usage?.completion_tokens || 0 })
+      return data?.choices?.[0]?.message?.content || null
+    }
+
+    const callClaude = async ({ label, prompt, maxTokens, timeoutMs }) => {
+      const data = await withTimeout(timeoutMs, async (signal) => {
+        const r = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST', signal,
+          headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }),
+        })
+        if (!r.ok) {
+          const detail = await r.text().catch(() => '')
+          throw new Error(`HTTP ${r.status} ${detail.slice(0, 200)}`)
+        }
+        return r.json()
+      })
+      const usage = data?.usage || {}
+      console.log(`[district-events] anthropic ${label}: stop_reason=${data?.stop_reason} input_tokens=${usage.input_tokens ?? '?'} output_tokens=${usage.output_tokens ?? '?'} max_tokens=${maxTokens}`)
+      if (data?.stop_reason === 'max_tokens') {
+        console.warn(`[district-events] anthropic ${label}: OUTPUT TRUNCATED at max_tokens=${maxTokens} — salvaging complete objects`)
+      }
+      logAiUsage({ userId: authUser.id, endpoint: 'events', provider: 'anthropic', model: CLAUDE_MODEL, inputTokens: usage.input_tokens || 0, outputTokens: usage.output_tokens || 0 })
+      return (data?.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
+    }
+
+    const applyGuards = (list) => list
+      .filter(e => e && typeof e === 'object' && e.name)
+      .map(e => upcomingOrNull(e, todayIso))
+      .filter(e => e && inArea(e))
+
+    // ── Step 1: research — main web sweep, X and local news in parallel ────
+    const mainSearch = callPerplexity({
+      label: 'main', model: 'sonar-pro', maxTokens: 4000, timeoutMs: TIMEOUT.perplexityMain,
+      system: 'You are a Wisconsin community events researcher helping a political campaign find public events where a candidate can meet voters. Your goal is VOLUME and COMPLETENESS: small events (church fish fries, service-club breakfasts, library talks, school fundraisers, board meetings) matter exactly as much as big festivals — never skip an event for being minor. Be specific about dates, times, venues, and organizers. Include well-known annual and recurring events (county fairs, farmers markets, festivals, parades) that fall in the window based on their usual schedule even if the current-year page is sparse — note when a date is approximate. Never invent one-off events. STRICT GEOGRAPHY: only report events physically held in the area you are given — never events elsewhere "in the region".',
+      user: `Today is ${todayIso}. Find upcoming public events in the next 60 days held INSIDE this Wisconsin area (${district_name}): ${area}. An event counts ONLY if its venue is physically located in that area — exclude events outside it.
+
+Run searches for EACH of the larger communities named (e.g. "<community> WI events calendar ${todayIso.slice(0, 4)}", "<community> community calendar"), and cover ALL of these event types:
 - County fairs, 4-H and FFA events, dairy/farm breakfasts
 - Farmers markets (weekly), craft fairs, flea markets
 - Festivals, "fests", concerts and music-in-the-park series
@@ -304,97 +710,63 @@ Run searches for EACH of the larger communities in that list (e.g. "<community> 
 
 ${MEETINGS_RULE}
 
-Aim for 25-40 events; if you find more, list more — do NOT stop at the big well-known ones. Include recurring weekly ones (one mention with its schedule) and annual ones whose usual dates fall in the window — mark approximate dates. ONLY include events open to the general public with no invitation, membership, or private registration required — skip private parties, members-only club events, and invite-only gatherings. For each: name, date(s), start time, venue with its STREET ADDRESS and city, organizer/host, a one-sentence description, and the event website URL if known.${sourceBrief ? ` Check these county-specific sources known to publish local events:\n${sourceBrief}` : ''}` }
-          ],
-          max_tokens: 4000,
-        }),
-      })
-      if (pRes.ok) {
-        const pData = await pRes.json()
-        logAiUsage({ userId: authUser?.id, endpoint: 'events', provider: 'perplexity', model: 'sonar-pro', inputTokens: pData?.usage?.prompt_tokens || 0, outputTokens: pData?.usage?.completion_tokens || 0 })
-        research = pData.choices?.[0]?.message?.content || null
-      }
-    } catch (e) { console.warn('[district-events] Perplexity failed:', e.message) }
-  }
-  // ── Supplementary sources: X (Twitter) + local news outlets ─────────────────
-  const placeList = (area_description || district_name).split('(')[0].split(',').map(x => x.trim()).filter(Boolean).slice(0, 4)
+Aim for 25-40 events; if you find more, list more — do NOT stop at the big well-known ones. Include recurring weekly ones (one mention with its schedule and its NEXT date on or after ${todayIso}) and annual ones whose usual dates fall in the window — mark approximate dates. Never list an event that has already ended. ONLY include events open to the general public with no invitation, membership, or private registration required — skip private parties, members-only club events, and invite-only gatherings. For each: name, date(s), start time, venue with its STREET ADDRESS and city, organizer/host, a one-sentence description, and the event website URL if known.${sourceBrief ? ` Check these county-specific sources known to publish local events:\n${sourceBrief}` : ''}`,
+    })
+    // Stage 2 on the page means "web sweep done, news still going".
+    const newsStageWrite = mainSearch.then(() => reportStage(STAGE_NEWS, 'running'), () => reportStage(STAGE_NEWS, 'running'))
 
-  let xPosts = null
-  if (process.env.X_BEARER_TOKEN && placeList.length) {
-    try {
-      const ctrlX = new AbortController()
-      setTimeout(() => ctrlX.abort(), 12000)
-      const q = `(${placeList.map(pl => `"${pl}"`).join(' OR ')}) (event OR festival OR parade OR fair OR "farmers market" OR concert OR fundraiser OR "town hall" OR happening) -is:retweet lang:en`
-      const xr = await fetch(`https://api.x.com/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=25&tweet.fields=created_at,author_id&expansions=author_id&user.fields=username,name`, {
-        signal: ctrlX.signal,
-        headers: { Authorization: `Bearer ${process.env.X_BEARER_TOKEN}` },
-      })
-      if (xr.ok) {
-        const xd = await xr.json()
-        const users = Object.fromEntries((xd.includes?.users || []).map(u => [u.id, u]))
-        const rows = (xd.data || []).map(t => {
-          const u = users[t.author_id] || {}
-          return `@${u.username || 'unknown'} (${u.name || ''}) on ${String(t.created_at).slice(0, 10)}: ${t.text.replace(/\s+/g, ' ').slice(0, 260)}`
+    const xSearch = (async () => {
+      if (!process.env.X_BEARER_TOKEN || !searchTerms.length) return null
+      const q = `(${searchTerms.map(pl => `"${pl.replace(/"/g, '')}"`).join(' OR ')}) (event OR festival OR parade OR fair OR "farmers market" OR concert OR fundraiser OR "town hall" OR happening) -is:retweet lang:en`
+      const xd = await withTimeout(TIMEOUT.xSearch, async (signal) => {
+        const xr = await fetch(`https://api.x.com/2/tweets/search/recent?query=${encodeURIComponent(q)}&max_results=25&tweet.fields=created_at,author_id&expansions=author_id&user.fields=username,name`, {
+          signal, headers: { Authorization: `Bearer ${process.env.X_BEARER_TOKEN}` },
         })
-        if (rows.length) xPosts = rows.join('\n')
-      } else {
-        console.warn('[district-events] X search HTTP', xr.status)
-      }
-    } catch (e) { console.warn('[district-events] X search skipped:', e.message) }
-  }
+        if (!xr.ok) throw new Error(`HTTP ${xr.status}`)
+        return xr.json()
+      })
+      const users = Object.fromEntries((xd.includes?.users || []).map(u => [u.id, u]))
+      const rows = (xd.data || []).map(t => {
+        const u = users[t.author_id] || {}
+        return `@${u.username || 'unknown'} (${u.name || ''}) on ${String(t.created_at).slice(0, 10)}: ${String(t.text || '').replace(/\s+/g, ' ').slice(0, 260)}`
+      })
+      return rows.length ? rows.join('\n') : null
+    })()
 
-  let newsResearch = null
-  await reportStage(district_key, STAGE_NEWS, 'running')
-  if (PERPLEXITY_API_KEY) {
-    try {
-      const ctrlN = new AbortController()
-      setTimeout(() => ctrlN.abort(), 21000)
-      const nr = await fetch('https://api.perplexity.ai/chat/completions', {
-        method: 'POST', signal: ctrlN.signal,
-        headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'sonar',
-          messages: [
-            { role: 'system', content: 'You research LOCAL NEWS coverage of upcoming community events in Wisconsin. Prefer local TV stations, local newspapers, and city/chamber announcement pages. Name the outlet for every item. Small announcements (club breakfasts, church suppers, library programs, board meetings) are just as important as big-festival coverage. Only report events held inside the exact communities given.' },
-            { role: 'user', content: `Check local news outlets and their community/event calendars covering ${placeList.join(', ')}, Wisconsin.${sourceBrief ? ` Prioritize these county-specific sources:\n${sourceBrief}` : ' Check local TV, local papers and city weeklies, chamber and city hall announcements.'}\nWhat upcoming public events in the next 60 days have they announced or covered? Include small items too — community briefs, club and church announcements, meeting notices — not just headline events. ONLY include events whose venue is inside one of these communities: ${communities}.
+    const newsSearch = callPerplexity({
+      label: 'news', model: 'sonar', maxTokens: 2500, timeoutMs: TIMEOUT.perplexityNews,
+      system: 'You research LOCAL NEWS coverage of upcoming community events in Wisconsin. Prefer local TV stations, local newspapers, and city/chamber announcement pages. Name the outlet for every item. Small announcements (club breakfasts, church suppers, library programs, board meetings) are just as important as big-festival coverage. Only report events held inside the area given.',
+      user: `Today is ${todayIso}. Check local news outlets and their community/event calendars covering ${area}, Wisconsin.${sourceBrief ? ` Prioritize these county-specific sources:\n${sourceBrief}` : ' Check local TV, local papers and city weeklies, chamber and city hall announcements.'}\nWhat upcoming public events in the next 60 days have they announced or covered? Include small items too — community briefs, club and church announcements, meeting notices — not just headline events. ONLY include events whose venue is inside that area.
 
 ${MEETINGS_RULE}
- For each: event name, date, time, venue with street address, city, host, one-sentence description, the OUTLET that reported it, and the article/calendar URL if available. List as many as you find (15+ is great).` }
-          ],
-          max_tokens: 2500,
-        }),
-      })
-      if (nr.ok) {
-        const nd = await nr.json()
-        logAiUsage({ userId: authUser?.id, endpoint: 'events', provider: 'perplexity', model: 'sonar-pro', inputTokens: nd?.usage?.prompt_tokens || 0, outputTokens: nd?.usage?.completion_tokens || 0 })
-        newsResearch = nd.choices?.[0]?.message?.content || null
-      }
-    } catch (e) { console.warn('[district-events] news pass skipped:', e.message) }
-  }
+ For each: event name, date, time, venue with street address, city, host, one-sentence description, the OUTLET that reported it, and the article/calendar URL if available. List as many as you find (15+ is great).`,
+    })
 
-  if (!research) {
-    // Research source unavailable (e.g. Perplexity credits exhausted).
-    // Audit fix (#18): do NOT write an empty events row here — the old code
-    // stamped events:[] with a fresh fetched_at, which the server then served
-    // as a "valid" 24h cache while the client rejected it, bricking the
-    // district behind 120-second spinners for a full day. Just fail; the next
-    // request retries research.
-    await reportStage(district_key, STAGE_SEARCH, 'error',
-      'The event research service did not respond. Nothing was saved — try again in a few minutes.')
-    return { statusCode: 502, headers, body: JSON.stringify({ error: 'Event research unavailable' }) }
-  }
+    const [mainR, xR, newsR] = await Promise.allSettled([mainSearch, xSearch, newsSearch])
+    await newsStageWrite   // keep progress writes ordered (stage 2 before 3)
+    if (mainR.status === 'rejected') console.warn('[district-events] Perplexity main search failed:', mainR.reason?.message)
+    if (xR.status === 'rejected')    console.warn('[district-events] X search skipped:', xR.reason?.message)
+    if (newsR.status === 'rejected') console.warn('[district-events] news pass skipped:', newsR.reason?.message)
+    const research     = mainR.status === 'fulfilled' ? mainR.value : null
+    const xPosts       = xR.status === 'fulfilled' ? xR.value : null
+    const newsResearch = newsR.status === 'fulfilled' ? newsR.value : null
 
-  // ── Step 2: Claude structures + classifies lean ─────────────────────────────
-  await reportStage(district_key, STAGE_STRUCTURE, 'running')
-  const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: 16000,
-      messages: [{
-        role: 'user',
-        content: `Convert this event research for ${district_name}, Wisconsin into strict JSON. The district's overall voter lean is ${district_lean || 'unknown'}.
+    if (!research && !newsResearch) {
+      // Research source unavailable (e.g. Perplexity credits exhausted). Never
+      // write an empty cache row (audit fix #18) — just fail; the next request
+      // retries research.
+      await reportError('The event research service did not respond. Nothing was saved — try again in a few minutes.', STAGE_SEARCH)
+      return reply(502, { error: 'Event research unavailable' })
+    }
+
+    // ── Step 2: Claude structures + classifies lean ─────────────────────────
+    await reportStage(STAGE_STRUCTURE, 'running')
+    const boundaryRule = `DISTRICT BOUNDARY RULE (strict): this list is for ${district_name} ONLY. The area covers: ${area}. Include an event ONLY if its venue is inside that area${places.length > PROMPT_PLACES ? ` (any municipality in ${countyNames || 'its counties'} that may belong to it is fine — an exact municipal-list filter runs afterwards)` : ''}. The single exception: county fairs and county-wide signature events of ${countyNames || "the area's counties"} may be included even if their venue city is not named. EXCLUDE everything clearly outside — an event in a town outside the area must be dropped no matter how close or how big it is. When research says an event is "near" or "in the area of" a community without naming an in-area city, drop it.`
+    let structuredText
+    try {
+      structuredText = await callClaude({
+        label: 'structure', maxTokens: 16000, timeoutMs: TIMEOUT.anthropicStructure,
+        prompt: `Today is ${todayIso} (America/Chicago). Convert this event research for ${district_name}, Wisconsin into strict JSON. The district's overall voter lean is ${district_lean || 'unknown'}.
 
 Schema — an array "events":
 {
@@ -404,6 +776,7 @@ Schema — an array "events":
       "date_start": "2026-07-17",
       "date_end": "2026-07-20" or null,
       "time": "9:00 AM" or null,
+      "recurrence": "weekly" | "biweekly" | "monthly" | null,
       "venue": "Venue name",
       "address": "street address (e.g. 1582 Kronenwetter Dr) or null",
       "city": "City",
@@ -422,257 +795,211 @@ Schema — an array "events":
     }
   ]
 }
+Dates are ISO YYYY-MM-DD. Drop any event that ends before ${todayIso}. Recurring events get ONE entry whose date_start is the NEXT occurrence on or after ${todayIso} (set "recurrence"; for a seasonal series set date_end to the season's last date).
 Lean rules — use this SIGNAL HIERARCHY (strongest evidence wins; cite the tier you used in "basis"):
 - TIER 1 (registered partisan entity → "confirmed_*", certainty 100): the host is a party organization (county/state Republican or Democratic party, party caucus, Young/College partisan clubs), a candidate committee, or the event is a partisan candidate's own campaign event. These orgs are registered with the FEC or the Wisconsin Ethics Commission's campaign-finance system.
 - TIER 2 (documented partisan alignment → "likely_*", certainty 80-99): labor unions and labor federations (AFSCME, SEIU, WEAC, AFL-CIO, trades councils → likely_liberal — union event infrastructure like Mobilize/ActBlue is Democratic-side); ideological advocacy organizations with a known side (Americans for Prosperity, Moms for Liberty, Right to Life → likely_conservative; Indivisible, Citizen Action, Planned Parenthood advocacy, conservation voter groups → likely_liberal). If the host lobbies Wisconsin government, weigh its known issue positions.
 - TIER 3 (no org-level signal → "nonpartisan", certainty below 80): fairs, farmers markets, chambers of commerce, service clubs (Lions/Rotary/Kiwanis/Optimist), VFW/Legion, churches, libraries, schools, government meetings. The League of Women Voters is legally NONPARTISAN — never mark it partisan. For Tier 3, set "score" to the AREA's voter-lean context (who will be in the crowd), not the event itself.
 - "score": negative = liberal, positive = conservative, drives a marker on a lean bar. Calibrate: confirmed ±85-100, likely ±55-80, nonpartisan-in-leaning-area ±10-45, truly neutral 0.
 - "basis" must name the signal used, e.g. "T1: county party host", "T2: union host (AFSCME)", "T3: civic host, R+8 area crowd". Never guess a partisan label from the event NAME alone (a "Freedom Fest" is not conservative without a partisan host).
-DISTRICT BOUNDARY RULE (strict): this list is for ${district_name} ONLY. The in-district communities are: ${communities}. Include an event ONLY if its city/venue is in one of those communities. The single exception: county fairs and county-wide signature events of ${countyNames || "the district's counties"} may be included even if their venue city is not on the list. EXCLUDE everything else — an event in a neighboring town outside the list must be dropped no matter how close or how big it is. When research says an event is "near" or "in the area of" a community without naming an in-district city, drop it.
-Include EVERY in-district event from the research that is public and has a usable date in the next ~60 days — do not drop events merely because a date is approximate (keep them, using the best-estimate date), and NEVER drop an event for being small or routine (club breakfasts, fish fries, library talks, board meetings are as valuable to a campaign as festivals). There is no maximum — 25-40+ events is the expected output when the research supports it. Recurring weekly events get one entry starting at the next occurrence.
+${boundaryRule}
+Include EVERY in-area event from the research that is public and has a usable date in the next ~60 days — do not drop events merely because a date is approximate (keep them, using the best-estimate date), and NEVER drop an event for being small or routine (club breakfasts, fish fries, library talks, board meetings are as valuable to a campaign as festivals). There is no maximum — 25-40+ events is the expected output when the research supports it. Keep each description to one short sentence so the whole list fits.
 ${MEETINGS_RULE}
-PUBLIC-ONLY RULE: include only events open to the general public. EXCLUDE anything private, invite-only, members-only, or requiring approval to attend (private fundraisers with invitation lists, closed club meetings, school-family-only events). Free-and-open government meetings, fairs, markets, festivals, and ticketed-but-open events all count as public. Output ONLY the JSON object.
+PUBLIC-ONLY RULE: include only events open to the general public. EXCLUDE anything private, invite-only, members-only, or requiring approval to attend (private fundraisers with invitation lists, closed club meetings, school-family-only events). Free-and-open government meetings, fairs, markets, festivals, and ticketed-but-open events all count as public. Output ONLY the JSON object — no preamble, no code fences.
 
 Merge events found across ALL sources below and dedupe by name, keeping the fullest details for each event. SOURCE LABELING (strict): if an event appears in LOCAL NEWS RESEARCH, set source="news" and source_note to the outlet name (e.g. "Wausau Pilot & Review") — even if it also appears in web research. If an event appears only in the X posts, set source="x" and source_note to the handle (e.g. "@WausauChamber on X"). Otherwise source="web" with source_note null. Events found ONLY on X must clearly be real public events with a date — skip vague chatter, national politics, and anything that is not a local event announcement.
 
 WEB RESEARCH:
-${research}
+${research || '(none available)'}
 
 LOCAL NEWS RESEARCH:
 ${newsResearch || '(none available)'}
 
 RECENT X (TWITTER) POSTS FROM THE AREA:
 ${xPosts || '(none available)'}`,
-      }],
-    }),
-  })
-  if (!claudeRes.ok) {
-    await reportStage(district_key, STAGE_STRUCTURE, 'error',
-      'Events were found but could not be organised. Nothing was saved — try Refresh again.')
-    return { statusCode: 502, headers, body: JSON.stringify({ error: 'Event structuring failed' }) }
-  }
-  const cData = await claudeRes.json()
-  logAiUsage({ userId: authUser?.id, endpoint: 'events', provider: 'anthropic', model: CLAUDE_MODEL, inputTokens: cData?.usage?.input_tokens || 0, outputTokens: cData?.usage?.output_tokens || 0 })
-  let parsed
-  try {
-    const raw = (cData.content?.find(b => b.type === 'text')?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
-    parsed = JSON.parse(raw)
-  } catch {
-    await reportStage(district_key, STAGE_STRUCTURE, 'error',
-      'The event list came back unreadable. Nothing was saved — try Refresh again.')
-    return { statusCode: 502, headers, body: JSON.stringify({ error: 'Could not parse event output' }) }
-  }
-  // ── Code-level guards: district boundary + past dates ─────────────────────
-  // The prompts already demand in-district-only events, but AI output can
-  // slip. This filter guarantees it. Exceptions: county fairs (category
-  // "fair") are county-wide by nature and always kept.
-  const communitySet = communities.split(',')
-    .map(c => c.trim().toLowerCase().replace(/\./g, ''))
-    .filter(c => c && c !== 'wi' && c !== 'wisconsin')
-  const inDistrict = (e) => {
-    if (!communitySet.length) return true
-    if (e.category === 'fair') return true
-    const hay = [e.city, e.venue, e.address].filter(Boolean).join(' ').toLowerCase().replace(/\./g, '')
-    return communitySet.some(c => hay.includes(c))
-  }
-  const todayIso = new Date().toISOString().slice(0, 10)
-  const notPast = (e) => String(e.date_end || e.date_start).slice(0, 10) >= todayIso
-  const applyGuards = (list) => list.filter(e => notPast(e) && inDistrict(e))
+      })
+    } catch (e) {
+      console.warn('[district-events] structuring call failed:', e.message)
+      await reportError('Events were found but could not be organised. Nothing was saved — try again.')
+      return reply(502, { error: 'Event structuring failed' })
+    }
 
-  let events = applyGuards((parsed.events || []).filter(e => e?.name && e?.date_start))
+    const parsed = parseModelJson(structuredText)
+    if (!parsed) {
+      console.warn('[district-events] unparseable structuring output:', String(structuredText).slice(0, 300))
+      await reportError('The event list came back unreadable. Nothing was saved — try again.')
+      return reply(502, { error: 'Could not parse event output' })
+    }
+    if (parsed.salvaged) console.warn('[district-events] structuring output was not valid JSON — salvaged complete event objects')
+    const rawEvents = listFromParsed(parsed, 'events')
+    let events = applyGuards(rawEvents)
+    console.log(`[district-events] ${district_key}: ${rawEvents.length} structured → ${events.length} after date/area guards`)
 
-  // Thin result (search variance): one supplemental research pass, merged + deduped.
-  if (events.length < 14 && PERPLEXITY_API_KEY) {
-    try {
-      const ctrl2 = new AbortController()
-      setTimeout(() => ctrl2.abort(), 21000)
-      const p2 = await fetch('https://api.perplexity.ai/chat/completions', {
-        method: 'POST', signal: ctrl2.signal,
-        headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'sonar-pro',
-          messages: [
-            { role: 'system', content: 'You are a Wisconsin community events researcher. Only public events. Include street addresses. Small events (fish fries, club breakfasts, library programs, board meetings) count as much as big ones. Only report events physically held inside the exact communities given.' },
-            { role: 'user', content: `List public community events in the next 60 days held INSIDE these Wisconsin communities and ONLY these communities: ${communities}. Cover the small stuff too: church fish fries and picnics, VFW/American Legion and Lions/Rotary/Kiwanis events, library programs, school events open to the public, county party (GOP/Dem) meetings, charity runs and benefit dinners, car/tractor/sportsmen shows, senior center events — plus fairs, markets, festivals, parades, concerts.
+    // ── Optional: thin result → one supplemental research pass ──────────────
+    if (events.length < 14 && timeLeft() > TIMEOUT.perplexityExtra + TIMEOUT.anthropicSmall) {
+      try {
+        const extra = await callPerplexity({
+          label: 'extra', model: 'sonar-pro', maxTokens: 2500, timeoutMs: TIMEOUT.perplexityExtra,
+          system: 'You are a Wisconsin community events researcher. Only public events. Include street addresses. Small events (fish fries, club breakfasts, library programs, board meetings) count as much as big ones. Only report events physically held inside the area given.',
+          user: `Today is ${todayIso}. List public community events in the next 60 days held INSIDE this Wisconsin area and ONLY this area: ${area}. Cover the small stuff too: church fish fries and picnics, VFW/American Legion and Lions/Rotary/Kiwanis events, library programs, school events open to the public, county party (GOP/Dem) meetings, charity runs and benefit dinners, car/tractor/sportsmen shows, senior center events — plus fairs, markets, festivals, parades, concerts.
 
 ${MEETINGS_RULE}
 
-Skip events already in this list: ${events.map(e => e.name).join('; ') || 'none'}. Find as many NEW ones as you can (15+). For each: name, date, time, venue with street address, city, host, one-sentence description, URL if known.` }
-          ],
-          max_tokens: 2500,
-        }),
-      })
-      if (p2.ok) {
-        const d2 = await p2.json()
-        logAiUsage({ userId: authUser?.id, endpoint: 'events', provider: 'perplexity', model: 'sonar-pro', inputTokens: d2?.usage?.prompt_tokens || 0, outputTokens: d2?.usage?.completion_tokens || 0 })
-        const extra = d2.choices?.[0]?.message?.content
-        if (extra) {
-          const c2 = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: CLAUDE_MODEL, max_tokens: 6000,
-              messages: [{ role: 'user', content: `Convert to the same strict JSON schema {"events":[...]} used before (name, date_start, date_end, time, venue, address, city, host, description, category, url, lean{label,certainty,score,basis}). Public events only, next 60 days, district lean ${district_lean || 'unknown'}. STRICT BOUNDARY: include ONLY events whose city is one of these in-district communities: ${communities} (county fairs of ${countyNames || "the district's counties"} also allowed). Drop events in any other town. Include every qualifying event no matter how small. Output ONLY JSON.
+Skip events already in this list: ${events.map(e => e.name).join('; ') || 'none'}. Find as many NEW ones as you can (15+). For each: name, date, time, venue with street address, city, host, one-sentence description, URL if known.`,
+        })
+        if (extra && timeLeft() > TIMEOUT.anthropicSmall) {
+          const text2 = await callClaude({
+            label: 'extra-structure', maxTokens: 6000, timeoutMs: TIMEOUT.anthropicSmall,
+            prompt: `Today is ${todayIso}. Convert to the same strict JSON schema {"events":[...]} used before (name, date_start, date_end, time, recurrence, venue, address, city, host, description, category, url, lean{label,certainty,score,basis}). Public events only, next 60 days, nothing that ends before ${todayIso}; recurring events use their next occurrence. District lean ${district_lean || 'unknown'}. ${boundaryRule} Include every qualifying event no matter how small. Output ONLY JSON.
 
 RESEARCH:
-${extra}` }],
-            }),
+${extra}`,
           })
-          if (c2.ok) {
-            const cd2 = await c2.json()
-            logAiUsage({ userId: authUser?.id, endpoint: 'events', provider: 'anthropic', model: CLAUDE_MODEL, inputTokens: cd2?.usage?.input_tokens || 0, outputTokens: cd2?.usage?.output_tokens || 0 })
-            const raw2 = (cd2.content?.find(b => b.type === 'text')?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
-            const more = applyGuards((JSON.parse(raw2).events || []).filter(e => e?.name && e?.date_start))
-            const seen = new Set(events.map(e => e.name.toLowerCase()))
-            for (const e of more) if (!seen.has(e.name.toLowerCase())) { events.push(e); seen.add(e.name.toLowerCase()) }
+          const more = applyGuards(listFromParsed(parseModelJson(text2), 'events'))
+          const seen = new Set(events.map(e => String(e.name).toLowerCase()))
+          for (const e of more) {
+            const k = String(e.name).toLowerCase()
+            if (!seen.has(k)) { events.push(e); seen.add(k) }
           }
         }
-      }
-    } catch (e) { console.warn('[district-events] supplemental pass skipped:', e.message) }
-  }
-
-  await reportStage(district_key, STAGE_ENRICH, 'running')
-
-  // ── Lean hardening pass 1: deterministic partisan-signal lexicon ───────────
-  // (v1.18.1) The curated Wisconsin org lexicon (_partisan-signals.js) overrides
-  // the LLM's lean whenever the HOST matches a known partisan (or legally
-  // nonpartisan) organization. Deterministic > generative for known entities:
-  // the LLM can miss a county party or mislabel the League of Women Voters,
-  // the regex table cannot.
-  for (const e of events) {
-    const sig = matchPartisanSignals(e.host) || matchPartisanSignals(e.name)
-    if (!sig) continue
-    if (sig.tier === 3) {
-      // Known civic org: force nonpartisan LABEL but keep the LLM's area-crowd score
-      if (e.lean?.label !== 'nonpartisan') {
-        e.lean = { label: 'nonpartisan', certainty: sig.certainty, score: e.lean?.score ?? 0, basis: `T3: known nonpartisan civic org` }
-      }
-    } else if (e.lean?.label !== sig.label || (e.lean?.certainty ?? 0) < sig.certainty) {
-      e.lean = { label: sig.label, certainty: sig.certainty, score: sig.score, basis: `T${sig.tier}: known partisan org match (${e.host || e.name})` }
+      } catch (e) { console.warn('[district-events] supplemental pass skipped:', e.message) }
+    } else if (events.length < 14) {
+      console.warn('[district-events] supplemental pass skipped: past run deadline')
     }
-  }
 
-  // ── Lean hardening pass 2: registry verification for uncertain named hosts ─
-  // (v1.18.1) Hosts the lexicon doesn't know and the LLM wasn't sure about get
-  // one batched Perplexity check against the verified public registries:
-  // Wisconsin's campaign-finance registrant search (campaignfinance.wi.gov),
-  // Mobilize (progressive event infrastructure), ActBlue's public directory,
-  // and Wisconsin's Eye on Lobbying. This is the research-verified multi-signal
-  // approach: registry match = high precision; platform presence = high recall
-  // on the left side; absence everywhere = genuine nonpartisan confidence.
-  const uncertain = events.filter(e =>
-    e.host &&
-    !matchPartisanSignals(e.host) &&
-    ['party', 'labor', 'civic', 'other'].includes(e.category) &&
-    (e.lean?.certainty ?? 0) < 90
-  ).slice(0, 15)
-  if (uncertain.length && PERPLEXITY_API_KEY) {
-    try {
-      const ctrlV = new AbortController()
-      setTimeout(() => ctrlV.abort(), 30000)
-      const hostList = [...new Set(uncertain.map(e => e.host))]
-      const vRes = await fetch('https://api.perplexity.ai/chat/completions', {
-        method: 'POST', signal: ctrlV.signal,
-        headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'sonar',
-          messages: [
-            { role: 'system', content: 'You verify the political affiliation of Wisconsin organizations using public records. For each organization, check: (1) is it a registered campaign-finance committee or conduit in Wisconsin (campaignfinance.wi.gov registrant search) or with the FEC; (2) does it appear on Mobilize (mobilize.us — Democratic/progressive event platform) or in ActBlue’s public directory (Democratic-side fundraising); (3) does it use WinRed (Republican-side fundraising); (4) is it a registered Wisconsin lobbying principal (lobbying.wi.gov) and what issues does it lobby on; (5) do news reports document endorsements of or by partisan candidates. Answer strictly from evidence; say "no partisan signal found" when that is the truth.' },
-            { role: 'user', content: `For each of these organizations that host community events in ${countyNames || district_name}, Wisconsin, report any partisan affiliation evidence and its source, one line each. Organizations:\n${hostList.map((h, i) => `${i + 1}. ${h}`).join('\n')}` }
-          ],
-          max_tokens: 1500,
-        }),
-      })
-      if (vRes.ok) {
-        const vd = await vRes.json()
-        logAiUsage({ userId: authUser?.id, endpoint: 'events', provider: 'perplexity', model: 'sonar-pro', inputTokens: vd?.usage?.prompt_tokens || 0, outputTokens: vd?.usage?.completion_tokens || 0 })
-        const verification = vd.choices?.[0]?.message?.content
-        if (verification) {
-          const c3 = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: CLAUDE_MODEL, max_tokens: 2000,
-              messages: [{ role: 'user', content: `Based on this verification research about Wisconsin organizations, output STRICT JSON {"hosts":[{"host": "<exact name from list>", "label": "confirmed_conservative"|"likely_conservative"|"nonpartisan"|"likely_liberal"|"confirmed_liberal", "certainty": 0-100, "score": -100 to 100, "basis": "signal + source, e.g. 'registered WI committee' or 'on Mobilize/ActBlue' or 'no partisan signal in registries'"}]}. Rules: registered party/candidate committee = confirmed (certainty 100); Mobilize/ActBlue presence = likely_liberal (85-95); WinRed presence = likely_conservative (85-95); lobbying registration alone is NOT partisan — use its documented issue positions; explicit "no partisan signal found" = nonpartisan with certainty 75. Only include hosts where the research supports a judgment. Output ONLY JSON.\n\nHOSTS:\n${hostList.join('\n')}\n\nVERIFICATION RESEARCH:\n${verification}` }],
-            }),
-          })
-          if (c3.ok) {
-            const cd3 = await c3.json()
-            logAiUsage({ userId: authUser?.id, endpoint: 'events', provider: 'anthropic', model: CLAUDE_MODEL, inputTokens: cd3?.usage?.input_tokens || 0, outputTokens: cd3?.usage?.output_tokens || 0 })
-            const raw3 = (cd3.content?.find(b => b.type === 'text')?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
-            const verdicts = JSON.parse(raw3).hosts || []
-            const vMap = new Map(verdicts.map(v => [String(v.host).toLowerCase(), v]))
-            for (const e of events) {
-              const v = e.host && vMap.get(String(e.host).toLowerCase())
-              if (v && (v.certainty ?? 0) > (e.lean?.certainty ?? 0)) {
-                e.lean = { label: v.label, certainty: v.certainty, score: v.score, basis: `Registry check: ${v.basis}` }
-              }
-            }
-            console.log(`[district-events] registry verification updated ${verdicts.length}/${hostList.length} hosts`)
-          }
+    await reportStage(STAGE_ENRICH, 'running')
+
+    // ── Lean hardening pass 1: deterministic partisan-signal lexicon ─────────
+    // The curated Wisconsin org lexicon (_partisan-signals.js) overrides the
+    // LLM's lean whenever the HOST matches a known partisan (or legally
+    // nonpartisan) organization. Deterministic > generative for known entities.
+    for (const e of events) {
+      const sig = matchPartisanSignals(e.host) || matchPartisanSignals(e.name)
+      if (!sig) continue
+      if (sig.tier === 3) {
+        if (e.lean?.label !== 'nonpartisan') {
+          e.lean = { label: 'nonpartisan', certainty: sig.certainty, score: e.lean?.score ?? 0, basis: `T3: known nonpartisan civic org` }
         }
+      } else if (e.lean?.label !== sig.label || (e.lean?.certainty ?? 0) < sig.certainty) {
+        e.lean = { label: sig.label, certainty: sig.certainty, score: sig.score, basis: `T${sig.tier}: known partisan org match (${e.host || e.name})` }
       }
-    } catch (e) { console.warn('[district-events] registry verification skipped:', e.message) }
+    }
+
+    // ── Lean hardening pass 2 (optional): registry verification ─────────────
+    // Hosts the lexicon doesn't know and the LLM wasn't sure about get one
+    // batched Perplexity check against Wisconsin's campaign-finance registry,
+    // Mobilize, ActBlue and Eye on Lobbying.
+    const uncertain = events.filter(e =>
+      e.host &&
+      !matchPartisanSignals(e.host) &&
+      ['party', 'labor', 'civic', 'other'].includes(e.category) &&
+      (e.lean?.certainty ?? 0) < 90
+    ).slice(0, 15)
+    if (uncertain.length && timeLeft() > TIMEOUT.perplexityVerify + TIMEOUT.anthropicSmall) {
+      try {
+        const hostList = [...new Set(uncertain.map(e => e.host))]
+        const verification = await callPerplexity({
+          label: 'verify', model: 'sonar', maxTokens: 1500, timeoutMs: TIMEOUT.perplexityVerify,
+          system: 'You verify the political affiliation of Wisconsin organizations using public records. For each organization, check: (1) is it a registered campaign-finance committee or conduit in Wisconsin (campaignfinance.wi.gov registrant search) or with the FEC; (2) does it appear on Mobilize (mobilize.us — Democratic/progressive event platform) or in ActBlue’s public directory (Democratic-side fundraising); (3) does it use WinRed (Republican-side fundraising); (4) is it a registered Wisconsin lobbying principal (lobbying.wi.gov) and what issues does it lobby on; (5) do news reports document endorsements of or by partisan candidates. Answer strictly from evidence; say "no partisan signal found" when that is the truth.',
+          user: `For each of these organizations that host community events in ${countyNames || district_name}, Wisconsin, report any partisan affiliation evidence and its source, one line each. Organizations:\n${hostList.map((h, i) => `${i + 1}. ${h}`).join('\n')}`,
+        })
+        if (verification && timeLeft() > TIMEOUT.anthropicSmall) {
+          const text3 = await callClaude({
+            label: 'verify-structure', maxTokens: 2000, timeoutMs: TIMEOUT.anthropicSmall,
+            prompt: `Based on this verification research about Wisconsin organizations, output STRICT JSON {"hosts":[{"host": "<exact name from list>", "label": "confirmed_conservative"|"likely_conservative"|"nonpartisan"|"likely_liberal"|"confirmed_liberal", "certainty": 0-100, "score": -100 to 100, "basis": "signal + source, e.g. 'registered WI committee' or 'on Mobilize/ActBlue' or 'no partisan signal in registries'"}]}. Rules: registered party/candidate committee = confirmed (certainty 100); Mobilize/ActBlue presence = likely_liberal (85-95); WinRed presence = likely_conservative (85-95); lobbying registration alone is NOT partisan — use its documented issue positions; explicit "no partisan signal found" = nonpartisan with certainty 75. Only include hosts where the research supports a judgment. Output ONLY JSON.\n\nHOSTS:\n${hostList.join('\n')}\n\nVERIFICATION RESEARCH:\n${verification}`,
+          })
+          const verdicts = listFromParsed(parseModelJson(text3), 'hosts')
+          const vMap = new Map(verdicts.filter(v => v?.host).map(v => [String(v.host).toLowerCase(), v]))
+          for (const e of events) {
+            const v = e.host && vMap.get(String(e.host).toLowerCase())
+            if (v && (v.certainty ?? 0) > (e.lean?.certainty ?? 0)) {
+              e.lean = { label: v.label, certainty: v.certainty, score: v.score, basis: `Registry check: ${v.basis}` }
+            }
+          }
+          console.log(`[district-events] registry verification updated ${verdicts.length}/${hostList.length} hosts`)
+        }
+      } catch (e) { console.warn('[district-events] registry verification skipped:', e.message) }
+    } else if (uncertain.length) {
+      console.warn('[district-events] registry verification skipped: past run deadline')
+    }
+
+    // ── Image + detail enrichment (optional) ───────────────────────────────
+    // JSON-LD Event > og:image > twitter:image. Never overwrites existing values.
+    if (timeLeft() > TIMEOUT.pageFetch * 2) {
+      const withUrls = events.filter(e => typeof e.url === 'string' && /^https?:\/\//i.test(e.url)).slice(0, 30)
+      await Promise.allSettled(withUrls.map(async (e) => {
+        try {
+          await withTimeout(TIMEOUT.pageFetch, async (signal) => {
+            const res = await fetch(e.url, {
+              signal, redirect: 'follow',
+              headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BadgerBoard/1.0; +https://badgerboardwi.com)' },
+            })
+            if (!res.ok || !/text\/html/i.test(res.headers.get('content-type') || '')) return
+            const html = (await res.text()).slice(0, 250000)
+            const meta = extractEventMeta(html, res.url || e.url)
+            if (meta.date_start && !e.date_start) e.date_start = meta.date_start
+            if (meta.date_end   && !e.date_end)   e.date_end   = meta.date_end
+            if (meta.time       && !e.time)       e.time       = meta.time
+            if (meta.venue      && !e.venue)      e.venue      = meta.venue
+            if (meta.address    && !e.address)    e.address    = meta.address
+            if (meta.image) e.image = meta.image
+          })
+        } catch { /* no image — card uses category visual */ }
+      }))
+    } else {
+      console.warn('[district-events] page enrichment skipped: past run deadline')
+    }
+
+    // Final guard (enrichment may have filled a date_end).
+    events = applyGuards(events)
+
+    if (!events.length) {
+      // Nothing usable came back. Never stamp an empty cache row (audit fix
+      // #18) and never overwrite a previous good result — just tell the page.
+      await reportError('No public events could be confirmed for this area right now — try again later.')
+      return reply(200, { cached: false, events: [], fetched_at: null })
+    }
+
+    const fetched_at = new Date().toISOString()
+    const saveRes = await sb('district_events', {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ district_key, name: district_name, events, fetched_at, updated_at: fetched_at }),
+    })
+    if (!saveRes.ok) {
+      const detail = await saveRes.text().catch(() => '')
+      console.error('[district-events] cache write failed:', saveRes.status, detail.slice(0, 300))
+      await reportError('The events were found but could not be saved. Try again.')
+      return reply(502, { error: 'Could not save events' })
+    }
+
+    await reportStage(STAGE_ENRICH, 'done')
+    return reply(200, { cached: false, events, fetched_at })
   }
+}
 
-  // ── Image + detail enrichment (JSON-LD Event > og:image > twitter:image) ───
-  // Event pages very often embed schema.org/Event JSON-LD with authoritative
-  // dates, venue, address, AND an image. Fall back to og/twitter meta tags.
-  // Images are later served through the Netlify Image CDN proxy, so any
-  // https URL works — but skip expiring CDNs (Facebook) that die in days.
-  const withUrls = events.filter(e => e.url).slice(0, 30)
-  await Promise.all(withUrls.map(async (e) => {
-    try {
-      const ctrl = new AbortController()
-      setTimeout(() => ctrl.abort(), 5000)
-      const res = await fetch(e.url, {
-        signal: ctrl.signal, redirect: 'follow',
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BadgerBoard/1.0; +https://badgerboardwi.com)' },
-      })
-      if (!res.ok || !/text\/html/i.test(res.headers.get('content-type') || '')) return
-      const html = (await res.text()).slice(0, 250000)
-      const meta = extractEventMeta(html, res.url || e.url)
-      // Fill details the research pass missed (never overwrite existing values)
-      if (meta.date_start && !e.date_start) e.date_start = meta.date_start
-      if (meta.date_end   && !e.date_end)   e.date_end   = meta.date_end
-      if (meta.time       && !e.time)       e.time       = meta.time
-      if (meta.venue      && !e.venue)      e.venue      = meta.venue
-      if (meta.address    && !e.address)    e.address    = meta.address
-      if (meta.image) e.image = meta.image
-    } catch (_) { /* no image — card uses category visual */ }
-  }))
-
-  if (!events.length) {
-    // Nothing usable came back. Deliberately do NOT stamp an empty cache row
-    // (audit fix #18) — but the client must still be told, or it spins.
-    await reportStage(district_key, STAGE_ENRICH, 'error',
-      'No public events could be confirmed for this area right now — try Refresh later.')
-    return { statusCode: 200, headers, body: JSON.stringify({ cached: false, events: [], fetched_at: null }) }
-  }
-
-  const fetched_at = new Date().toISOString()
-  const saveRes = await sb('district_events', {
-    method: 'POST',
-    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-    body: JSON.stringify({ district_key, name: district_name, events, fetched_at, updated_at: fetched_at }),
-  })
-  if (!saveRes.ok) {
-    const detail = await saveRes.text().catch(() => '')
-    console.error('[district-events] cache write failed:', saveRes.status, detail.slice(0, 300))
-    await reportStage(district_key, STAGE_ENRICH, 'error',
-      'The events were found but could not be saved. Try Refresh again.')
-    return { statusCode: 502, headers, body: JSON.stringify({ error: 'Could not save events' }) }
-  }
-
-  await reportStage(district_key, STAGE_ENRICH, 'done')
-  return { statusCode: 200, headers, body: JSON.stringify({ cached: false, events, fetched_at }) }
-
-  } catch (err) {
-    // A background invocation swallows thrown errors entirely — without this the
-    // page would poll a status row that never leaves "running".
-    console.error('[district-events] unhandled error:', err?.stack || err?.message || err)
-    await reportStage(district_key, STAGE_SEARCH, 'error',
-      'Something went wrong while researching this area. Nothing was saved — try again.')
-    return { statusCode: 500, headers, body: JSON.stringify({ error: 'Event research failed' }) }
-  }
+module.exports = {
+  handler,
+  // pure helpers (tests)
+  DISTRICT_KEY_RE,
+  DEFAULT_CLAUDE_MODEL,
+  STALE_AFTER_DAYS,
+  centralTodayIso,
+  isoDateOrNull,
+  isUpcomingEvent,
+  isStaleCache,
+  upcomingOrNull,
+  normalizePlaces,
+  parseAreaDescriptionPlaces,
+  countyFromKey,
+  promptArea,
+  buildAreaMatcher,
+  parseModelJson,
+  salvageArrayObjects,
+  listFromParsed,
+  rateLimitMessage,
+  sniffDistrictKey,
+  classifyDistrictSize,
+  meetingsDirective,
+  extractEventMeta,
 }

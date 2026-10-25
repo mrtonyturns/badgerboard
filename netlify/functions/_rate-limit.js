@@ -99,23 +99,25 @@ async function enforceRateLimit(userId, endpoint, extraHeaders = {}) {
   }
   if (!row) return null
 
-  const build = (retryAfterSec, message) => ({
+  // `limit` ('day' | 'minute') tells callers WHICH budget tripped, so a
+  // background function can word its own progress message accordingly.
+  const build = (retryAfterSec, message, limit) => ({
     statusCode: 429,
     headers: {
       'Content-Type': 'application/json',
       'Retry-After': String(Math.max(1, retryAfterSec)),
       ...extraHeaders,
     },
-    body: JSON.stringify({ error: message, retry_after: Math.max(1, retryAfterSec) }),
+    body: JSON.stringify({ error: message, retry_after: Math.max(1, retryAfterSec), limit }),
   })
 
   if (row.day_count > limits.perDay) {
     const retry = Math.ceil((dayStartMs + 86400000 - now) / 1000)
-    return build(retry, 'Daily limit for this feature reached. It resets at midnight UTC.')
+    return build(retry, 'Daily limit for this feature reached. It resets at midnight UTC.', 'day')
   }
   if (row.minute_count > limits.perMinute) {
     const retry = Math.ceil((minuteStartMs + 60000 - now) / 1000)
-    return build(retry, 'Too many requests — please slow down a moment.')
+    return build(retry, 'Too many requests — please slow down a moment.', 'minute')
   }
   return null
 }

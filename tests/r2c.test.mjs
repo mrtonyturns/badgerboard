@@ -51,9 +51,9 @@ console.log('1 — the district-events search is click-gated')
     /prog\?\.status === 'running'/.test(s) && /await watchRun\(key,/.test(s))
   t('there is exactly one POST to the research function, inside loadEvents',
     (s.match(/fetch\('\/\.netlify\/functions\/research-district-events-background'/g) || []).length === 1)
-  t('an explicit "Search for new events" control exists', /Search for new events/.test(s))
-  t('the start state names the job', /Find conservative events in your districts/.test(s))
-  t('a last-searched timestamp is shown', /Last searched/.test(s))
+  t('an explicit "Search for events" control exists', /Search for events/.test(s))
+  t('the start state names the job (neutral copy)', /Find events in your district/.test(s) && !/Find conservative events/.test(s))
+  t('a last-searched date is shown for out-of-date results', /last searched \$\{fmtMonDay\(fetchedAt\)\}/.test(s))
 }
 
 // ═══ 2 — Events card presentation ════════════════════════════════════════════
