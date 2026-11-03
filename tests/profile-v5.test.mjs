@@ -223,6 +223,7 @@ console.log('\n[9] pipeline wiring (source checks)')
   check('writer effort configurable via PROFILE_EFFORT, default medium (14-min incumbent run at high)', /process\.env\.PROFILE_EFFORT/.test(SRC) && G._v5.WRITER_EFFORT === 'medium')
   check('writer call has its own 10-minute timeout inside the 15-minute function', /WRITER_CALL_TIMEOUT_MS = 10 \* 60 \* 1000/.test(SRC))
   check('writer + QA respect the function deadline', /deadlineMs: handlerStartedAt \+ FUNCTION_BUDGET_MS/.test(SRC) && /remainingMs\(handlerStartedAt\) > QA_MIN_REMAINING_MS/.test(SRC) && G._v5.FUNCTION_BUDGET_MS === 14 * 60 * 1000)
+  check('Perplexity packets get 90s and a sonar fallback (six of seven were dying at 45s)', /PPLX_TIMEOUT_MS = 90000/.test(SRC) && /if \(model !== 'sonar-pro'\) return null/.test(SRC) && /once\('sonar', PPLX_FALLBACK_TIMEOUT_MS/.test(SRC))
   check('remainingMs counts down from the handler start', G._v5.remainingMs(Date.now()) > 13 * 60 * 1000 && G._v5.remainingMs(Date.now() - 20 * 60 * 1000) === 0)
   {
     let threw = ''

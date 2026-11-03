@@ -196,22 +196,41 @@ function getResearchMode(status, isIncumbent, hasOffice) {
 }
 
 // ─── Generic Perplexity query helper ─────────────────────────────────────────
-async function queryPerplexity(systemMsg, userMsg, maxTokens = 1500, model = 'sonar') {
+// Every saved profile since August recorded perplexity_sources_used = 1: six
+// of the seven packets were dying on the 45s abort (seven sonar-pro searches
+// run at once and each takes 30–90s) and only the news pass, which had its own
+// sonar fallback, survived. The budget is now 90s and every sonar-pro call
+// falls back to a quicker sonar pass instead of returning nothing.
+const PPLX_TIMEOUT_MS = 90000
+const PPLX_FALLBACK_TIMEOUT_MS = 40000
+async function queryPerplexity(systemMsg, userMsg, maxTokens = 1500, model = 'sonar', label = model) {
   if (!PERPLEXITY_API_KEY) return null
-  try {
+  const once = async (m, ms, tokens) => {
     const ctrl = new AbortController()
-    // v1.20.1: 45s (was 22s) — deep sonar-pro searches were being aborted and
-    // silently returned null, which is why news/social sections came up thin.
-    setTimeout(() => ctrl.abort(), 45000)
-    const res = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST', signal: ctrl.signal,
-      headers: { 'Authorization': `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages: [{ role: 'system', content: systemMsg }, { role: 'user', content: userMsg }], max_tokens: maxTokens }),
-    })
-    if (!res.ok) { console.error(`[perplexity] ${res.status}`); return null }
-    const d = await res.json()
-    return d.choices?.[0]?.message?.content || null
-  } catch (e) { console.error(`[perplexity] ${e.message}`); return null }
+    const to = setTimeout(() => ctrl.abort(), ms)
+    const t0 = Date.now()
+    try {
+      const res = await fetch('https://api.perplexity.ai/chat/completions', {
+        method: 'POST', signal: ctrl.signal,
+        headers: { 'Authorization': `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: m, messages: [{ role: 'system', content: systemMsg }, { role: 'user', content: userMsg }], max_tokens: tokens }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const d = await res.json()
+      const text = d.choices?.[0]?.message?.content || null
+      console.log(`[perplexity] ${label} (${m}) ok in ${Date.now() - t0}ms, ${text ? text.length : 0} chars`)
+      return text
+    } finally { clearTimeout(to) }
+  }
+  try {
+    return await once(model, PPLX_TIMEOUT_MS, maxTokens)
+  } catch (e) {
+    console.error(`[perplexity] ${label} (${model}) failed: ${e.message}`)
+    if (model !== 'sonar-pro') return null
+    try {
+      return await once('sonar', PPLX_FALLBACK_TIMEOUT_MS, Math.min(maxTokens, 2000))
+    } catch (e2) { console.error(`[perplexity] ${label} sonar fallback failed: ${e2.message}`); return null }
+  }
 }
 
 // ─── Identity lock — mode-aware ───────────────────────────────────────────────
@@ -272,11 +291,11 @@ async function fetchPerplexityNews(name, office, district, ctx, mode, localSourc
   // v1.20.1: 45s budget + a fast sonar retry when the deep search fails —
   // previously a 20s abort silently produced a dossier with NO news at all.
   try {
-    return await runNewsSearch('sonar-pro', 3000, 45000)
+    return await runNewsSearch('sonar-pro', 3000, PPLX_TIMEOUT_MS)
   } catch (e) {
     console.error(`[perplexity/news] deep search failed (${e.message}) — retrying with sonar`)
     try {
-      return await runNewsSearch('sonar', 2000, 20000)
+      return await runNewsSearch('sonar', 2000, PPLX_FALLBACK_TIMEOUT_MS)
     } catch (e2) { console.error(`[perplexity/news] fallback failed: ${e2.message}`); return null }
   }
 }
