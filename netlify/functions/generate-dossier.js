@@ -76,8 +76,13 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) }
   }
 
-  // Test mode — verify keys are set
+  // Test mode — ADMIN ONLY (pings Claude, which costs money, and reports
+  // which model ids are in effect so a stale env override is visible)
   if (body.test === true) {
+    const testUser = await verifyUser(event.headers?.authorization || event.headers?.Authorization)
+    if (!testUser || !ADMIN_EMAILS.includes((testUser.email || '').toLowerCase())) {
+      return { statusCode: 401, headers, body: JSON.stringify({ error: 'Not authorized' }) }
+    }
     if (!ANTHROPIC_API_KEY) {
       return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: 'ANTHROPIC_API_KEY is not set.' }) }
     }
@@ -98,7 +103,16 @@ exports.handler = async (event) => {
         return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: e.message }) }
       }
     }
-    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, key_set: true, key_prefix: ANTHROPIC_API_KEY.slice(0, 8) + '...', perplexity: !!PERPLEXITY_API_KEY }) }
+    const models = {
+      profiles: CLAUDE_MODEL, fast: MODELS.CLAUDE_FAST, broadside: MODELS.CLAUDE_BALANCED, grok: MODELS.GROK,
+      events_and_history: process.env.CLAUDE_RESEARCH_MODEL || MODELS.CLAUDE_QUALITY,
+      polling_synth: process.env.POLLING_SYNTH_MODEL || MODELS.CLAUDE_QUALITY,
+      polling_grok: process.env.POLLING_GROK_MODEL || MODELS.GROK,
+      polling_research: process.env.POLLING_RESEARCH_MODEL || MODELS.PPLX_PRO,
+      polling_gemini: process.env.POLLING_GEMINI_MODEL || MODELS.GEMINI,
+      env_overrides: ['CLAUDE_RESEARCH_MODEL', 'POLLING_SYNTH_MODEL', 'POLLING_GROK_MODEL', 'POLLING_RESEARCH_MODEL', 'POLLING_SOCIAL_MODEL', 'POLLING_GEMINI_MODEL'].filter(k => process.env[k]),
+    }
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, key_set: true, perplexity: !!PERPLEXITY_API_KEY, xai: !!process.env.XAI_API_KEY, gemini: !!process.env.GEMINI_API_KEY, models }) }
   }
 
   if (!ANTHROPIC_API_KEY) {
