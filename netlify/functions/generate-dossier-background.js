@@ -5,6 +5,7 @@
 
 const { enforceRateLimit } = require('./_rate-limit')
 const { logAiUsage } = require('./_ai-usage')
+const { perplexityFetch } = require('./_perplexity')
 const { MODELS, CLAUDE, claudeMaxTokens, claudeText, claudeFetch } = require('./_models')
 const { resolveIdentityPrompt, WRITER_SYSTEM, WRITER_TOOLS, WRITER_TOOLS_SEARCH_ONLY, buildWriterUserPrompt, QA_SYSTEM, qaPrompt } = require('./_profile-prompt')
 const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY
@@ -210,11 +211,7 @@ async function queryPerplexity(systemMsg, userMsg, maxTokens = 1500, model = 'so
     const to = setTimeout(() => ctrl.abort(), ms)
     const t0 = Date.now()
     try {
-      const res = await fetch('https://api.perplexity.ai/chat/completions', {
-        method: 'POST', signal: ctrl.signal,
-        headers: { 'Authorization': `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: m, messages: [{ role: 'system', content: systemMsg }, { role: 'user', content: userMsg }], max_tokens: tokens }),
-      })
+      const res = await perplexityFetch({ apiKey: PERPLEXITY_API_KEY, signal: ctrl.signal, body: { model: m, messages: [{ role: 'system', content: systemMsg }, { role: 'user', content: userMsg }], max_tokens: tokens } })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const d = await res.json()
       const text = d.choices?.[0]?.message?.content || null
@@ -271,18 +268,14 @@ async function fetchPerplexityNews(name, office, district, ctx, mode, localSourc
   const runNewsSearch = async (model, maxTokens, timeoutMs) => {
     const ctrl = new AbortController()
     setTimeout(() => ctrl.abort(), timeoutMs)
-    const res = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST', signal: ctrl.signal,
-      headers: { 'Authorization': `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const res = await perplexityFetch({ apiKey: PERPLEXITY_API_KEY, signal: ctrl.signal, body: {
         model,
         messages: [
           { role: 'system', content: NEWS_SYSTEM },
           { role: 'user', content: (queries[mode] || queries.challenger) + ' ALSO search for podcast episodes, radio interviews, and YouTube/TV appearances featuring them (list each as an item with the show name as the publication).' + localSources },
         ],
         max_tokens: maxTokens,
-      }),
-    })
+      } })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
     return data.choices?.[0]?.message?.content || null

@@ -5,6 +5,7 @@
 
 import crypto from 'crypto'
 import { logAiUsage } from './_ai-usage.js'
+import { perplexityFetch } from './_perplexity.js'
 import { MODELS, CLAUDE, claudeMaxTokens, claudeText, claudeFetch } from './_models.js'
 import { enforceRateLimit } from './_rate-limit.js'
 import { ADMIN_EMAILS } from './_config.js'
@@ -118,18 +119,14 @@ export const handler = async (event) => {
     try {
       const ctrl = new AbortController()
       setTimeout(() => ctrl.abort(), 18000)
-      const pRes = await fetch('https://api.perplexity.ai/chat/completions', {
-        method: 'POST', signal: ctrl.signal,
-        headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const pRes = await perplexityFetch({ apiKey: PERPLEXITY_API_KEY, signal: ctrl.signal, body: {
           model: 'sonar',
           messages: [
             { role: 'system', content: 'You are a Wisconsin political historian. Be precise about names, parties, years, and vote percentages. Cite what actually happened in this specific district.' },
             { role: 'user', content: `List every person who has held the office of ${office_label} (${district_name}, Wisconsin) from 2010 through today. For each person include: full name, party, years served, each election in this district they won or lost with the year and their vote percentage, whether they are the current officeholder, and a 2-3 sentence biography (background, notable work, committees). Note any redistricting that changed the district's territory. Include election results for every general election for this seat from 2010 to now.` }
           ],
           max_tokens: 2500,
-        }),
-      })
+        } })
       if (pRes.ok) {
         const pData = await pRes.json()
         logAiUsage({ userId: uid, endpoint: 'district-intel', provider: 'perplexity', model: 'sonar', inputTokens: pData?.usage?.prompt_tokens || 0, outputTokens: pData?.usage?.completion_tokens || 0 })

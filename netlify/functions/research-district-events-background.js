@@ -30,6 +30,7 @@
 const COUNTY_SOURCES = require('./_county-sources.json')
 const { matchPartisanSignals } = require('./_partisan-signals.js')
 const { logAiUsage } = require('./_ai-usage.js')
+const { perplexityFetch } = require('./_perplexity.js')
 const { MODELS, CLAUDE, claudeMaxTokens, claudeText, claudeFetch } = require('./_models.js')
 const { ADMIN_EMAILS } = require('./_config.js')
 
@@ -644,11 +645,7 @@ const handler = async (event) => {
     // ── Provider helpers ───────────────────────────────────────────────────
     const callPerplexity = async ({ label, model, system, user, maxTokens, timeoutMs }) => {
       const data = await withTimeout(timeoutMs, async (signal) => {
-        const r = await fetch('https://api.perplexity.ai/chat/completions', {
-          method: 'POST', signal,
-          headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: maxTokens }),
-        })
+        const r = await perplexityFetch({ apiKey: PERPLEXITY_API_KEY, signal: signal, body: { model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: maxTokens } })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
       })

@@ -47,6 +47,7 @@
 
 const { enforceRateLimit } = require('./_rate-limit')
 const { logAiUsage } = require('./_ai-usage')
+const { perplexityFetch } = require('./_perplexity')
 const { MODELS, CLAUDE, claudeText, claudeFetch } = require('./_models')
 const { computeWinOdds, primaryMarginFromResults } = require('./_win-odds')
 const { ADMIN_EMAILS } = require('./_config')
@@ -581,11 +582,7 @@ async function runPerplexity(prompt, userId) {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), PPLX_TIMEOUT_MS)
   try {
-    const res = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST',
-      signal: ctrl.signal,
-      headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const res = await perplexityFetch({ apiKey: PERPLEXITY_API_KEY, signal: ctrl.signal, body: {
         model: PPLX_MODEL,
         temperature: 0,
         max_tokens: 900,
@@ -593,8 +590,7 @@ async function runPerplexity(prompt, userId) {
           { role: 'system', content: RESEARCH_SYSTEM },
           { role: 'user', content: prompt },
         ],
-      }),
-    })
+      } })
     if (!res.ok) {
       const detail = await res.text().catch(() => '')
       return { text: null, error: `Perplexity ${res.status}${detail ? `: ${detail.slice(0, 160)}` : ''}` }

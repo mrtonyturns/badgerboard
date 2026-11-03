@@ -4,6 +4,7 @@
 
 const { enforceRateLimit } = require('./_rate-limit')
 const { MODELS, CLAUDE, claudeMaxTokens, claudeText, claudeFetch } = require('./_models')
+const { perplexityFetch } = require('./_perplexity')
 const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY // must be set in Netlify env vars
 const SUPABASE_URL       = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
@@ -96,9 +97,7 @@ exports.handler = async (event) => {
         const t0 = Date.now()
         const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 40000)
         try {
-          const r = await fetch('https://api.perplexity.ai/chat/completions', { method: 'POST', signal: ctrl.signal,
-            headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model, max_tokens: 120, messages: [{ role: 'user', content: `In one sentence: who is the current sheriff of ${['Marathon', 'Waupaca', 'Portage', 'Wood', 'Lincoln', 'Shawano'][i]} County, Wisconsin?` }] }) })
+          const r = await perplexityFetch({ apiKey: PERPLEXITY_API_KEY, signal: ctrl.signal, body: { model, max_tokens: 120, messages: [{ role: 'user', content: `In one sentence: who is the current sheriff of ${['Marathon', 'Waupaca', 'Portage', 'Wood', 'Lincoln', 'Shawano'][i]} County, Wisconsin?` }] } })
           const txt = await r.text()
           return { i, status: r.status, ms: Date.now() - t0, len: txt.length, head: r.ok ? '' : txt.slice(0, 160), ratelimit: { remaining: r.headers.get('x-ratelimit-remaining-requests'), limit: r.headers.get('x-ratelimit-limit-requests'), retry: r.headers.get('retry-after') } }
         } catch (e) { return { i, status: 'ERR', ms: Date.now() - t0, error: e.message } }

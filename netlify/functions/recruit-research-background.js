@@ -34,6 +34,7 @@
 //     survive coerceResearchOutput()'s allow-list.
 
 import { logAiUsage } from './_ai-usage.js'
+import { perplexityFetch } from './_perplexity.js'
 import { MODELS, CLAUDE, claudeText, claudeFetch } from './_models.js'
 import {
   coerceResearchOutput, researchOutputToRow, researchCacheKey,
@@ -108,18 +109,14 @@ async function perplexity({ apiKey, model, prompt, maxTokens, userId }) {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 45000)
   try {
-    const res = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST', signal: ctrl.signal,
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const res = await perplexityFetch({ apiKey: apiKey, signal: ctrl.signal, body: {
         model,
         messages: [
           { role: 'system', content: RESEARCH_SYSTEM_PROMPT },
           { role: 'user', content: prompt },
         ],
         max_tokens: maxTokens,
-      }),
-    })
+      } })
     if (!res.ok) return null
     const data = await res.json()
     logAiUsage({

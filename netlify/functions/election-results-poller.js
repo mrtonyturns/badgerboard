@@ -98,6 +98,7 @@
 //   countyChunk, countyDiscoveryPrompt, shapeCountyContests, WI_COUNTIES
 
 const { cors, json, serviceClient, requireAdmin } = require('./_shared')
+const { perplexityFetch } = require('./_perplexity')
 const { normalizePartyForDb } = require('./_party')
 const { determineStatus } = require('./_determination')
 const { notifyContestChanges } = require('./_result-notify')
@@ -111,7 +112,6 @@ const COUNTY_RESULT_URLS = require('./_county-results-sources.json')
 // Read lazily: the key is looked up per call so a test (or a redeploy that sets
 // the variable after cold start) never gets a stale null captured at require().
 const pplxKey = () => process.env.PERPLEXITY_API_KEY
-const PPLX_URL   = 'https://api.perplexity.ai/chat/completions'
 const PPLX_MODEL = 'sonar'
 
 // Wisconsin's entire electorate casts ~3.3M votes at a presidential general and
@@ -782,12 +782,9 @@ async function queryPerplexity({ system, user, maxTokens = 2000, schema = null, 
         ],
       }
       if (withSchema && schema) body.response_format = { type: 'json_schema', json_schema: { schema } }
-      const res = await fetch(PPLX_URL, {
-        method: 'POST',
-        signal: ctrl.signal,
-        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
+      // Shared client: honours the account's 429s with a short retry, but the
+      // poller's wall-clock budget (ctrl.signal) still wins.
+      const res = await perplexityFetch({ apiKey: key, signal: ctrl.signal, body, attempts: 2, label: 'results-poller' })
       if (!res.ok) {
         const detail = await res.text().catch(() => '')
         // Rate limited: close the gate so nothing else this run is dispatched.

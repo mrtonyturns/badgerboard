@@ -37,6 +37,7 @@
 
 import crypto from 'crypto'
 import { logAiUsage } from './_ai-usage.js'
+import { perplexityFetch } from './_perplexity.js'
 import { MODELS, CLAUDE, claudeMaxTokens, claudeText, claudeFetch } from './_models.js'
 
 const SUPABASE_URL   = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
@@ -222,10 +223,7 @@ async function perplexityResearch(district, requestedBy) {
   const label = districtLabel(district)
   const ctrl = new AbortController()
   setTimeout(() => ctrl.abort(), 60000)
-  const res = await fetch('https://api.perplexity.ai/chat/completions', {
-    method: 'POST', signal: ctrl.signal,
-    headers: { Authorization: `Bearer ${PPLX_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const res = await perplexityFetch({ apiKey: PPLX_KEY, signal: ctrl.signal, body: {
       model: RESEARCH_MODEL,
       messages: [
         { role: 'system', content: 'You are a Wisconsin political researcher. Report only sourced, current facts. Name the outlet/source for every claim. Never fabricate polls or results.' },
@@ -239,8 +237,7 @@ async function perplexityResearch(district, requestedBy) {
 List the URL for every source you used.` }
       ],
       max_tokens: 3000,
-    }),
-  })
+    } })
   if (!res.ok) throw new Error(`Perplexity ${res.status}`)
   const d = await res.json()
   logAiUsage({ userId: requestedBy, endpoint: 'polling', provider: 'perplexity', model: RESEARCH_MODEL, inputTokens: d?.usage?.prompt_tokens || 0, outputTokens: d?.usage?.completion_tokens || 0 })
@@ -465,14 +462,10 @@ ${(research?.text || '').slice(0, 11000)}${PRIOR_NOTE(prior)}${INTEL_NOTE(intel)
     text = d.choices?.[0]?.message?.content
   } else if (provider === 'perplexity') {
     if (!PPLX_KEY) return null
-    const res = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${PPLX_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: RESEARCH_MODEL, max_tokens: 1200, temperature: EST_TEMP, messages: [
+    const res = await perplexityFetch({ apiKey: PPLX_KEY, body: { model: RESEARCH_MODEL, max_tokens: 1200, temperature: EST_TEMP, messages: [
         { role: 'system', content: 'You are a Wisconsin election forecaster. You may verify facts with live search, but output STRICT JSON only.' },
         { role: 'user', content: prompt },
-      ] }),
-    })
+      ] } })
     if (!res.ok) throw new Error(`perplexity ${res.status}`)
     const d = await res.json()
     logAiUsage({ userId: requestedBy, endpoint: 'polling', provider: 'perplexity', model: RESEARCH_MODEL, inputTokens: d?.usage?.prompt_tokens || 0, outputTokens: d?.usage?.completion_tokens || 0 })
