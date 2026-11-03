@@ -782,9 +782,9 @@ async function queryPerplexity({ system, user, maxTokens = 2000, schema = null, 
         ],
       }
       if (withSchema && schema) body.response_format = { type: 'json_schema', json_schema: { schema } }
-      // Shared client: honours the account's 429s with a short retry, but the
-      // poller's wall-clock budget (ctrl.signal) still wins.
-      const res = await perplexityFetch({ apiKey: key, signal: ctrl.signal, body, attempts: 2, label: 'results-poller' })
+      // Shared client for the concurrency gate only — the poller has an 18s
+      // budget and its own run gate (one 429 stops the run), so no retries here.
+      const res = await perplexityFetch({ apiKey: key, signal: ctrl.signal, body, attempts: 1, label: 'results-poller' })
       if (!res.ok) {
         const detail = await res.text().catch(() => '')
         // Rate limited: close the gate so nothing else this run is dispatched.
