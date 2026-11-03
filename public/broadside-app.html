@@ -132,10 +132,26 @@ body.embedded .layout .plugin{max-width:none}
 /* v1.21.2: container-query stacking — reacts to the panel's own width, which
    catches condensed windows AND the side-dock layout the viewport queries
    couldn't see. Fixes the sphere overlapping the control columns. */
+/* Nov 2026: stacking at 1000px fired on ordinary desktops (a 1440px laptop with
+   the sidebar, or any window at 125% zoom), hiding START, the sphere and the
+   signal column below the fold — the whole tool looked broken. Between 800 and
+   1000px the three columns now tighten instead; only under 800px do they stack,
+   and then the sphere + transport come first. */
 @container plugin (max-width: 1000px){
+  .scene-body{grid-template-columns:1fr 1.25fr 1fr;padding:6px 18px 16px}
+  .pill-select,.ss-trigger{width:min(228px,100%);padding-left:20px;padding-right:38px}
+  .slider-unit{width:200px}
+  .sphere-stage{width:min(300px,100%)}
+  .scope-wrap{width:160px;height:160px}
+  .col-right .slider-unit.rt-pace{width:160px}
+  .comp-track{width:140px}
+  .transport-row{width:300px}
+}
+@container plugin (max-width: 800px){
   .scene-head{grid-template-columns:1fr;gap:4px;text-align:center;padding:20px 20px 4px}
   .scene-head .t-left,.scene-head .t-right{text-align:center}
   .scene-body{grid-template-columns:1fr;padding:6px 20px 18px}
+  .col-center{order:-1}
   .col-left::after,.col-right::before{display:none}
   .console{margin:0 20px 22px}
 }
@@ -187,6 +203,54 @@ body.embedded .layout .plugin{max-width:none}
 }
 .pill-select:hover{filter:brightness(1.15)}
 .pill-select option{color:#111;background:#f4f5f7}
+
+/* ---------- SEARCHABLE SELECT (app standard: type-to-filter dropdowns) ----------
+   The native <select> stays in the DOM (hidden) as the source of truth; the
+   trigger button reuses .pill-select styling and the panel matches the
+   console-dark profiler picker. */
+.ss-wrap{position:relative;display:flex;flex-direction:column;align-items:center;width:100%}
+select.ss-native{display:none!important}
+.ss-trigger{
+  position:relative;display:block;
+  padding-right:44px;padding-left:44px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.ss-trigger[aria-expanded="true"]{filter:brightness(1.15)}
+.ss-trigger:disabled{opacity:.5;cursor:not-allowed;filter:none}
+.ss-trigger:focus-visible{outline:2px solid var(--red-bright);outline-offset:2px}
+.ss-panel{
+  position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);
+  z-index:90;display:none;min-width:228px;max-width:min(320px,calc(100vw - 24px));
+  background:#101c31;border:1px solid #2a3a54;border-radius:12px;padding:8px;
+  box-shadow:0 14px 30px rgba(0,0,0,.5);text-align:left;color:#eef1f6;
+}
+.ss-panel.open{display:block;animation:fadein .15s ease}
+.ss-panel.up{top:auto;bottom:calc(100% + 6px)}
+/* .scene-body and .console are sibling stacking contexts (both z-index:2);
+   lift the body while a panel is open so it paints above the console strip */
+.scene-body:has(.ss-panel.open){z-index:5}
+.ss-search{
+  width:100%;font-family:var(--font);font-size:12px;font-weight:700;letter-spacing:.02em;
+  color:#eef1f6;background:
+    url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="%238b98ad" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>') no-repeat 11px center,#16233c;
+  border:1px solid #2a3a54;border-radius:9px;padding:9px 10px 9px 32px;
+}
+.ss-search::placeholder{color:#8b98ad;font-weight:600}
+.ss-search:focus{outline:none;border-color:#c41e1e}
+.ss-list{list-style:none;margin:6px 0 0;padding:0;max-height:220px;overflow-y:auto}
+.ss-list::-webkit-scrollbar{width:6px}
+.ss-list::-webkit-scrollbar-thumb{background:#22314d;border-radius:3px}
+.ss-opt{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:9px 11px;border-radius:8px;font-size:12.5px;font-weight:600;color:#dfe5ee;
+  cursor:pointer;white-space:nowrap;
+}
+.ss-opt:hover,.ss-opt.active{background:#1d2c47}
+.ss-opt.selected{color:#fff}
+.ss-opt .ss-check{flex:none;width:14px;height:14px;color:var(--led-green);opacity:0}
+.ss-opt.selected .ss-check{opacity:1}
+.ss-opt.disabled{opacity:.4;cursor:not-allowed}
+.ss-empty{padding:10px 12px;font-size:11px;color:#8b98ad;font-style:italic}
 
 /* horizontal parameter slider */
 .slider-unit{width:230px;display:flex;flex-direction:column;align-items:center;gap:5px;margin-top:4px}
@@ -791,25 +855,117 @@ const VOICE_CONFIG = {
   }
 };
 
-class BrowserVoice {
-  constructor(){ this.name='BROWSER'; this.pickVoice(); if (window.speechSynthesis) speechSynthesis.onvoiceschanged = ()=>this.pickVoice(); }
-  pickVoice(){
+/* Browser speechSynthesis is the universal fallback, so it has to be bullet-
+   proof: voices load async (cache them module-wide, re-pick on
+   voiceschanged); Chrome silently drops a speak() issued in the same tick as
+   cancel() (defer one tick); Chrome cuts utterances longer than ~15s and
+   sometimes never fires onend (speak sentence-by-sentence + a duration
+   watchdog); and callbacks must fire exactly once so the turn engine never
+   stalls or double-advances. */
+let BROWSER_VOICE_PICK=null, browserUtterToken=0;
+const BROWSER_VOICE_KEEP=[];   // live utterance refs — Chrome GCs them mid-speech otherwise
+function pickBrowserVoice(){
+  try{
     const vs = window.speechSynthesis ? speechSynthesis.getVoices() : [];
-    this.voice = vs.find(v=>/en[-_]US/i.test(v.lang) && /male|david|guy|alex/i.test(v.name)) || vs.find(v=>/en/i.test(v.lang)) || null;
-  }
+    BROWSER_VOICE_PICK = vs.find(v=>/en[-_]US/i.test(v.lang) && /male|david|guy|alex/i.test(v.name)) || vs.find(v=>/en/i.test(v.lang)) || null;
+  }catch(_){ BROWSER_VOICE_PICK=null; }
+}
+if(window.speechSynthesis){ pickBrowserVoice(); try{ speechSynthesis.addEventListener('voiceschanged',pickBrowserVoice); }catch(_){ speechSynthesis.onvoiceschanged=pickBrowserVoice; } }
+class BrowserVoice {
+  constructor(){ this.name='BROWSER'; this.pickVoice(); }
+  pickVoice(){ if(!BROWSER_VOICE_PICK) pickBrowserVoice(); this.voice=BROWSER_VOICE_PICK; }
   speak(text,{rate=1,pitch=0.92,onStart,onEnd}={}){
-    if(!window.speechSynthesis){ onStart&&onStart(); onEnd&&onEnd(); return; }
-    speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    if(this.voice) u.voice=this.voice;
-    u.rate=rate; u.pitch=pitch;
-    u.onstart=()=>onStart&&onStart();
-    u.onend=()=>onEnd&&onEnd();
-    u.onerror=()=>onEnd&&onEnd();
-    speechSynthesis.speak(u);
+    let started=false, done=false;
+    const start=()=>{ if(started) return; started=true; try{ onStart&&onStart(); }catch(_){} };
+    const end=()=>{ if(done) return; done=true; try{ onEnd&&onEnd(); }catch(_){} };
+    text=String(text||'').trim();
+    if(!text){ start(); end(); return; }
+    if(!window.speechSynthesis || typeof SpeechSynthesisUtterance==='undefined'){ start(); end(); return; }
+    const myTok=++browserUtterToken;
+    try{ speechSynthesis.cancel(); }catch(_){}
+    if(!this.voice) this.pickVoice();
+    // sentence chunks keep every utterance well under Chrome's ~15s cutoff
+    const chunks=text.split(/(?<=[.!?…]["')”]?)\s+/).map(s=>s.trim()).filter(Boolean);
+    const safeRate=Math.max(0.5,Math.min(2,rate||1));
+    const next=()=>{
+      if(myTok!==browserUtterToken){ end(); return; }
+      const piece=chunks.shift();
+      if(!piece){ end(); return; }
+      const u=new SpeechSynthesisUtterance(piece);
+      if(this.voice) u.voice=this.voice;
+      u.rate=safeRate; u.pitch=pitch;
+      let wd=null, finished=false;
+      const fin=()=>{
+        if(finished) return; finished=true; clearTimeout(wd);
+        const i=BROWSER_VOICE_KEEP.indexOf(u); if(i>=0) BROWSER_VOICE_KEEP.splice(i,1);
+        if(myTok!==browserUtterToken){ end(); return; }
+        setTimeout(next,60);
+      };
+      u.onstart=()=>{ start(); };
+      u.onend=fin;
+      u.onerror=ev=>{
+        // our own cancel() surfaces as interrupted/canceled — just finish quietly
+        if(ev && ev.error && !/interrupted|canceled/.test(ev.error)) console.warn('[Broadside] browser TTS error:',ev.error);
+        if(ev && ev.error && /not-allowed/.test(ev.error)) chunks.length=0;   // no gesture → don't grind through every chunk
+        fin();
+      };
+      // watchdog: Chrome occasionally never fires onend — estimate ~2.6 words/s
+      const words=piece.split(/\s+/).length;
+      wd=setTimeout(()=>{ console.warn('[Broadside] browser TTS watchdog fired'); fin(); }, Math.max(3000,(words/(2.6*safeRate))*1000)+4000);
+      BROWSER_VOICE_KEEP.push(u);
+      try{ if(speechSynthesis.paused) speechSynthesis.resume(); }catch(_){}
+      try{ speechSynthesis.speak(u); }catch(_){ fin(); }
+    };
+    // Chrome drops speak() issued in the same tick as cancel() — defer one tick
+    setTimeout(next,0);
+    // belt and braces: if nothing ever starts (synth stuck), release the turn
+    setTimeout(()=>{ if(!started && !done && myTok===browserUtterToken){ console.warn('[Broadside] browser TTS never started'); try{ speechSynthesis.cancel(); }catch(_){} end(); } },6000);
   }
   setRate(r){ /* browser TTS can't change rate mid-utterance; applies next line */ }
-  stop(){ if(window.speechSynthesis) speechSynthesis.cancel(); }
+  stop(){ browserUtterToken++; if(window.speechSynthesis){ try{ speechSynthesis.cancel(); }catch(_){} } }
+}
+
+/* =====================================================================
+   AUDIO UNLOCK — Chrome refuses media.play() / AudioContext / speech-
+   Synthesis until the document has a user gesture. The Start click is
+   that gesture: unlockAudio() runs SYNCHRONOUSLY inside it (before any
+   await) so every later Audio.play() in the session is allowed, and the
+   shared AudioContext is created + resumed while the gesture is live.
+   ===================================================================== */
+let sharedAudioCtx=null, audioUnlocked=false, silentWavUrl=null;
+function makeSilentWav(){
+  if(silentWavUrl) return silentWavUrl;
+  try{
+    const sr=8000, n=sr/10, buf=new ArrayBuffer(44+n*2), v=new DataView(buf);
+    const str=(o,s)=>{ for(let i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); };
+    str(0,'RIFF'); v.setUint32(4,36+n*2,true); str(8,'WAVE'); str(12,'fmt '); v.setUint32(16,16,true);
+    v.setUint16(20,1,true); v.setUint16(22,1,true); v.setUint32(24,sr,true); v.setUint32(28,sr*2,true);
+    v.setUint16(32,2,true); v.setUint16(34,16,true); str(36,'data'); v.setUint32(40,n*2,true);
+    silentWavUrl=URL.createObjectURL(new Blob([buf],{type:'audio/wav'}));
+  }catch(_){ silentWavUrl=null; }
+  return silentWavUrl;
+}
+function getAudioCtx(){
+  try{
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(!AC) return null;
+    if(!sharedAudioCtx) sharedAudioCtx=new AC();
+    if(sharedAudioCtx.state==='suspended'){ const p=sharedAudioCtx.resume(); if(p&&p.catch) p.catch(()=>{}); }
+    return sharedAudioCtx;
+  }catch(_){ return null; }
+}
+function unlockAudio(){
+  getAudioCtx();
+  try{
+    const url=makeSilentWav();
+    if(url && typeof Audio!=='undefined'){
+      const a=new Audio(url); a.volume=0.01;
+      const p=a.play();
+      if(p&&p.then) p.then(()=>{ audioUnlocked=true; },e=>{ console.warn('[Broadside] media unlock refused:',e&&e.name); });
+      else audioUnlocked=true;
+    }
+  }catch(_){}
+  try{ if(window.speechSynthesis){ speechSynthesis.getVoices(); if(speechSynthesis.paused) speechSynthesis.resume(); } }catch(_){}
 }
 
 class ElevenLabsVoice {
@@ -879,15 +1035,26 @@ class CartesiaVoice {
 const REACTION_CACHE=new Map();   // voiceId|text -> blob URL (instant latency mask)
 class ProxyVoice {
   constructor(cfg={}){ this.cfg=cfg; this.name='CARTESIA'; this.audio=null; this.disabled=false; this.ctrl=null; }
-  async speak(text,{voiceId,rate=1,onStart,onEnd,controls}={}){
-    if(this.disabled) return new BrowserVoice().speak(text,{rate,onStart,onEnd});
+  /* noFallback: optional sounds (reaction grunts) must never degrade into a
+     browser-TTS "Hm." barging in seconds later — on any failure they just
+     report done. */
+  async speak(text,{voiceId,rate=1,onStart,onEnd,controls,noFallback=false}={}){
+    let ended=false;
+    const fireEnd=()=>{ if(ended) return; ended=true; try{ onEnd&&onEnd(); }catch(_){} };
+    const fallback=(why)=>{
+      if(noFallback){ fireEnd(); return; }
+      console.warn('[Broadside] voice proxy → browser voice fallback:',why);
+      new BrowserVoice().speak(text,{rate,onStart,onEnd:fireEnd});
+    };
+    if(this.disabled) return fallback('voice proxy disabled');
     // cached clip (reaction sounds) -> play instantly, no network
     const ck=(voiceId||this.cfg.voiceId)+'|'+text;
     if(REACTION_CACHE.has(ck)){
       this.stop();
       const a=new Audio(REACTION_CACHE.get(ck));
-      a.playbackRate=rate; a.onplay=()=>onStart&&onStart(); a.onended=()=>onEnd&&onEnd();
-      this.audio=a; a.play().catch(()=>{});
+      a.playbackRate=rate; a.onplay=()=>onStart&&onStart(); a.onended=fireEnd; a.onerror=fireEnd;
+      this.audio=a;
+      const p=a.play(); if(p&&p.catch) p.catch(()=>fireEnd());
       return;
     }
     try{
@@ -903,27 +1070,28 @@ class ProxyVoice {
       if(r.status===503){ this.disabled=true; throw new Error('voice not configured on server'); }
       if(!r.ok) throw new Error('voice proxy '+r.status);
       const blob = await r.blob();
-      this.audio = new Audio(URL.createObjectURL(blob));
-      this.audio.playbackRate = rate;
-      let started=false;
-      this.audio.onplay = ()=>{ started=true; onStart&&onStart(); };
-      this.audio.onended = ()=>onEnd&&onEnd();
+      const el = new Audio(URL.createObjectURL(blob));
+      this.audio = el;
+      el.playbackRate = rate;
+      let started=false, wd=null;
+      const giveUp=(why)=>{
+        if(this.audio!==el) { fireEnd(); return; }   // superseded by stop()/another line
+        clearTimeout(wd);
+        try{ el.pause(); }catch(_){}
+        this.audio=null;
+        fallback(why);
+      };
+      el.onplay = ()=>{ started=true; clearTimeout(wd); onStart&&onStart(); };
+      el.onended = ()=>{ try{ URL.revokeObjectURL(el.src); }catch(_){} fireEnd(); };
+      el.onerror = ()=>{ if(started) fireEnd(); else giveUp('media error'); };
       /* watchdog: if playback never actually starts (blocked/broken media
          pipeline), don't hang the session — fall back to browser TTS */
-      const el=this.audio;
-      setTimeout(()=>{
-        if(!started && this.audio===el){
-          console.warn('Voice proxy audio never started — browser voice fallback');
-          try{ el.pause(); }catch(_){}
-          this.audio=null;
-          new BrowserVoice().speak(text,{rate,onStart,onEnd});
-        }
-      },6000);
-      this.audio.play().catch(()=>{});
+      wd=setTimeout(()=>{ if(!started) giveUp('audio never started'); },6000);
+      const p=el.play();
+      if(p&&p.catch) p.catch(e=>{ if(!started) giveUp('play() rejected: '+(e&&e.name)); });
     }catch(e){
-      if(e && e.name==='AbortError') return;   // superseded turn — stay silent
-      console.warn('Voice proxy failed, falling back to browser voice', e);
-      new BrowserVoice().speak(text,{rate,onStart,onEnd});
+      if(e && e.name==='AbortError'){ fireEnd(); return; }   // superseded turn — stay silent
+      fallback(e && e.message);
     }
   }
   setRate(r){ if(this.audio) this.audio.playbackRate=r; }
@@ -938,10 +1106,10 @@ class ProxyVoice {
    Any synth failure falls back to browser TTS for that sentence only.
    ===================================================================== */
 class StreamSpeaker{
-  constructor(o){ this.o=o||{}; this.buf=''; this.q=[]; this.playing=false; this.done=false; this.dead=false; this.startedAny=false; this.audio=null; }
+  constructor(o){ this.o=o||{}; this.buf=''; this.q=[]; this.playing=false; this.done=false; this.dead=false; this.startedAny=false; this.audio=null; this.ctrl=new AbortController(); this.usedBrowser=false; }
   addText(t){ this.buf+=t; this._flush(false); }
   _flush(final){
-    const parts=this.buf.split(/(?<=[.!?…]["')\u201d]?)\s+/);
+    const parts=this.buf.split(/(?<=[.!?…]["')”]?)\s+/);
     const complete=final?parts:parts.slice(0,-1);
     this.buf=final?'':(parts[parts.length-1]||'');
     for(const sRaw of complete){ const t=sRaw.trim(); if(t) this._enqueue(t); }
@@ -949,13 +1117,18 @@ class StreamSpeaker{
   _enqueue(text){ this.q.push(this._synth(text)); this._pump(); }
   async _synth(text){
     try{
-      if(!PROXY_CONFIG.enabled) throw 0;
-      const r=await fetch(PROXY_CONFIG.voiceUrl,{method:'POST',
+      if(!PROXY_CONFIG.enabled) throw new Error('proxy off');
+      if(Voice instanceof ProxyVoice && Voice.disabled) throw new Error('voice disabled');
+      const r=await fetch(PROXY_CONFIG.voiceUrl,{method:'POST', signal:this.ctrl.signal,
         headers:{'Authorization':'Bearer '+PROXY_CONFIG.token,'Content-Type':'application/json'},
         body:JSON.stringify({transcript:text, voiceId:this.o.voiceId, controls:this.o.controls||undefined})});
-      if(!r.ok) throw 0;
-      return {url:URL.createObjectURL(await r.blob())};
-    }catch(_){ return {browser:true, text}; }
+      if(r.status===503 && Voice instanceof ProxyVoice) Voice.disabled=true;   // no key server-side → browser TTS for the session
+      if(!r.ok) throw new Error('voice proxy '+r.status);
+      return {url:URL.createObjectURL(await r.blob()), text};
+    }catch(e){
+      if(!(e && e.name==='AbortError')) console.warn('[Broadside] sentence synth failed — browser voice for this sentence:',e&&e.message);
+      return {browser:true, text};
+    }
   }
   _first(){ if(!this.startedAny){ this.startedAny=true; this.o.onFirstAudio&&this.o.onFirstAudio(); } }
   _maybeDone(){ if(this.done && !this.playing && !this.q.length && !this.dead){ this.dead=true; this.o.onAllDone&&this.o.onAllDone(); } }
@@ -966,16 +1139,43 @@ class StreamSpeaker{
     this.playing=true;
     next.then(res=>{
       if(this.dead){ this.playing=false; return; }
-      const fin=()=>{ this.playing=false; this.audio=null; this._pump(); };
-      if(res.browser){ new BrowserVoice().speak(res.text,{rate:this.o.rate||1,onStart:()=>this._first(),onEnd:fin}); return; }
+      let finished=false, wd=null;
+      const fin=()=>{ if(finished) return; finished=true; clearTimeout(wd); this.playing=false; this.audio=null; this._pump(); };
+      const viaBrowser=()=>{
+        if(this.dead){ fin(); return; }
+        this.usedBrowser=true;
+        new BrowserVoice().speak(res.text,{rate:this.o.rate||1,onStart:()=>this._first(),onEnd:fin});
+      };
+      if(res.browser){ viaBrowser(); return; }
       const a=new Audio(res.url); this.audio=a; a.playbackRate=this.o.rate||1;
-      a.onplay=()=>this._first(); a.onended=fin; a.onerror=fin;
-      a.play().catch(fin);
+      let started=false;
+      const bail=(why)=>{            // media pipeline refused → say it with browser TTS instead of dropping the sentence
+        if(finished) return;
+        clearTimeout(wd); try{ a.pause(); }catch(_){} if(this.audio===a) this.audio=null;
+        console.warn('[Broadside] sentence audio failed ('+why+') — browser voice fallback');
+        viaBrowser();
+      };
+      a.onplay=()=>{
+        started=true; this._first(); clearTimeout(wd);
+        // second watchdog: playback started but 'ended' never arrives (stalled decode)
+        const dur=isFinite(a.duration)&&a.duration>0 ? a.duration/(a.playbackRate||1) : 20;
+        wd=setTimeout(()=>{ console.warn('[Broadside] sentence audio never ended — advancing'); fin(); },(dur+4)*1000);
+      };
+      a.onended=()=>{ try{ URL.revokeObjectURL(res.url); }catch(_){} fin(); };
+      a.onerror=()=>{ if(started) fin(); else bail('media error'); };
+      wd=setTimeout(()=>{ if(!started) bail('never started'); },5000);
+      const p=a.play();
+      if(p&&p.catch) p.catch(e=>{ if(!started) bail('play() rejected: '+(e&&e.name)); });
     }).catch(()=>{ this.playing=false; this._pump(); });
   }
   finish(){ this._flush(true); this.done=true; if(!this.playing) this._pump(); }
   setRate(r){ this.o.rate=r; if(this.audio) this.audio.playbackRate=r; }
-  stop(){ this.dead=true; this.q=[]; try{ this.audio&&this.audio.pause(); }catch(_){} this.audio=null; }
+  stop(){
+    this.dead=true; this.q=[];
+    try{ this.ctrl.abort(); }catch(_){}
+    try{ this.audio&&this.audio.pause(); }catch(_){} this.audio=null;
+    if(this.usedBrowser && window.speechSynthesis){ browserUtterToken++; try{ speechSynthesis.cancel(); }catch(_){} }
+  }
 }
 let activeSpeaker=null;
 
@@ -996,6 +1196,9 @@ const PROXY_CONFIG={
   debriefUrl:'/.netlify/functions/broadside-debrief',
   dossierMeta:null      // {id,title} set by the host app on load
 };
+const BRAIN_TIMEOUT_MS=14000;          // classic brain call (server model budget 12s + overhead)
+const STREAM_FIRST_BYTE_MS=8000;       // streaming: give up fast if nothing arrives
+const STREAM_TOTAL_MS=14000;
 const BRAIN_CONFIG={
   apiKey:'',
   mode:'quality',                       // 'quality' (Sonnet 5) | 'speed' (Haiku 4.5)
@@ -1013,6 +1216,9 @@ const Brain={
      record while the trainee cross-examines (Attack mode, v1.24). */
   prompts(directive){
     const P=persona();
+    // speculative prefetch builds the prompt before deliver() fills in the
+    // word budget — never let "Max undefined words" reach the model
+    if(!directive.maxWords) directive.maxWords=directive.rattled?24:34;
     let sys;
     if(directive.role==='defender'){
       sys=`You are ${(dossier&&dossier.name)||'the candidate'}, a politician in a controversy-prep SIMULATION being cross-examined by the trainee, who plays your election opponent. You are DEFENDING your own record. Stay in character.
@@ -1056,7 +1262,9 @@ Write your single spoken line now.`;
     const {sys,usr}=this.prompts(directive);
     try{
       const ctrl=new AbortController();
-      const to=setTimeout(()=>ctrl.abort(),PROXY_CONFIG.enabled?6500:3500);
+      // proxy: the server allows the model 12s (+ auth/rate-limit overhead);
+      // aborting at 6.5s was throwing away answers that were about to land
+      const to=setTimeout(()=>ctrl.abort(),PROXY_CONFIG.enabled?BRAIN_TIMEOUT_MS:3500);
       if(PROXY_CONFIG.enabled){
         const r=await fetch(PROXY_CONFIG.brainUrl,{
           method:'POST', signal:ctrl.signal,
@@ -1088,19 +1296,32 @@ Write your single spoken line now.`;
     if(!PROXY_CONFIG.enabled) throw new Error('stream requires proxy');
     const {sys,usr}=this.prompts(directive);
     const ctrl=new AbortController();
-    const to=setTimeout(()=>ctrl.abort(),15000);
-    const r=await fetch('/.netlify/functions/broadside-brain-stream',{
-      method:'POST', signal:ctrl.signal,
-      headers:{'Authorization':'Bearer '+PROXY_CONFIG.token,'content-type':'application/json'},
-      body:JSON.stringify({system:sys,user:usr,mode:BRAIN_CONFIG.mode})
-    });
-    if(!r.ok||!r.body){ clearTimeout(to); throw new Error('stream '+r.status); }
+    let timedOut='';
+    const to=setTimeout(()=>{ timedOut='stream timeout'; ctrl.abort(); },STREAM_TOTAL_MS);
+    // first-byte guard: a proxy that buffers or never answers must not hold
+    // the turn hostage — bail early and let the classic path take over
+    let fb=setTimeout(()=>{ timedOut='stream no-first-byte'; ctrl.abort(); },STREAM_FIRST_BYTE_MS);
+    let r;
+    try{
+      r=await fetch('/.netlify/functions/broadside-brain-stream',{
+        method:'POST', signal:ctrl.signal,
+        headers:{'Authorization':'Bearer '+PROXY_CONFIG.token,'content-type':'application/json'},
+        body:JSON.stringify({system:sys,user:usr,mode:BRAIN_CONFIG.mode})
+      });
+    }catch(e){ clearTimeout(to); clearTimeout(fb); throw new Error(timedOut||('stream fetch: '+(e&&e.message))); }
+    if(!r.ok||!r.body){ clearTimeout(to); clearTimeout(fb); throw new Error('stream '+r.status); }
+    const ct=(r.headers.get('content-type')||'');
+    if(!/event-stream/i.test(ct)){ clearTimeout(to); clearTimeout(fb); try{ ctrl.abort(); }catch(_){} throw new Error('stream not-sse '+ct.slice(0,40)); }
     const reader=r.body.getReader(), dec=new TextDecoder();
     let buf='', full='';
     try{
       while(true){
-        const {done,value}=await reader.read();
+        let chunk;
+        try{ chunk=await reader.read(); }
+        catch(e){ throw new Error(timedOut||('stream read: '+(e&&e.message))); }
+        const {done,value}=chunk;
         if(done) break;
+        clearTimeout(fb); fb=null;
         buf+=dec.decode(value,{stream:true});
         let idx;
         while((idx=buf.indexOf('\n\n'))>=0){
@@ -1109,15 +1330,17 @@ Write your single spoken line now.`;
             if(!ln.startsWith('data:')) continue;
             const payload=ln.slice(5).trim();
             if(!payload||payload==='[DONE]') continue;
-            try{
-              const j=JSON.parse(payload);
-              const t=j&&j.delta&&j.delta.text;
-              if(j.type==='content_block_delta'&&t){ full+=t; onDelta&&onDelta(t,full); }
-            }catch(_){}
+            let j=null; try{ j=JSON.parse(payload); }catch(_){ continue; }
+            if(j && j.type==='error') throw new Error('stream upstream error');
+            const t=j&&j.delta&&j.delta.text;
+            // onDelta may throw 'superseded' \u2014 it must escape this loop, not be
+            // swallowed by the JSON guard above
+            if(j&&j.type==='content_block_delta'&&t){ full+=t; onDelta&&onDelta(t,full); }
           }
         }
       }
-    }finally{ clearTimeout(to); try{reader.releaseLock();}catch(_){} }
+    }catch(e){ try{ e.partial=full; }catch(_){} throw e; }
+    finally{ clearTimeout(to); clearTimeout(fb); try{ ctrl.abort(); }catch(_){} try{reader.releaseLock();}catch(_){} }
     return full.trim().replace(/^["'\u201c]|["'\u201d]$/g,'').replace(/[ \t]+/g,' ');
   }
 };
@@ -1741,7 +1964,10 @@ const getPressure=()=> +$('sldPress').value;
 
 /* ---- voice mode pill ---- */
 if(Voice.name!=='CARTESIA'){
-  log('SYSTEM','Cartesia API key / voice ID not set — using the browser voice as a fallback. Add your key to VOICE_CONFIG at the top of the script for full speed and quality.','sys');
+  /* Developer note only — never printed to the user-facing Session Console.
+     Inside Badger Board the host calls ControversyPrep.connect() right after
+     load and swaps in the proxied Cartesia voice, so this is expected. */
+  console.warn('[Broadside] Cartesia API key / voice ID not set — using the browser voice as a fallback until the host connects the voice proxy (or a key is added to VOICE_CONFIG).');
 }
 
 /* ---- SCOPE: rolling waveform in the dark circle ---- */
@@ -1750,7 +1976,8 @@ let micAnalyser=null,micData=null,aiTalking=false;
 const scopeHist=new Array(120).fill(0);
 function sizeScope(){ const r=scope.parentElement.getBoundingClientRect(); scope.width=r.width*2; scope.height=r.height*2; }
 window.addEventListener('resize',sizeScope); sizeScope();
-let bargeFrames=0;
+let bargeFrames=0, lastMicHotTs=0;
+const bargeEnabled=()=>{ const c=$('chkBarge'); return !c || !!c.checked; };
 function scopeLoop(){
   let level=0, micLevel=0;
   if(micAnalyser){
@@ -1759,16 +1986,17 @@ function scopeLoop(){
     micLevel=Math.min(1,peak/64);
   }
   level = aiTalking ? 0.35+Math.random()*0.5 : micLevel;
+  if(micLevel>0.18) lastMicHotTs=Date.now();   // echo-cancelled mic energy — the SR barge watch needs this to confirm it's YOU, not the speakers
   /* user barge-in: if you talk over the opponent's attack for ~1.2s
      sustained, they trail off and yield — as real candidates do after
-     a beat or two of being talked over. (Disabled under Muted Mics.) */
-  if(aiTalking && !interjecting && rules().maxInt>0){
+     a beat or two of being talked over. (Disabled under Muted Mics.)
+     Routed through bargeIn() so the sentence queue actually stops and
+     listening starts exactly once. */
+  if(running && aiTalking && !interjecting && rules().maxInt>0 && bargeEnabled()){
     if(micLevel>0.18) bargeFrames++; else bargeFrames=Math.max(0,bargeFrames-2);
     if(bargeFrames>70){
       bargeFrames=0;
-      Voice.stop(); aiTalking=false; $('lampAi').classList.remove('hot');
-      log('SYSTEM','You talked over the opponent — they yield the floor.','sys');
-      if(running && !listening) startListening();
+      bargeIn('', 'You talked over the opponent — they yield the floor.');
     }
   } else bargeFrames=0;
   scopeHist.push(level); scopeHist.shift();
@@ -1799,29 +2027,49 @@ function scopeLoop(){
   requestAnimationFrame(scopeLoop);
 }
 scopeLoop();
+/* The meter is cosmetic + barge-in confirmation only. Any failure here
+   (no mediaDevices, denied prompt, no AudioContext) must leave the session
+   fully usable — speech recognition and typed answers do not depend on it. */
 async function initMicMeter(){
   try{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('no mediaDevices');
     const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});
-    const ctx=new (window.AudioContext||window.webkitAudioContext)();
-    const src=ctx.createMediaStreamSource(stream);
-    micAnalyser=ctx.createAnalyser(); micAnalyser.fftSize=512;
-    micData=new Uint8Array(micAnalyser.fftSize);
-    src.connect(micAnalyser);
+    micGranted=true;
+    try{
+      const ctx=getAudioCtx();
+      if(ctx){
+        const src=ctx.createMediaStreamSource(stream);
+        const an=ctx.createAnalyser(); an.fftSize=512;
+        src.connect(an);
+        micData=new Uint8Array(an.fftSize); micAnalyser=an;
+      }
+    }catch(e){ console.warn('[Broadside] mic meter unavailable (analyser):',e&&e.message); micAnalyser=null; micData=null; }
     $('lampMic').classList.add('on');
     return true;
-  }catch(e){ log('SYSTEM','Microphone access denied — you can type responses instead.','sys'); return false; }
+  }catch(e){
+    micAnalyser=null; micData=null;
+    const denied=e && /NotAllowed|Permission|denied/i.test((e.name||'')+(e.message||''));
+    log('SYSTEM', denied ? 'Microphone access denied — you can type responses instead.' : 'Microphone unavailable ('+((e&&e.message)||'unknown')+') — you can type responses instead.','sys');
+    return false;
+  }
 }
 
 /* ---- speech recognition ---- */
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-let recog=null,finalText='',silenceTimer=null,interimLine=null;
+let recog=null,finalText='',silenceTimer=null,interimLine=null,lastInterim='';
 let intUsed=0,lastIntTs=0,lastSpeechTs=0,overtimeTimer=null,wrapTimer=null,interjecting=false;
+let micGranted=false;          // getUserMedia succeeded this session
+let srFatal=false;             // recognizer hit a permanent error (no mic / permission) → typed mode for the session
+let srNetErrors=0, srRestartTimer=null, srGraceUsed=false, listenGen=0;
 function adaptiveSilenceMs(){
   // Short answers finalize fast; long answers get the full research window.
+  // Floors are generous enough that a thinking pause mid-sentence does not
+  // end the turn on a fragment (Chrome only finalizes after ~1s of silence
+  // anyway, so the effective wait is this + Chrome's endpointing).
   const words=finalText.trim().split(/\s+/).filter(Boolean).length;
-  if(words<12) return 1100;
-  if(words<30) return 1700;
-  return rules().silence;
+  if(words<12) return 1500;
+  if(words<30) return 1900;
+  return Math.max(1900, rules().silence);
 }
 function maybePrefetch(){
   // Speculative pre-generation (v1.24): once the transcript has settled for
@@ -1837,47 +2085,151 @@ function maybePrefetch(){
     spec={text, plan, promise:Brain.line(plan.directive).catch(()=>null)};
   }catch(_){ spec=null; }
 }
+function showTypedBox(focus){
+  const tf=$('typedFallback'); if(tf) tf.style.display='flex';
+  if(focus){ try{ $('typedInput').focus(); }catch(_){} }
+}
+/* Silence detector: fires when nothing new has been heard for the adaptive
+   window. If Chrome has only given us interim text (no final yet) we grant
+   ONE extra window for it to finalize, then end the turn on the interim —
+   the user must never be left hanging because a final result never came. */
+function armSilenceTimer(){
+  clearTimeout(silenceTimer);
+  silenceTimer=setTimeout(()=>{
+    if(!listening || !running || interjecting) return;
+    if(finalText.trim()){ endUserTurn(); return; }
+    if(lastInterim.trim()){
+      if(!srGraceUsed){ srGraceUsed=true; armSilenceTimer(); return; }
+      finalText=lastInterim.trim()+' ';
+      endUserTurn();
+    }
+  },adaptiveSilenceMs());
+}
+/* Tear down the live recognizer without firing its handlers again. A
+   recognizer that is merely .stop()ped can still deliver a late final
+   result into the NEXT turn's finalText — so null every handler and abort. */
+function killRecog(){
+  clearTimeout(srRestartTimer); srRestartTimer=null;
+  const r=recog; recog=null;
+  if(!r) return;
+  r.onresult=null; r.onerror=null; r.onend=null; r.onstart=null;
+  try{ r.abort(); }catch(_){ try{ r.stop(); }catch(__){} }
+}
+function spawnRecognizer(gen){
+  const r=new SR(); r.continuous=true; r.interimResults=true; r.lang='en-US';
+  r.onresult=e=>{
+    if(gen!==listenGen || !listening) return;
+    let interim='';
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      const alt=e.results[i] && e.results[i][0];
+      if(!alt) continue;
+      if(e.results[i].isFinal) finalText+=alt.transcript+' ';
+      else interim+=alt.transcript;
+    }
+    lastSpeechTs=Date.now();
+    srNetErrors=0;
+    if(interim){
+      lastInterim=interim;
+      if(!interimLine) interimLine=log('YOU','','you interim');
+      interimLine.lastChild.textContent=interim;
+    } else if(finalText.trim()){
+      lastInterim='';
+      if(interimLine){ interimLine.remove(); interimLine=null; }
+    }
+    if(interim||finalText) scrollToBottom();
+    srGraceUsed=false;
+    armSilenceTimer();
+    clearTimeout(specTimer);
+    specTimer=setTimeout(maybePrefetch,800);
+  };
+  r.onerror=ev=>{
+    if(gen!==listenGen) return;
+    const err=(ev&&ev.error)||'unknown';
+    if(err==='not-allowed'||err==='service-not-allowed'||err==='audio-capture'){
+      // permanent for this session — stop the restart loop, switch to typing
+      srFatal=true;
+      console.warn('[Broadside] speech recognition unavailable:',err);
+      showTypedBox(true);
+      setHint(err==='audio-capture'
+        ? 'No microphone found — type your answer below and hit Enter.'
+        : 'Microphone blocked for speech recognition — type your answer below and hit Enter.');
+      if(!micGranted) $('lampMic').classList.remove('on');
+    } else if(err==='network'){
+      srNetErrors++;
+      showTypedBox(false);
+      setHint(srNetErrors<4
+        ? 'Speech service hiccup — retrying… (you can also type your answer below)'
+        : 'Speech service is not responding. Type your answer below and hit Enter.');
+      if(srNetErrors>=4) srFatal=true;
+    } else if(err==='no-speech'){
+      if(!finalText.trim() && !lastInterim.trim()) setHint((sessionRole==='attack'?'Ask your question — ':'Go ahead — ')+'I did not catch anything yet. Speak up, or type below.');
+      showTypedBox(false);
+    } else if(err==='aborted'){
+      /* usually us (abort on teardown) or another recognizer taking the mic — onend handles the restart */
+    } else {
+      console.warn('[Broadside] speech recognition error:',err);
+    }
+  };
+  r.onend=()=>{
+    if(gen!==listenGen || recog!==r) return;
+    recog=null;
+    if(!listening || !running || srFatal) return;
+    // Chrome ends continuous sessions every ~60s / on silence: restart with a
+    // short backoff (longer after network errors); never double-start.
+    const delay=srNetErrors? Math.min(4000, 400*srNetErrors) : 120;
+    clearTimeout(srRestartTimer);
+    srRestartTimer=setTimeout(function tryRestart(){
+      if(gen!==listenGen || !listening || !running || srFatal || recog) return;
+      // opponent audio playing (an interjection) with barge-in off → wait for it
+      if(aiTalking && !bargeEnabled()){ srRestartTimer=setTimeout(tryRestart,300); return; }
+      spawnRecognizer(gen);
+    },delay);
+  };
+  recog=r;
+  try{ r.start(); }
+  catch(e){
+    // InvalidStateError = already running (double-start) — keep the live one
+    console.warn('[Broadside] recognizer start failed:',e&&e.message);
+    if(recog===r) recog=null;
+    showTypedBox(false);
+  }
+  return r;
+}
 function startListening(seed){
-  finalText=seed||''; listening=true; responseStart=performance.now();
+  // idempotent: a second call (two finish callbacks racing) must not leave
+  // a zombie recognizer feeding finalText
+  killRecog();
+  clearTimeout(silenceTimer);
+  const gen=++listenGen;
+  finalText=seed||''; lastInterim=''; srGraceUsed=false; listening=true; responseStart=performance.now();
+  if(interimLine){ interimLine.remove(); interimLine=null; }
   const R=rules();
   setState(sessionRole==='attack'?'YOUR FLOOR':'LISTENING');
-  setHint(sessionRole==='attack'
-    ? 'Ask your question out loud. Pause (or press Done Talking) when finished.'
-    : 'Answer out loud. Pause (or press Done Talking) when done.');
-  $('lampMic').classList.add('on');
   // debate answer window: warn near the limit, opponent may cut in past it
   clearTimeout(overtimeTimer); clearTimeout(wrapTimer);
   if(R.overtime<Infinity){
     wrapTimer=setTimeout(()=>{ if(listening) setHint('Wrap it up — you’re past the answer window. A real opponent is about to cut in.'); },R.overtime-15000);
     overtimeTimer=setTimeout(()=>{ if(listening) attemptInterject(); },R.overtime);
   }
-  if(!SR || micSkipped){ $('typedFallback').style.display='flex'; $('typedInput').focus(); return; }
-  recog=new SR(); recog.continuous=true; recog.interimResults=true; recog.lang='en-US';
-  recog.onresult=e=>{
-    let interim='';
-    for(let i=e.resultIndex;i<e.results.length;i++){
-      if(e.results[i].isFinal) finalText+=e.results[i][0].transcript+' ';
-      else interim+=e.results[i][0].transcript;
-    }
-    lastSpeechTs=Date.now();
-    if(interim){
-      if(!interimLine) interimLine=log('YOU','','you interim');
-      interimLine.lastChild.textContent=interim;
-    }
-    if(interim||finalText) scrollToBottom();
-    clearTimeout(silenceTimer);
-    silenceTimer=setTimeout(()=>{ if(finalText.trim() && !interjecting) endUserTurn(); },adaptiveSilenceMs());
-    clearTimeout(specTimer);
-    specTimer=setTimeout(maybePrefetch,800);
-  };
-  recog.onerror=ev=>{ if(ev.error==='not-allowed'){ $('typedFallback').style.display='flex'; } };
-  recog.onend=()=>{ if(listening && running){ try{recog.start();}catch(e){} } };
-  try{recog.start();}catch(e){}
+  if(!SR || micSkipped || srFatal){
+    setHint(sessionRole==='attack'
+      ? 'Type your question below and hit Enter (or press Done Talking).'
+      : 'Type your answer below and hit Enter (or press Done Talking).');
+    showTypedBox(true);
+    return;
+  }
+  setHint(sessionRole==='attack'
+    ? 'Ask your question out loud. Pause (or press Done Talking) when finished.'
+    : 'Answer out loud. Pause (or press Done Talking) when done.');
+  $('lampMic').classList.add('on');
+  spawnRecognizer(gen);
 }
 function stopListening(){
-  listening=false; clearTimeout(silenceTimer); clearTimeout(overtimeTimer); clearTimeout(wrapTimer); clearTimeout(specTimer);
-  if(recog){ recog.onend=null; try{recog.stop();}catch(e){} recog=null; }
+  listening=false; listenGen++;
+  clearTimeout(silenceTimer); clearTimeout(overtimeTimer); clearTimeout(wrapTimer); clearTimeout(specTimer);
+  killRecog();
   if(interimLine){ interimLine.remove(); interimLine=null; }
+  lastInterim='';
 }
 
 /* One short interjection attempt, then follow the research: if the
@@ -1891,23 +2243,31 @@ function attemptInterject(){
   const line=pick(P.interject);
   log('OPPO · '+P.label+' (cuts in)',line,'ai');
   aiTalking=true; $('lampAi').classList.add('hot');
-  Voice.speak(line,{
-    rate:getRate()*P.rateMul, pitch:P.pitch,
-    voiceId:oppoVoiceId(P),
-    onEnd:()=>{
-      aiTalking=false; $('lampAi').classList.remove('hot'); interjecting=false;
-      if(!running || !listening) return;
-      if(Date.now()-lastSpeechTs<1500){
-        // user held the floor through the interjection → opponent yields
-        log('SYSTEM','Opponent yields the floor — finish your answer.','sys');
-      } else if(finalText.trim()){
-        endUserTurn(); // user stopped → opponent takes the floor
-      }
-    }
-  });
+  let finished=false;
+  const finish=()=>{
+    if(finished) return; finished=true; clearTimeout(wd);
+    aiTalking=false; $('lampAi').classList.remove('hot'); interjecting=false;
+    if(!running || !listening) return;
+    if(Date.now()-lastSpeechTs<1500){
+      // user held the floor through the interjection → opponent yields
+      log('SYSTEM','Opponent yields the floor — finish your answer.','sys');
+    } else if(finalText.trim() || lastInterim.trim()){
+      if(!finalText.trim()) finalText=lastInterim.trim()+' ';
+      endUserTurn(); // user stopped → opponent takes the floor
+    } else armSilenceTimer();
+  };
+  // an interjection that never reports 'end' would leave interjecting=true
+  // and block the silence detector for the rest of the turn
+  const wd=setTimeout(finish,8000);
+  Voice.speak(line,{ rate:getRate()*P.rateMul, pitch:P.pitch, voiceId:oppoVoiceId(P), onEnd:finish });
 }
 $('typedInput').addEventListener('keydown',e=>{
-  if(e.key==='Enter'&&e.target.value.trim()){ if(!running)return; finalText=e.target.value; e.target.value=''; endUserTurn(); }
+  if(e.key==='Enter'&&e.target.value.trim()){
+    if(!running)return;
+    const v=e.target.value; e.target.value='';
+    if(aiTalking) log('SYSTEM','You cut in — the floor is yours.','sys');   // endUserTurn silences the opponent
+    finalText=v; endUserTurn();
+  }
 });
 
 /* computeTurnPlan (v1.24): the full topic-continuation decision as a pure-ish
@@ -1945,7 +2305,8 @@ function endUserTurn(){
   if(!running) return;                     // guard: no processing after End/Reset
   const text=finalText.trim();
   stopListening();
-  if(!text) return;
+  if(!text){ if(running) startListening(); return; }   // nothing to process — keep the floor open rather than go dark
+  if(aiTalking) silenceOpponent();         // typed/forced turn while the opponent is still talking → they stop first
   clearTimeout(specTimer);
   const specHit=(spec && spec.text===text)?spec:null;
   spec=null;
@@ -2043,9 +2404,9 @@ const REACTIONS=['Hm.','Mm.','Okay—','Right.','Ha—','Well—','Sure.'];
 async function primeReactions(){
   try{
     if(!PROXY_CONFIG.enabled || !(Voice instanceof ProxyVoice)) return;
-    const vid=oppoVoiceId(persona())||'';
+    const vid=oppoVoiceId(persona())||Voice.cfg.voiceId||'';
     for(const t of REACTIONS){
-      const ck=vid+'|'+t;
+      const ck=vid+'|'+t;                     // must match ProxyVoice.speak's cache key
       if(REACTION_CACHE.has(ck)) continue;
       const r=await fetch(PROXY_CONFIG.voiceUrl,{method:'POST',
         headers:{'Authorization':'Bearer '+PROXY_CONFIG.token,'Content-Type':'application/json'},
@@ -2055,9 +2416,32 @@ async function primeReactions(){
     }
   }catch(_){}
 }
-function playReaction(){                    // instant sound masks Brain latency
+/* Latency mask: play a cached reaction grunt while the brain thinks. Cache-
+   only on the proxy voice — a cold fetch could land seconds later, ON TOP of
+   the real line, or degrade into browser TTS saying "Hm." mid-sentence. */
+function playReaction(){
   const P=persona();
-  try{ Voice.speak(pick(REACTIONS),{rate:getRate()*P.rateMul,pitch:P.pitch,voiceId:oppoVoiceId(P)}); }catch(e){}
+  try{
+    const t=pick(REACTIONS);
+    if(Voice instanceof ProxyVoice){
+      if(Voice.disabled) return;
+      if(!REACTION_CACHE.has((oppoVoiceId(P)||Voice.cfg.voiceId)+'|'+t)) return;
+      Voice.speak(t,{rate:getRate()*P.rateMul,pitch:P.pitch,voiceId:oppoVoiceId(P),noFallback:true});
+      return;
+    }
+    if(Voice.name==='BROWSER') return;   // browser TTS is too slow to be a mask
+    Voice.speak(t,{rate:getRate()*P.rateMul,pitch:P.pitch,voiceId:oppoVoiceId(P)});
+  }catch(e){}
+}
+/* Stop whatever the opponent is saying right now (reaction clip, sentence
+   queue, browser utterance) and invalidate its callbacks. */
+function silenceOpponent(){
+  newTurn();
+  stopBargeWatch();
+  if(activeSpeaker){ try{ activeSpeaker.stop(); }catch(_){} activeSpeaker=null; }
+  try{ Voice.stop(); }catch(_){}
+  if(window.speechSynthesis){ browserUtterToken++; try{ speechSynthesis.cancel(); }catch(_){} }
+  aiTalking=false; $('lampAi').classList.remove('hot');
 }
 
 /* Per-line delivery tone → whitelisted Cartesia controls (v1.24). */
@@ -2073,7 +2457,10 @@ function toneControls(d){
 /* deliver (v1.24): director hands the actor a directive.
    Path 1 — speculative prefetch already resolved → sentence-parallel playback.
    Path 2 — streaming brain (SSE) → speak sentence-by-sentence as text arrives.
-   Path 3 — classic full round trip → template fallback if the brain fails. */
+   Path 3 — classic full round trip → template fallback if the brain fails.
+   INVARIANT: every path ends in playLine()/deliverStreamed(), which log the
+   line to the console BEFORE any audio is attempted and hand the floor back
+   via startListening() when audio ends, fails, or is unavailable. */
 async function deliver(directive,fallbackText,prefetchedPromise){
   const myTurn=newTurn();
   directive.rattled=composure<40;
@@ -2082,8 +2469,9 @@ async function deliver(directive,fallbackText,prefetchedPromise){
   if(directive.floored && Math.random()<0.6) fallbackText=pick(CONCESSIONS)+' '+fallbackText;
   directive.maxWords=directive.maxWords||(directive.rattled?24:34);
   const controls=toneControls(directive);
+  const thinking=()=>{ setState('OPPO LIVE'); setHint('Opponent is thinking…'); };
   if(prefetchedPromise && Brain.enabled){
-    setState('OPPO LIVE');
+    thinking();
     try{
       const text=await Promise.race([prefetchedPromise, new Promise((_,rej)=>setTimeout(()=>rej(new Error('spec-timeout')),4000))]);
       if(myTurn!==turnToken) return;
@@ -2091,7 +2479,7 @@ async function deliver(directive,fallbackText,prefetchedPromise){
     }catch(_){ if(myTurn!==turnToken) return; }
   }
   if(Brain.enabled){
-    setState('OPPO LIVE');
+    thinking();
     if(PROXY_CONFIG.enabled && STREAM_OK && Voice instanceof ProxyVoice && !Voice.disabled){
       try{ await deliverStreamed(directive,myTurn,controls); return; }
       catch(e){
@@ -2099,9 +2487,11 @@ async function deliver(directive,fallbackText,prefetchedPromise){
         console.warn('[broadside] stream path failed — classic fallback:',e.message);
       }
     }
-    if(Voice.name!=='BROWSER') playReaction();   // skip masking on slow browser TTS
-    const text=await Brain.line(directive);
+    playReaction();
+    let text=null;
+    try{ text=await Brain.line(directive); }catch(e){ text=null; }
     if(myTurn!==turnToken) return;                // session advanced/ended → drop
+    if(!text) console.warn('[broadside] brain unavailable — scripted line');
     playLine(text||fallbackText,myTurn,controls);
     return;
   }
@@ -2133,18 +2523,29 @@ async function deliverStreamed(directive,myTurn,controls){
     full=await Brain.lineStream(directive,(t,acc)=>{
       if(myTurn!==turnToken) throw new Error('superseded');
       el.lastChild.textContent=acc; scrollToBottom();
+      if(!aiTalking){ aiTalking=true; $('lampAi').classList.add('hot'); }
       speaker.addText(t);
     });
   }catch(e){
-    speaker.stop(); if(activeSpeaker===speaker) activeSpeaker=null;
-    stopBargeWatch();
-    try{ el.remove(); }catch(_){}
-    if(/^stream \d|brain-|upstream/.test(e.message)) STREAM_OK=false;   // endpoint unhealthy → stop trying this session
-    throw e;
+    const msg=(e&&e.message)||'';
+    const partial=((e&&e.partial)||'').trim();
+    if(msg!=='superseded' && myTurn===turnToken && partial.split(/\s+/).length>=4){
+      // the model got most of the line out before the pipe broke — keep it
+      // rather than re-asking (a second brain call reads as the opponent
+      // repeating themselves)
+      console.warn('[broadside] stream broke mid-line, keeping partial:',msg);
+      full=partial;
+    } else {
+      speaker.stop(); if(activeSpeaker===speaker) activeSpeaker=null;
+      stopBargeWatch();
+      try{ el.remove(); }catch(_){}
+      if(msg!=='superseded') STREAM_OK=false;   // any real failure → classic path for the rest of the session
+      throw e;
+    }
   }
   if(myTurn!==turnToken){ speaker.stop(); return; }
-  if(!full){ speaker.stop(); try{ el.remove(); }catch(_){} throw new Error('empty stream'); }
-  const cleaned=full.trim().replace(/^["'\u201c]|["'\u201d]$/g,'');
+  if(!full){ speaker.stop(); try{ el.remove(); }catch(_){} STREAM_OK=false; throw new Error('empty stream'); }
+  const cleaned=full.trim().replace(/^["'“]|["'”]$/g,'');
   el.lastChild.textContent=cleaned; scrollToBottom();
   remember('oppo',cleaned);
   setHint('');
@@ -2152,7 +2553,8 @@ async function deliverStreamed(directive,myTurn,controls){
 }
 
 /* Full-line playback. ProxyVoice → sentence-parallel synthesis (first
-   sentence plays while the rest render); otherwise the classic single call. */
+   sentence plays while the rest render); otherwise the classic single call.
+   The line is ALWAYS written to the console first — audio is best-effort. */
 function playLine(text,myTurn,controls){
   if(myTurn===undefined) myTurn=newTurn();
   setState('OPPO LIVE'); setHint('');
@@ -2160,34 +2562,40 @@ function playLine(text,myTurn,controls){
   const spoken=humanize(text);
   const stressed=composure<40;
   currentRateMul=P.rateMul*(stressed?1.07:1);
+  // a reaction clip still fetching/playing must not land on top of the line
+  try{ Voice.stop(); }catch(_){}
+  if(activeSpeaker){ try{ activeSpeaker.stop(); }catch(_){} activeSpeaker=null; }
   aiTalking=true; $('lampAi').classList.add('hot');
   log('OPPO · '+P.label+(stressed?' (rattled)':''),spoken,'ai');
   remember('oppo',text);
   startBargeWatch();
+  const handBack=()=>{
+    if(myTurn!==turnToken) return;
+    aiTalking=false; $('lampAi').classList.remove('hot'); stopBargeWatch();
+    if(running) startListening();
+  };
   if(Voice instanceof ProxyVoice && !Voice.disabled){
     const speaker=new StreamSpeaker({
       voiceId:oppoVoiceId(P),
       rate:getRate()*currentRateMul,
       controls,
       onFirstAudio:()=>{ if(myTurn===turnToken){ markFirstAudio(); aiTalking=true; } },
-      onAllDone:()=>{
-        if(myTurn!==turnToken) return;
-        aiTalking=false; $('lampAi').classList.remove('hot'); stopBargeWatch();
-        if(running) startListening();
-      }
+      onAllDone:handBack
     });
     activeSpeaker=speaker;
     speaker.addText(spoken);
     speaker.finish();
     return;
   }
-  Voice.speak(spoken,{
-    rate:getRate()*currentRateMul,
-    pitch:P.pitch+(stressed?0.05:0),
-    voiceId:oppoVoiceId(P),
-    onStart:()=>{ aiTalking=true; markFirstAudio(); },
-    onEnd:()=>{ aiTalking=false; $('lampAi').classList.remove('hot'); stopBargeWatch(); if(running && myTurn===turnToken) startListening(); }
-  });
+  try{
+    Voice.speak(spoken,{
+      rate:getRate()*currentRateMul,
+      pitch:P.pitch+(stressed?0.05:0),
+      voiceId:oppoVoiceId(P),
+      onStart:()=>{ if(myTurn===turnToken){ aiTalking=true; markFirstAudio(); } },
+      onEnd:handBack
+    });
+  }catch(e){ console.warn('[broadside] voice threw — handing the floor back:',e&&e.message); handBack(); }
 }
 /* legacy name kept for any stragglers */
 function speakAttack(text,myTurn){ playLine(text,myTurn,null); }
@@ -2195,36 +2603,47 @@ function speakAttack(text,myTurn){ playLine(text,myTurn,null); }
 /* ── Barge-in (v1.24): start talking while the opponent speaks and they
    shut up — like a real debate. A light recognizer runs during AI speech;
    4+ words of sustained speech cuts the audio and hands you the floor.
-   Cartesia voice only (browser TTS + SR fight over the audio stack). ── */
+   Cartesia voice only (browser TTS + SR fight over the audio stack).
+   Guard against the opponent cutting THEMSELVES off: when the opponent is
+   played through speakers, the recognizer hears the TTS too. With a live
+   (echo-cancelled) mic meter we require real mic energy in the last ~1.5s
+   before honouring the words; without a meter, word count alone decides. ── */
 let bargeRecog=null;
 function startBargeWatch(){
   try{
-    if(!SR||micSkipped||bargeRecog||!running) return;
-    if(!$('chkBarge').checked) return;
+    if(!SR||micSkipped||srFatal||bargeRecog||!running) return;
+    if(!bargeEnabled()) return;
     if(!(Voice instanceof ProxyVoice)||Voice.disabled) return;
     const b=new SR(); b.continuous=true; b.interimResults=true; b.lang='en-US';
+    const startedAt=Date.now();
     b.onresult=e=>{
+      if(bargeRecog!==b || !aiTalking) return;
       let txt='';
-      for(let i=e.resultIndex;i<e.results.length;i++) txt+=e.results[i][0].transcript;
-      if(txt.trim().split(/\s+/).filter(Boolean).length>=4) bargeIn(txt.trim());
+      for(let i=e.resultIndex;i<e.results.length;i++){ const alt=e.results[i]&&e.results[i][0]; if(alt) txt+=alt.transcript; }
+      const words=txt.trim().split(/\s+/).filter(Boolean).length;
+      if(words<4) return;
+      if(micAnalyser && Date.now()-lastMicHotTs>1500) return;   // speakers, not you
+      if(Date.now()-startedAt<400) return;                      // tail of the user's own previous answer
+      bargeIn(txt.trim(), 'You cut in — the floor is yours.');
     };
-    b.onerror=()=>{};
-    b.onend=()=>{ if(bargeRecog===b){ try{b.start();}catch(_){}} };
+    b.onerror=ev=>{
+      const err=ev&&ev.error;
+      if(err==='not-allowed'||err==='service-not-allowed'||err==='audio-capture'){ if(bargeRecog===b){ bargeRecog=null; } }
+    };
+    b.onend=()=>{ if(bargeRecog===b && aiTalking && running){ setTimeout(()=>{ if(bargeRecog===b && aiTalking && running){ try{b.start();}catch(_){} } },150); } };
     bargeRecog=b;
     b.start();
   }catch(_){ bargeRecog=null; }
 }
 function stopBargeWatch(){
   const b=bargeRecog; bargeRecog=null;
-  if(b){ b.onend=null; try{b.stop();}catch(_){} }
+  if(b){ b.onend=null; b.onresult=null; b.onerror=null; try{b.abort();}catch(_){ try{b.stop();}catch(__){} } }
 }
-function bargeIn(seedText){
+function bargeIn(seedText,msg){
   if(!running||!aiTalking) return;
-  stopBargeWatch(); newTurn();
-  if(activeSpeaker){ activeSpeaker.stop(); activeSpeaker=null; }
-  Voice.stop(); aiTalking=false; $('lampAi').classList.remove('hot');
-  log('SYSTEM','You cut in — the floor is yours.','sys');
-  startListening(seedText+' ');
+  silenceOpponent();
+  log('SYSTEM',msg||'You cut in — the floor is yours.','sys');
+  startListening(seedText?seedText+' ':'');
 }
 
 function nextAttack(){
@@ -2248,7 +2667,12 @@ function nextAttack(){
 }
 async function startSession(){
   if(!dossier||!dossier.items.length){ setHint('Load info with controversy items first (or use the sample).'); return; }
+  if(running) return;                         // double-click / host start() while armed
+  // Start is the user gesture every later Audio.play() / AudioContext /
+  // speechSynthesis call inherits — unlock synchronously, before any await.
+  unlockAudio();
   running=true;
+  srFatal=false; srNetErrors=0; micGranted=false;
   sessionRole=$('selRole').value==='attack'?'attack':'defend';
   $('btnStart').disabled=true; $('btnNext').disabled=false; $('btnRepeat').disabled=false; $('btnEnd').disabled=false;
   $('btnDone').disabled=false; $('btnDrill').disabled=(sessionRole==='attack');
@@ -2270,6 +2694,8 @@ async function startSession(){
   const got=await Promise.race([initMicMeter(), skipped]);
   if(skipBtn) skipBtn.style.display='none';
   if(got==='skip'){ micSkipped=true; log('SYSTEM','Typed mode — answer in the text box and hit Enter.','sys'); }
+  else if(got===false && !SR){ micSkipped=true; }
+  if(!SR && !micSkipped){ micSkipped=true; log('SYSTEM','This browser has no speech recognition — typed mode. (Chrome or Edge for voice.)','sys'); }
   if(!running) return;                        // ended while waiting on the prompt
   primeReactions();                           // warm the reaction-clip cache (fire & forget)
   if(sessionRole==='attack'){
@@ -2284,6 +2710,7 @@ async function startSession(){
 let sessionReported=false;
 async function requestDebrief(){
   if(!PROXY_CONFIG.enabled || sessionReported || stats.attacks<1) return;
+  if(!transcript.some(t=>t.who==='user')){ log('SYSTEM','No report card — you did not answer anything this session.','sys'); return; }
   sessionReported=true;
   const rt=stats.responseTimes, al=stats.aiLatency||[];
   const payload={
@@ -2297,35 +2724,52 @@ async function requestDebrief(){
     dossierName: PROXY_CONFIG.dossierMeta?.title || (dossier&&dossier.name) || null,
     dossierId: PROXY_CONFIG.dossierMeta?.id || null
   };
-  log('SYSTEM','Writing your report card…','sys');
+  const waiting=log('SYSTEM','Writing your report card… (10–20 seconds)','sys');
   try{
-    const r=await fetch(PROXY_CONFIG.debriefUrl,{method:'POST',
-      headers:{'Authorization':'Bearer '+PROXY_CONFIG.token,'content-type':'application/json'},
-      body:JSON.stringify(payload)});
-    if(!r.ok) throw new Error('debrief '+r.status);
+    const ctrl=new AbortController();
+    const to=setTimeout(()=>ctrl.abort(),45000);
+    let r;
+    try{
+      r=await fetch(PROXY_CONFIG.debriefUrl,{method:'POST', signal:ctrl.signal,
+        headers:{'Authorization':'Bearer '+PROXY_CONFIG.token,'content-type':'application/json'},
+        body:JSON.stringify(payload)});
+    }finally{ clearTimeout(to); }
+    if(!r.ok){
+      let why='debrief '+r.status;
+      try{ const ej=await r.json(); if(ej&&ej.error) why=ej.error; }catch(_){}
+      throw new Error(why);
+    }
     const j=await r.json();
-    log('COACH · SESSION REPORT', j.debrief.replace(/\*\*/g,''), 'sys');
+    if(!j || typeof j.debrief!=='string' || !j.debrief.trim()) throw new Error('empty report');
+    try{ waiting.remove(); }catch(_){}
+    const el=log('COACH · SESSION REPORT', j.debrief.replace(/\*\*/g,'').trim(), 'sys');
+    el.style.whiteSpace='pre-wrap';           // the report is multi-paragraph markdown — keep its line breaks
     if(!j.saved) log('SYSTEM','(Report card not saved to history — session storage not yet enabled on the server.)','sys');
-  }catch(e){ log('SYSTEM','Report card unavailable this session ('+e.message+').','sys'); }
+  }catch(e){
+    try{ waiting.remove(); }catch(_){}
+    const why=e&&e.name==='AbortError'?'timed out':(e&&e.message)||'unknown error';
+    log('SYSTEM','Report card unavailable this session ('+why+').','sys');
+  }
 }
-function endSession(complete){
-  running=false; newTurn(); stopListening(); stopBargeWatch(); Voice.stop();
-  if(activeSpeaker){ activeSpeaker.stop(); activeSpeaker=null; }
+function endSession(complete,opts){
+  const wasRunning=running;
+  running=false; newTurn(); stopListening(); stopBargeWatch();
+  silenceOpponent();
   spec=null; clearTimeout(specTimer);
-  aiTalking=false;
   $('btnDone').disabled=true; $('btnDrill').disabled=true;
-  $('lampAi').classList.remove('hot');
   $('typedFallback').style.display='none';
+  const skipBtn=$('btnSkipMic'); if(skipBtn) skipBtn.style.display='none';
   $('btnStart').disabled=false; $('btnNext').disabled=true; $('btnRepeat').disabled=true; $('btnEnd').disabled=true;
   setState('STANDBY'); setHint('');
+  if(!wasRunning) return;                     // nothing was armed (Reset on an idle console)
   const rt=stats.responseTimes;
   const avg=rt.length?(rt.reduce((a,b)=>a+b,0)/rt.length).toFixed(1):'0';
   const worst=Object.keys(stats.tally).length?` Biggest tics: ${topTics(stats.tally,3)}.`:'';
   log('SYSTEM',(complete?'All attack vectors exhausted. ':'Session ended. ')+`Debrief: ${stats.attacks} attacks faced, avg response ${avg}s, ${stats.fillers} tics & fillers.`+worst,'sys');
-  requestDebrief();
+  if(!(opts&&opts.skipDebrief)) requestDebrief();
 }
 
-$('btnStart').onclick=startSession;
+$('btnStart').onclick=()=>{ unlockAudio(); startSession(); };   // unlock inside the raw click, before the async chain
 $('btnNext').onclick=()=>{
   if(!running)return;
   if(sessionRole==='attack'){
@@ -2335,35 +2779,45 @@ $('btnNext').onclick=()=>{
     else log('COACH','No unused vectors left in the file — press what they\'ve dodged.','sys');
     return;
   }
-  newTurn(); stopListening(); stopBargeWatch(); Voice.stop();
-  if(activeSpeaker){ activeSpeaker.stop(); activeSpeaker=null; }
-  aiTalking=false; nextAttack();
+  stopListening(); silenceOpponent();
+  nextAttack();
 };
 $('btnRepeat').onclick=()=>{
   if(!running||!current)return;
-  newTurn(); stopListening(); stopBargeWatch(); Voice.stop();
-  if(activeSpeaker){ activeSpeaker.stop(); activeSpeaker=null; }
-  aiTalking=false;
+  stopListening(); silenceOpponent();
   deliver({instruction:'Re-ask your last attack a different way — same point, fresh phrasing.',item:current}, buildAttack(current,effIntensity()));
 };
+/* Done Talking must ALWAYS be able to end the turn: final text, else the
+   live interim transcript, else whatever is sitting in the typed box. With
+   nothing at all, say so instead of silently ignoring the click. */
 $('btnDone').onclick=()=>{
-  if(!running||!listening) return;
-  if(!finalText.trim() && interimLine) finalText=interimLine.lastChild.textContent||'';
-  if(finalText.trim()) endUserTurn();
+  if(!running) return;
+  if(!listening){
+    if(aiTalking) setHint('The opponent has the floor — start talking to cut in, or wait for them to finish.');
+    return;
+  }
+  let txt=finalText.trim();
+  if(!txt && lastInterim.trim()) txt=lastInterim.trim();
+  if(!txt && interimLine && interimLine.lastChild) txt=(interimLine.lastChild.textContent||'').trim();
+  const typed=$('typedInput');
+  if(!txt && typed && typed.value.trim()){ txt=typed.value.trim(); typed.value=''; }
+  if(!txt){ setHint('Nothing heard yet — say your answer (or type it below), then press Done Talking.'); showTypedBox(false); return; }
+  finalText=txt+' ';
+  endUserTurn();
 };
 $('btnDrill').onclick=()=>{
   if(!running||!current||sessionRole==='attack') return;
   topicFlubs=0; topicStrong=Math.min(topicStrong,1); topicExchanges=0;
   topicStage=Math.min(topicStage+1,3);
-  newTurn(); stopListening(); stopBargeWatch(); Voice.stop();
-  if(activeSpeaker){ activeSpeaker.stop(); activeSpeaker=null; }
-  aiTalking=false;
+  stopListening(); silenceOpponent();
   log('COACH','Drilling this topic deeper.','sys');
   deliver({instruction:'Drill deeper on the SAME topic from a fresh angle — '+STAGES[topicStage]+'.', item:current, tone:'press'},
     pick(FOLLOWUPS.good)+' '+buildFollowupQuestion());
 };
 $('btnEnd').onclick=()=>endSession(false);
-$('btnReset').onclick=()=>{ endSession(false); screenEl.innerHTML=''; log('SYSTEM','Session reset. Load info and press START.','sys'); };
+$('btnReset').onclick=()=>{ endSession(false,{skipDebrief:true}); screenEl.innerHTML=''; log('SYSTEM','Session reset. Load info and press START.','sys'); };
+/* voice change mid-session: re-warm the reaction cache for the new voice */
+(function(){ const sv=$('selOppoVoice'); if(sv) sv.addEventListener('change',()=>{ if(PROXY_CONFIG.enabled) primeReactions(); }); })();
 
 /* ---- dark / light mode ----
    Persistence: saved locally (localStorage) so the choice survives
@@ -2421,6 +2875,163 @@ const TIPS=[
   ['#bargeWrap','<b>BARGE-IN</b> — start talking while the opponent is mid-sentence and they stop, like a real debate. Four or more words cuts them off.'],
   ['#stLag','<b>OPPO LAG</b> — average seconds between the end of your answer and the opponent\'s first spoken word. The fluidity metric.']
 ];
+/* ---- searchable selects (app standard) ----
+   makeSearchable(selectEl): hides the native <select> but keeps it in the DOM
+   as the source of truth — every existing `sel.value` read and 'change'
+   listener keeps working. Renders a pill trigger (label + chevron) that opens
+   a panel with a type-to-filter box and the option list. Keyboard: ↑ ↓ Enter
+   Esc; click-outside closes. Picking sets selectEl.value and dispatches a real
+   'change' event. Mirrors the select's `disabled` state and refreshes the
+   label on programmatic value changes ('change'/'input' from other code). */
+function makeSearchable(sel){
+  if(!sel||sel.tagName!=='SELECT'||sel.__ssTrigger) return sel;
+  const wrap=document.createElement('div'); wrap.className='ss-wrap';
+  const trig=document.createElement('button');
+  trig.type='button'; trig.className='pill-select ss-trigger';
+  trig.setAttribute('aria-haspopup','listbox'); trig.setAttribute('aria-expanded','false');
+  if(sel.id) trig.id=sel.id+'Trigger';
+  const panel=document.createElement('div'); panel.className='ss-panel';
+  const search=document.createElement('input');
+  search.type='text'; search.className='ss-search'; search.placeholder='Search…';
+  search.setAttribute('autocomplete','off'); search.setAttribute('aria-label','Search options');
+  const list=document.createElement('ul'); list.className='ss-list'; list.setAttribute('role','listbox');
+  panel.appendChild(search); panel.appendChild(list);
+  sel.parentNode.insertBefore(wrap,sel);
+  wrap.appendChild(sel); wrap.appendChild(trig); wrap.appendChild(panel);
+  sel.classList.add('ss-native'); sel.setAttribute('aria-hidden','true'); sel.tabIndex=-1;
+
+  const opts=()=>Array.from(sel.options);
+  const label=()=>{ const o=sel.options[sel.selectedIndex]; return o?o.text:''; };
+  const refresh=()=>{
+    trig.textContent=label()||'Select…';
+    trig.title=trig.textContent;
+    trig.disabled=!!sel.disabled;
+    if(sel.disabled&&isOpen()) close();
+  };
+  let shown=[], active=-1;
+  const isOpen=()=>panel.classList.contains('open');
+  const render=()=>{
+    const q=search.value.trim().toLowerCase();
+    shown=opts().filter(o=>!q||o.text.toLowerCase().includes(q)||String(o.value).toLowerCase().includes(q));
+    list.innerHTML='';
+    if(!shown.length){
+      const e=document.createElement('li'); e.className='ss-empty'; e.textContent='No matches'; list.appendChild(e);
+      active=-1; return;
+    }
+    const selIdx=shown.findIndex(o=>o.selected);
+    active=selIdx>=0?selIdx:0;
+    shown.forEach((o,i)=>{
+      const li=document.createElement('li');
+      li.className='ss-opt'+(o.selected?' selected':'')+(o.disabled?' disabled':'')+(i===active?' active':'');
+      li.setAttribute('role','option'); li.setAttribute('aria-selected',o.selected?'true':'false');
+      li.dataset.i=i;
+      const t=document.createElement('span'); t.textContent=o.text;
+      const c=document.createElement('span'); c.className='ss-check';
+      c.innerHTML='<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>';
+      li.appendChild(t); li.appendChild(c);
+      list.appendChild(li);
+    });
+    scrollActive();
+  };
+  const setActive=i=>{
+    if(!shown.length) return;
+    active=(i+shown.length)%shown.length;
+    list.querySelectorAll('.ss-opt').forEach((li,k)=>li.classList.toggle('active',k===active));
+    scrollActive();
+  };
+  function scrollActive(){
+    const li=list.querySelector('.ss-opt.active'); if(!li) return;
+    const top=li.offsetTop, bot=top+li.offsetHeight;
+    if(top<list.scrollTop) list.scrollTop=top;
+    else if(bot>list.scrollTop+list.clientHeight) list.scrollTop=bot-list.clientHeight;
+  }
+  const open=()=>{
+    if(sel.disabled||isOpen()) return;
+    document.querySelectorAll('.ss-panel.open').forEach(p=>{ if(p!==panel&&p.__ssClose) p.__ssClose(); });
+    search.value='';
+    panel.style.width=Math.max(trig.offsetWidth,225)+'px';
+    panel.classList.remove('up');
+    panel.classList.add('open'); trig.setAttribute('aria-expanded','true');
+    render();
+    // .plugin clips overflow — flip upward if the panel would be cut off below
+    try{
+      const clip=wrap.closest('.plugin')||document.documentElement;
+      const cb=clip.getBoundingClientRect().bottom, pb=panel.getBoundingClientRect().bottom;
+      const above=trig.getBoundingClientRect().top-clip.getBoundingClientRect().top;
+      if(pb>cb-8 && above>panel.offsetHeight+8) panel.classList.add('up');
+    }catch(_){}
+    requestAnimationFrame(()=>search.focus());
+  };
+  const close=(refocus)=>{
+    if(!isOpen()) return;
+    panel.classList.remove('open'); trig.setAttribute('aria-expanded','false');
+    if(refocus) trig.focus();
+  };
+  panel.__ssClose=close;
+  const pick=o=>{
+    if(!o||o.disabled) return;
+    const changed=sel.value!==o.value;
+    sel.value=o.value;
+    refresh();
+    close(true);
+    if(changed){
+      sel.dispatchEvent(new Event('input',{bubbles:true}));
+      sel.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+  };
+
+  trig.addEventListener('click',()=>{ isOpen()?close(true):open(); });
+  trig.addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'||e.key==='ArrowUp'||e.key==='Enter'||e.key===' '){ e.preventDefault(); open(); }
+  });
+  search.addEventListener('input',render);
+  search.addEventListener('keydown',e=>{
+    if(e.key==='ArrowDown'){ e.preventDefault(); setActive(active+1); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); setActive(active-1); }
+    else if(e.key==='Home'){ e.preventDefault(); setActive(0); }
+    else if(e.key==='End'){ e.preventDefault(); setActive(shown.length-1); }
+    else if(e.key==='Enter'){ e.preventDefault(); if(active>=0) pick(shown[active]); }
+    else if(e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); close(true); }
+    else if(e.key==='Tab'){ close(false); }
+  });
+  list.addEventListener('mousemove',e=>{
+    const li=e.target.closest('.ss-opt'); if(!li) return;
+    const i=+li.dataset.i; if(i!==active) setActive(i);
+  });
+  list.addEventListener('mousedown',e=>e.preventDefault()); // keep focus in the search box
+  list.addEventListener('click',e=>{
+    const li=e.target.closest('.ss-opt'); if(!li) return;
+    pick(shown[+li.dataset.i]);
+  });
+  document.addEventListener('mousedown',e=>{ if(isOpen()&&!wrap.contains(e.target)) close(false); });
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&isOpen()) close(true); });
+  window.addEventListener('blur',()=>close(false));
+
+  // stay in sync with the native select when other code drives it
+  sel.addEventListener('change',refresh);
+  sel.addEventListener('input',refresh);
+  try{
+    new MutationObserver(muts=>{
+      let opt=false;
+      muts.forEach(m=>{ if(m.type==='childList') opt=true; });
+      if(opt&&isOpen()) render();
+      refresh();
+    }).observe(sel,{attributes:true,attributeFilter:['disabled'],childList:true,subtree:true});
+  }catch(_){}
+  trig.addEventListener('pointerenter',refresh); // catches silent `sel.value=` writes
+  trig.addEventListener('focus',refresh);
+
+  sel.__ssTrigger=trig; trig.__ssSelect=sel;
+  refresh();
+  return sel;
+}
+(function initSearchableSelects(){
+  const run=()=>['selMode','selPersona','selRace','selRole','selDepth','selOppoVoice']
+    .forEach(id=>{ const el=document.getElementById(id); if(el) makeSearchable(el); });
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',run);
+  else run();
+})();
+
 let coNodes=null;
 function hideCallout(){ if(coNodes){ coNodes.forEach(n=>n.remove()); coNodes=null; } }
 function showCallout(ev,html){
@@ -2462,7 +3073,8 @@ function showCallout(ev,html){
 const CALLOUT_DELAY=500;
 let coTimer=null;
 TIPS.forEach(([sel,html])=>{
-  document.querySelectorAll(sel).forEach(el=>{
+  document.querySelectorAll(sel).forEach(node=>{
+    const el=node.__ssTrigger||node; // searchable selects: hover the visible trigger, not the hidden <select>
     const arm=ev=>{
       clearTimeout(coTimer);
       const snap={clientX:ev.clientX,clientY:ev.clientY,currentTarget:el};
@@ -2554,18 +3166,31 @@ window.ControversyPrep={
      Netlify function proxies so no keys reach the browser. Applies live, no
      reload. {token, voiceId, brainMode:'quality'|'speed'} */
   configureProxy(cfg={}){
-    if(!cfg.token) return;
+    if(!cfg||!cfg.token) return false;
+    /* Idempotent: the host calls this on iframe load AND on every Supabase
+       TOKEN_REFRESHED (and React effects can re-run). Same config → no-op;
+       a new token/voice/mode is applied silently; the "connected" line is
+       printed exactly once per page load. */
+    const first=!PROXY_CONFIG.enabled;
+    const sameToken=PROXY_CONFIG.token===cfg.token;
+    const sameVoice=!cfg.voiceId || (Voice instanceof ProxyVoice && Voice.cfg.voiceId===cfg.voiceId);
+    const sameMode=!cfg.brainMode || BRAIN_CONFIG.mode===cfg.brainMode;
+    if(!first && sameToken && sameVoice && sameMode) return true;
     PROXY_CONFIG.enabled=true; PROXY_CONFIG.token=cfg.token;
     /* v1.24: real-time sparring defaults to the fast brain — the quality
        model still writes the post-session report card server-side. */
-    BRAIN_CONFIG.mode=cfg.brainMode||'speed';
+    if(cfg.brainMode) BRAIN_CONFIG.mode=cfg.brainMode; else if(first) BRAIN_CONFIG.mode='speed';
     /* token refreshes re-call this mid-session — don't orphan playing audio */
     if(!(Voice instanceof ProxyVoice)) Voice = new ProxyVoice({voiceId:cfg.voiceId||VOICE_CONFIG.cartesia.voiceId});
     else if(cfg.voiceId) Voice.cfg.voiceId=cfg.voiceId;
     const sv=document.getElementById('stVoice'); if(sv) sv.textContent=Voice.name;
     const sb=document.getElementById('stBrain'); if(sb) sb.textContent=brainLabel();
-    try{ log('SYSTEM','Badger Board connected — opponent brain and Cartesia voice run through secure server proxies. Ignore any key-setup notes above.','sys'); }catch(_){}
+    if(first){ try{ log('SYSTEM','Badger Board connected — opponent brain and Cartesia voice run through secure server proxies.','sys'); }catch(_){} }
+    return true;
   },
+  /* alias — some host code calls connect() */
+  connect(cfg){ return this.configureProxy(cfg); },
+  get connected(){ return PROXY_CONFIG.enabled; },
   /* host app: populate the in-dock Profiler dossier picker (searchable).
      cfg = { items:[{id,title}], onPick:(id)=>void } */
   setDossierPicker(cfg){

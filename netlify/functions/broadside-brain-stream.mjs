@@ -125,7 +125,7 @@ export default async (req) => {
       },
       body: JSON.stringify({
         model: MODELS[mode],
-        max_tokens: 140,
+        max_tokens: 160,
         stream: true,
         system,
         messages: [{ role: 'user', content: usr }],

@@ -57,7 +57,9 @@ exports.handler = async (event) => {
 
   try {
     const ctrl = new AbortController()
-    const to = setTimeout(() => ctrl.abort(), 9000)
+    // 12s model budget: enough for Sonnet to finish a 34-word line without a
+    // truncated sentence. netlify.toml raises this function's timeout to match.
+    const to = setTimeout(() => ctrl.abort(), 12000)
     const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       signal: ctrl.signal,
@@ -68,7 +70,7 @@ exports.handler = async (event) => {
       },
       body: JSON.stringify({
         model: MODELS[mode],
-        max_tokens: 120,
+        max_tokens: 160,
         system,
         messages: [{ role: 'user', content: usr }],
       }),
