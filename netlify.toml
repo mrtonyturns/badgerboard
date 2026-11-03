@@ -44,6 +44,26 @@
 [functions."research-district-history"]
   timeout = 60
 
+# Broadside: the brain gives the model 12s (+ auth/rate-limit overhead) and the
+# debrief lets Sonnet write a 700-token report card — both overrun the 10s
+# default and used to surface as 502s in the session console.
+[functions."broadside-brain"]
+  timeout = 26
+
+[functions."broadside-brain-stream"]
+  timeout = 26
+
+[functions."broadside-voice"]
+  timeout = 26
+
+[functions."broadside-debrief"]
+  timeout = 30
+
+# "Just describe them" intake: up to 6 parallel article fetches (8s each) plus a
+# 12s Haiku call — comfortably inside 26s, well over the 10s default.
+[functions."broadside-prep"]
+  timeout = 26
+
 
 # Auto-regenerate stale dossiers every Monday at 9am CT (UTC-6 standard / UTC-5 daylight)
 # Using 15:00 UTC to cover CT regardless of DST
