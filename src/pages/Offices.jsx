@@ -379,7 +379,9 @@ export default function Offices() {
   // The table/list view was removed (Aug 2026) — the map is the only view, so
   // there is no viewMode/mapEverShown state left to track.
   const [activeLayer, setActiveLayer]   = useState(() =>
-    typeof restoredMapCtx?.activeLayer === 'string' ? restoredMapCtx.activeLayer : '')
+    // First open shows the Congress outlines rather than a blank map; a saved
+    // session keeps whatever the user last chose (including "none").
+    typeof restoredMapCtx?.activeLayer === 'string' ? restoredMapCtx.activeLayer : 'congress')
   const [selectedDistrict, setSelectedDistrict] = useState(() =>
     (restoredMapCtx?.selectedDistrict && typeof restoredMapCtx.selectedDistrict === 'object') ? restoredMapCtx.selectedDistrict : null)
   const [mapView, setMapView] = useState(() =>

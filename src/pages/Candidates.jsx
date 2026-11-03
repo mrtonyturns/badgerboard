@@ -185,7 +185,9 @@ export default function Candidates() {
   const [viewMode, setViewMode] = useState(() => restoredMapCtx?.viewMode === 'map' ? 'map' : 'table')
   const [mapEverShown, setMapEverShown] = useState(() => restoredMapCtx?.viewMode === 'map')
   const [activeLayer, setActiveLayer] = useState(() =>
-    typeof restoredMapCtx?.activeLayer === 'string' ? restoredMapCtx.activeLayer : '')
+    // First open shows the Congress outlines rather than a blank map; a saved
+    // session keeps whatever the user last chose (including "none").
+    typeof restoredMapCtx?.activeLayer === 'string' ? restoredMapCtx.activeLayer : 'congress')
   // A restored selection must still look like a district (a `name` to parse a
   // district number out of and a `layerKey` to branch on). A stale or truncated
   // payload used to restore `{}`, and the first render then called
