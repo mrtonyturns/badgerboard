@@ -526,11 +526,79 @@ html[data-theme="dark"] .comp-track{box-shadow:0 1px 0 rgba(255,255,255,.1), ins
 .pr-empty{padding:10px 12px;font-size:11px;color:#8b98ad;font-style:italic}
 .dbtn:hover{filter:brightness(1.15)}
 .file-note{font-size:9.5px;color:#5a6a84;letter-spacing:.05em;text-align:center}
-.loaded-pill{
-  display:none;font-size:10.5px;font-weight:700;color:#ff9a9a;
-  background:rgba(196,30,30,.14);border:1px solid rgba(196,30,30,.4);
-  border-radius:20px;padding:6px 12px;text-align:center;
+/* ---- "WHO ARE YOU UP AGAINST?" intake (Nov 2026) ---- */
+.intake-body{display:flex;flex-direction:column;gap:12px}
+.intake-section{display:flex;flex-direction:column;gap:8px}
+.intake-label{font-size:10px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:#8fa0b8}
+.intake-label b{color:#ff6b6b}
+.dock .dk-input{
+  width:100%;font-family:var(--font);font-size:12px;font-weight:600;color:#eef1f6;
+  background:#060d18;border:1px solid #22314d;border-radius:8px;padding:9px 10px;
 }
+.dock .dk-input:focus{outline:none;border-color:rgba(196,30,30,.6)}
+.dock .dk-input::placeholder{color:#5a6a84;font-weight:500}
+.pr-item{display:flex;align-items:center;gap:8px}
+.pr-item .pr-main{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pr-item .pr-office{color:#8fa0b8;font-weight:500}
+.pr-chip{
+  flex:none;font-size:9px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
+  border-radius:999px;padding:3px 7px;border:1px solid;
+}
+.pr-chip.ready{color:#8fffc4;border-color:rgba(34,197,94,.45);background:rgba(34,197,94,.12)}
+.pr-chip.none{color:#ffb4b4;border-color:rgba(196,30,30,.45);background:rgba(196,30,30,.12)}
+.pr-new{color:#ff9a9a;font-weight:800;border-top:1px solid rgba(255,255,255,.08)}
+.no-profile-card{
+  display:none;flex-direction:column;gap:8px;
+  background:rgba(196,30,30,.08);border:1px solid rgba(196,30,30,.4);border-radius:10px;padding:10px;
+}
+.npc-text{font-size:12px;font-weight:700;color:#eef1f6}
+.npc-sub{font-size:10.5px;color:#8fa0b8;line-height:1.45}
+.gen-status{
+  display:none;align-items:center;gap:8px;font-size:11px;font-weight:700;color:#ffd0d0;
+  background:rgba(196,30,30,.12);border:1px solid rgba(196,30,30,.4);border-radius:10px;padding:9px 10px;
+}
+.gen-status.on{display:flex}
+.gen-status.done{color:#8fffc4;background:rgba(34,197,94,.1);border-color:rgba(34,197,94,.4)}
+.gen-status.err{color:#ffb4b4}
+.gen-spin{
+  width:12px;height:12px;flex:none;border-radius:50%;border:2px solid rgba(255,255,255,.2);border-top-color:#ff6b6b;
+  animation:genspin .8s linear infinite;
+}
+.gen-status.done .gen-spin,.gen-status.err .gen-spin{display:none}
+@keyframes genspin{to{transform:rotate(360deg)}}
+.link-btn{
+  background:none;border:0;padding:0;cursor:pointer;font-family:var(--font);
+  font-size:11px;font-weight:700;color:#ff9a9a;text-decoration:underline;text-underline-offset:2px;
+}
+.link-btn:hover{color:#ffd0d0}
+.new-cand{display:none;flex-direction:column;gap:8px;background:#0c1628;border:1px solid #22314d;border-radius:10px;padding:10px}
+.new-cand.on{display:flex}
+.intake-err{display:none;font-size:11px;font-weight:600;color:#ffb4b4;line-height:1.45}
+.intake-err.on{display:block}
+.dbtn.busy{opacity:.7;pointer-events:none}
+.dbtn .btn-spin{display:none;width:11px;height:11px;border-radius:50%;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;animation:genspin .8s linear infinite;vertical-align:-2px;margin-right:6px}
+.dbtn.busy .btn-spin{display:inline-block}
+.dock .intake-divider{font-size:10px;font-weight:800;letter-spacing:.16em;color:#5a6a84;text-align:center}
+.dropzone.compact{padding:9px 10px;display:flex;align-items:center;justify-content:center;gap:8px}
+.dropzone.compact svg{width:16px;height:16px;margin:0}
+.dropzone.compact .dz-main{font-size:11px}
+.dropzone.compact .dz-sub{display:none}
+.intake-links{display:flex;justify-content:center;gap:14px}
+.loaded-card{
+  display:none;align-items:center;gap:10px;
+  background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.4);border-radius:10px;padding:10px 12px;
+}
+.loaded-card.on{display:flex}
+.loaded-card .lc-text{flex:1;min-width:0}
+.loaded-card .lc-name{font-size:13px;font-weight:800;color:#eef1f6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.loaded-card .lc-meta{font-size:10.5px;color:#8fffc4;font-weight:700;margin-top:2px}
+.loaded-card.thin{border-color:rgba(196,30,30,.4);background:rgba(196,30,30,.08)}
+.loaded-card.thin .lc-meta{color:#ffb4b4}
+.lc-change{
+  flex:none;font-family:var(--font);font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;
+  border-radius:999px;padding:7px 11px;cursor:pointer;border:1px solid #2a3a54;background:#16233c;color:#eef1f6;
+}
+.lc-change:hover{filter:brightness(1.15)}
 .typed-fallback{display:none;width:100%;gap:8px}
 .typed-fallback input{flex:1;border:1px solid #22314d;border-radius:8px;padding:9px;font-family:var(--font);font-size:12px;background:#060d18;color:#eef1f6}
 
@@ -785,23 +853,63 @@ html[data-theme="dark"] .lamp{box-shadow:0 1px 0 rgba(255,255,255,.15), inset 0 
 <aside class="dock">
   <div class="dock-head">
     <span class="dock-lamp" id="dockLamp"></span>
-    <h2>INTEL <span>INTAKE</span></h2>
+    <h2>WHO ARE YOU <span>UP AGAINST?</span></h2>
   </div>
-  <div id="profilerPick" style="display:none">
-    <input type="text" id="profilerSearch" class="profiler-search" placeholder="Choose a dossier — type to search…" autocomplete="off" spellcheck="false">
-    <div id="profilerResults"></div>
+
+  <!-- collapsed state: something is loaded — eye goes to START -->
+  <div class="loaded-card" id="loadedCard">
+    <div class="lc-text">
+      <div class="lc-name" id="loadedName"></div>
+      <div class="lc-meta" id="loadedMeta"></div>
+    </div>
+    <button class="lc-change" id="btnChange" type="button">Change</button>
   </div>
-  <div class="dropzone" id="dropzone">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-    <div class="dz-main">Drop an info file</div>
-    <div class="dz-sub" id="dzSub">.pdf · .txt · .md · .json — or click to browse</div>
+
+  <div class="intake-body" id="intakeBody">
+    <!-- A. pick a candidate (host-populated; hidden when the module runs standalone) -->
+    <div class="intake-section" id="secPick" style="display:none">
+      <div class="intake-label">Pick a candidate</div>
+      <div id="profilerPick">
+        <input type="text" id="profilerSearch" class="profiler-search" placeholder="Search your candidates…" autocomplete="off" spellcheck="false">
+        <div id="profilerResults"></div>
+      </div>
+      <div class="no-profile-card" id="noProfileCard">
+        <div class="npc-text" id="noProfileText">No profile yet</div>
+        <div class="npc-sub">Badger Board researches public sources and builds the attack file for you.</div>
+        <button class="dbtn red" id="btnGenerate" type="button"><span class="btn-spin"></span>Generate profile (2–4 min)</button>
+      </div>
+      <div class="gen-status" id="genStatus"><span class="gen-spin"></span><span id="genStatusText"></span></div>
+      <div class="intake-err" id="genErr"></div>
+      <div class="new-cand" id="newCand">
+        <input type="text" id="newCandName" class="dk-input" placeholder="Candidate name" autocomplete="off">
+        <input type="text" id="newCandNotes" class="dk-input" placeholder="Office / anything that helps identify them (optional)" autocomplete="off">
+        <div class="dock-actions">
+          <button class="dbtn red" id="btnCreateCand" type="button"><span class="btn-spin"></span>Add &amp; generate</button>
+          <button class="dbtn" id="btnCancelNew" type="button">Cancel</button>
+        </div>
+        <div class="intake-err" id="newCandErr"></div>
+      </div>
+      <div><button class="link-btn" id="btnNewCand" type="button">+ New candidate</button></div>
+    </div>
+
+    <!-- B. or just describe them -->
+    <div class="intake-section" id="secDescribe">
+      <div class="intake-label">Or just describe them</div>
+      <input type="text" id="describeName" class="dk-input" placeholder="Their name (optional)" autocomplete="off">
+      <textarea id="dossierText" placeholder="Paste links to news articles, or describe them in your own words — record, controversies, positions, anything you know."></textarea>
+      <button class="dbtn red" id="btnBuild" type="button"><span class="btn-spin"></span>Build sparring file</button>
+      <div class="intake-err" id="buildErr"></div>
+    </div>
+
+    <!-- C. drop a file / sample -->
+    <div class="dropzone compact" id="dropzone" title="PDF, .txt, .md or .json — parsed locally">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      <div class="dz-main" id="dzMain">or drop a file</div>
+      <div class="dz-sub" id="dzSub">.pdf · .txt · .md · .json — or click to browse</div>
+    </div>
+    <div class="intake-links"><button class="link-btn" id="btnSample" type="button">Try a sample candidate</button></div>
   </div>
-  <textarea id="dossierText" placeholder="…or paste info text / JSON here. Sections named Controversies / Vulnerabilities / Weaknesses get priority."></textarea>
-  <div class="dock-actions">
-    <button class="dbtn red" id="btnLoad">Load</button>
-    <button class="dbtn" id="btnSample">Sample</button>
-  </div>
-  <div class="loaded-pill" id="loadedPill"></div>
+
   <div class="typed-fallback" id="typedFallback">
     <input type="text" id="typedInput" placeholder="Mic unavailable — type response, hit Enter">
   </div>
@@ -1194,6 +1302,7 @@ const PROXY_CONFIG={
   brainUrl:'/.netlify/functions/broadside-brain',
   voiceUrl:'/.netlify/functions/broadside-voice',
   debriefUrl:'/.netlify/functions/broadside-debrief',
+  prepUrl:'/.netlify/functions/broadside-prep',   // "just describe them" → sparring file
   dossierMeta:null      // {id,title} set by the host app on load
 };
 const BRAIN_TIMEOUT_MS=14000;          // classic brain call (server model budget 12s + overhead)
@@ -2666,7 +2775,11 @@ function nextAttack(){
   }, fb);
 }
 async function startSession(){
-  if(!dossier||!dossier.items.length){ setHint('Load info with controversy items first (or use the sample).'); return; }
+  if(!dossier||!dossier.items.length){
+    setHint('Pick a candidate or describe them first');
+    try{ focusIntake(); }catch(_){}
+    return;
+  }
   if(running) return;                         // double-click / host start() while armed
   // Start is the user gesture every later Audio.play() / AudioContext /
   // speechSynthesis call inherits — unlock synchronously, before any await.
@@ -2861,7 +2974,10 @@ const TIPS=[
   ['#lampAi','<b>OPPO LAMP</b> — lights red while the opponent agent is speaking.'],
   ['#sessionState','<b>STATE READOUT</b> — shows STANDBY, OPPO LIVE, or LISTENING.'],
   ['.switch','<b>THEME SWITCH</b> — toggles light/dark mode. Your choice is remembered.'],
-  ['#dossierText','<b>INFO FIELD</b> — paste profile text or JSON. Controversies / Vulnerabilities sections become attack vectors.'],
+  ['#profilerSearch','<b>PICK A CANDIDATE</b> — search the candidates in your Badger Board account. Ones with a Profiler report load instantly; the rest get a one-click Generate.'],
+  ['#btnGenerate','<b>GENERATE PROFILE</b> — Badger Board researches public sources and builds the full report (2–4 minutes, counts toward your monthly profiles). It loads here automatically when done.'],
+  ['#dossierText','<b>DESCRIBE THEM</b> — paste article links or write what you know in plain words. Build turns it into attack vectors. Markdown / JSON dossiers still work here too.'],
+  ['#btnBuild','<b>BUILD SPARRING FILE</b> — reads any links you pasted, combines them with your notes, and writes 3–12 attack vectors. No invented facts — only what the material says.'],
   ['#dropzone','<b>FILE DROP</b> — drop or click to load an info file: PDF (text is extracted locally), .txt, .md, or .json.'],
   ['#selRace','<b>RACE POSITION</b> — the opponent\'s scripted standing. Underdogs attack harder; frontrunners stay above the fray (research: trailing candidates go negative far more).'],
   ['#compWrap','<b>OPPO COMPOSURE</b> — the opponent\'s inner state. Land fluent, specific, corrective-action answers and it drops: they hesitate more, simplify, and get rattled. It recovers slowly, like a real stress arc.'],
@@ -3088,28 +3204,257 @@ TIPS.forEach(([sel,html])=>{
 });
 window.addEventListener('scroll',()=>{ clearTimeout(coTimer); hideCallout(); },true);
 
-/* ---- dossier dock ---- */
+/* =====================================================================
+   INTAKE DOCK — "WHO ARE YOU UP AGAINST?" (Nov 2026)
+   Three ways in: (A) pick one of the account's candidates — loads their
+   Profiler report, or generates one on the spot; (B) describe them / paste
+   article links — the server turns notes into a sparring file; (C) drop a
+   file. Once anything is loaded the dock collapses to a one-line card so
+   the eye goes to START.
+   ===================================================================== */
+const esc=t=>String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+function showErr(id,msg){ const el=$(id); if(!el) return; el.textContent=msg||''; el.classList.toggle('on', !!msg); }
+function setBusy(id,on){ const b=$(id); if(b){ b.classList.toggle('busy',!!on); b.disabled=!!on; } }
+
+/* collapsed ⇄ expanded */
+function collapseDock(d,label){
+  const card=$('loadedCard'); if(!card) return;
+  $('loadedName').textContent=d.name;
+  $('loadedMeta').textContent=d.empty
+    ? 'no attackable items found — add more detail'
+    : `${d.items.length} attack vector${d.items.length===1?'':'s'}${label?' · '+label.replace(/^\((.*)\)$/,'$1'):''}`;
+  card.classList.toggle('thin', !!d.empty);
+  card.classList.add('on');
+  $('intakeBody').style.display='none';
+}
+function expandDock(){
+  const card=$('loadedCard'); if(card) card.classList.remove('on');
+  $('intakeBody').style.display='';
+}
+function focusIntake(){
+  expandDock();
+  const pick=$('secPick'), search=$('profilerSearch'), ta=$('dossierText');
+  if(pick && pick.style.display!=='none' && search){ search.focus(); }
+  else if(ta){ ta.focus(); }
+}
+$('btnChange').onclick=()=>{ expandDock(); try{ ($('secPick').style.display!=='none'?$('profilerSearch'):$('dossierText')).focus(); }catch(_){} };
+
 function loadDossierText(raw,label){
   const d=parseDossier(raw);
-  if(!d){ setHint('The info field is empty.'); return; }
+  if(!d){ setHint('Nothing to load yet — pick a candidate or describe them.'); return; }
   dossier=d;
   $('dockLamp').classList.toggle('on', !d.empty);
-  const pill=$('loadedPill');
-  pill.style.display='block';
+  collapseDock(d,label);
   if(d.empty){
-    pill.textContent=`Loaded "${d.name}" — no controversy items detected`;
-    log('SYSTEM',`Info loaded for ${d.name}, but no attackable items were found. Add a Controversies/Vulnerabilities section or use JSON format.`,'sys');
+    log('SYSTEM',`Info loaded for ${d.name}, but no attackable items were found. Hit Change and describe them in a few lines — Build will turn it into attack vectors.`,'sys');
+    setHint('No attack vectors yet — add more detail');
   }else{
-    pill.textContent=`${d.name} · ${d.items.length} attack vectors ${label||''}`;
     log('SYSTEM',`Info locked in: ${d.name} — ${d.items.length} attack vectors identified. Press START when ready.`,'sys');
+    setHint('Press START');
   }
 }
-$('btnLoad').onclick=()=>loadDossierText($('dossierText').value);
-$('btnSample').onclick=()=>{ $('dossierText').value=SAMPLE_DOSSIER; loadDossierText(SAMPLE_DOSSIER,'(sample)'); };
+$('btnSample').onclick=()=>{ $('dossierText').value=SAMPLE_DOSSIER; $('describeName').value=''; loadDossierText(SAMPLE_DOSSIER,'(sample)'); };
+
+/* ---- (A) candidate picker — host-populated via ControversyPrep.setCandidatePicker ---- */
+const CAND={ configured:false, legacy:false, items:[], selected:null, onPick:null, onGenerate:null, onCreate:null, generating:null, render:null };
+function candById(id){ return CAND.items.find(c=>c.id===String(id))||null; }
+function showNoProfile(c){
+  const card=$('noProfileCard');
+  if(!c){ card.style.display='none'; return; }
+  $('noProfileText').textContent=`No profile for ${c.name} yet`;
+  card.style.display='flex';
+  setBusy('btnGenerate', CAND.generating===c.id);
+}
+function selectCandidate(id,opts){
+  const c=candById(id); if(!c) return false;
+  CAND.selected=c.id;
+  const inp=$('profilerSearch'); if(inp){ inp.value=c.name+(c.office?' · '+c.office:''); }
+  showErr('genErr','');
+  if(c.dossierId){
+    showNoProfile(null);
+    if(!(opts&&opts.silent)){
+      log('SYSTEM','Pulling '+c.name+'’s profile from Badger Board…','sys');
+      if(typeof CAND.onPick==='function') CAND.onPick(c.dossierId, c.id);
+    }
+  }else{
+    showNoProfile(c);
+    setHint('No profile for '+c.name+' yet — generate one, or describe them below');
+  }
+  return true;
+}
+function requestGenerate(id){
+  const c=candById(id); if(!c) return;
+  if(CAND.generating) return;                 // one run at a time per dock
+  showErr('genErr','');
+  if(typeof CAND.onGenerate!=='function'){ showErr('genErr','Profile generation is not available here.'); return; }
+  CAND.generating=c.id;
+  setBusy('btnGenerate',true);
+  renderGenStatus({state:'running', stage:1, message:'Starting research', elapsedMs:0});
+  log('SYSTEM','Generating a profile for '+c.name+' — usually 2–4 minutes. You can describe them below meanwhile, or wait and it loads here by itself.','sys');
+  try{
+    const r=CAND.onGenerate(c.id);
+    if(r&&typeof r.then==='function') r.catch(e=>renderGenStatus({state:'error', message:(e&&e.message)||'Could not start this profile.'}));
+  }catch(e){ renderGenStatus({state:'error', message:(e&&e.message)||'Could not start this profile.'}); }
+}
+$('btnGenerate').onclick=()=>{ if(CAND.selected) requestGenerate(CAND.selected); };
+
+function fmtElapsed(ms){ const s=Math.max(0,Math.round((ms||0)/1000)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+let lastGenKey='';
+function renderGenStatus(st){
+  const box=$('genStatus'), txt=$('genStatusText'); if(!box||!txt) return;
+  const state=(st&&st.state)||'idle';
+  box.classList.remove('done','err');
+  if(state==='idle'){ box.classList.remove('on'); CAND.generating=null; setBusy('btnGenerate',false); lastGenKey=''; return; }
+  if(state==='running'){
+    if(st.candidateId) CAND.generating=String(st.candidateId);   // host-started run (e.g. "+ New candidate")
+    setBusy('btnGenerate', !!CAND.generating && CAND.selected===CAND.generating);
+    const stage=Number(st.stage)||0, total=Number(st.totalStages)||4;
+    const label=st.message||'Working';
+    txt.textContent=label+(stage?' — step '+stage+' of '+total:'')+(st.elapsedMs!=null?' · '+fmtElapsed(st.elapsedMs):'');
+    box.classList.add('on');
+    const key=stage+'|'+label;
+    if(key!==lastGenKey && stage>0){ lastGenKey=key; log('SYSTEM','Profile build — step '+stage+' of '+total+': '+label+'…','sys'); }
+    return;
+  }
+  if(state==='done'){
+    txt.textContent=st.message||'Profile ready — press START';
+    box.classList.add('on','done');
+    const c=candById(CAND.generating);
+    if(c&&st.dossierId){ c.dossierId=String(st.dossierId); }
+    CAND.generating=null; setBusy('btnGenerate',false); showNoProfile(null); lastGenKey='';
+    log('SYSTEM', st.message||'Profile ready — press START','sys');
+    setHint('Press START');
+    setTimeout(()=>{ if(!box.classList.contains('err')) box.classList.remove('on','done'); },6000);
+    return;
+  }
+  if(state==='error'){
+    box.classList.remove('on');
+    CAND.generating=null; setBusy('btnGenerate',false); lastGenKey='';
+    showErr('genErr', st.message||'Profile generation failed.');
+    log('SYSTEM','Profile generation stopped: '+(st.message||'unknown error'),'sys');
+  }
+}
+
+/* searchable rows: name · office + status chip */
+(function initCandidatePicker(){
+  const wrap=$('profilerPick'), inp=$('profilerSearch'), box=$('profilerResults');
+  if(!wrap||!inp||!box) return;
+  let active=-1, shown=[];
+  const close=()=>{ box.style.display='none'; active=-1; };
+  const pick=it=>{ close(); if(it.__new){ openNewCand(inp.value.trim()); return; } selectCandidate(it.id); };
+  const hi=(s,q)=>{ if(!q) return esc(s); const j=s.toLowerCase().indexOf(q); return j<0?esc(s):esc(s.slice(0,j))+'<b>'+esc(s.slice(j,j+q.length))+'</b>'+esc(s.slice(j+q.length)); };
+  const render=()=>{
+    const q=inp.value.trim().toLowerCase();
+    const sel=candById(CAND.selected);
+    const typedIsSelection=sel && inp.value.trim()===(sel.name+(sel.office?' · '+sel.office:''));
+    const qq=typedIsSelection?'':q;
+    shown=qq?CAND.items.filter(it=>(it.name+' '+(it.office||'')+' '+(it.party||'')).toLowerCase().includes(qq)):CAND.items.slice(0,50);
+    let html='';
+    if(!CAND.items.length) html='<div class="pr-empty">No candidates in your account yet — add one below.</div>';
+    else if(!shown.length) html='<div class="pr-empty">No candidates match “'+esc(inp.value.trim())+'”</div>';
+    else html=shown.map((it,i)=>
+      '<div class="pr-item'+(i===active?' active':'')+'" data-i="'+i+'">'+
+        '<span class="pr-main">'+hi(it.name,qq)+(it.office?' <span class="pr-office">· '+hi(it.office,qq)+'</span>':'')+'</span>'+
+        '<span class="pr-chip '+(it.dossierId?'ready':'none')+'">'+(it.dossierId?'Profile ready':'No profile yet')+'</span>'+
+      '</div>').join('');
+    html+='<div class="pr-item pr-new" data-new="1">+ New candidate'+(qq&&!shown.length?': “'+esc(inp.value.trim())+'”':'')+'</div>';
+    box.innerHTML=html; box.style.display='block';
+  };
+  inp.oninput=()=>{ active=-1; render(); };
+  inp.onfocus=()=>{ if(CAND.configured) render(); };
+  inp.onkeydown=e=>{
+    if(box.style.display==='none' && (e.key==='ArrowDown'||e.key==='Enter')){ render(); return; }
+    if(e.key==='ArrowDown'){ e.preventDefault(); active=Math.min(active+1,shown.length-1); render(); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); active=Math.max(active-1,0); render(); }
+    else if(e.key==='Enter'){ e.preventDefault(); if(shown.length===1) pick(shown[0]); else if(active>=0&&shown[active]) pick(shown[active]); else if(!shown.length) pick({__new:true}); }
+    else if(e.key==='Escape'){ close(); inp.blur(); }
+  };
+  box.onmousedown=e=>{             // mousedown beats the input's blur
+    const el=e.target.closest('.pr-item'); if(!el) return;
+    e.preventDefault();
+    if(el.dataset.new) pick({__new:true}); else pick(shown[+el.dataset.i]);
+  };
+  document.addEventListener('mousedown',e=>{ if(!wrap.contains(e.target)) close(); });
+  CAND.render=render;
+})();
+
+/* "+ New candidate" — name (+ optional notes) → host creates it, then generates */
+function openNewCand(prefill){
+  const f=$('newCand'); if(!f) return;
+  f.classList.add('on'); showErr('newCandErr','');
+  if(prefill && !$('newCandName').value) $('newCandName').value=prefill;
+  $('newCandName').focus();
+}
+$('btnNewCand').onclick=()=>openNewCand('');
+$('btnCancelNew').onclick=()=>{ $('newCand').classList.remove('on'); $('newCandName').value=''; $('newCandNotes').value=''; showErr('newCandErr',''); };
+$('newCandName').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); $('btnCreateCand').click(); } };
+$('newCandNotes').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); $('btnCreateCand').click(); } };
+$('btnCreateCand').onclick=async()=>{
+  const name=$('newCandName').value.trim(), notes=$('newCandNotes').value.trim();
+  if(!name){ showErr('newCandErr','Give them a name first.'); $('newCandName').focus(); return; }
+  if(typeof CAND.onCreate!=='function'){ showErr('newCandErr','Adding candidates is not available here.'); return; }
+  showErr('newCandErr',''); setBusy('btnCreateCand',true);
+  try{
+    await CAND.onCreate({name, notes});
+    $('newCand').classList.remove('on'); $('newCandName').value=''; $('newCandNotes').value='';
+  }catch(e){ showErr('newCandErr',(e&&e.message)||'Could not add this candidate.'); }
+  setBusy('btnCreateCand',false);
+};
+
+/* ---- (B) describe them → server builds a sparring file ---- */
+const PREP_TIMEOUT_MS=30000;
+let prepCtrl=null;
+async function buildFromNotes(){
+  const ta=$('dossierText'), text=ta.value.trim(), name=$('describeName').value.trim();
+  showErr('buildErr','');
+  if(!text){ showErr('buildErr','Paste a link or write a few lines about them first.'); ta.focus(); return; }
+  // A pasted markdown / JSON dossier already carries its own attack vectors —
+  // no server round-trip needed.
+  const local=parseDossier(name&&!/^(name|candidate)\s*:/im.test(text)?`Candidate: ${name}\n${text}`:text);
+  if(local && !local.empty && local.items.length>=3){ loadDossierText(name&&!/^(name|candidate)\s*:/im.test(text)?`Candidate: ${name}\n${text}`:text,'(pasted)'); return; }
+  if(!PROXY_CONFIG.enabled){ showErr('buildErr','Connect to Badger Board to build a file from notes — or paste a dossier with a Controversies section.'); return; }
+  if(prepCtrl){ try{ prepCtrl.abort(); }catch(_){} }
+  prepCtrl=new AbortController();
+  const ctrl=prepCtrl;
+  const to=setTimeout(()=>ctrl.abort(),PREP_TIMEOUT_MS);
+  setBusy('btnBuild',true);
+  const urls=(text.match(/https?:\/\/[^\s<>"'`)\]]+/gi)||[]).length;
+  const waiting=log('SYSTEM','Building your sparring file'+(urls?' — reading '+Math.min(urls,6)+' link'+(urls===1?'':'s')+'…':'…'),'sys');
+  try{
+    const r=await fetch(PROXY_CONFIG.prepUrl,{method:'POST', signal:ctrl.signal,
+      headers:{'Authorization':'Bearer '+PROXY_CONFIG.token,'content-type':'application/json'},
+      body:JSON.stringify({name:name||undefined, text})});
+    let j=null; try{ j=await r.json(); }catch(_){}
+    if(!r.ok){
+      const why=(j&&j.error)||('prep '+r.status);
+      const friendly={ 'prep-upstream-error':'The writer is unavailable right now — try again in a moment.', 'prep-timeout':'That took too long — try fewer links or a shorter description.', 'prep-unparseable':'Could not turn that into attack vectors — add a few more specifics and try again.', 'prep-not-configured':'Sparring-file builder is not configured on the server.' }[why]||why;
+      throw new Error(friendly);
+    }
+    if(!j || !Array.isArray(j.items) || !j.items.length) throw new Error('Nothing attackable came back — add more detail and try again.');
+    try{ waiting.remove(); }catch(_){}
+    const fetched=Array.isArray(j.fetched)?j.fetched:[];
+    const okCount=fetched.filter(f=>f.ok).length, bad=fetched.filter(f=>!f.ok);
+    PROXY_CONFIG.dossierMeta=null;             // not a Profiler dossier — report cards carry the name only
+    loadDossierText(JSON.stringify({name:j.name||name||'the candidate', office:j.office||null, controversies:j.items}),'(from your notes)');
+    log('SYSTEM',`Built ${j.items.length} attack vectors from your notes${okCount?' (+ '+okCount+' article'+(okCount===1?'':'s')+')':''}.`+(j.thin?' Thin file — add more detail for a tougher session.':''),'sys');
+    if(bad.length) log('SYSTEM','Could not read '+bad.length+' link'+(bad.length===1?'':'s')+': '+bad.map(b=>b.url.replace(/^https?:\/\//,'').slice(0,40)+(b.error?' ('+b.error+')':'')).join(', '),'sys');
+  }catch(e){
+    try{ waiting.remove(); }catch(_){}
+    if(ctrl!==prepCtrl) return;               // superseded by a newer build
+    const why=e&&e.name==='AbortError'?'That took too long — try fewer links or a shorter description.':(e&&e.message)||'Could not build the file.';
+    showErr('buildErr',why);
+    log('SYSTEM','Sparring file not built: '+why,'sys');
+  }finally{
+    clearTimeout(to);
+    if(ctrl===prepCtrl){ prepCtrl=null; setBusy('btnBuild',false); }
+  }
+}
+$('btnBuild').onclick=()=>buildFromNotes();
+$('dossierText').addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){ e.preventDefault(); buildFromNotes(); } });
 
 /* file intake: click-or-drop zone, with PDF text extraction via pdf.js */
 const dz=$('dropzone');
-function dzStatus(msg){ $('dzSub').textContent=msg||'.pdf · .txt · .md · .json — or click to browse'; }
+function dzStatus(msg){ $('dzMain').textContent=msg||'or drop a file'; $('dzSub').textContent=msg||'.pdf · .txt · .md · .json — or click to browse'; }
 async function extractPdfText(file){
   if(!window.pdfjsLib){
     await new Promise((res,rej)=>{
@@ -3136,6 +3481,7 @@ async function handleFile(f){
     $('dossierText').value=text.trim();
     loadDossierText(text,'(file: '+f.name+')');
     dzStatus('Loaded: '+f.name);
+    setTimeout(()=>dzStatus(''),4000);
   }catch(err){
     dzStatus('');
     log('SYSTEM','Could not read '+f.name+' — '+err.message,'sys');
@@ -3191,54 +3537,52 @@ window.ControversyPrep={
   /* alias — some host code calls connect() */
   connect(cfg){ return this.configureProxy(cfg); },
   get connected(){ return PROXY_CONFIG.enabled; },
-  /* host app: populate the in-dock Profiler dossier picker (searchable).
-     cfg = { items:[{id,title}], onPick:(id)=>void } */
+  /* host app: populate the "Pick a candidate" picker (searchable, with a
+     Profile ready / No profile yet chip per row).
+       cfg = { items:[{id,name,office?,party?,dossierId|null}],
+               onPick:(dossierId, candidateId)=>void,   // candidate HAS a profile → host loads it
+               onGenerate:(candidateId)=>Promise|void,   // host POSTs generate-dossier, then drives setGenerationStatus
+               onCreate:({name,notes})=>Promise,         // host creates the candidate, refreshes this picker, then generates
+               selectedId?: string }                      // preselect (deep link / just-created)
+     Re-calling with a new list keeps the current selection if it still exists. */
+  setCandidatePicker(cfg){
+    try{
+      if(!cfg||!Array.isArray(cfg.items)) return false;
+      CAND.items=cfg.items.map(c=>({ id:String(c.id), name:String(c.name||'Unnamed candidate'), office:c.office?String(c.office):'', party:c.party?String(c.party):'', dossierId:c.dossierId?String(c.dossierId):null }));
+      if(typeof cfg.onPick==='function') CAND.onPick=cfg.onPick;
+      if(typeof cfg.onGenerate==='function') CAND.onGenerate=cfg.onGenerate;
+      if(typeof cfg.onCreate==='function') CAND.onCreate=cfg.onCreate;
+      CAND.configured=true; CAND.legacy=false;
+      const sec=document.getElementById('secPick'); if(sec) sec.style.display='';
+      const explicit=cfg.selectedId!=null?String(cfg.selectedId):null;
+      const want=explicit||CAND.selected;
+      if(want && candById(want)){
+        // Re-feeding the list is silent (never re-triggers onPick for a profile
+        // that is already loaded); an explicit preselect of a profile-ready
+        // candidate with nothing loaded yet DOES load it (deep link).
+        selectCandidate(want,{silent:true});
+        if(explicit && candById(want).dossierId && !dossier) selectCandidate(want);
+      }else{ CAND.selected=null; showNoProfile(null); }
+      const box=document.getElementById('profilerResults');
+      if(box && box.style.display==='block' && CAND.render) CAND.render();
+      return true;
+    }catch(_){ return false; }
+  },
+  /* host app: drive the Generate-profile progress UI.
+       { state:'running'|'done'|'error'|'idle', stage?, totalStages?, message?, elapsedMs?, dossierId? } */
+  setGenerationStatus(st){ try{ renderGenStatus(st||{}); }catch(_){} },
+  /* host app: programmatic select (deep link). Returns false if unknown. */
+  selectCandidate(id){ try{ return selectCandidate(id); }catch(_){ return false; } },
+  /* legacy host API — dossier list → forwarded to the candidate picker as
+     "Profile ready" rows. A later setCandidatePicker call replaces it. */
   setDossierPicker(cfg){
     try{
-      const wrap=document.getElementById('profilerPick'),
-            inp=document.getElementById('profilerSearch'),
-            box=document.getElementById('profilerResults');
-      if(!wrap||!inp||!box||!cfg||!Array.isArray(cfg.items)||!cfg.items.length) return;
-      const items=cfg.items.map(d=>({id:String(d.id), title:String(d.label||d.title||'Untitled dossier')}));
-      const esc=t=>t.replace(/&/g,'&amp;').replace(/</g,'&lt;');
-      let active=-1, shown=[];
-      const close=()=>{ box.style.display='none'; active=-1; };
-      const pick=it=>{
-        inp.value=it.title; close();
-        log('SYSTEM','Pulling that profile from Badger Board…','sys');
-        if(typeof cfg.onPick==='function') cfg.onPick(it.id);
-      };
-      const render=()=>{
-        const q=inp.value.trim().toLowerCase();
-        shown=q?items.filter(it=>it.title.toLowerCase().includes(q)):items.slice(0,50);
-        if(!shown.length){ box.innerHTML='<div class="pr-empty">No dossiers match “'+esc(inp.value.trim())+'”</div>'; }
-        else{
-          box.innerHTML=shown.map((it,i)=>{
-            let label=esc(it.title);
-            if(q){
-              const j=it.title.toLowerCase().indexOf(q);
-              if(j>-1) label=esc(it.title.slice(0,j))+'<b>'+esc(it.title.slice(j,j+q.length))+'</b>'+esc(it.title.slice(j+q.length));
-            }
-            return '<div class="pr-item'+(i===active?' active':'')+'" data-i="'+i+'">'+label+'</div>';
-          }).join('');
-        }
-        box.style.display='block';
-      };
-      inp.oninput=()=>{ active=-1; render(); };
-      inp.onfocus=()=>render();
-      inp.onkeydown=e=>{
-        if(box.style.display==='none' && (e.key==='ArrowDown'||e.key==='Enter')){ render(); return; }
-        if(e.key==='ArrowDown'){ e.preventDefault(); active=Math.min(active+1,shown.length-1); render(); }
-        else if(e.key==='ArrowUp'){ e.preventDefault(); active=Math.max(active-1,0); render(); }
-        else if(e.key==='Enter'){ e.preventDefault(); if(shown.length===1) pick(shown[0]); else if(active>=0&&shown[active]) pick(shown[active]); }
-        else if(e.key==='Escape'){ close(); inp.blur(); }
-      };
-      box.onmousedown=e=>{             // mousedown beats the input's blur
-        const el=e.target.closest('.pr-item'); if(!el) return;
-        e.preventDefault(); pick(shown[+el.dataset.i]);
-      };
-      document.addEventListener('mousedown',e=>{ if(!wrap.contains(e.target)) close(); });
-      wrap.style.display='block';
+      if((CAND.configured&&!CAND.legacy)||!cfg||!Array.isArray(cfg.items)||!cfg.items.length) return;
+      this.setCandidatePicker({
+        items: cfg.items.map(d=>({ id:'dossier:'+d.id, name:String(d.label||d.title||'Untitled dossier'), office:'', dossierId:d.id })),
+        onPick: dossierId=>{ if(typeof cfg.onPick==='function') cfg.onPick(dossierId); }
+      });
+      CAND.legacy=true;               // a later setCandidatePicker still wins
     }catch(_){}
   },
   /* host app: tell the module which Profiler dossier is loaded (report cards) */

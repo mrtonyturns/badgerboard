@@ -41,6 +41,8 @@ const RATE_LIMITS = {
   'broadside-brain':             { perMinute: 40, perDay: 800 },
   'broadside-voice':             { perMinute: 40, perDay: 800 },
   'broadside-debrief':           { perMinute: 3,  perDay: 60  },
+  // "Just describe them" intake: up to 6 article fetches + one Haiku call per build
+  'broadside-prep':              { perMinute: 6,  perDay: 60  },
   // Sends real email from the platform domain — keep tight (audit #16)
   'invite-volunteer':            { perMinute: 5,  perDay: 50  },
   // Most expensive endpoint in the app (multi-Perplexity + multi-Opus per run) —

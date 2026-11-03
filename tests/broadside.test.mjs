@@ -6,6 +6,11 @@
 //   3. brain 502 → scripted fallback line, never silence
 //   4. Done Talking with interim-only transcript ends the turn
 //   5. configureProxy() is idempotent (one "connected" line, token updates silent)
+//   7-11. "WHO ARE YOU UP AGAINST?" intake: candidate picker (Profile ready / No
+//      profile yet chips, Generate → onGenerate, setGenerationStatus progress →
+//      loaded card), describe-them path (broadside-prep stub → N vectors; pasted
+//      markdown short-circuits without a fetch), "+ New candidate" → onCreate,
+//      START with nothing loaded → hint + picker focus, legacy setDossierPicker.
 // Prints "N passed, M failed" for scripts/run-unit-tests.mjs.
 import { readFileSync } from 'node:fs'
 import { JSDOM, VirtualConsole } from 'jsdom'
@@ -31,6 +36,8 @@ function boot(opts = {}) {
     brainStatus: opts.brainStatus || 200,
     streamMode: opts.streamMode || 'missing',   // 'missing' (404) | 'json' (200 non-SSE) | 'hang'
     brainText: opts.brainText || 'Look — fourteen missed votes, including the budget. Why should anyone believe the mailer?',
+    prepStatus: opts.prepStatus || 200,
+    prepBody: opts.prepBody || null,
   }
   const vc = new VirtualConsole()
   vc.on('warn', (...a) => state.warnings.push(a.join(' ')))
@@ -106,6 +113,11 @@ function boot(opts = {}) {
           return new window.Response(new window.Blob([new Uint8Array([0xff, 0xfb, 0x90, 0x00])], { type: 'audio/mpeg' }), { status: 200, headers: { 'content-type': 'audio/mpeg' } })
         }
         if (/broadside-debrief/.test(u)) return json(200, { debrief: '**Overall: B** — solid.\n\n**Fix first** — slow down.', saved: false })
+        if (/broadside-prep/.test(u)) {
+          await sleep(20)
+          if (state.prepStatus !== 200) return json(state.prepStatus, { error: state.prepBody?.error || 'prep-upstream-error' })
+          return json(200, state.prepBody || { name: 'Jane Roe', office: 'Mayor', fetched: [], items: [] })
+        }
         return json(404, {})
       }
       window.Response = Response; window.Blob = Blob
@@ -286,6 +298,234 @@ console.log('\n[6] getUserMedia rejected: mic meter failure does not break the s
   check('LISTENING with a recognizer attempted (SR independent of the meter)', $('sessionState').textContent === 'LISTENING' && state.recogs.some(x => x.started))
   check('no uncaught errors', !state.warnings.some(w => /jsdomError/.test(w)), state.warnings.filter(w => /jsdomError/.test(w)).join(' | '))
   $('btnEnd').click()
+}
+
+// ─── 7. Candidate picker: chips, Generate → onGenerate, progress → loaded card ─
+console.log('\n[7] WHO ARE YOU UP AGAINST? — candidate picker + generate flow')
+{
+  const t = boot({ streamMode: 'missing' })
+  const { $, window, texts, state } = t
+  connectTwice(window)
+  const cp = window.ControversyPrep
+  check('new host API present', ['setCandidatePicker', 'setGenerationStatus', 'selectCandidate', 'setDossierPicker'].every(k => typeof cp[k] === 'function'))
+  check('dock heading reads WHO ARE YOU UP AGAINST?', /WHO ARE YOU\s*UP AGAINST\?/.test(window.document.querySelector('.dock h2').textContent))
+  check('legacy Load button + loaded pill are gone', !$('btnLoad') && !$('loadedPill'))
+  check('picker section hidden until the host feeds it', $('secPick').style.display === 'none')
+
+  const calls = { pick: [], gen: [], create: [] }
+  cp.setCandidatePicker({
+    items: [
+      { id: 'c1', name: 'Jane Roe', office: 'Mayor · Wausau', party: 'NP', dossierId: 'd1' },
+      { id: 'c2', name: 'John Q. Public', office: 'County Board · District 4', party: 'R', dossierId: null },
+    ],
+    onPick: (d, c) => calls.pick.push([d, c]),
+    onGenerate: (id) => { calls.gen.push(id) },
+    onCreate: async (x) => { calls.create.push(x) },
+  })
+  check('picker section shown after setCandidatePicker', $('secPick').style.display !== 'none')
+  const inp = $('profilerSearch')
+  inp.dispatchEvent(new window.Event('focus'))
+  const rows = Array.from(window.document.querySelectorAll('#profilerResults .pr-item'))
+  check('two candidate rows + a "+ New candidate" row', rows.length === 3 && /New candidate/.test(rows[2].textContent), rows.map(r => r.textContent).join(' | '))
+  check('row shows name · office', /Jane Roe/.test(rows[0].textContent) && /Mayor · Wausau/.test(rows[0].textContent))
+  check('"Profile ready" chip on the candidate with a dossier', rows[0].querySelector('.pr-chip.ready')?.textContent === 'Profile ready')
+  check('"No profile yet" chip on the candidate without one', rows[1].querySelector('.pr-chip.none')?.textContent === 'No profile yet')
+
+  // type-to-search filters
+  inp.value = 'john'; inp.dispatchEvent(new window.Event('input'))
+  const filtered = Array.from(window.document.querySelectorAll('#profilerResults .pr-item:not(.pr-new)'))
+  check('search filters rows', filtered.length === 1 && /John/.test(filtered[0].textContent))
+
+  // pick the no-profile candidate (mousedown on the row)
+  filtered[0].dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }))
+  check('no-profile card appears with the name', $('noProfileCard').style.display === 'flex' && $('noProfileText').textContent === 'No profile for John Q. Public yet')
+  check('Generate button present and labelled', /Generate profile \(2–4 min\)/.test($('btnGenerate').textContent))
+  check('onPick NOT called for a candidate without a profile', calls.pick.length === 0)
+  $('btnGenerate').click()
+  check('Generate → onGenerate(candidateId)', calls.gen.length === 1 && calls.gen[0] === 'c2', JSON.stringify(calls.gen))
+  check('button goes busy while generating', $('btnGenerate').classList.contains('busy') && $('btnGenerate').disabled)
+  check('console logs that generation started', texts('sys').some(s => /Generating a profile for John Q\. Public/.test(s)))
+
+  cp.setGenerationStatus({ state: 'running', stage: 2, message: 'Searching press & filings…', elapsedMs: 72000 })
+  check('progress renders "<stage> — step 2 of 4 · 1:12"', $('genStatus').classList.contains('on') && $('genStatusText').textContent === 'Searching press & filings… — step 2 of 4 · 1:12', $('genStatusText').textContent)
+  check('progress also logged in the session console', texts('sys').some(s => /step 2 of 4: Searching press & filings/.test(s)))
+  cp.setGenerationStatus({ state: 'running', stage: 2, message: 'Searching press & filings…', elapsedMs: 77000 })
+  check('same stage re-render does not spam the console', texts('sys').filter(s => /step 2 of 4/.test(s)).length === 1)
+
+  // host loads the finished dossier, then signals done
+  cp.setDossierMeta({ id: 'd2', title: 'Political Profile — John Q. Public' })
+  cp.loadDossier({ name: 'John Q. Public', controversies: [
+    { topic: 'Missed votes', detail: 'Missed 14 of 31 county board votes in 2024.' },
+    { topic: 'Ethics fine', detail: 'Fined $2,500 by the state ethics board in 2023.' },
+    { topic: 'Highway flip-flop', detail: 'Opposed the expansion in 2022, voted for it in 2024 after a PAC donation.' },
+  ] })
+  cp.setGenerationStatus({ state: 'done', dossierId: 'd2', message: 'Profile ready — press START' })
+  check('dock collapses to the loaded card', $('loadedCard').classList.contains('on') && $('intakeBody').style.display === 'none')
+  check('loaded card reads "John Q. Public · 3 attack vectors"', $('loadedName').textContent === 'John Q. Public' && /^3 attack vectors/.test($('loadedMeta').textContent), $('loadedMeta').textContent)
+  check('"Profile ready — press START" logged', texts('sys').some(s => /Profile ready — press START/.test(s)))
+  check('hint says Press START', $('hint').textContent === 'Press START')
+  check('Generate button released', !$('btnGenerate').classList.contains('busy'))
+  check('dock lamp on', $('dockLamp').classList.contains('on'))
+
+  // Change → expand; pick the profile-ready candidate → onPick(dossierId)
+  $('btnChange').click()
+  check('Change re-expands the intake', !$('loadedCard').classList.contains('on') && $('intakeBody').style.display === '')
+  check('re-feeding the list keeps selection and stays silent', cp.setCandidatePicker({ items: [
+    { id: 'c1', name: 'Jane Roe', office: 'Mayor · Wausau', dossierId: 'd1' },
+    { id: 'c2', name: 'John Q. Public', office: 'County Board · District 4', dossierId: 'd2' },
+  ] }) === true && calls.pick.length === 0)
+  check('selectCandidate(profile-ready) → onPick(dossierId, candidateId)', cp.selectCandidate('c1') === true && calls.pick.length === 1 && calls.pick[0][0] === 'd1' && calls.pick[0][1] === 'c1', JSON.stringify(calls.pick))
+  check('no-profile card hidden for a profile-ready pick', $('noProfileCard').style.display === 'none')
+
+  // error state
+  cp.selectCandidate('c2')
+  cp.setGenerationStatus({ state: 'error', message: "You've used all 3 of your profile generations for this month." })
+  check('error renders inline and is logged', $('genErr').classList.contains('on') && /used all 3/.test($('genErr').textContent) && texts('sys').some(s => /Profile generation stopped/.test(s)))
+  check('no uncaught jsdom errors', !state.warnings.some(w => /jsdomError/.test(w)), state.warnings.filter(w => /jsdomError/.test(w)).join(' | '))
+}
+
+// ─── 8. Describe them → broadside-prep → N vectors ────────────────────────────
+console.log('\n[8] describe them: Build sparring file → broadside-prep → dossier loads')
+{
+  const prepBody = { name: 'Pat Doe', office: 'County Board', fetched: [{ url: 'https://news.example/story', ok: true, title: 'Story' }, { url: 'https://dead.example/x', ok: false, error: 'timed out' }], items: [
+    { topic: 'Missed votes', detail: 'Missed 14 of 31 votes in 2024 while claiming perfect attendance.' },
+    { topic: 'Ethics fine', detail: 'Fined $2,500 in 2023 for an undisclosed rental income.' },
+    { topic: 'Highway flip-flop', detail: 'Opposed the expansion, then voted for it after a PAC donation.' },
+    { topic: 'Family hire', detail: 'Hired a family member as treasurer at above-market pay.' },
+  ] }
+  const t = boot({ streamMode: 'missing', prepBody })
+  const { $, window, texts, state } = t
+  connectTwice(window)
+  check('describe placeholder is the plain-words prompt', /Paste links to news articles, or describe them in your own words/.test($('dossierText').placeholder))
+
+  $('btnBuild').click()
+  check('empty box → inline error, no fetch', $('buildErr').classList.contains('on') && !state.fetches.some(f => /broadside-prep/.test(f.url)))
+
+  $('describeName').value = 'Pat Doe'
+  $('dossierText').value = 'County board member. https://news.example/story and https://dead.example/x — she skipped a bunch of meetings and I think there was something about a fine.'
+  $('btnBuild').click()
+  check('button goes busy while building', $('btnBuild').classList.contains('busy'))
+  const built = await waitFor(() => texts('sys').find(s => /Built 4 attack vectors from your notes/.test(s)), 3000)
+  check('"Built N attack vectors from your notes (+ M articles)" logged', built === 'SYSTEMBuilt 4 attack vectors from your notes (+ 1 article).', built)
+  const prep = state.fetches.find(f => /broadside-prep/.test(f.url))
+  check('POSTs {name,text} with the proxy bearer token', !!prep && prep.init.method === 'POST' && /Bearer tok-/.test(prep.init.headers.Authorization) && JSON.parse(prep.init.body).name === 'Pat Doe' && /skipped a bunch/.test(JSON.parse(prep.init.body).text))
+  check('dossier loaded from the result', $('loadedCard').classList.contains('on') && $('loadedName').textContent === 'Pat Doe' && /^4 attack vectors/.test($('loadedMeta').textContent), $('loadedMeta').textContent)
+  check('unreadable link reported, not fatal', texts('sys').some(s => /Could not read 1 link: dead\.example\/x \(timed out\)/.test(s)))
+  check('button released, no inline error', !$('btnBuild').classList.contains('busy') && !$('buildErr').classList.contains('on'))
+  check('hint says Press START', $('hint').textContent === 'Press START')
+
+  // a session actually runs on the built file
+  $('btnStart').click()
+  await waitFor(() => $('btnSkipMic').style.display === 'inline-block', 2000)
+  $('btnSkipMic').click()
+  const armed = await waitFor(() => texts('sys').find(s => /Session armed — 4 attack vectors loaded for Pat Doe/.test(s)), 3000)
+  check('START arms a session on the built file', !!armed)
+  $('btnEnd').click()
+
+  // server failure → inline error, dossier untouched
+  state.prepStatus = 502
+  $('btnChange').click()
+  $('dossierText').value = 'Some other person, nothing much known.'
+  $('btnBuild').click()
+  await waitFor(() => $('buildErr').classList.contains('on'), 3000)
+  check('502 → friendly inline error', /writer is unavailable/.test($('buildErr').textContent), $('buildErr').textContent)
+  check('…and the previously built file is still loaded', $('loadedName').textContent === 'Pat Doe')
+  check('no uncaught jsdom errors', !state.warnings.some(w => /jsdomError/.test(w)), state.warnings.filter(w => /jsdomError/.test(w)).join(' | '))
+}
+
+// ─── 9. Pasted markdown with ≥3 items short-circuits (no server call) ─────────
+console.log('\n[9] pasted markdown/JSON dossier loads locally without calling broadside-prep')
+{
+  const t = boot({ streamMode: 'missing' })
+  const { $, window, texts, state } = t
+  connectTwice(window)
+  $('dossierText').value = `Candidate: Sam Smith
+## Controversies
+- Was sued in 2021 over unpaid contractor invoices totalling $40,000.
+- Missed 9 of 20 council votes in 2023, including the levy vote.
+- Criticized for a flip-flop on the downtown parking garage after a developer donation.`
+  $('btnBuild').click()
+  await sleep(60)
+  check('3 vectors parsed locally', $('loadedCard').classList.contains('on') && $('loadedName').textContent === 'Sam Smith' && /^3 attack vectors/.test($('loadedMeta').textContent), $('loadedMeta').textContent)
+  check('no broadside-prep fetch', !state.fetches.some(f => /broadside-prep/.test(f.url)))
+  check('"Info locked in" logged', texts('sys').some(s => /Info locked in: Sam Smith — 3 attack vectors/.test(s)))
+
+  // JSON works too
+  $('btnChange').click()
+  $('dossierText').value = JSON.stringify({ name: 'JSON Jones', controversies: [{ topic: 'a', detail: 'Detail one.' }, { topic: 'b', detail: 'Detail two.' }, { topic: 'c', detail: 'Detail three.' }] })
+  $('btnBuild').click()
+  await sleep(60)
+  check('pasted JSON loads locally', $('loadedName').textContent === 'JSON Jones' && !state.fetches.some(f => /broadside-prep/.test(f.url)))
+
+  // fewer than 3 local hits → goes to the server
+  $('btnChange').click()
+  $('dossierText').value = 'He was fined once, I think. Otherwise just a regular small-town guy who runs a hardware store.'
+  $('btnBuild').click()
+  await waitFor(() => state.fetches.some(f => /broadside-prep/.test(f.url)), 2000)
+  check('a plain description (<3 local hits) DOES call broadside-prep', state.fetches.some(f => /broadside-prep/.test(f.url)))
+  await sleep(100)
+}
+
+// ─── 10. "+ New candidate" → onCreate ────────────────────────────────────────
+console.log('\n[10] + New candidate → onCreate({name, notes})')
+{
+  const t = boot({ streamMode: 'missing' })
+  const { $, window } = t
+  connectTwice(window)
+  const cp = window.ControversyPrep
+  const created = []
+  cp.setCandidatePicker({ items: [], onCreate: async (x) => { created.push(x) } })
+  $('profilerSearch').dispatchEvent(new window.Event('focus'))
+  check('empty account → empty-state row + "+ New candidate"', /No candidates in your account yet/.test($('profilerResults').textContent) && /New candidate/.test($('profilerResults').textContent))
+  check('form hidden initially', !$('newCand').classList.contains('on'))
+  $('btnNewCand').click()
+  check('form opens', $('newCand').classList.contains('on'))
+  $('btnCreateCand').click()
+  await sleep(10)
+  check('empty name → inline error, no onCreate', $('newCandErr').classList.contains('on') && created.length === 0)
+  $('newCandName').value = 'New Person'
+  $('newCandNotes').value = 'Running for school board'
+  $('btnCreateCand').click()
+  await waitFor(() => created.length === 1, 1000)
+  check('onCreate called with {name, notes}', created.length === 1 && created[0].name === 'New Person' && created[0].notes === 'Running for school board', JSON.stringify(created))
+  await sleep(10)
+  check('form closes and clears on success', !$('newCand').classList.contains('on') && $('newCandName').value === '')
+
+  // rejection surfaces inline
+  cp.setCandidatePicker({ items: [], onCreate: async () => { throw new Error('Monthly limit reached.') } })
+  $('btnNewCand').click(); $('newCandName').value = 'Another'; $('btnCreateCand').click()
+  await waitFor(() => $('newCandErr').classList.contains('on'), 1000)
+  check('onCreate rejection shown inline', /Monthly limit reached/.test($('newCandErr').textContent), $('newCandErr').textContent)
+
+  // typing an unknown name + Enter opens the form prefilled
+  cp.setCandidatePicker({ items: [{ id: 'c1', name: 'Jane Roe', office: '', dossierId: 'd1' }] })
+  $('btnCancelNew').click()
+  const inp = $('profilerSearch')
+  inp.value = 'Nobody Here'; inp.dispatchEvent(new window.Event('input'))
+  inp.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  check('no match + Enter → new-candidate form prefilled', $('newCand').classList.contains('on') && $('newCandName').value === 'Nobody Here', $('newCandName').value)
+}
+
+// ─── 11. START with nothing loaded + legacy setDossierPicker ─────────────────
+console.log('\n[11] START with nothing loaded → hint + picker focus; legacy setDossierPicker still works')
+{
+  const t = boot({ streamMode: 'missing' })
+  const { $, window } = t
+  connectTwice(window)
+  const cp = window.ControversyPrep
+  $('btnStart').click()
+  check('hint: "Pick a candidate or describe them first"', $('hint').textContent === 'Pick a candidate or describe them first', $('hint').textContent)
+  check('focus lands on the describe box when no picker is configured', window.document.activeElement === $('dossierText'))
+
+  const picks = []
+  cp.setDossierPicker({ items: [{ id: 'd9', title: 'Political Profile — Old Style', label: 'Political Profile — Old Style · Jan 1, 2026' }], onPick: (id) => picks.push(id) })
+  $('profilerSearch').dispatchEvent(new window.Event('focus'))
+  const row = window.document.querySelector('#profilerResults .pr-item')
+  check('legacy items render as Profile-ready rows', !!row && /Old Style/.test(row.textContent) && row.querySelector('.pr-chip.ready'))
+  row.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }))
+  check('legacy onPick(id) fires with the dossier id', picks.length === 1 && picks[0] === 'd9', JSON.stringify(picks))
+  $('btnStart').click()
+  check('…and START with nothing loaded now focuses the picker', window.document.activeElement === $('profilerSearch'))
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)

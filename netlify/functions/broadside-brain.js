@@ -24,6 +24,8 @@ const MODELS = {
   quality: 'claude-sonnet-5',
   speed:   'claude-haiku-4-5-20251001',
 }
+// Shared with broadside-prep.js so the "speed" model id lives in one place.
+exports.MODELS = MODELS
 
 const HEADERS = {
   'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || 'https://badgerboardwi.com',

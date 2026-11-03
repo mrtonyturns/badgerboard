@@ -209,8 +209,10 @@ console.log('4 — wiring: the helpers are used where the audit found the drift'
     !/\.tbtn:disabled\{opacity:\.35/.test(bs))
   t('disabled transport buttons get a legible muted treatment',
     /\.tbtn:disabled\{[\s\S]{0,200}opacity:1/.test(bs))
-  t('the dossier placeholder ends in a single ellipsis',
-    /placeholder="Choose a dossier — type to search…"/.test(bs))
+  // Nov 2026: the dossier picker became the candidate picker ("WHO ARE YOU UP
+  // AGAINST?") — same guard, new placeholder.
+  t('the candidate picker placeholder ends in a single ellipsis',
+    /placeholder="Search your candidates…"/.test(bs) && !/……/.test(bs))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
