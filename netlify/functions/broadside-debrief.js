@@ -12,10 +12,14 @@
 
 const { json, requireBroadside, serviceClient } = require('./_shared')
 const { logAiUsage } = require('./_ai-usage')
+const { MODELS, claudeText, claudeFetch } = require('./_models')
 const { enforceRateLimit } = require('./_rate-limit')
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
-const MODEL = 'claude-sonnet-5'
+const MODEL = MODELS.CLAUDE_BALANCED
+// Report card: no up-front thinking (700-token budget, 30s function cap) but
+// medium effort so the critique stays substantive.
+const OPTS  = { thinking: { type: 'between_tools' }, output_config: { effort: 'medium' } }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const HEADERS = {
@@ -92,21 +96,12 @@ Write the report card now.`
   try {
     const ctrl = new AbortController()
     const to = setTimeout(() => ctrl.abort(), 20000)
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      signal: ctrl.signal,
-      headers: {
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ model: MODEL, max_tokens: 700, system: mode === 'attack' ? SYSTEM_ATTACK : SYSTEM, messages: [{ role: 'user', content: usr }] }),
-    })
+    const r = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, signal: ctrl.signal, body: { model: MODEL, max_tokens: 700, ...OPTS, system: mode === 'attack' ? SYSTEM_ATTACK : SYSTEM, messages: [{ role: 'user', content: usr }] } })
     clearTimeout(to)
     if (!r.ok) throw new Error('anthropic ' + r.status)
     const j = await r.json()
     logAiUsage({ userId: user.id, endpoint: 'broadside', provider: 'anthropic', model: MODEL, inputTokens: j?.usage?.input_tokens || 0, outputTokens: j?.usage?.output_tokens || 0 })
-    debrief = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
+    debrief = claudeText(j).trim()
     if (!debrief) throw new Error('empty debrief')
   } catch (e) {
     console.error('[broadside-debrief] LLM error:', e.message)

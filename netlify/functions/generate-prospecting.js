@@ -4,6 +4,7 @@
 
 const { enforceRateLimit } = require('./_rate-limit')
 const { logAiUsage } = require('./_ai-usage')
+const { MODELS, CLAUDE, claudeMaxTokens, claudeText, claudeFetch } = require('./_models')
 const { ADMIN_EMAILS } = require('./_config')
 const { PLAN_CONFIG } = require('../../src/lib/tiers.js')
 // Tier gating — prospecting is an Action-plan entitlement (tiers.js features.prospecting)
@@ -11,7 +12,7 @@ const PROSPECTING_PLANS = Object.keys(PLAN_CONFIG).filter(k => PLAN_CONFIG[k]?.f
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const SUPABASE_URL      = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
-const MODEL = 'claude-opus-4-8'
+const MODEL = MODELS.CLAUDE_QUALITY
 
 // ─── Sanitization & allowlists ────────────────────────────────────────────────
 function sanitize(val, maxLen = 200) {
@@ -193,20 +194,13 @@ Please return a JSON object with this exact structure:
 Sort candidates by priority (high first, then medium, then low). Include ALL candidates but prioritize the most strategic opportunities. Return ONLY the JSON object with no markdown or other text.`
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
+    const response = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, body: {
         model: MODEL,
-        max_tokens: 8000,
+        max_tokens: claudeMaxTokens(8000),
+        ...CLAUDE.QUALITY,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
-      }),
-    })
+      } })
 
     if (!response.ok) {
       const err = await response.json()
@@ -215,7 +209,7 @@ Sort candidates by priority (high first, then medium, then low). Include ALL can
 
     const data = await response.json()
     logAiUsage({ userId: caller?.id, endpoint: 'prospecting', provider: 'anthropic', model: MODEL, inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
-    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
+    const text = claudeText(data)
 
     if (!text) throw new Error('No content returned from Claude')
 

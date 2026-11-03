@@ -1292,7 +1292,9 @@ let activeSpeaker=null;
    The rule engine (director) decides WHEN and WHAT KIND of line to
    deliver; this LLM actor writes the actual words, tethered to the
    loaded info + running transcript. Falls back to templates with no key.
-   Actor models: Sonnet 5 (quality, default) / Haiku 4.5 (speed mode).
+   Actor models: Sonnet 5.5 (quality, default) / Haiku 5.5 (speed mode).
+   In the app the ids live server-side (netlify/functions/_models.js); the
+   ones here only matter for the standalone (bring-your-own-key) mode.
    ===================================================================== */
 /* Badger Board integration: when embedded in the app, LLM + TTS calls are
    proxied through Netlify functions so no API keys ever reach the browser.
@@ -1310,11 +1312,14 @@ const STREAM_FIRST_BYTE_MS=8000;       // streaming: give up fast if nothing arr
 const STREAM_TOTAL_MS=14000;
 const BRAIN_CONFIG={
   apiKey:'',
-  mode:'quality',                       // 'quality' (Sonnet 5) | 'speed' (Haiku 4.5)
-  models:{ quality:'claude-sonnet-5', speed:'claude-haiku-4-5-20251001' },
+  mode:'quality',                       // 'quality' (Sonnet 5.5) | 'speed' (Haiku 5.5)
+  models:{ quality:'claude-sonnet-5-5', speed:'claude-haiku-5-5' },
+  // 5.5 models think by default; a 120-token line can't spare the tokens
+  opts:{ quality:{thinking:{type:'between_tools'},output_config:{effort:'low'}}, speed:{thinking:{type:'disabled'}} },
+  get modelOpts(){ return this.opts[this.mode]||this.opts.quality; },
   get model(){ return this.models[this.mode]||this.models.quality; }
 };
-function brainLabel(){ return Brain.enabled ? (BRAIN_CONFIG.mode==='speed'?'HAIKU · SPEED':'SONNET 5') : 'TEMPLATES'; }
+function brainLabel(){ return Brain.enabled ? (BRAIN_CONFIG.mode==='speed'?'HAIKU · SPEED':'SONNET 5.5') : 'TEMPLATES'; }
 const transcript=[];   // in-session memory: [{who:'oppo'|'user', text}]
 function remember(who,text){ transcript.push({who,text}); if(transcript.length>24) transcript.shift(); }
 
@@ -1389,12 +1394,12 @@ Write your single spoken line now.`;
       const r=await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST', signal:ctrl.signal,
         headers:{'x-api-key':BRAIN_CONFIG.apiKey,'anthropic-version':'2023-06-01','content-type':'application/json','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({model:BRAIN_CONFIG.model,max_tokens:120,system:sys,messages:[{role:'user',content:usr}]})
+        body:JSON.stringify({model:BRAIN_CONFIG.model,max_tokens:120,...BRAIN_CONFIG.modelOpts,system:sys,messages:[{role:'user',content:usr}]})
       });
       clearTimeout(to);
       if(!r.ok) throw new Error('brain '+r.status);
       const j=await r.json();
-      let out=(j.content?.[0]?.text||'').trim().replace(/^["'“]|["'”]$/g,'').replace(/\s+/g,' ');
+      let out=((j.content||[]).filter(function(b){return b&&b.type==='text';}).map(function(b){return b.text;}).join(' ')).trim().replace(/^["'“]|["'”]$/g,'').replace(/\s+/g,' ');
       return out||null;
     }catch(e){ console.warn('Brain fell back to templates:',e.message); return null; }
   },

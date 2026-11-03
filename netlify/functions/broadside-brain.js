@@ -16,14 +16,19 @@
 
 const { json, requireBroadside } = require('./_shared')
 const { logAiUsage } = require('./_ai-usage')
+const { MODELS: TIERS, CLAUDE, claudeText, claudeFetch } = require('./_models')
 const { enforceRateLimit } = require('./_rate-limit')
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 
 const MODELS = {
-  quality: 'claude-sonnet-5',
-  speed:   'claude-haiku-4-5-20251001',
+  quality: TIERS.CLAUDE_BALANCED,   // Sonnet 5.5 — no up-front thinking, low effort (CLAUDE.BALANCED)
+  speed:   TIERS.CLAUDE_FAST,       // Haiku 5.5 — thinking off (CLAUDE.FAST)
 }
+// Per-mode request options: a 160-token spoken line can't afford thinking
+// tokens eating its budget, so both modes run without up-front thinking.
+const MODE_OPTS = { quality: CLAUDE.BALANCED, speed: CLAUDE.FAST }
+exports.MODE_OPTS = MODE_OPTS
 // Shared with broadside-prep.js so the "speed" model id lives in one place.
 exports.MODELS = MODELS
 
@@ -62,21 +67,13 @@ exports.handler = async (event) => {
     // 12s model budget: enough for Sonnet to finish a 34-word line without a
     // truncated sentence. netlify.toml raises this function's timeout to match.
     const to = setTimeout(() => ctrl.abort(), 12000)
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      signal: ctrl.signal,
-      headers: {
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
+    const r = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, signal: ctrl.signal, body: {
         model: MODELS[mode],
         max_tokens: 160,
+        ...MODE_OPTS[mode],
         system,
         messages: [{ role: 'user', content: usr }],
-      }),
-    })
+      } })
     clearTimeout(to)
     if (!r.ok) {
       const detail = await r.text().catch(() => '')
@@ -85,7 +82,7 @@ exports.handler = async (event) => {
     }
     const j = await r.json()
     logAiUsage({ userId: user.id, endpoint: 'broadside', provider: 'anthropic', model: MODELS[mode], inputTokens: j?.usage?.input_tokens || 0, outputTokens: j?.usage?.output_tokens || 0 })
-    const text = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join(' ').trim()
+    const text = claudeText(j).trim()
     if (!text) return json(502, { error: 'brain-empty' }, HEADERS)
     return json(200, { text }, HEADERS)
   } catch (e) {

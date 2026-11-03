@@ -3,11 +3,12 @@
 // The real work happens in generate-dossier-background.js (no timeout, saves to Supabase).
 
 const { enforceRateLimit } = require('./_rate-limit')
+const { MODELS, CLAUDE, claudeMaxTokens, claudeText, claudeFetch } = require('./_models')
 const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY // must be set in Netlify env vars
 const SUPABASE_URL       = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-const CLAUDE_MODEL       = 'claude-opus-4-8'
+const CLAUDE_MODEL       = MODELS.CLAUDE_QUALITY
 
 const { ADMIN_EMAILS } = require('./_config')
 
@@ -85,18 +86,14 @@ exports.handler = async (event) => {
         const ctrl = new AbortController()
         setTimeout(() => ctrl.abort(), 15000)
         const t0 = Date.now()
-        const r = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST', signal: ctrl.signal,
-          headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: 512, messages: [{ role: 'user', content: 'Say OK' }] }),
-        })
+        const r = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, signal: ctrl.signal, body: { model: CLAUDE_MODEL, max_tokens: claudeMaxTokens(512), ...CLAUDE.QUALITY, messages: [{ role: 'user', content: 'Say OK' }] } })
         const ms = Date.now() - t0
         if (!r.ok) {
           const errText = await r.text()
           return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: `API ${r.status}: ${errText.slice(0, 300)}`, ms }) }
         }
         const d = await r.json()
-        return { statusCode: 200, headers, body: JSON.stringify({ ok: true, reply: (d.content || []).filter(b => b.type === 'text').map(b => b.text).join(''), ms, model: CLAUDE_MODEL }) }
+        return { statusCode: 200, headers, body: JSON.stringify({ ok: true, reply: claudeText(d), ms, model: CLAUDE_MODEL }) }
       } catch (e) {
         return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: e.message }) }
       }

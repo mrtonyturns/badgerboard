@@ -111,7 +111,7 @@ Tests marked `[INT]` involve an external integration (Stripe, Claude, Perplexity
 **BE-2.1.2** `[CRITICAL]` `user_id` in the function is derived from the verified JWT, never from request body fields.  
 **BE-2.1.3** `[CRITICAL]` Claude's system prompt is built dynamically per user and includes only that user's data (plan, list count, volunteer count, error count).  
 **BE-2.1.4** `support-chat` uses `SUPABASE_ANON_KEY` (not `VITE_SUPABASE_ANON_KEY`) at runtime in the Netlify environment.  
-**BE-2.1.5** `[INT]` Claude is called with the `claude-haiku-4-5` model and a sensible `max_tokens` limit.  
+**BE-2.1.5** `[INT]` Claude is called with the `claude-haiku-5-5` model and a sensible `max_tokens` limit.  
 **BE-2.1.6** Response body never contains service role keys, other users' emails, or raw UUIDs from other records.  
 **BE-2.1.7** GET requests to `/.netlify/functions/support-chat` return HTTP 405.  
 **BE-2.1.8** Missing `messages` field in POST body returns HTTP 400.

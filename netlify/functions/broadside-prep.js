@@ -20,6 +20,7 @@
 
 const { json, requireBroadside } = require('./_shared')
 const { logAiUsage } = require('./_ai-usage')
+const { CLAUDE, claudeText, claudeFetch } = require('./_models')
 const { enforceRateLimit } = require('./_rate-limit')
 const { MODELS } = require('./broadside-brain')
 
@@ -233,28 +234,20 @@ async function askModel(userPrompt) {
   const ctrl = new AbortController()
   const to = setTimeout(() => ctrl.abort(), MODEL_TIMEOUT_MS)
   try {
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      signal: ctrl.signal,
-      headers: {
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
+    const r = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, signal: ctrl.signal, body: {
         model: MODEL,
         max_tokens: 1800,
+        ...CLAUDE.FAST,
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: userPrompt }],
-      }),
-    })
+      } })
     if (!r.ok) {
       const detail = await r.text().catch(() => '')
       console.error(`[broadside-prep] Anthropic ${r.status}: ${detail.slice(0, 300)}`)
       return { error: 'prep-upstream-error' }
     }
     const j = await r.json()
-    const text = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
+    const text = claudeText(j).trim()
     return { text, usage: j.usage || {} }
   } catch (e) {
     return { error: e && e.name === 'AbortError' ? 'prep-timeout' : 'prep-upstream-error' }

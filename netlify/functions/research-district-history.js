@@ -5,6 +5,7 @@
 
 import crypto from 'crypto'
 import { logAiUsage } from './_ai-usage.js'
+import { MODELS, CLAUDE, claudeMaxTokens, claudeText, claudeFetch } from './_models.js'
 import { enforceRateLimit } from './_rate-limit.js'
 import { ADMIN_EMAILS } from './_config.js'
 
@@ -38,7 +39,7 @@ export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method not allowed' }) }
 
   const ANTHROPIC_API_KEY    = process.env.ANTHROPIC_API_KEY
-  const CLAUDE_MODEL         = process.env.CLAUDE_RESEARCH_MODEL || 'claude-opus-4-8' // Opus 4.8 (per request)
+  const CLAUDE_MODEL         = process.env.CLAUDE_RESEARCH_MODEL || MODELS.CLAUDE_QUALITY
   const PERPLEXITY_API_KEY   = process.env.PERPLEXITY_API_KEY
   const SUPABASE_URL         = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
   const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -145,12 +146,10 @@ export const handler = async (event) => {
   }
 
   // ── Step 2: Claude structures the research into JSON ───────────────────────
-  const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const claudeRes = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, body: {
       model: CLAUDE_MODEL,
-      max_tokens: 8000,
+      max_tokens: claudeMaxTokens(8000),
+      ...CLAUDE.QUALITY,
       messages: [{
         role: 'user',
         content: `Convert this research about ${office_label} (${district_name}, Wisconsin) into strict JSON. Schema:
@@ -177,8 +176,7 @@ Rules: entries sorted newest first, one entry per general election for this seat
 RESEARCH:
 ${research}`,
       }],
-    }),
-  })
+    } })
   if (!claudeRes.ok) {
     const t = await claudeRes.text()
     return { statusCode: 502, headers, body: JSON.stringify({ error: 'Structuring failed', detail: t.slice(0, 200) }) }
@@ -187,7 +185,7 @@ ${research}`,
   logAiUsage({ userId: uid, endpoint: 'district-intel', provider: 'anthropic', model: CLAUDE_MODEL, inputTokens: cData?.usage?.input_tokens || 0, outputTokens: cData?.usage?.output_tokens || 0 })
   let history
   try {
-    const raw = (cData.content?.find(b => b.type === 'text')?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
+    const raw = claudeText(cData).replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
     history = JSON.parse(raw)
   } catch {
     return { statusCode: 502, headers, body: JSON.stringify({ error: 'Could not parse research output' }) }

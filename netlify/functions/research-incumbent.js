@@ -4,6 +4,7 @@
 
 import { enforceRateLimit } from './_rate-limit.js'
 import { logAiUsage } from './_ai-usage.js'
+import { MODELS, CLAUDE, claudeText, claudeFetch } from './_models.js'
 
 export const handler = async (event) => {
   const headers = {
@@ -105,19 +106,12 @@ ${content.slice(0, 14000)}
 
 Return ONLY the JSON array:`
 
-  const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+  const claudeRes = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, body: {
+      model: MODELS.CLAUDE_FAST,
+      ...CLAUDE.FAST,
       max_tokens: 3000,
       messages: [{ role: 'user', content: extractPrompt }],
-    }),
-  })
+    } })
 
   if (!claudeRes.ok) {
     const err = await claudeRes.text()
@@ -125,8 +119,8 @@ Return ONLY the JSON array:`
   }
 
   const claudeData = await claudeRes.json()
-  logAiUsage({ userId: uid, endpoint: 'district-intel', provider: 'anthropic', model: 'claude-opus-4-8', inputTokens: claudeData?.usage?.input_tokens || 0, outputTokens: claudeData?.usage?.output_tokens || 0 })
-  const rawText = claudeData.content?.[0]?.text?.trim() || '[]'
+  logAiUsage({ userId: uid, endpoint: 'district-intel', provider: 'anthropic', model: MODELS.CLAUDE_FAST, inputTokens: claudeData?.usage?.input_tokens || 0, outputTokens: claudeData?.usage?.output_tokens || 0 })
+  const rawText = claudeText(claudeData).trim() || '[]'
 
   let records
   try {

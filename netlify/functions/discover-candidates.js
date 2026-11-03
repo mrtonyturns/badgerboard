@@ -4,10 +4,11 @@
 
 const { enforceRateLimit } = require('./_rate-limit')
 const { logAiUsage } = require('./_ai-usage')
+const { MODELS, CLAUDE, claudeMaxTokens, claudeText, claudeFetch } = require('./_models')
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const SUPABASE_URL      = process.env.SUPABASE_URL  || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
-const MODEL = 'claude-opus-4-8'
+const MODEL = MODELS.CLAUDE_QUALITY
 
 const { ADMIN_EMAILS } = require('./_config')
 const CAMPAIGN_PLUS  = ['campaign', 'agency', 'c_active', 'c_campaign', 'a_monitor', 'a_active', 'a_campaign']
@@ -125,20 +126,13 @@ For each candidate you identify, provide a structured entry in this exact JSON f
 Include 5-15 candidates if available. If fewer are known, include only those with reasonable confidence. Mark any candidate you are uncertain about with confidence: "LOW".`
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
+    const response = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, body: {
         model: MODEL,
-        max_tokens: 7000,
+        max_tokens: claudeMaxTokens(7000),
+        ...CLAUDE.QUALITY,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
-      }),
-    })
+      } })
 
     if (!response.ok) {
       const err = await response.json()
@@ -147,7 +141,7 @@ Include 5-15 candidates if available. If fewer are known, include only those wit
 
     const data    = await response.json()
     logAiUsage({ userId: caller?.id, endpoint: 'prospecting', provider: 'anthropic', model: MODEL, inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
-    const rawText = ((data.content || []).filter(b => b.type === 'text').map(b => b.text).join('')) || '[]'
+    const rawText = claudeText(data) || '[]'
 
     let candidates = []
     try {

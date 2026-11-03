@@ -47,6 +47,7 @@
 
 const { enforceRateLimit } = require('./_rate-limit')
 const { logAiUsage } = require('./_ai-usage')
+const { MODELS, CLAUDE, claudeText, claudeFetch } = require('./_models')
 const { computeWinOdds, primaryMarginFromResults } = require('./_win-odds')
 const { ADMIN_EMAILS } = require('./_config')
 const { partyGroup } = require('./_party')
@@ -56,8 +57,8 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 const ANTHROPIC_API_KEY    = process.env.ANTHROPIC_API_KEY
 const PERPLEXITY_API_KEY   = process.env.PERPLEXITY_API_KEY
 
-const HAIKU_MODEL = 'claude-haiku-4-5-20251001'   // cheap classification/structuring (game plan §4b)
-const PPLX_MODEL  = 'sonar-pro'                   // extractor with citations
+const HAIKU_MODEL = MODELS.CLAUDE_FAST   // cheap classification/structuring (game plan §4b)
+const PPLX_MODEL  = MODELS.PPLX_PRO      // extractor with citations
 
 // ── Caps & budgets ───────────────────────────────────────────────────────────
 const MAX_PROSPECTS_PER_RUN = 10        // hard cap per invocation (spend control)
@@ -624,12 +625,9 @@ async function classifyAffiliation({ name, officeName, researchText, dbParty }, 
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), HAIKU_TIMEOUT_MS)
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      signal: ctrl.signal,
-      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const res = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, signal: ctrl.signal, body: {
         model: HAIKU_MODEL,
+        ...CLAUDE.FAST,
         max_tokens: 400,
         messages: [{
           role: 'user',
@@ -646,15 +644,14 @@ Rules:
 RESEARCH:
 ${String(researchText).slice(0, 6000)}`,
         }],
-      }),
-    })
+      } })
     if (!res.ok) return null
     const d = await res.json()
     logAiUsage({
       userId, endpoint: 'prospecting', provider: 'anthropic', model: HAIKU_MODEL,
       inputTokens: d?.usage?.input_tokens || 0, outputTokens: d?.usage?.output_tokens || 0,
     })
-    const raw = (d.content?.find(b => b.type === 'text')?.text || '')
+    const raw = claudeText(d)
       .replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
     const parsed = JSON.parse(raw)
     const label = sanitize(parsed?.label, 30)

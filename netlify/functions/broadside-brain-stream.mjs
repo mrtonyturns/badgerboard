@@ -17,10 +17,12 @@
 import config from './_config.js'
 import entitlements from './_entitlements.js'
 import aiUsage from './_ai-usage.js'
+import models from './_models.js'
 
 const { ADMIN_EMAILS } = config
 const { resolveEntitlement } = entitlements
 const { logAiUsage } = aiUsage
+const { MODELS: TIERS, CLAUDE, claudeFetch } = models
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
@@ -78,9 +80,10 @@ async function rateLimitFetch(userId) {
 }
 
 const MODELS = {
-  quality: 'claude-sonnet-5',
-  speed:   'claude-haiku-4-5-20251001',
+  quality: TIERS.CLAUDE_BALANCED,   // Sonnet 5.5 — mirrors broadside-brain.js
+  speed:   TIERS.CLAUDE_FAST,       // Haiku 5.5
 }
+const MODE_OPTS = { quality: CLAUDE.BALANCED, speed: CLAUDE.FAST }
 
 const CORS = {
   'Access-Control-Allow-Origin':  process.env.ALLOWED_ORIGIN || 'https://badgerboardwi.com',
@@ -116,21 +119,14 @@ export default async (req) => {
   if (system.length > 5000 || usr.length > 12000) return jsonRes(400, { error: 'Prompt too long' })
 
   try {
-    const upstream = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
+    const upstream = await claudeFetch({ apiKey: process.env.ANTHROPIC_API_KEY, body: {
         model: MODELS[mode],
         max_tokens: 160,
+        ...MODE_OPTS[mode],
         stream: true,
         system,
         messages: [{ role: 'user', content: usr }],
-      }),
-    })
+      } })
     if (!upstream.ok || !upstream.body) {
       const detail = await upstream.text().catch(() => '')
       console.error(`[broadside-brain-stream] Anthropic ${upstream.status}: ${detail.slice(0, 300)}`)

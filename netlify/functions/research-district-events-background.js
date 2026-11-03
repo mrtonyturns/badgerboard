@@ -30,13 +30,13 @@
 const COUNTY_SOURCES = require('./_county-sources.json')
 const { matchPartisanSignals } = require('./_partisan-signals.js')
 const { logAiUsage } = require('./_ai-usage.js')
+const { MODELS, CLAUDE, claudeMaxTokens, claudeText, claudeFetch } = require('./_models.js')
 const { ADMIN_EMAILS } = require('./_config.js')
 
-// Most of the codebase pins Opus via the literal 'claude-opus-4-8'
-// (generate-dossier*, discover-candidates, generate-campaign-intel, …); this
-// function and research-district-history share the CLAUDE_RESEARCH_MODEL
-// override with the same default.
-const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-8'
+// Every function takes its Claude tier from _models.js; this function and
+// research-district-history additionally honour the CLAUDE_RESEARCH_MODEL
+// env override.
+const DEFAULT_CLAUDE_MODEL = MODELS.CLAUDE_QUALITY
 
 // Progress stages, mirrored by PHASE_LABELS in src/pages/Events.jsx.
 const STAGE_SEARCH    = 1   // Perplexity sweep of public calendars & community sources
@@ -659,11 +659,9 @@ const handler = async (event) => {
 
     const callClaude = async ({ label, prompt, maxTokens, timeoutMs }) => {
       const data = await withTimeout(timeoutMs, async (signal) => {
-        const r = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST', signal,
-          headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }),
-        })
+        const r = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, signal, body: {
+          model: CLAUDE_MODEL, max_tokens: claudeMaxTokens(maxTokens), ...CLAUDE.QUALITY, messages: [{ role: 'user', content: prompt }],
+        } })
         if (!r.ok) {
           const detail = await r.text().catch(() => '')
           throw new Error(`HTTP ${r.status} ${detail.slice(0, 200)}`)
@@ -676,7 +674,7 @@ const handler = async (event) => {
         console.warn(`[district-events] anthropic ${label}: OUTPUT TRUNCATED at max_tokens=${maxTokens} — salvaging complete objects`)
       }
       logAiUsage({ userId: authUser.id, endpoint: 'events', provider: 'anthropic', model: CLAUDE_MODEL, inputTokens: usage.input_tokens || 0, outputTokens: usage.output_tokens || 0 })
-      return (data?.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
+      return claudeText(data)
     }
 
     const applyGuards = (list) => list

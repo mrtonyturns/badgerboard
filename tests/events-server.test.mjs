@@ -156,7 +156,7 @@ t('limiter reports which budget tripped', /'day'\)/.test(readFileSync(join(ROOT,
 console.log('8 — model id & ai-usage model names')
 {
   const src = readFileSync(join(ROOT, 'netlify/functions/research-district-events-background.js'), 'utf8')
-  eq('default model matches the codebase-wide Opus id', M.DEFAULT_CLAUDE_MODEL, 'claude-opus-4-8')
+  eq('default model is the shared QUALITY tier (Opus 5.5)', M.DEFAULT_CLAUDE_MODEL, 'claude-opus-5-5')
   t('usage is logged with the model actually called (no hardcoded sonar-pro)', !/model:\s*'sonar-pro',\s*inputTokens/.test(src))
   t('sonar-pro extra pass timeout raised to 45 s', /perplexityExtra:\s*45000/.test(src))
   t('structuring call timeout 150 s', /anthropicStructure:\s*150000/.test(src))

@@ -34,6 +34,7 @@
 //     survive coerceResearchOutput()'s allow-list.
 
 import { logAiUsage } from './_ai-usage.js'
+import { MODELS, CLAUDE, claudeText, claudeFetch } from './_models.js'
 import {
   coerceResearchOutput, researchOutputToRow, researchCacheKey,
   RETRYABLE_RESEARCH_STATUSES, cachedModelVersion,
@@ -46,7 +47,7 @@ const WAVE_SIZE        = 5                        // concurrent people per wave
 const CACHE_TTL_DAYS   = 90                       // reuse across searches/lists
 const DEADLINE_MS      = 13 * 60 * 1000           // stop before Netlify's 15 min
 const MODEL_VERSION    = 'sonar+haiku-4-5, v1'
-const HAIKU_MODEL      = 'claude-haiku-4-5-20251001'
+const HAIKU_MODEL      = MODELS.CLAUDE_FAST
 const USAGE_ENDPOINT   = 'recruit'
 
 // Progress stages, mirrored by PHASE_LABELS in src/pages/Recruit.jsx.
@@ -138,7 +139,7 @@ async function perplexity({ apiKey, model, prompt, maxTokens, userId }) {
 async function researchProspect(p, { PERPLEXITY_API_KEY, ANTHROPIC_API_KEY, userId }) {
   // 1. Cheap pass.
   let research = await perplexity({
-    apiKey: PERPLEXITY_API_KEY, model: 'sonar', prompt: personQuery(p),
+    apiKey: PERPLEXITY_API_KEY, model: MODELS.PPLX, prompt: personQuery(p),
     maxTokens: 900, userId,
   })
   if (!research) throw new Error('Research service did not respond')
@@ -147,7 +148,7 @@ async function researchProspect(p, { PERPLEXITY_API_KEY, ANTHROPIC_API_KEY, user
   //    tier rare (gameplan §3.2 step 2).
   if (research.citations.length < 2) {
     const pro = await perplexity({
-      apiKey: PERPLEXITY_API_KEY, model: 'sonar-pro',
+      apiKey: PERPLEXITY_API_KEY, model: MODELS.PPLX_PRO,
       prompt: `${personQuery(p)}\n\nA first search found little. Check local news archives, Wisconsin campaign-finance filings, municipal meeting minutes and civic-organization listings specifically. If this name is common in the area, say so and do not attribute another person's record to them.`,
       maxTokens: 1400, userId,
     })
@@ -157,11 +158,9 @@ async function researchProspect(p, { PERPLEXITY_API_KEY, ANTHROPIC_API_KEY, user
   }
 
   // 3. Structure with Haiku, fenced to the citations we actually retrieved.
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const res = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, body: {
       model: HAIKU_MODEL,
+      ...CLAUDE.FAST,
       max_tokens: 1200,
       system: STRUCTURING_SYSTEM_PROMPT,
       messages: [{
@@ -174,8 +173,7 @@ ${research.citations.length ? research.citations.map((u, i) => `${i + 1}. ${u}`)
 RESEARCH NOTES:
 ${research.text || '(no research returned)'}`,
       }],
-    }),
-  })
+    } })
   if (!res.ok) throw new Error('Structuring failed')
   const data = await res.json()
   logAiUsage({
@@ -185,7 +183,7 @@ ${research.text || '(no research returned)'}`,
 
   let parsed
   try {
-    const raw = (data.content?.find(b => b.type === 'text')?.text || '')
+    const raw = claudeText(data)
       .replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
     parsed = JSON.parse(raw)
   } catch {

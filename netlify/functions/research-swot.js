@@ -3,6 +3,7 @@
 
 import { enforceRateLimit } from './_rate-limit.js'
 import { logAiUsage } from './_ai-usage.js'
+import { MODELS, CLAUDE, claudeText, claudeFetch } from './_models.js'
 
 export const handler = async (event) => {
   const headers = {
@@ -72,19 +73,12 @@ DOSSIER:
 ${dossierContent.slice(0, 12000)}`
 
   try {
-    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+    const aiRes = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, body: {
+        model: MODELS.CLAUDE_FAST,
+        ...CLAUDE.FAST,
         max_tokens: 2000,
         messages: [{ role: 'user', content: prompt }],
-      }),
-    })
+      } })
 
     if (!aiRes.ok) {
       const err = await aiRes.json()
@@ -92,8 +86,8 @@ ${dossierContent.slice(0, 12000)}`
     }
 
     const data = await aiRes.json()
-    logAiUsage({ userId: uid, endpoint: 'campaign-intel', provider: 'anthropic', model: 'claude-opus-4-8', inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
-    let text = data.content?.[0]?.text || ''
+    logAiUsage({ userId: uid, endpoint: 'campaign-intel', provider: 'anthropic', model: MODELS.CLAUDE_FAST, inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
+    let text = claudeText(data)
 
     // Strip markdown code fences if present
     text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim()

@@ -7,7 +7,7 @@
 // Usage (ESM):  import { logAiUsage } from './_ai-usage.js'
 //
 //   logAiUsage({ userId, endpoint: 'profiler', provider: 'anthropic',
-//                model: 'claude-opus-4-8', inputTokens, outputTokens })
+//                model: 'claude-opus-5-5', inputTokens, outputTokens })
 //
 // endpoint = app section key (profiler | events | district-intel | broadside |
 // support-chat | prospecting | campaign-intel | ...) so the dashboard can show
@@ -19,15 +19,26 @@ const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY
 // $ per MILLION tokens; flat = fixed per-call fee (Perplexity search fees).
 // estimate = flat per-call cost used when the provider's usage block is
 // unavailable at the call site.
+// Claude 5.5 generation list prices (platform.claude.com/docs/en/about-claude/pricing,
+// 2026-11-02). Haiku 5.5 is $0.10/$0.50 up to a 100k-token prompt — every call
+// here is far below that. Older ids stay so historical rows still price.
 const PRICING = {
+  'claude-fable-5-1':          { in: 10.00, out: 50.00 },
+  'claude-opus-5-5':           { in: 4.00, out: 20.00 },
+  'claude-sonnet-5-5':         { in: 2.00, out: 10.00 },
+  'claude-haiku-5-5':          { in: 0.10, out: 0.50  },
   'claude-opus-4-8':           { in: 5.00, out: 25.00 },
+  'claude-opus':               { in: 5.00, out: 25.00 },
+  'claude-sonnet-5':           { in: 3.00, out: 15.00 },
   'claude-sonnet-4':           { in: 3.00, out: 15.00 },
   'claude-sonnet':             { in: 3.00, out: 15.00 },
   'claude-haiku-4-5-20251001': { in: 0.80, out: 4.00  },
   'claude-haiku':              { in: 0.80, out: 4.00  },
   'sonar-pro':                 { in: 3.00, out: 15.00, flat: 0.006 },
   'sonar':                     { in: 1.00, out: 1.00,  flat: 0.005 },
-  'grok-4.3':                  { in: 3.00, out: 15.00, flat: 0.02 },  // + server-side search tools
+  'grok-4.7':                  { in: 3.00, out: 15.00, flat: 0.02 },  // + server-side search tools
+  'grok-4.3':                  { in: 3.00, out: 15.00, flat: 0.02 },
+  'grok':                      { in: 3.00, out: 15.00, flat: 0.02 },
 }
 const DEFAULT_PRICE = { in: 3.00, out: 15.00 }
 

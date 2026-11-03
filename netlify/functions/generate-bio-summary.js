@@ -9,11 +9,12 @@
 
 const { enforceRateLimit } = require('./_rate-limit')
 const { logAiUsage } = require('./_ai-usage')
+const { MODELS, CLAUDE, claudeText, claudeFetch } = require('./_models')
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 const SUPABASE_URL      = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
 const SERVICE_KEY       = process.env.SUPABASE_SERVICE_ROLE_KEY
-const MODEL             = 'claude-haiku-4-5-20251001'
+const MODEL             = MODELS.CLAUDE_FAST
 
 const HEADERS = {
   'Access-Control-Allow-Origin':  '*',
@@ -124,20 +125,13 @@ If little is confirmed, be honest about that briefly — do not pad or speculate
 RESEARCH NOTES (Biography, Timeline, Political Record):
 ${cleaned || 'No biographical data found in dossier.'}`
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key':         ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-      'Content-Type':      'application/json',
-    },
-    body: JSON.stringify({
+  const res = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, body: {
       model:      MODEL,
+      ...CLAUDE.FAST,
       max_tokens: 600,
       system:     systemPrompt,
       messages:   [{ role: 'user', content: userPrompt }],
-    }),
-  })
+    } })
 
   if (!res.ok) {
     const err = await res.text()
@@ -146,7 +140,7 @@ ${cleaned || 'No biographical data found in dossier.'}`
 
   const data = await res.json()
   logAiUsage({ userId: null, endpoint: 'candidates', provider: 'anthropic', model: MODEL, inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
-  return data.content?.[0]?.text?.trim() || ''
+  return claudeText(data).trim() || ''
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────

@@ -30,12 +30,14 @@
 //   3. Claude synthesis to the strict snapshot JSON, validated server-side;
 //      one retry on malformed output.
 //
-// Providers are swappable via env: POLLING_GROK_MODEL (default grok-4.3),
+// Providers are swappable via env: POLLING_GROK_MODEL (default grok-4.7),
 // POLLING_RESEARCH_MODEL (Perplexity fallback model, default sonar-pro),
-// POLLING_SYNTH_MODEL (default claude-opus-4-8). All keys server-side only.
+// POLLING_SYNTH_MODEL (default claude-opus-5-5), POLLING_GEMINI_MODEL (default
+// gemini-3.8-flash). Defaults come from _models.js. All keys server-side only.
 
 import crypto from 'crypto'
 import { logAiUsage } from './_ai-usage.js'
+import { MODELS, CLAUDE, claudeMaxTokens, claudeText, claudeFetch } from './_models.js'
 
 const SUPABASE_URL   = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SERVICE_KEY    = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -44,10 +46,11 @@ const XAI_KEY        = process.env.XAI_API_KEY
 const ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY
 const GEMINI_KEY     = process.env.GEMINI_API_KEY
 
-const GROK_MODEL     = process.env.POLLING_GROK_MODEL     || 'grok-4.3'
-const RESEARCH_MODEL = process.env.POLLING_RESEARCH_MODEL || 'sonar-pro'   // Perplexity fallback
+const GROK_MODEL     = process.env.POLLING_GROK_MODEL     || MODELS.GROK
+const RESEARCH_MODEL = process.env.POLLING_RESEARCH_MODEL || MODELS.PPLX_PRO   // Perplexity fallback
 const SOCIAL_MODEL   = process.env.POLLING_SOCIAL_MODEL   || GROK_MODEL
-const SYNTH_MODEL    = process.env.POLLING_SYNTH_MODEL    || 'claude-opus-4-8'
+const SYNTH_MODEL    = process.env.POLLING_SYNTH_MODEL    || MODELS.CLAUDE_QUALITY
+const GEMINI_MODEL   = process.env.POLLING_GEMINI_MODEL   || MODELS.GEMINI
 
 const GLOBAL_USER = '00000000-0000-0000-0000-000000000000'
 
@@ -248,7 +251,7 @@ List the URL for every source you used.` }
 async function geminiResearch(district, requestedBy) {
   if (!GEMINI_KEY) return null
   const label = districtLabel(district)
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`, {
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -258,7 +261,7 @@ async function geminiResearch(district, requestedBy) {
   })
   if (!res.ok) throw new Error(`Gemini ${res.status}`)
   const d = await res.json()
-  logAiUsage({ userId: requestedBy, endpoint: 'polling', provider: 'gemini', model: 'gemini-2.5-flash', flatUsd: 0.01, estimated: true })
+  logAiUsage({ userId: requestedBy, endpoint: 'polling', provider: 'gemini', model: GEMINI_MODEL, flatUsd: 0.01, estimated: true })
   const text = d.candidates?.[0]?.content?.parts?.map(p => p.text).filter(Boolean).join('\n') || null
   const cites = (d.candidates?.[0]?.groundingMetadata?.groundingChunks || [])
     .map(c => ({ title: c.web?.title, url: c.web?.uri })).filter(c => c.url)
@@ -308,12 +311,10 @@ const SNAPSHOT_SCHEMA_NOTE = `{
 async function synthesize(district, research, social, requestedBy, intel, prior) {
   const label = districtLabel(district)
   const call = async () => {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const res = await claudeFetch({ apiKey: ANTHROPIC_KEY, body: {
         model: SYNTH_MODEL,
-        max_tokens: 2000,
+        max_tokens: claudeMaxTokens(2000),
+        ...CLAUDE.QUALITY,
         // NOTE: no `temperature` here — SYNTH_MODEL rejects it (400), which
         // silently failed both synthesis attempts. Run-to-run stability for
         // this call comes from PRIOR_NOTE anchoring instead.
@@ -345,12 +346,11 @@ ${(social || 'None available').slice(0, 4000)}${PRIOR_NOTE(prior)}${INTEL_NOTE(i
             { type: 'text', text: m.content },
           ] }
         }),
-      }),
-    })
+      } })
     if (!res.ok) throw new Error(`Anthropic ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`)
     const d = await res.json()
     logAiUsage({ userId: requestedBy, endpoint: 'polling', provider: 'anthropic', model: SYNTH_MODEL, inputTokens: d?.usage?.input_tokens || 0, outputTokens: d?.usage?.output_tokens || 0 })
-    return (d.content?.[0]?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
+    return claudeText(d).replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
   }
 
   // Validate; one retry on malformed output
@@ -479,14 +479,14 @@ ${(research?.text || '').slice(0, 11000)}${PRIOR_NOTE(prior)}${INTEL_NOTE(intel)
     text = d.choices?.[0]?.message?.content
   } else if (provider === 'gemini') {
     if (!GEMINI_KEY) return null
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`, {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: EST_TEMP } }),
     })
     if (!res.ok) throw new Error(`gemini ${res.status}`)
     const d = await res.json()
-    logAiUsage({ userId: requestedBy, endpoint: 'polling', provider: 'gemini', model: 'gemini-2.5-flash', flatUsd: 0.005, estimated: true })
+    logAiUsage({ userId: requestedBy, endpoint: 'polling', provider: 'gemini', model: GEMINI_MODEL, flatUsd: 0.005, estimated: true })
     text = d.candidates?.[0]?.content?.parts?.map(x => x.text).filter(Boolean).join('\n')
   }
   if (!text) return null
@@ -869,7 +869,7 @@ export const handler = async (event) => {
         .map(u => ({ title: u.replace(/^https?:\/\/(www\.)?/, '').split('/')[0], url: u }))
     }
 
-    const researchModelName = researchProvider === 'xai' ? GROK_MODEL : researchProvider === 'gemini' ? 'gemini-2.5-flash' : RESEARCH_MODEL
+    const researchModelName = researchProvider === 'xai' ? GROK_MODEL : researchProvider === 'gemini' ? GEMINI_MODEL : RESEARCH_MODEL
     const modelUsed = `${researchProvider}:${researchModelName} + anthropic:${SYNTH_MODEL}${ensembleUsed ? ` + vote-share median of ${validEstimates.length} models (${estLabel})` : ''}${prior ? ' + baseline-anchored' : ''}`
 
     // on_conflict=district is REQUIRED: merge-duplicates alone resolves on the

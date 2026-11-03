@@ -13,6 +13,7 @@
 
 import { enforceRateLimit } from './_rate-limit.js'
 import { logAiUsage } from './_ai-usage.js'
+import { MODELS, CLAUDE, claudeText, claudeFetch } from './_models.js'
 import { SUPPORT_KB } from './_support-kb.js'
 import { resolveEntitlement } from './_entitlements.js'
 import { corsHeaders } from './_config.js'
@@ -230,20 +231,13 @@ export const handler = async (event) => {
 
   // ── 4. Call Claude Haiku ───────────────────────────────────────────────────
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type':      'application/json',
-        'x-api-key':          ANTHROPIC_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model:      'claude-haiku-4-5-20251001',
+    const res = await claudeFetch({ apiKey: ANTHROPIC_KEY, body: {
+        model:      MODELS.CLAUDE_FAST,
+        ...CLAUDE.FAST,
         max_tokens: 600,
         system:     systemPrompt,
         messages:   cleanMessages,
-      }),
-    })
+      } })
 
     if (!res.ok) {
       const err = await res.text()
@@ -256,11 +250,11 @@ export const handler = async (event) => {
     }
 
     const data = await res.json()
-    logAiUsage({ userId: user.id, endpoint: 'support-chat', provider: 'anthropic', model: 'claude-haiku-4-5-20251001', inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
+    logAiUsage({ userId: user.id, endpoint: 'support-chat', provider: 'anthropic', model: MODELS.CLAUDE_FAST, inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
     return {
       statusCode: 200,
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reply: data?.content?.[0]?.text || '' }),
+      body: JSON.stringify({ reply: claudeText(data) }),
     }
   } catch (err) {
     console.error('[support-chat] Error:', err)

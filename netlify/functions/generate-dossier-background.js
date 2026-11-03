@@ -5,13 +5,15 @@
 
 const { enforceRateLimit } = require('./_rate-limit')
 const { logAiUsage } = require('./_ai-usage')
+const { MODELS, CLAUDE, claudeMaxTokens, claudeText, claudeFetch } = require('./_models')
 const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY // must be set in Netlify env vars
 const XAI_API_KEY        = process.env.XAI_API_KEY        // xAI Grok — x.ai console
 const SUPABASE_URL       = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-const CLAUDE_MODEL       = 'claude-opus-4-8' // Opus 4.8 — profile writer (per request)
-const GROK_MODEL         = 'grok-4.3'  // latest Grok — Responses API w/ server-side x_search + web_search (verified 2026-07)
+const CLAUDE_MODEL       = MODELS.CLAUDE_QUALITY  // profile writer
+const HAIKU_MODEL        = MODELS.CLAUDE_FAST     // verification pass + weekly digest
+const GROK_MODEL         = MODELS.GROK  // Responses API w/ server-side x_search + web_search
 
 // Admin emails — always treated as Agency tier
 const { ADMIN_EMAILS } = require('./_config')
@@ -465,11 +467,7 @@ async function callClaudeWithRetry(payload, maxRetries = 2) {
       await new Promise(r => setTimeout(r, delay))
     }
     try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
+      const response = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, body: payload })
       if (response.status === 529 && attempt < maxRetries) { lastErr = new Error('API overloaded (529)'); continue }
       return response
     } catch (e) { lastErr = e; if (attempt < maxRetries) continue; throw e }
@@ -525,23 +523,20 @@ async function runVerificationPass(content, candidateName) {
   const sec13 = content.match(/## SECTION 13[\s\S]*?(?=## SECTION 14|$)/i)?.[0] || ''
   if (!sec6 && !sec13) return null
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+    const res = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, body: {
+        model: HAIKU_MODEL,
         max_tokens: 800,
+        ...CLAUDE.FAST,
         messages: [{
           role: 'user',
           content: `Review these dossier sections for ${candidateName} and identify any claims that: (1) are stated as fact but lack a cited source, (2) could constitute defamation if wrong, (3) confuse this person with someone else, or (4) rely only on aggregator data rather than primary sources. Return ONLY a brief bullet list of specific flags, or "NO FLAGS" if all claims appear properly sourced and badged. Be concise.\n\n${sec6}\n\n${sec13}`
         }],
-      }),
-    })
+      } })
     if (!res.ok) return null
     const d = await res.json()
-    logAiUsage({ endpoint: 'profiler', provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
+    logAiUsage({ endpoint: 'profiler', provider: 'anthropic', model: HAIKU_MODEL,
       inputTokens: d?.usage?.input_tokens || 0, outputTokens: d?.usage?.output_tokens || 0 })
-    const flags = d.content?.[0]?.text?.trim()
+    const flags = claudeText(d).trim()
     return (flags && flags !== 'NO FLAGS') ? flags : null
   } catch (e) { console.error('[dossier-bg] Verification pass failed:', e.message); return null }
 }
@@ -767,12 +762,10 @@ async function buildWeeklyDigest(dossierId, candidateId, newContent, candidateNa
     if (!prev?.content) { console.log('[dossier-bg] digest skipped — no previous dossier'); return }
 
     const clip = (s, n) => String(s || '').slice(0, n)
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
+    const res = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, body: {
+        model: HAIKU_MODEL,
         max_tokens: 1500,
+        ...CLAUDE.FAST,
         messages: [{
           role: 'user',
           content: `Compare the PREVIOUS and NEW intelligence profiles for ${candidateName} and produce a week-in-review of genuinely NEW developments (items in NEW that are absent from PREVIOUS). Cover: news articles, podcast/radio/TV appearances, social media activity, controversies, polling, endorsements.
@@ -788,13 +781,12 @@ ${clip(prev.content, 14000)}
 NEW PROFILE:
 ${clip(newContent, 14000)}`
         }],
-      }),
-    })
+      } })
     if (!res.ok) { console.error('[dossier-bg] digest LLM failed:', res.status); return }
     const d = await res.json()
-    logAiUsage({ userId, endpoint: 'monitoring', provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
+    logAiUsage({ userId, endpoint: 'monitoring', provider: 'anthropic', model: HAIKU_MODEL,
       inputTokens: d?.usage?.input_tokens || 0, outputTokens: d?.usage?.output_tokens || 0 })
-    const raw = (d.content?.[0]?.text || '').replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
+    const raw = claudeText(d).replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
     let digest
     try { digest = JSON.parse(raw) } catch { console.error('[dossier-bg] digest JSON unparseable'); return }
     if (!digest || typeof digest.summary !== 'string') return
@@ -855,27 +847,19 @@ exports.handler = async (event) => {
         const ctrl = new AbortController()
         setTimeout(() => ctrl.abort(), 15000)
         const t0 = Date.now()
-        const r = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          signal: ctrl.signal,
-          headers: {
-            'x-api-key': ANTHROPIC_API_KEY,
-            'anthropic-version': '2023-06-01',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
+        const r = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, signal: ctrl.signal, body: {
             model: CLAUDE_MODEL,
-            max_tokens: 512,
+            max_tokens: claudeMaxTokens(512),
+            ...CLAUDE.QUALITY,
             messages: [{ role: 'user', content: 'Say OK' }],
-          }),
-        })
+          } })
         const ms = Date.now() - t0
         if (!r.ok) {
           const errText = await r.text()
           return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: `API ${r.status}: ${errText.slice(0, 300)}`, ms }) }
         }
         const d = await r.json()
-        return { statusCode: 200, headers, body: JSON.stringify({ ok: true, reply: (d.content || []).filter(b => b.type === 'text').map(b => b.text).join(''), ms, model: CLAUDE_MODEL }) }
+        return { statusCode: 200, headers, body: JSON.stringify({ ok: true, reply: claudeText(d), ms, model: CLAUDE_MODEL }) }
       } catch (e) {
         return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: e.message, hint: 'API call failed or timed out' }) }
       }
@@ -1701,7 +1685,8 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     const webSearchTools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }]
     const claudePayload = {
       model: CLAUDE_MODEL,
-      max_tokens: 16000,
+      max_tokens: claudeMaxTokens(16000),
+      ...CLAUDE.QUALITY,
       system: systemPrompt + webSearchDirective,
       tools: webSearchTools,
       messages: [{ role: 'user', content: userPrompt }],
@@ -1748,7 +1733,7 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     if (sectionCount < 10) {
       console.log('[dossier-bg] Too few sections — retrying with continuation prompt')
       const retryPrompt = `The dossier you just generated for ${safe.name} was cut short — only ${sectionCount} of 14 sections were included. Continue from where it was cut off and complete ALL missing sections. Start with the next missing ## SECTION header and continue through ## SECTION 14. Do not repeat sections already written.\n\nPrevious output (partial):\n${content.slice(-3000)}`
-      const retryResp = await callClaudeWithRetry({ model: CLAUDE_MODEL, max_tokens: 16000, system: systemPrompt + webSearchDirective, tools: webSearchTools, messages: [{ role: 'user', content: retryPrompt }] })
+      const retryResp = await callClaudeWithRetry({ model: CLAUDE_MODEL, max_tokens: claudeMaxTokens(16000), ...CLAUDE.QUALITY, system: systemPrompt + webSearchDirective, tools: webSearchTools, messages: [{ role: 'user', content: retryPrompt }] })
       if (retryResp.ok) {
         const retryData = await retryResp.json()
         logAiUsage({ userId: user_id, endpoint: 'profiler', provider: 'anthropic', model: CLAUDE_MODEL,
