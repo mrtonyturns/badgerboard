@@ -518,13 +518,19 @@ function applyScoutLiteGate(content) {
 
 // ─── v5 stages: identity resolver · writer loop · QA pass ────────────────────
 // Writer tool budget (also stated to the model in the prompt).
-const WRITER_BUDGET = { searches: 12, fetches: 10 }
-// How hard the writer thinks. Opus 5.5 defaults to medium; profiles are the
-// core paid product, so the default here is high. Override with PROFILE_EFFORT.
-const WRITER_EFFORT = ['low', 'medium', 'high', 'xhigh', 'max'].includes(process.env.PROFILE_EFFORT) ? process.env.PROFILE_EFFORT : 'high'
+const WRITER_BUDGET = { searches: 10, fetches: 8 }
+// How hard the writer thinks. Opus 5.5 defaults to medium. The first live
+// runs at high took 7 min (prospect) and 14 min (incumbent) end to end —
+// against a 15-minute function ceiling — so medium is the default; set
+// PROFILE_EFFORT=high to trade time for depth.
+const WRITER_EFFORT = ['low', 'medium', 'high', 'xhigh', 'max'].includes(process.env.PROFILE_EFFORT) ? process.env.PROFILE_EFFORT : 'medium'
 const WRITER_MAX_TOKENS = claudeMaxTokens(24000)   // 48k: the report plus thinking
 const WRITER_CONTINUATIONS = 4                      // pause_turn resumes per call
 const WRITER_CALL_TIMEOUT_MS = 10 * 60 * 1000       // one API call; the function has 15 min
+const FUNCTION_BUDGET_MS = 14 * 60 * 1000           // leave a minute under Netlify's 15-min ceiling
+const QA_MIN_REMAINING_MS = 100 * 1000               // skip QA rather than die mid-pass
+// Time left in this invocation, given when the handler started.
+function remainingMs(startedAt) { return Math.max(0, startedAt + FUNCTION_BUDGET_MS - Date.now()) }
 
 // Real cost metering for a Claude response, including the per-search fee for
 // server-side web_search ($10 / 1,000 searches). web_fetch has no fee beyond
@@ -609,7 +615,7 @@ function refineModeFromIdentity({ mode, officeLine, safe, card }) {
 // continued through pause_turn, retried on 529, and downgraded to
 // search-only if the org has web fetch turned off (400 naming web_fetch).
 // Resolves { data, text, usedTools }; throws on a hard failure.
-async function runWriter({ userPrompt, userId, maxContinuations = WRITER_CONTINUATIONS }) {
+async function runWriter({ userPrompt, userId, maxContinuations = WRITER_CONTINUATIONS, deadlineMs = Infinity }) {
   let tools = WRITER_TOOLS
   const messages = [{ role: 'user', content: userPrompt }]
   const body = () => ({
@@ -625,7 +631,11 @@ async function runWriter({ userPrompt, userId, maxContinuations = WRITER_CONTINU
   const textParts = []   // a paused turn may already hold part of the report
   for (let hop = 0; hop <= maxContinuations; hop++) {
     const ctrl = new AbortController()
-    const to = setTimeout(() => ctrl.abort(), WRITER_CALL_TIMEOUT_MS)
+    // Never let one call run past the function's own deadline (minus ~70s for
+    // save + QA); a request that would start with under a minute is pointless.
+    const budget = Math.min(WRITER_CALL_TIMEOUT_MS, deadlineMs - Date.now() - 70000)
+    if (budget < 60000) throw new Error('out of time before the writer call')
+    const to = setTimeout(() => ctrl.abort(), budget)
     let response
     try {
       response = await callClaudeWithRetry(body(), 2, ctrl.signal)
@@ -971,6 +981,7 @@ ${clip(newContent, 14000)}`
 }
 
 exports.handler = async (event) => {
+  const handlerStartedAt = Date.now()
   const headers = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
@@ -1289,8 +1300,8 @@ exports.handler = async (event) => {
     // Server tools run inside the API's own loop; a long turn can come back
     // with stop_reason "pause_turn", which we continue (same tools, content
     // passed back as-is) a bounded number of times.
-    const { text: writerText, usedTools } = await runWriter({ userPrompt, userId: user_id })
-    console.log(`[dossier-bg] Claude responded in ${Date.now() - startTime}ms (tools=${usedTools.map(t => t.name).join('+')})`)
+    const { text: writerText, usedTools } = await runWriter({ userPrompt, userId: user_id, deadlineMs: handlerStartedAt + FUNCTION_BUDGET_MS })
+    console.log(`[dossier-bg] Claude responded in ${Date.now() - startTime}ms (tools=${usedTools.map(t => t.name).join('+')}, ${Math.round(remainingMs(handlerStartedAt) / 1000)}s left in the function)`)
     reportStage(body.candidate_id, 4)                       // Verifying claims
     let content = writerText
     // Strip any AI reasoning/thinking tags that should never be stored or shown to users
@@ -1320,7 +1331,7 @@ exports.handler = async (event) => {
       console.log('[dossier-bg] Too few sections — retrying with continuation prompt')
       const retryPrompt = `The profile you just generated for ${safe.name} was cut short — only ${sectionCount} of 14 sections were included. Continue from where it was cut off and complete ALL missing sections. Start with the next missing ## SECTION header and continue through ## SECTION 14, then the CANDIDATE_UPDATES block. Do not repeat sections already written.\n\nPrevious output (partial):\n${content.slice(-3000)}`
       try {
-        const { text: continuation } = await runWriter({ userPrompt: retryPrompt, userId: user_id, maxContinuations: 1 })
+        const { text: continuation } = await runWriter({ userPrompt: retryPrompt, userId: user_id, maxContinuations: 1, deadlineMs: handlerStartedAt + FUNCTION_BUDGET_MS })
         if (continuation) {
           const { content: contStripped, updates: contUpdates } = parseCandidateUpdates(continuation)
           content = content + '\n\n' + contStripped
@@ -1331,7 +1342,9 @@ exports.handler = async (event) => {
     }
 
     // ─── QA pass: Sonnet 5.5 reviews the whole profile ───────────────────────
-    const verificationFlags = await runQaPass({ content, candidateName: safe.name, officeLine: writerOfficeLine, identity: identityCard, userId: user_id })
+    const verificationFlags = remainingMs(handlerStartedAt) > QA_MIN_REMAINING_MS
+      ? await runQaPass({ content, candidateName: safe.name, officeLine: writerOfficeLine, identity: identityCard, userId: user_id })
+      : (console.warn(`[dossier-bg] QA pass skipped — ${Math.round(remainingMs(handlerStartedAt) / 1000)}s left`), null)
     if (verificationFlags) {
       console.log(`[dossier-bg] QA flags: ${verificationFlags.count}`)
       content = content + `\n\n---\n## ⚠️ VERIFICATION FLAGS (AI Quality Check)\n*The following potential issues were flagged by a secondary review pass. Verify before use.*\n\n${verificationFlags.markdown}`
@@ -1471,4 +1484,4 @@ exports.handler = async (event) => {
 }
 
 // Test seam for the v5 pipeline helpers (pure functions + constants only).
-exports._v5 = { parseJsonObject, refineModeFromIdentity, parseCandidateUpdates, WRITER_BUDGET, WRITER_EFFORT, WRITER_MAX_TOKENS, WRITER_CONTINUATIONS, runWriter, runQaPass, resolveIdentity }
+exports._v5 = { parseJsonObject, remainingMs, FUNCTION_BUDGET_MS, refineModeFromIdentity, parseCandidateUpdates, WRITER_BUDGET, WRITER_EFFORT, WRITER_MAX_TOKENS, WRITER_CONTINUATIONS, runWriter, runQaPass, resolveIdentity }

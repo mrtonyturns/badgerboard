@@ -44,9 +44,9 @@ console.log('\n[1] writer system prompt — contract with the report parser')
 console.log('\n[2] writer tools')
 {
   check('web_search + web_fetch, basic (direct, ZDR-eligible) versions', P.WRITER_TOOLS.map(t => t.type).join() === 'web_search_20250305,web_fetch_20250910')
-  check('budgets: 12 searches, 10 fetches, fetch content capped', P.WRITER_TOOLS[0].max_uses === 12 && P.WRITER_TOOLS[1].max_uses === 10 && P.WRITER_TOOLS[1].max_content_tokens === 12000)
+  check('budgets: 10 searches, 8 fetches, fetch content capped at 8k', P.WRITER_TOOLS[0].max_uses === 10 && P.WRITER_TOOLS[1].max_uses === 8 && P.WRITER_TOOLS[1].max_content_tokens === 8000)
   check('search-only fallback is just web_search', P.WRITER_TOOLS_SEARCH_ONLY.length === 1 && P.WRITER_TOOLS_SEARCH_ONLY[0].name === 'web_search')
-  check('pipeline budget matches the tools', G._v5.WRITER_BUDGET.searches === 12 && G._v5.WRITER_BUDGET.fetches === 10)
+  check('pipeline budget matches the tools', G._v5.WRITER_BUDGET.searches === 10 && G._v5.WRITER_BUDGET.fetches === 8)
 }
 
 console.log('\n[3] section template')
@@ -72,8 +72,8 @@ console.log('\n[3] section template')
 
 console.log('\n[4] writer user prompt')
 {
-  const u = P.buildWriterUserPrompt({ safe, officeLine, mode: 'newly_declared', canViewSection6: true, today: 'November 2, 2026', identity, packets: { news: '### [A](https://a)\n**WSAW** · Jan 1, 2026', official: 'FEC: none', grok: '[@janedoe · Oct 1] "hi"' }, teamNotes: 'TEAM NOTES: watch the clinic story', budget: { searches: 12, fetches: 10 } })
-  check('states today and the tool budget', u.includes('Today is November 2, 2026') && u.includes('web_search up to 12, web_fetch up to 10'))
+  const u = P.buildWriterUserPrompt({ safe, officeLine, mode: 'newly_declared', canViewSection6: true, today: 'November 2, 2026', identity, packets: { news: '### [A](https://a)\n**WSAW** · Jan 1, 2026', official: 'FEC: none', grok: '[@janedoe · Oct 1] "hi"' }, teamNotes: 'TEAM NOTES: watch the clinic story', budget: { searches: 10, fetches: 8 } })
+  check('states today and the tool budget', u.includes('Today is November 2, 2026') && u.includes('web_search up to 10, web_fetch up to 8'))
   check('mode directive for newly declared', /RESEARCH MODE: NEWLY DECLARED candidate for State Assembly \(District 87\)/.test(u))
   check('candidate record with party/status marked as claims', /Party on file: Republican/.test(u) && /Status on file: declared/.test(u))
   check('user identity context is elevated', /USER-PROVIDED IDENTITY CONTEXT/.test(u) && u.includes('the dentist in Mosinee'))
@@ -220,8 +220,15 @@ console.log('\n[9] pipeline wiring (source checks)')
   check('old Haiku verification pass is gone; QA pass appends VERIFICATION FLAGS', !/runVerificationPass/.test(SRC) && /runQaPass\(\{ content/.test(SRC) && /VERIFICATION FLAGS \(AI Quality Check\)/.test(SRC))
   check('leak guard keeps the PROFILE SNAPSHOT', /content\.search\(\/\^##\\s\*PROFILE SNAPSHOT\/im\)/.test(SRC))
   check('web search fees are metered', /web_search_requests\) \|\| 0/.test(SRC) && /flatUsd: searches \* 0\.01/.test(SRC))
-  check('writer effort configurable via PROFILE_EFFORT, default high', /process\.env\.PROFILE_EFFORT/.test(SRC) && G._v5.WRITER_EFFORT === 'high')
+  check('writer effort configurable via PROFILE_EFFORT, default medium (14-min incumbent run at high)', /process\.env\.PROFILE_EFFORT/.test(SRC) && G._v5.WRITER_EFFORT === 'medium')
   check('writer call has its own 10-minute timeout inside the 15-minute function', /WRITER_CALL_TIMEOUT_MS = 10 \* 60 \* 1000/.test(SRC))
+  check('writer + QA respect the function deadline', /deadlineMs: handlerStartedAt \+ FUNCTION_BUDGET_MS/.test(SRC) && /remainingMs\(handlerStartedAt\) > QA_MIN_REMAINING_MS/.test(SRC) && G._v5.FUNCTION_BUDGET_MS === 14 * 60 * 1000)
+  check('remainingMs counts down from the handler start', G._v5.remainingMs(Date.now()) > 13 * 60 * 1000 && G._v5.remainingMs(Date.now() - 20 * 60 * 1000) === 0)
+  {
+    let threw = ''
+    try { await G._v5.runWriter({ userPrompt: 'x', userId: 'u', deadlineMs: Date.now() + 30000 }) } catch (e) { threw = e.message }
+    check('a writer call that cannot get a minute before the deadline refuses instead of starting', /out of time/.test(threw))
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)

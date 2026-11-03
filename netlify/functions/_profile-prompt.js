@@ -155,10 +155,12 @@ OUTPUT FORMAT — the app parses this; follow it exactly
 - Nothing before "## PROFILE SNAPSHOT": no greeting, no "I searched for…", no summary of your process. Material discrepancies with the request (wrong office, already elected, withdrawn, identity doubt) go ONLY in the CANDIDATE_UPDATES research_note.`
 
 // Tool budgets for the writer. Searches are billed per call; fetches cost
-// only the tokens they return (capped by max_content_tokens).
+// only the tokens they return (capped by max_content_tokens). Sized so an
+// incumbent profile at medium effort finishes in ~5–7 minutes — the whole
+// background function has a 15-minute ceiling (first live runs: 7 and 14 min).
 const WRITER_TOOLS = [
-  { type: 'web_search_20250305', name: 'web_search', max_uses: 12 },
-  { type: 'web_fetch_20250910', name: 'web_fetch', max_uses: 10, max_content_tokens: 12000 },
+  { type: 'web_search_20250305', name: 'web_search', max_uses: 10 },
+  { type: 'web_fetch_20250910', name: 'web_fetch', max_uses: 8, max_content_tokens: 8000 },
 ]
 // Fallback when the org has web fetch turned off (the API answers 400).
 const WRITER_TOOLS_SEARCH_ONLY = [WRITER_TOOLS[0]]
@@ -413,7 +415,7 @@ Rules: verified_party only with independent verification (CFIS, donation platfor
  * @param {string} [o.teamNotes]       formatted team-notes block (may be '')
  * @param {object} [o.budget]          { searches, fetches }
  */
-function buildWriterUserPrompt({ safe, officeLine, mode, canViewSection6, today, identity, packets = {}, teamNotes = '', budget = { searches: 12, fetches: 10 } }) {
+function buildWriterUserPrompt({ safe, officeLine, mode, canViewSection6, today, identity, packets = {}, teamNotes = '', budget = { searches: 10, fetches: 8 } }) {
   const dir = (MODE_DIRECTIVES[mode] || MODE_DIRECTIVES.challenger)(officeLine, safe.status)
 
   const record = [
