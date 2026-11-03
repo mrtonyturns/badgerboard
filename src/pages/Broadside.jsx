@@ -169,7 +169,7 @@ export default function Broadside() {
     generatingRef.current = cid
     const startedAt = Date.now()
     const status = (st) => { if (aliveRef.current) cpOf(iframeRef)?.setGenerationStatus?.({ candidateId: cid, ...st, elapsedMs: Date.now() - startedAt }) }
-    const progressLog = (stage) => `${STAGE_LABELS[Math.min(Math.max(stage, 1), STAGE_LABELS.length) - 1]}…`
+    const progressLog = (stage) => `${String(STAGE_LABELS[Math.min(Math.max(stage, 1), STAGE_LABELS.length) - 1]).replace(/[…./]+$/, '')}…`
 
     status({ state: 'running', stage: 1, message: progressLog(1) })
     startGeneration(candidate.name, cid)

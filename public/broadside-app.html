@@ -3284,6 +3284,7 @@ function selectCandidate(id,opts){
 }
 function requestGenerate(id){
   const c=candById(id); if(!c) return;
+  if(c.dossierId){ selectCandidate(c.id); return; }   // already has a profile: load it, never regenerate from here
   if(CAND.generating) return;                 // one run at a time per dock
   showErr('genErr','');
   if(typeof CAND.onGenerate!=='function'){ showErr('genErr','Profile generation is not available here.'); return; }
