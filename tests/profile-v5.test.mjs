@@ -179,6 +179,40 @@ console.log('\n[8] identity stage + QA pass (mocked)')
   globalThis.fetch = realFetch
 }
 
+console.log('\n[8b] live-run fixes — CANDIDATE_UPDATES stripping, mode refinement, prompt guidance')
+{
+  const pcu = G._v5.parseCandidateUpdates
+  const body = '## SECTION 14: VERIFICATION\n**[HIGH]**\nx\n\n---\n⚠️ DOSSIER FOOTER:\n*footer*'
+  const json = '{ "verified_party": "Republican", "party_confidence": "KNOWN", "verified_status": null, "status_notes": null, "research_note": {"finding": "f", "evidence": "e", "suggested_status": "general"} }'
+  const bare = pcu(`${body}\nCANDIDATE_UPDATES:\n${json}`)
+  check('bare CANDIDATE_UPDATES (no header, no fence) is parsed', bare.updates?.verified_party === 'Republican' && bare.updates.research_note.suggested_status === 'general')
+  check('…and stripped from the stored report (the live run leaked it)', !/CANDIDATE_UPDATES/.test(bare.content) && bare.content.endsWith('*footer*'))
+  const fenced = pcu(`${body}\n\n---\n## CANDIDATE UPDATES (output AFTER Section 14)\n\nCANDIDATE_UPDATES:\n\`\`\`json\n${json}\n\`\`\``)
+  check('headed + fenced form is parsed and stripped', fenced.updates?.party_confidence === 'KNOWN' && !/CANDIDATE UPDATES/i.test(fenced.content) && fenced.content.endsWith('*footer*'))
+  check('no block → content untouched', pcu(body).updates === null && pcu(body).content === body)
+
+  const rm = G._v5.refineModeFromIdentity
+  const noOffice = { name: 'B', status: 'elected' }
+  const card = { resolved: true, confidence: 'high', suggested_mode: 'incumbent', office_or_role: 'State Representative, 87th Assembly District' }
+  const r1 = rm({ mode: 'prospect', officeLine: 'Unknown Office', safe: noOffice, card })
+  check('no linked office + card says incumbent → incumbent with the card office', r1.mode === 'incumbent' && r1.officeLine === 'State Representative, 87th Assembly District')
+  const r2 = rm({ mode: 'challenger', officeLine: 'State Assembly (District 87)', safe: { name: 'B', status: 'general', officeName: 'State Assembly' }, card })
+  check('a full record keeps its own mode and office', r2.mode === 'challenger' && r2.officeLine === 'State Assembly (District 87)')
+  check('low-confidence card never overrides', rm({ mode: 'prospect', officeLine: 'Unknown Office', safe: noOffice, card: { ...card, confidence: 'low' } }).mode === 'prospect')
+  check('unresolved / bogus mode ignored', rm({ mode: 'prospect', officeLine: 'U', safe: noOffice, card: { resolved: false, suggested_mode: 'incumbent' } }).mode === 'prospect' && rm({ mode: 'prospect', officeLine: 'U', safe: noOffice, card: { ...card, suggested_mode: 'king' } }).mode === 'prospect')
+  check('prospect suggestion keeps Unknown Office (nothing to research yet)', rm({ mode: 'prospect', officeLine: 'Unknown Office', safe: { name: 'B' }, card: { ...card, suggested_mode: 'prospect' } }).officeLine === 'Unknown Office')
+
+  const ip = P.resolveIdentityPrompt({ safe, officeLine, mode: 'challenger' })
+  check('identity prompt asks for suggested_mode with evidence', /"suggested_mode"/.test(ip) && /"suggested_mode_evidence"/.test(ip))
+  check('identity prompt: same name + location/role = same person; never "not the same" from silence', /SAME person/.test(ip) && /Never assert "not the same person" from silence/.test(ip))
+  const u = P.buildWriterUserPrompt({ safe, officeLine, mode: 'challenger', canViewSection6: true, today: 'x', identity, packets: {} })
+  check('writer is told the card can be wrong and to record corrections', /The card comes from a quick search step and can be wrong/.test(u))
+  check('Section 1 gaps go under a "#### Coverage gaps" sub-heading (feed parser safe)', /#### Coverage gaps/.test(u))
+  const qp = P.qaPrompt({ content: 'x', candidateName: 'J', officeLine, identity })
+  check('QA does not flag disagreement with the card by itself', /a profile that disagrees with the card is NOT a flag by itself/.test(qp))
+  check('UI copy says 5–8 minutes', !/2–4 minutes/.test(readFileSync(new URL('../src/pages/Dossiers.jsx', import.meta.url), 'utf8')))
+}
+
 console.log('\n[9] pipeline wiring (source checks)')
 {
   check('identity stage is launched alongside the research fan-out', /const identityCardPromise = resolveIdentity\(/.test(SRC))

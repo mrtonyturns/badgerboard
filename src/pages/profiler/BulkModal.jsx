@@ -91,8 +91,8 @@ function BulkDialog({ onClose, balance, onRun, runState }) {
         ? (overBy > 0
             ? `${plural(rows.length, 'profile')} ${rows.length === 1 ? 'needs' : 'need'} ${overBy} more than the ${left} left on your plan. Buy a credit pack to run the whole file, or trim it to ${plural(left, 'row')}.`
             : unlimited
-              ? `${plural(rows.length, 'profile')}. Each takes 2–4 minutes and runs in the background.`
-              : `Uses ${rows.length} of the ${plural(left, 'profile')} left on your plan, leaving ${left - rows.length}. Each takes 2–4 minutes and runs in the background.`)
+              ? `${plural(rows.length, 'profile')}. Each takes 5–8 minutes and runs in the background.`
+              : `Uses ${rows.length} of the ${plural(left, 'profile')} left on your plan, leaving ${left - rows.length}. Each takes 5–8 minutes and runs in the background.`)
         : unlimited
           ? 'Your account has no monthly profile cap. Each row becomes a full 14-section profile.'
           : `${left} of ${balance?.limit} profiles left on your plan this month. Each row becomes a full 14-section profile and uses one.`
@@ -428,7 +428,7 @@ function RunProgress({ runState }) {
           </div>
           <div style={{ fontSize: 11.5, color: T.muted, marginTop: 2, lineHeight: 1.5 }}>
             {done
-              ? 'Each one takes 2–4 minutes. They appear in the table below as they land.'
+              ? 'Each one takes 5–8 minutes. They appear in the table below as they land.'
               : 'Each request is sent a few seconds apart so the research jobs queue cleanly.'}
             {failed > 0 && ` ${plural(failed, 'row')} could not be started.`}
           </div>

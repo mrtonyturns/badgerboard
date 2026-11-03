@@ -590,6 +590,21 @@ async function resolveIdentity({ safe, officeLine, mode, userId }) {
   } finally { clearTimeout(to) }
 }
 
+const MODES = new Set(['prospect', 'newly_declared', 'challenger', 'incumbent'])
+// Trust the identity stage's suggested mode only where the record is thin:
+// no linked office (which forces PROSPECT), or an unknown status. A record
+// flagged is_incumbent, or with an office and a real status, keeps its mode.
+function refineModeFromIdentity({ mode, officeLine, safe, card }) {
+  if (!card || card.resolved === false || !MODES.has(card.suggested_mode)) return { mode, officeLine }
+  const thin = !safe.officeName || !safe.status || safe.status === 'exploring'
+  const out = { mode, officeLine }
+  if (thin && card.suggested_mode !== mode && card.confidence !== 'low') out.mode = card.suggested_mode
+  if ((!safe.officeName || officeLine === 'Unknown Office') && typeof card.office_or_role === 'string' && card.office_or_role.trim() && out.mode !== 'prospect') {
+    out.officeLine = card.office_or_role.trim().slice(0, 150)
+  }
+  return out
+}
+
 // Stage 2 — the writer. One Opus 5.5 turn with web_search + web_fetch,
 // continued through pause_turn, retried on 529, and downgraded to
 // search-only if the org has web fetch turned off (400 naming web_fetch).
@@ -733,7 +748,15 @@ function parseCandidateUpdates(content) {
     || content.match(/CANDIDATE_UPDATES:\s*\n?\s*(\{[\s\S]*?\})\s*(?=\n---|\n##|$)/i)
   if (!match) return { content, updates: null }
   // Strip the block from stored content regardless of whether we can parse it
-  const cleaned = content.replace(/\n*---\n## CANDIDATE UPDATES[\s\S]*$/i, '').trim()
+  // Strip from the block's start — the model may or may not emit the
+  // "## CANDIDATE UPDATES" header or the json fence before "CANDIDATE_UPDATES:".
+  const cutAt = (() => {
+    const h = content.search(/\n*---\s*\n## CANDIDATE UPDATES/i)
+    const k = content.search(/\n*CANDIDATE_UPDATES:/i)
+    const cands = [h, k].filter(i => i >= 0)
+    return cands.length ? Math.min(...cands) : -1
+  })()
+  const cleaned = (cutAt >= 0 ? content.slice(0, cutAt) : content).trim()
   try {
     const raw = match[1].trim()
     const updates = JSON.parse(raw)
@@ -1224,6 +1247,11 @@ exports.handler = async (event) => {
   // Identity card: the Sonnet resolver ran alongside the research fan-out.
   let identityCard = null
   try { identityCard = await identityCardPromise } catch (e) { console.warn('[dossier-bg] identity stage failed:', e.message) }
+  // A candidate with no linked office defaults to PROSPECT mode from the
+  // record alone; if the identity stage found them on a ballot or in office,
+  // use that instead so the writer researches the right thing.
+  const { mode: writerMode, officeLine: writerOfficeLine } = refineModeFromIdentity({ mode, officeLine, safe, card: identityCard })
+  if (writerMode !== mode || writerOfficeLine !== officeLine) console.log(`[dossier-bg] mode refined by identity card: ${mode} → ${writerMode}; office: ${officeLine} → ${writerOfficeLine}`)
 
   // Team notes & documents — enters the prompt ONLY through the single
   // AI-access gate (_candidate-context.js). Locked candidate => empty block.
@@ -1236,7 +1264,7 @@ exports.handler = async (event) => {
 
   // ─── Writer prompt (v5 — _profile-prompt.js) ────────────────────────────
   const userPrompt = buildWriterUserPrompt({
-    safe, officeLine, mode, canViewSection6, today,
+    safe, officeLine: writerOfficeLine, mode: writerMode, canViewSection6, today,
     identity: identityCard,
     packets: {
       official: officialData, identity: identityData, news: perplexityNews, incumbent: perplexityIncumbent,
@@ -1303,7 +1331,7 @@ exports.handler = async (event) => {
     }
 
     // ─── QA pass: Sonnet 5.5 reviews the whole profile ───────────────────────
-    const verificationFlags = await runQaPass({ content, candidateName: safe.name, officeLine, identity: identityCard, userId: user_id })
+    const verificationFlags = await runQaPass({ content, candidateName: safe.name, officeLine: writerOfficeLine, identity: identityCard, userId: user_id })
     if (verificationFlags) {
       console.log(`[dossier-bg] QA flags: ${verificationFlags.count}`)
       content = content + `\n\n---\n## ⚠️ VERIFICATION FLAGS (AI Quality Check)\n*The following potential issues were flagged by a secondary review pass. Verify before use.*\n\n${verificationFlags.markdown}`
@@ -1443,4 +1471,4 @@ exports.handler = async (event) => {
 }
 
 // Test seam for the v5 pipeline helpers (pure functions + constants only).
-exports._v5 = { parseJsonObject, WRITER_BUDGET, WRITER_EFFORT, WRITER_MAX_TOKENS, WRITER_CONTINUATIONS, runWriter, runQaPass, resolveIdentity }
+exports._v5 = { parseJsonObject, refineModeFromIdentity, parseCandidateUpdates, WRITER_BUDGET, WRITER_EFFORT, WRITER_MAX_TOKENS, WRITER_CONTINUATIONS, runWriter, runQaPass, resolveIdentity }

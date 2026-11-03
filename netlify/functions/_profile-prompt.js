@@ -90,6 +90,8 @@ function resolveIdentityPrompt({ safe, officeLine, mode }) {
     `  "party_evidence": [ { "party": "Democrat|Republican|Independent|Nonpartisan|Other", "source": "url", "note": "e.g. CFIS registration, ActBlue page, party website listing" } ],`,
     `  "status_evidence": "one sentence on whether they are exploring / declared / nominee / elected / withdrawn, with source, or null",`,
     `  "disambiguation": "how to tell this person from others with the same name (employer, age band, town), or null",`,
+    `  "suggested_mode": "prospect|newly_declared|challenger|incumbent",   // prospect = no announced run; newly_declared = first candidacy just announced; challenger = on a ballot (nominee / general / running again); incumbent = currently holds the office`,
+    `  "suggested_mode_evidence": "one sentence with the source, or null",`,
     `  "canonical_urls": {`,
     `    "ballotpedia": "url or null", "campaign_site": "url or null", "legislature_page": "url or null",`,
     `    "cfis": "url or null", "government_page": "url or null", "linkedin": "url or null",`,
@@ -100,6 +102,7 @@ function resolveIdentityPrompt({ safe, officeLine, mode }) {
     `  "notes": "anything the writer must know (e.g. 'two people with this name in Marathon County; ours is the dentist') or null"`,
     `}`,
     `Every URL must come from a search result you actually saw. Never invent a URL.`,
+    `Disambiguation discipline: a page that matches this person on name AND location or role (e.g. a law-firm bio that mentions the same town, mayoralty or legislature) is the SAME person — say so. Only declare a page to be a different person when it positively conflicts (different city, age band, occupation or party). Never assert "not the same person" from silence.`,
   ]
   return lines.filter(l => l !== null).join('\n')
 }
@@ -238,7 +241,7 @@ Three to six rows each, strongest first, every row tied to a documented item fro
 ## SECTION 1: NEWS & MEDIA COVERAGE
 **[HIGH/MEDIUM/LOW]**
 
-Feed format (see format rules). Include EVERY distinct item the research packets provide plus anything you find — aim for 12–20 items when they exist; do not collapse the list. Most recent first. Podcast, radio and TV appearances count (show name as the publication). Close with up to three [RESEARCH REQUIRED] lines for obvious coverage gaps.
+Feed format (see format rules). Include EVERY distinct item the research packets provide plus anything you find — aim for 12–20 items when they exist; do not collapse the list. Most recent first. Podcast, radio and TV appearances count (show name as the publication). Close the section with a "#### Coverage gaps" sub-heading followed by up to three bullet lines, each starting with [RESEARCH REQUIRED], for obvious holes (no debate coverage found, local weekly not reviewed, etc.).
 
 ## SECTION 2: BIOGRAPHY & BACKGROUND
 **[HIGH/MEDIUM/LOW]**
@@ -452,7 +455,7 @@ Office / role: ${identity.office_or_role || 'unknown'}
 Party evidence: ${(identity.party_evidence || []).map(p => `${p.party} — ${p.note || ''} (${p.source || 'no url'})`).join('; ') || 'none found'}
 Status evidence: ${identity.status_evidence || 'none'}
 Disambiguation: ${identity.disambiguation || 'none noted'}
-Notes: ${identity.notes || 'none'}`
+Notes: ${identity.notes || 'none'}\nThe card comes from a quick search step and can be wrong. Where the primary sources you read contradict it, trust the sources, and record the correction in the CANDIDATE_UPDATES research_note.`
     if (urls.length) urlList = `\nCANONICAL PAGES YOU MAY FETCH (primary sources — read the ones that matter for this profile first):\n${urls.map(u => `- ${u}`).join('\n')}`
   }
 
@@ -510,7 +513,7 @@ Review the profile below and return ONLY a JSON object (no prose, no code fence)
 }
 What to flag:
 - unsourced_known: a [KNOWN] or [Confirmed] badge on a claim with no URL or named record next to it, especially in Sections 4, 5, 6 and 13.
-- identity_risk: a record (court case, business, property, donation) that could belong to someone else with the same name and is not tied to this person by location, employer or age.
+- identity_risk: a record (court case, business, property, donation) that could belong to someone else with the same name and is not tied to this person by location, employer or age. The identity card above came from a quick search step and the writer had more evidence — a profile that disagrees with the card is NOT a flag by itself. Flag only when the PROFILE's own evidence fails to tie the record to the subject.
 - legal_risk: statements of fact about conduct, character or motive that go beyond what the cited record shows; medical, juvenile, sealed, or private-financial content; dismissed cases presented as findings.
 - contradiction: two sections that disagree (party, office, dates, dollar figures).
 - stale: a "current" claim whose cited date is more than 18 months old without acknowledgment.

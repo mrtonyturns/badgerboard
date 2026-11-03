@@ -1018,7 +1018,7 @@ export default function Dossiers() {
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 14, fontWeight: 700 }}>Generate a profile</span>
           <span style={{ fontSize: 11.5, color: T.muted }}>
-            14 sections · 2–4 minutes · Grok and Perplexity search the web, news and filings; Claude writes the report
+            14 sections · 5–8 minutes · Claude confirms who they are, Grok and Perplexity search the web, news and filings, then Claude reads the primary sources and writes the report
           </span>
         </div>
         <div className="pf-genrow" style={{
@@ -1253,7 +1253,7 @@ export default function Dossiers() {
             {!loading && (
               <div style={{ fontSize: 12.5, color: T.muted, lineHeight: 1.6 }}>
                 {rows.length === 0
-                  ? 'Pick a candidate above and generate the first one — it takes 2–4 minutes.'
+                  ? 'Pick a candidate above and generate the first one — it takes 5–8 minutes.'
                   : 'Search runs over candidate names and offices.'}
               </div>
             )}
