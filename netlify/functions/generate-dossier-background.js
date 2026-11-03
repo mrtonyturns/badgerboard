@@ -6,6 +6,7 @@
 const { enforceRateLimit } = require('./_rate-limit')
 const { logAiUsage } = require('./_ai-usage')
 const { MODELS, CLAUDE, claudeMaxTokens, claudeText, claudeFetch } = require('./_models')
+const { resolveIdentityPrompt, WRITER_SYSTEM, WRITER_TOOLS, WRITER_TOOLS_SEARCH_ONLY, buildWriterUserPrompt, QA_SYSTEM, qaPrompt } = require('./_profile-prompt')
 const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY // must be set in Netlify env vars
 const XAI_API_KEY        = process.env.XAI_API_KEY        // xAI Grok — x.ai console
@@ -458,7 +459,7 @@ Return structured findings with source attribution. Mark recency: [Today] [This 
 }
 
 // ─── #18: Claude API call with retry on 529 overload ─────────────────────────
-async function callClaudeWithRetry(payload, maxRetries = 2) {
+async function callClaudeWithRetry(payload, maxRetries = 2, signal = undefined) {
   let lastErr = null
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
@@ -467,7 +468,7 @@ async function callClaudeWithRetry(payload, maxRetries = 2) {
       await new Promise(r => setTimeout(r, delay))
     }
     try {
-      const response = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, body: payload })
+      const response = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, body: payload, signal })
       if (response.status === 529 && attempt < maxRetries) { lastErr = new Error('API overloaded (529)'); continue }
       return response
     } catch (e) { lastErr = e; if (attempt < maxRetries) continue; throw e }
@@ -515,31 +516,166 @@ function applyScoutLiteGate(content) {
   })
 }
 
-// ─── #1: Secondary Haiku pass — verify high-risk sections and flag issues ─────
-async function runVerificationPass(content, candidateName) {
-  if (!ANTHROPIC_API_KEY || !content) return null
-  // Extract sections 6 and 13 for verification (the most legally sensitive)
-  const sec6 = content.match(/## SECTION 6[\s\S]*?(?=## SECTION 7|$)/i)?.[0] || ''
-  const sec13 = content.match(/## SECTION 13[\s\S]*?(?=## SECTION 14|$)/i)?.[0] || ''
-  if (!sec6 && !sec13) return null
-  try {
-    const res = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, body: {
-        model: HAIKU_MODEL,
-        max_tokens: 800,
-        ...CLAUDE.FAST,
-        messages: [{
-          role: 'user',
-          content: `Review these dossier sections for ${candidateName} and identify any claims that: (1) are stated as fact but lack a cited source, (2) could constitute defamation if wrong, (3) confuse this person with someone else, or (4) rely only on aggregator data rather than primary sources. Return ONLY a brief bullet list of specific flags, or "NO FLAGS" if all claims appear properly sourced and badged. Be concise.\n\n${sec6}\n\n${sec13}`
-        }],
-      } })
-    if (!res.ok) return null
-    const d = await res.json()
-    logAiUsage({ endpoint: 'profiler', provider: 'anthropic', model: HAIKU_MODEL,
-      inputTokens: d?.usage?.input_tokens || 0, outputTokens: d?.usage?.output_tokens || 0 })
-    const flags = claudeText(d).trim()
-    return (flags && flags !== 'NO FLAGS') ? flags : null
-  } catch (e) { console.error('[dossier-bg] Verification pass failed:', e.message); return null }
+// ─── v5 stages: identity resolver · writer loop · QA pass ────────────────────
+// Writer tool budget (also stated to the model in the prompt).
+const WRITER_BUDGET = { searches: 12, fetches: 10 }
+// How hard the writer thinks. Opus 5.5 defaults to medium; profiles are the
+// core paid product, so the default here is high. Override with PROFILE_EFFORT.
+const WRITER_EFFORT = ['low', 'medium', 'high', 'xhigh', 'max'].includes(process.env.PROFILE_EFFORT) ? process.env.PROFILE_EFFORT : 'high'
+const WRITER_MAX_TOKENS = claudeMaxTokens(24000)   // 48k: the report plus thinking
+const WRITER_CONTINUATIONS = 4                      // pause_turn resumes per call
+const WRITER_CALL_TIMEOUT_MS = 10 * 60 * 1000       // one API call; the function has 15 min
+
+// Real cost metering for a Claude response, including the per-search fee for
+// server-side web_search ($10 / 1,000 searches). web_fetch has no fee beyond
+// the tokens it returns, which are already in input_tokens.
+function meterClaude({ userId, endpoint, model, data }) {
+  const u = data?.usage || {}
+  const searches = Number(u.server_tool_use?.web_search_requests) || 0
+  logAiUsage({ userId, endpoint, provider: 'anthropic', model,
+    inputTokens: (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0),
+    outputTokens: u.output_tokens || 0,
+    flatUsd: searches * 0.01 })
 }
+
+function parseJsonObject(text) {
+  if (!text) return null
+  const raw = String(text).replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
+  try { return JSON.parse(raw) } catch { /* fall through */ }
+  const m = raw.match(/\{[\s\S]*\}/)
+  if (m) { try { return JSON.parse(m[0]) } catch { /* fall through */ } }
+  return null
+}
+
+// Stage 1 — who is this? Sonnet 5.5 with web_search; returns the identity
+// card (or null — the writer copes). Never throws.
+async function resolveIdentity({ safe, officeLine, mode, userId }) {
+  if (!ANTHROPIC_API_KEY) return null
+  const ctrl = new AbortController()
+  const to = setTimeout(() => ctrl.abort(), 90000)
+  try {
+    const res = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, signal: ctrl.signal, body: {
+      model: MODELS.CLAUDE_BALANCED,
+      max_tokens: 6000,
+      output_config: { effort: 'medium' },
+      system: 'You resolve the identity of Wisconsin political figures from public web sources and answer only in JSON.',
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+      messages: [{ role: 'user', content: resolveIdentityPrompt({ safe, officeLine, mode }) }],
+    } })
+    if (!res.ok) { console.warn(`[dossier-bg] identity stage HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`); return null }
+    let data = await res.json()
+    // A paused server-tool loop: continue once with the content as-is.
+    if (data.stop_reason === 'pause_turn') {
+      const res2 = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, signal: ctrl.signal, body: {
+        model: MODELS.CLAUDE_BALANCED, max_tokens: 6000, output_config: { effort: 'medium' },
+        tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+        messages: [{ role: 'user', content: resolveIdentityPrompt({ safe, officeLine, mode }) }, { role: 'assistant', content: data.content }],
+      } })
+      if (res2.ok) { meterClaude({ userId, endpoint: 'profiler', model: MODELS.CLAUDE_BALANCED, data }); data = await res2.json() }
+    }
+    meterClaude({ userId, endpoint: 'profiler', model: MODELS.CLAUDE_BALANCED, data })
+    const card = parseJsonObject(claudeText(data))
+    if (!card || typeof card !== 'object') { console.warn('[dossier-bg] identity stage returned no JSON'); return null }
+    // Only keep http(s) URLs — the writer's fetch list is built from these.
+    const okUrl = (u) => typeof u === 'string' && /^https?:\/\/\S+$/i.test(u) && u.length < 250 ? u : null
+    const cu = card.canonical_urls && typeof card.canonical_urls === 'object' ? card.canonical_urls : {}
+    for (const k of Object.keys(cu)) cu[k] = Array.isArray(cu[k]) ? cu[k].map(okUrl).filter(Boolean).slice(0, 6) : okUrl(cu[k])
+    card.canonical_urls = cu
+    card.key_news_urls = (Array.isArray(card.key_news_urls) ? card.key_news_urls : []).map(okUrl).filter(Boolean).slice(0, 8)
+    console.log(`[dossier-bg] identity: resolved=${card.resolved} confidence=${card.confidence} name=${card.legal_name} urls=${Object.values(cu).flat().filter(Boolean).length + card.key_news_urls.length}`)
+    return card
+  } catch (e) {
+    console.warn('[dossier-bg] identity stage failed:', e.message)
+    return null
+  } finally { clearTimeout(to) }
+}
+
+// Stage 2 — the writer. One Opus 5.5 turn with web_search + web_fetch,
+// continued through pause_turn, retried on 529, and downgraded to
+// search-only if the org has web fetch turned off (400 naming web_fetch).
+// Resolves { data, text, usedTools }; throws on a hard failure.
+async function runWriter({ userPrompt, userId, maxContinuations = WRITER_CONTINUATIONS }) {
+  let tools = WRITER_TOOLS
+  const messages = [{ role: 'user', content: userPrompt }]
+  const body = () => ({
+    model: CLAUDE_MODEL,
+    max_tokens: WRITER_MAX_TOKENS,
+    output_config: { effort: WRITER_EFFORT },
+    // Static system prompt → prompt-cached across every profile run.
+    system: [{ type: 'text', text: WRITER_SYSTEM, cache_control: { type: 'ephemeral' } }],
+    tools,
+    messages,
+  })
+  let data = null
+  const textParts = []   // a paused turn may already hold part of the report
+  for (let hop = 0; hop <= maxContinuations; hop++) {
+    const ctrl = new AbortController()
+    const to = setTimeout(() => ctrl.abort(), WRITER_CALL_TIMEOUT_MS)
+    let response
+    try {
+      response = await callClaudeWithRetry(body(), 2, ctrl.signal)
+      if (response.status === 400 && tools === WRITER_TOOLS) {
+        const detail = await response.text().catch(() => '')
+        if (/web_fetch/i.test(detail)) {
+          console.warn('[dossier-bg] web_fetch rejected by the API — continuing with web_search only')
+          tools = WRITER_TOOLS_SEARCH_ONLY
+          response = await callClaudeWithRetry(body(), 2, ctrl.signal)
+        } else {
+          throw new Error(`Anthropic API error: 400 ${detail.slice(0, 300)}`)
+        }
+      }
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '')
+        console.error(`[dossier-bg] Claude error: ${errText.slice(0, 500)}`)
+        throw new Error(`Anthropic API error: ${response.status}`)
+      }
+      data = await response.json()
+    } finally { clearTimeout(to) }
+    meterClaude({ userId, endpoint: 'profiler', model: CLAUDE_MODEL, data })
+    const u = data.usage || {}
+    console.log(`[dossier-bg] writer hop ${hop}: stop=${data.stop_reason} in=${u.input_tokens} cached=${u.cache_read_input_tokens || 0} out=${u.output_tokens} searches=${u.server_tool_use?.web_search_requests || 0} fetches=${u.server_tool_use?.web_fetch_requests || 0}`)
+    textParts.push(claudeText(data))
+    if (data.stop_reason !== 'pause_turn') break
+    messages.push({ role: 'assistant', content: data.content })
+  }
+  if (data?.stop_reason === 'pause_turn') console.warn('[dossier-bg] writer still paused after max continuations — using what we have')
+  if (data?.stop_reason === 'max_tokens') console.warn('[dossier-bg] writer hit max_tokens — report may be truncated')
+  return { data, text: textParts.join(''), usedTools: tools }
+}
+
+// Stage 3 — QA. Sonnet 5.5 reads the finished report and returns structured
+// flags; rendered as the "VERIFICATION FLAGS" block the app already shows.
+// Returns { count, markdown, identityRisk } or null. Never throws.
+async function runQaPass({ content, candidateName, officeLine, identity, userId }) {
+  if (!ANTHROPIC_API_KEY || !content) return null
+  const ctrl = new AbortController()
+  const to = setTimeout(() => ctrl.abort(), 120000)
+  try {
+    const res = await claudeFetch({ apiKey: ANTHROPIC_API_KEY, signal: ctrl.signal, body: {
+      model: MODELS.CLAUDE_BALANCED,
+      max_tokens: 6000,
+      output_config: { effort: 'medium' },
+      system: QA_SYSTEM,
+      messages: [{ role: 'user', content: qaPrompt({ content: content.slice(0, 120000), candidateName, officeLine, identity }) }],
+    } })
+    if (!res.ok) { console.warn(`[dossier-bg] QA pass HTTP ${res.status}`); return null }
+    const d = await res.json()
+    meterClaude({ userId, endpoint: 'profiler', model: MODELS.CLAUDE_BALANCED, data: d })
+    const out = parseJsonObject(claudeText(d))
+    const flags = Array.isArray(out?.flags) ? out.flags.filter(f => f && typeof f === 'object' && f.issue).slice(0, 15) : []
+    if (!flags.length) return null
+    const sev = { high: 0, medium: 1, low: 2 }
+    flags.sort((a, b) => (sev[a.severity] ?? 3) - (sev[b.severity] ?? 3))
+    const label = (f) => `**${String(f.severity || 'medium').toUpperCase()}** · ${f.section ? `Section ${f.section}` : 'Snapshot'} · ${String(f.type || 'issue').replace(/_/g, ' ')}`
+    const lines = flags.map(f => `- ${label(f)}: ${String(f.issue).slice(0, 300)}${f.claim ? ` — “${String(f.claim).slice(0, 160)}”` : ''}`)
+    if (out.identity_risk && out.identity_risk !== 'none') lines.unshift(`- **IDENTITY RISK: ${String(out.identity_risk).toUpperCase()}** — some records may belong to a different person with this name. Confirm identity before use.`)
+    return { count: flags.length, markdown: lines.join('\n'), identityRisk: out.identity_risk || 'none' }
+  } catch (e) {
+    console.error('[dossier-bg] QA pass failed:', e.message)
+    return null
+  } finally { clearTimeout(to) }
+}
+
 
 // ─── #10: Change detection — extract new items vs previous dossier ────────────
 function extractSection1Headlines(content) {
@@ -1026,6 +1162,9 @@ exports.handler = async (event) => {
   reportStage(body.candidate_id, 1)                       // Identifying the person
   const identityPromise     = fetchPerplexityIdentity(safe.name, officeLine, safe.districtName, ctx, mode)
   identityPromise.finally(() => reportStage(body.candidate_id, 2))  // Searching press & filings
+  // v5: Sonnet 5.5 + web_search resolves WHO this is and collects canonical
+  // URLs the writer may web_fetch (runs in parallel with the packets).
+  const identityCardPromise = resolveIdentity({ safe, officeLine, mode, userId: isInternalTrigger ? null : (user?.id || null) })
   const financePromise      = fetchPerplexityCampaignFinance(safe.name, officeLine, safe.districtName, ctx, mode)
   const politicalPromise    = fetchPerplexityPoliticalRecord(safe.name, officeLine, safe.districtName, ctx, mode)
   const affiliationsPromise = fetchPerplexityAffiliations(safe.name, officeLine, safe.districtName, ctx, mode)
@@ -1036,177 +1175,6 @@ exports.handler = async (event) => {
   // Include user research-context in the federal-office check so FEC still fires
   // for congressional candidates whose office isn't linked in the DB.
   const officialPromise     = fetchOfficialRecords(safe.name, `${officeLine} ${ctx || ''} ${safe.occupation || ''}`).catch(() => null)
-
-  // ─── System Prompt (v4.1 structure + current legal compliance) ─────────────
-  const systemPrompt = `You are a WI opposition researcher for The Bluejack Group. Build a sourced dossier using public records only. Tables over prose. Concise. Use "&" not "and" in tables.
-
-RULES:
-- NOT FOUND + search method if empty. Never fabricate.
-- Verify records by DOB/middle name/address before attributing.
-- Cite every claim (URL or DB name). Apply confidence badges.
-- No minors. No sealed/expunged/juvenile records.
-- Arrests ≠ convictions. WCCA dismissed cases removed after 2yr — skip third-party aggregator data.
-- Use & not "and" in table cells.
-
-CONFIDENCE BADGES — MANDATORY ON EVERY CLAIM:
-[KNOWN] – Publicly documented, verified through official records or credible reporting
-[RESEARCH REQUIRED] – Requires independent verification before any use
-[Confirmed] – Cross-referenced from multiple reliable sources
-[Likely] – Reasonable inference from available data; not yet verified
-[Verify] – Flagged for fact-checking before use
-
-Section-level confidence: [HIGH] / [MEDIUM] / [LOW] — open each section with one.
-
-LEGAL COMPLIANCE:
-1. ACCURACY: All claims must be sourced from publicly available information. Label every claim with a confidence badge. When in doubt, use [RESEARCH REQUIRED].
-2. DEFAMATION (Wis. Stat. § 895.05): Never state as confirmed fact any claim that could constitute defamation per se. No speculation on personal conduct, character, or motivations.
-3. FCRA (15 U.S.C. § 1681): Do NOT generate content usable as a "consumer report." No employment screening characterizations, no personal financial info beyond public filings.
-4. PRIVACY: Do not include unless already a documented public-record controversy: alleged criminal history (confirmed court records only), private religious practice, private personal conduct, minor children, medical/mental health info.
-5. Use "RESEARCH PRIORITY" not "vulnerability" — HIGH/MEDIUM/LOW RESEARCH PRIORITY.
-6. Clearly distinguish confirmed public record from analytical inference.
-
-LEGAL — WI PUBLIC RECORDS:
-✅ SAFE: WCCA convictions · property records · WDFI filings · DSPS licenses/discipline · DOR delinquent list (>$5K) · lobbying records · DOC registry · news · public social posts · FEC/OpenSecrets/FollowTheMoney · voter name/address/history
-❌ OFF-LIMITS: medical (HIPAA/Ch.51) · sealed/expunged · juvenile (Ch.938) · adoption · SSN/DL# · private financials · confidential electors (§ 6.47) · how someone voted · tax returns
-⚠️ CAUTION: dismissed cases on aggregators → skip · divorce records → political relevance only · cite original source not aggregator
-
-PARTY VERIFICATION — MANDATORY:
-The "Party" field in the candidate record may be wrong. Independently verify using:
-1. WEC voter registration & filing records (most authoritative)
-2. Donation platform: ActBlue.com = Democrat; Anedot.com = Republican
-3. Party endorsements, committee filings, official party listings
-4. Candidate's website, social media bio, public statements
-5. News coverage explicitly identifying party
-6. Donor network alignment
-7. PAC/organization endorsements
-If evidence contradicts supplied value, state the correct party & flag the discrepancy.
-
-P1: IDENTITY LOCK — Establish from campaign site/news/social BEFORE any record search:
-Legal name: ___ | DOB: ___ | Address: ___ | Spouse: ___ | Employer: ___
-Unverified records → UNCONFIRMED → Sec 14.
-
-P2: SEARCH ALL (report findings or NO RESULTS):
-
-Google searches to perform:
-"[Name]" site:wi.gov | site:wicourts.gov | site:reddit.com | site:facebook.com
-"[Name]" AND (lawsuit|sued|court|"tax lien"|bankrupt|arrest|DUI|OWI)
-"[Name]" AND (controversy|scandal|resign|fired|ethics|complaint)
-"[Name]" AND (endorsement|endorsed|supports)
-"[Name]" AND (op-ed|"letter to editor"|opinion)
-"[Name]" AND (OSHA|violation|fine|penalty)
-"[Name]" AND (divorce|custody|"restraining order")
-"[Name]" [city] [county]
-
-WI Databases (search each, report findings or NO RESULTS):
-WCCA (wcca.wicourts.gov) – All case types, filter DOB
-Eye on Lobbying (lobbying.wi.gov) – Name & employer
-MyVote (myvote.wi.gov) – Registration, address, history
-WDFI Corp (apps.dfi.wi.gov) – Business/LLC ownership
-WDFI UCC (wims.dfi.wi.gov/uccsearch) – Liens on property/equipment
-County Land (varies) – Value, tax, delinquencies, sales
-Legislature (legis.wisconsin.gov) – Bills, votes, testimony
-County Gov (varies) – Minutes, agendas, committees
-Ethics Comm (ethics.wi.gov) – Economic interest statements
-DOR Delinquent (revenue.wi.gov) – Unpaid taxes >$5K
-DSPS (licenseverification.wi.gov) – Licenses & discipline
-DPI (dpi.wi.gov/licensing) – Educator credentials & revocations
-DOC (appsdoc.wi.gov/public) – Offender & inmate search
-RETR (revenue.wi.gov/Pages/RETr) – Property transfers & prices
-OpenBook (openbook.wi.gov) – State contracts to candidate biz
-DNR (dnr.wisconsin.gov) – Environmental violations
-
-National Databases:
-FEC (fec.gov/data) – Federal donations
-OpenSecrets (opensecrets.org) – Donor lookup
-FollowTheMoney (followthemoney.org) – State finance
-Ballotpedia (ballotpedia.org) – Bio, elections
-Vote Smart (justfacts.votesmart.org) – Votes, ratings
-ProPublica 990s (projects.propublica.org/nonprofits) – Nonprofit roles & salary
-PACER (pacer.gov) – Federal bankruptcy/lawsuits
-USASpending (usaspending.gov) – Gov contracts to employer
-OSHA (osha.gov) – Workplace violations
-OpenTheBooks (openthebooks.com) – State employee salary
-InfluenceWatch (influencewatch.org) – Dark money/PAC mapping
-WI Democracy Campaign (wisdc.org) – Donor/PAC networks
-MuckRock (muckrock.com) – Existing FOIA requests
-
-Social Media: Facebook (personal+campaign) · Instagram · X · LinkedIn · Threads · Reddit (r/[city], r/wisconsin) · Local FB Groups · Nextdoor · YouTube · TikTok · Venmo/CashApp (public txns)
-
-Archives: Wayback Machine (web.archive.org) — campaign sites, old biz pages, deleted posts · archive.is — cached articles/posts · Deleted tweet tools
-
-WI Media (check each for coverage):
-Hyper-local: Wausau Pilot & Review · Urban Milwaukee · WI Examiner · Isthmus
-Newsletters: The Wausonian · WisPolitics · Recombobulation Area
-Conservative: MacIver · Right Wisconsin · Media Trackers
-Progressive: WI Democracy Campaign · One Wisconsin Now
-Wire: WisPolitics.com · WisconsinEye
-Broadcast: WSAW · WAOW · local PBS
-Investigative: The Badger Project · Votebeat WI
-
-Mandatory Commentators (check for mentions):
-Jessica McBride: wisconsinrightnow.com · fb/jessica.mcbride100 · x/jess_mcbride
-Charlie Sykes: thebulwark.com
-Vicki McKenna: newstalk1130.iheart.com
-McCoshen & Ross: pbswisconsin.org`
-
-  // ─── Section 6: full vs. template based on tier ───────────────────────────
-  const section6Prompt = canViewSection6
-    ? `## SECTION 6: CONTROVERSIES & OPPOSITION RESEARCH
-**[HIGH/MEDIUM/LOW]**
-
-Per item — use this table format:
-
-| Issue | Date | Summary (2 sent.) | Source | Response | Status | Confidence |
-|---|---|---|---|---|---|---|
-
-Cover: court (WCCA, convictions only) · electoral · professional (DSPS) · financial (DOR/PACER/OSHA/UCC) · hypocrisy · voter reg · DNR
-
-Also include:
-- CAMPAIGN FINANCE & REGULATORY MATTERS from official records — [KNOWN] or [RESEARCH REQUIRED]
-- INCONSISTENCIES IN PUBLIC RECORD — cite specific documented statements, flag [Verify] if source unclear
-- PROFESSIONAL/ORGANIZATIONAL RECORD — publicly documented only
-- Assign RESEARCH PRIORITY (HIGH/MEDIUM/LOW) to each finding
-
-DO NOT INCLUDE: unverified arrests, private personal conduct, religious beliefs, social media posts unless in credible news, family members who aren't public figures, FCRA-usable content.
-Label all items [RESEARCH REQUIRED] unless you have a credible public record source.`
-    : `## SECTION 6: CONTROVERSIES & OPPOSITION RESEARCH
-**[RESEARCH REQUIRED]**
-
-*This section is available to Campaign & Agency plan subscribers.*
-
-**RESEARCH FRAMEWORK — Items to Investigate:**
-- [ ] Campaign finance filings: Review WECF & FEC records — [RESEARCH REQUIRED]
-- [ ] Public record inconsistencies: Compare current platform vs past statements — [RESEARCH REQUIRED]
-- [ ] Professional background review: Employment history & documented controversies — [RESEARCH REQUIRED]
-- [ ] Organizational conflicts of interest: Board memberships from Section 8 — [RESEARCH REQUIRED]
-- [ ] Digital public record review: Public digital footprint via credible press — [RESEARCH REQUIRED]
-
-*Upgrade to Campaign or Agency plan to unlock AI-assisted analysis.*`
-
-  const section13Prompt = canViewSection6
-    ? `## SECTION 13: ATTACK & DEFENSE
-**[HIGH/MEDIUM/LOW]**
-
-**Attack angles (for opponents):**
-
-| Vulnerability | Evidence | Framing | Src |
-|---|---|---|---|
-
-**Defense prep (for candidate):**
-
-| Likely Attack | Truth/Context | Response | Src |
-|---|---|---|---|`
-    : `## SECTION 13: ATTACK & DEFENSE
-**[RESEARCH REQUIRED]**
-
-*This section is available to Campaign & Agency plan subscribers.*
-
-**RESEARCH FRAMEWORK:**
-- [ ] Identify top 3-5 potential attack angles from public record — [RESEARCH REQUIRED]
-- [ ] Prepare defense responses for each identified vulnerability — [RESEARCH REQUIRED]
-- [ ] Review opposition messaging patterns — [RESEARCH REQUIRED]
-
-*Upgrade to Campaign or Agency plan to unlock attack & defense analysis.*`
 
   const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
 
@@ -1252,96 +1220,10 @@ Label all items [RESEARCH REQUIRED] unless you have a credible public record sou
     console.log(`[dossier-bg] Research fetch error: ${e.message}`)
   }
 
-  // ─── Build context blocks injected into the user prompt ───────────────────
-  const officialContext = officialData
-    ? `\n\nOFFICIAL GOVERNMENT RECORDS (direct API data — FEC / CourtListener / LegiScan — highest reliability tier):\n${officialData}\n\nTreat FEC & LegiScan rows as [KNOWN] ground truth (they override contradictory web-search claims). CourtListener rows are NAME MATCHES — attribute only after identity confirmation.`
-    : ''
 
-  const identityContext = identityData
-    ? `\n\nVERIFIED IDENTITY DATA (from real-time web search — MANDATORY: use to populate IDENTITY LOCK in Section 2 and cross-reference ALL record attributions):\n${identityData}\n\nDo NOT attribute any record to this person unless the identity matches the above data.`
-    : ''
-
-  const newsContext = perplexityNews
-    ? `\n\nREAL-TIME NEWS RESEARCH (from web search — use as the primary basis for Section 1):\n${perplexityNews}\n\nUse these real news results for Section 1. Keep ### heading format. Add confidence badges. Prioritize these verified results over training knowledge. MANDATORY: include EVERY distinct item from this research in Section 1 — do NOT summarize the list down or drop smaller items; Section 1 must contain at least 12 items whenever the research provides them.`
-    : ''
-
-  const incumbentContext = perplexityIncumbent
-    ? `\n\nINCUMBENT RECORD RESEARCH (this candidate IS a current incumbent; incorporate into Section 4):\n${perplexityIncumbent}\n\nIncorporate into Section 4 (Political Record — Key Votes, Bills, official actions). Mark [KNOWN] if from official legislative record, [RESEARCH REQUIRED] if uncertain.`
-    : (isIncumbent ? '\n\nNOTE: This candidate IS a current incumbent. Section 4 must include their voting record, sponsored bills, committee assignments, and any legal/ethics matters from their time in office.' : '')
-
-  const financeContext = financeData
-    ? `\n\nCAMPAIGN FINANCE DATA (from web search — use for Section 5 Financial):\n${financeData}\n\nUse these verified financial figures in Section 5. Mark each item [KNOWN] or [RESEARCH REQUIRED].`
-    : ''
-
-  const politicalContext = politicalData
-    ? `\n\nPOLITICAL RECORD DATA (from web search — use for Section 4 Political Record):\n${politicalData}\n\nUse for election history table and key votes in Section 4. Do not add unsourced claims — mark any gaps [RESEARCH REQUIRED] instead of filling them from training knowledge.`
-    : ''
-
-  const affiliationsContext = affiliationsData
-    ? `\n\nAFFILIATIONS & ENDORSEMENTS DATA (from web search — use for Section 8):\n${affiliationsData}\n\nUse for the affiliations table and endorsements list in Section 8.`
-    : ''
-
-  const socialMediaContext = socialMediaData
-    ? `\n\nSOCIAL MEDIA RESEARCH (from web search — use as the primary basis for Section 10):\n${socialMediaData}\n\nUse these real social media findings for Section 10 (Social Posts). Keep ### heading format with platform/author info. Add sentiment flags. Include both posts BY the candidate and posts ABOUT the candidate. Prioritize these verified results over training knowledge.`
-    : ''
-
-  // Grok provides real-time X/Twitter intelligence + breaking web coverage.
-  // Injected as supplemental context for Section 1 (News), Section 10 (Social),
-  // and Section 6 (Controversies) — whichever sections benefit most.
-  const grokContext = grokData
-    ? `\n\nREAL-TIME X & BREAKING INTELLIGENCE (from Grok live search of X and web — as of TODAY):\n${grokData}\n\nThis is the most current intelligence available. Use it to:\n- Supplement Section 1 with any breaking news items not in the Perplexity results\n- Enrich Section 10 (Social Posts) with X/Twitter posts and sentiment data\n- Flag any emerging controversies or breaking developments in Section 6\n- Note current X sentiment (positive/negative/mixed) in Section 12 (Public Perception)\nMark items sourced from Grok as [X/Live] or [Web/Live].`
-    : ''
-
-  // Mode-specific directives — tells Claude exactly how to adapt each section
-  const researchModeDirectives = {
-    prospect: `\n⚠️ RESEARCH MODE: PROSPECT (Pre-Candidate)
-This person has NOT officially announced a run for office (status: ${safe.status || 'exploring'}).
-Adapt all 14 sections for a private citizen being researched before any announcement:
-- Section 1 (News): Professional/business coverage, community news, op-eds, civic activity — NOT campaign news
-- Section 2 (Bio): Lead with employment, business ownership, professional background — electoral history may be empty
-- Section 3 (Timeline): Career and civic milestones, not campaign milestones
-- Section 4 (Political Record): Civic board service, donations made, community roles. Races table may be EMPTY — that is correct, do NOT fabricate electoral results
-- Section 5 (Financial): Personal finances — property, business (WDFI), UCC liens, DOR, PACER
-- Section 8 (Affiliations): Civic orgs, nonprofit boards (ProPublica 990s), professional associations — not political endorsements
-- Section 10 (Social): LinkedIn is primary; personal Facebook and community groups
-Do NOT fabricate campaign finance filings. Do NOT assume this person has a WEC committee.\n`,
-
-    newly_declared: `\n⚠️ RESEARCH MODE: NEWLY DECLARED CANDIDATE
-This person RECENTLY announced their first candidacy for ${officeLine} (status: ${safe.status || 'declared'}).
-Focus all sections on the announcement and early campaign phase:
-- Section 1 (News): Announcement article (what outlet broke it), editorial reactions, opponent responses, professional background coverage that motivated the run
-- Section 2 (Bio): Employment and civic background establishing their qualifications for this office
-- Section 3 (Timeline): Career path leading to candidacy; announcement date is a key milestone; WEC filing date
-- Section 4 (Political Record): WEC filing date and committee name; prior civic board service; prior donations to other candidates. Races table may be EMPTY or minimal — correct, do NOT fabricate wins/losses that don't exist
-- Section 5 (Financial): WEC committee initial filing amount, personal finances (WDFI, property, UCC), any ActBlue/Anedot fundraising pages
-- Section 8 (Affiliations): Who endorsed at announcement; organizational affiliations that signal political alignment
-- Section 10 (Social): Campaign launch posts; early community reactions to announcement
-This person has a WEC filing — find it. They likely have no prior race history — that is fine.\n`,
-
-    challenger: `\n⚠️ RESEARCH MODE: CHALLENGER / ACTIVE CANDIDATE
-This person is actively running for ${officeLine} (status: ${safe.status || 'general'}).
-Apply full electoral research across all 14 sections:
-- Section 1 (News): Campaign news, debate coverage, endorsements, fundraising, any available polls
-- Section 4 (Political Record): Full electoral history — all prior races, all offices held or sought
-- Section 5 (Financial): Full campaign finance — raised/spent/cash on hand, top donors by category, PAC support
-- Section 6 (Controversies): Full opposition research — electoral record, professional background, financial record
-- Section 9 (Network): Head-to-head donor comparison to opponent if data available
-- Section 13 (Attack & Defense): Full attack/defense analysis based on documented record
-Compare to incumbent or primary opponent where data is available. Note poll averages and ground game signals.\n`,
-
-    incumbent: `\n⚠️ RESEARCH MODE: INCUMBENT SEEKING RE-ELECTION
-This person CURRENTLY HOLDS ${officeLine} (status: ${safe.status || 'elected'}) and is seeking re-election.
-Voting record and official performance in office are the HIGHEST PRIORITY:
-- Section 1 (News): Official votes and decisions that made news, re-election campaign activity, challenger coverage that references them
-- Section 4 (Political Record): COMPREHENSIVE voting record this term — every significant vote with bill number, date, and outcome; bills sponsored/co-sponsored; committee chair decisions; floor speeches; ethics filings (ethics.wi.gov); constituent case outcomes
-- Section 5 (Financial): Re-election fundraising vs. challenger; PAC and dark money support; flag any donor-to-vote conflicts
-- Section 6 (Controversies): Votes contradicting campaign promises; constituent complaints; performance gaps; ethics issues; any investigations
-- Section 7 (Platform): Compare current campaign platform to their actual voting record — flag every contradiction
-- Section 13 (Attack & Defense): Record-based vulnerabilities (missed votes, controversial positions) and defenses
-Voting record is the foundation — this is where the most research value lies.\n`,
-  }
-
-  const researchModeNote = researchModeDirectives[mode] || researchModeDirectives.challenger
+  // Identity card: the Sonnet resolver ran alongside the research fan-out.
+  let identityCard = null
+  try { identityCard = await identityCardPromise } catch (e) { console.warn('[dossier-bg] identity stage failed:', e.message) }
 
   // Team notes & documents — enters the prompt ONLY through the single
   // AI-access gate (_candidate-context.js). Locked candidate => empty block.
@@ -1352,325 +1234,17 @@ Voting record is the foundation — this is where the most research value lies.\
     aiNotesBlock = formatAiContextBlock(teamCtx, safe.name)
   } catch (e) { console.warn('[dossier-bg] team-notes context skipped:', e.message) }
 
-  const userPrompt = `Generate a complete 14-section political intelligence dossier for the following Wisconsin candidate. Adhere strictly to all legal compliance standards. Use table format wherever specified. Structure output EXACTLY with ## SECTION headers.
-
-IMPORTANT: If research returned NO USABLE DATA for a section (all entries are NOT FOUND or UNCONFIRMED), OMIT that entire section entirely from your output rather than writing a section that says information could not be found. Only include sections where you have at least some verified information to present.
-
-TODAY'S DATE: ${today}
-Include news, events, & developments up to today. Focus on the past 12 months.
-${safe.research_context ? `\n⭐ IDENTITY CONTEXT (user-provided — prioritize this to find the correct person before anything else):\n${safe.research_context}\nThis context must frame ALL searches and record attribution. Use it to distinguish this person from anyone sharing their name.\n` : ''}${aiNotesBlock}${researchModeNote}
----
-⚠️ LEGAL DISCLAIMER:
-This dossier is AI-generated from publicly available sources for lawful political research purposes only. All information requires independent verification before use. Do NOT use for FCRA-regulated purposes. Do NOT publish without independent corroboration. The Bluejack Group assumes no liability for accuracy of AI-generated content.
----
-
-CANDIDATE RECORD:
-Name: ${safe.name}
-Party (MUST be independently verified): ${safe.party || 'Unknown/Not listed'}
-Office: ${officeLine}
-Status: ${safe.status || 'Unknown'}
-Occupation: ${safe.occupation || 'Not listed'}
-Employer: ${safe.employer || 'Not listed'}
-Website: ${safe.website || 'Not listed'}
-Email: ${safe.email || 'Not listed'}
-Phone: ${safe.phone || 'Not listed'}
-Campaign Committee: ${safe.campaign_committee || 'Not listed'}
-Campaign Manager: ${safe.campaign_manager || 'Not listed'}
-Bio: ${safe.bio_summary || 'None provided'}
-Twitter/X: ${safe.twitter_handle || 'Not listed'}
-Facebook: ${safe.facebook_url || 'Not listed'}
-Instagram: ${safe.instagram_handle || 'Not listed'}
-Election: ${safe.electionName || 'Unknown'}
-PARTY VERIFICATION REMINDER: Check campaign website donation links (ActBlue = Democrat, Anedot = Republican), WEC filing, & endorsements before writing anything about party. Correct if wrong & flag discrepancy.
-${identityContext}${officialContext}${newsContext}${incumbentContext}${politicalContext}${financeContext}${affiliationsContext}${socialMediaContext}${grokContext}
----
-
-BEGIN DOSSIER. Start with the PROFILE SNAPSHOT, then output EXACTLY the 14 sections.
-
-## PROFILE SNAPSHOT
-Two to three sentences (max 60 words) describing who this person is — written the way a sharp, neutral observer would describe them to a friend: intriguing, plain-spoken, easy to understand, and strictly unbiased. Lead with what makes them distinctive (their background, their path into politics, what they're known for locally). No confidence badges, no headers, no bullet points, no partisan framing — just a compelling, factual portrait.
-
-## SECTION 1: NEWS & MEDIA COVERAGE
-**[HIGH/MEDIUM/LOW]**
-
-IMPORTANT FORMAT — each news item MUST use this exact format:
-
-### [Exact Article or Post Title](https://full-url-if-known.com)
-**Publication or Source Name** · Month D, YYYY
-One to two sentence summary. **[KNOWN]** or **[Verify]**
-
-If URL unknown, omit link: ### Exact Article Title
-For social media: ### [Post description](https://url)
-**Facebook / PageName** · Month D, YYYY
-
-Target 15-20+ items, chronological (most recent first). All articles from WI media list. Check mandatory commentators. End with [RESEARCH REQUIRED] items for gaps.
-
-## SECTION 2: BIOGRAPHY & BACKGROUND
-**[HIGH/MEDIUM/LOW]**
-
-First: complete the IDENTITY LOCK:
-Legal name: ___ | DOB: ___ | Address: ___ | Spouse: ___ | Employer: ___
-
-Then provide the Bio table:
-
-| Field | Value | Source |
-|---|---|---|
-| Name | | |
-| DOB/Age | | |
-| Address | | |
-| Property Value | | County |
-| Property Tax | | County |
-| Tax Delinquent? | Y/N | DOR |
-| Spouse | | |
-| Education | | |
-| Edu Verified? | Y/N | |
-| Employer | | |
-| Title | | |
-| License | | DSPS |
-| Discipline? | Y/N | DSPS |
-| Prior Jobs | | |
-| Military | | |
-| Businesses | | WDFI |
-| UCC Liens | | WDFI |
-
-## SECTION 3: TIMELINE
-**[HIGH/MEDIUM/LOW]**
-
-| Year | Event | Source |
-|---|---|---|
-
-Flag unexplained gaps. Include career, political, legal, & financial events.
-
-${(mode === 'prospect' || mode === 'newly_declared') ? `## SECTION 4: CIVIC & POLITICAL BACKGROUND
-**[HIGH/MEDIUM/LOW]**
-
-| Org / Board / Body | Role | Years Active | Source |
-|---|---|---|---|
-
-**Prior Campaign Donations Made:** (recipient, year, amount, source — FEC/WEC)
-**WEC Committee Filing:** (committee name, filing date — or NOT FOUND)
-**Public Testimony / Statements:** (date, body, topic, source)
-**Voter Reg Match?** MyVote address vs actual: Y/N
-
-For newly declared candidates: include WEC registration details and any initial filings. For prospects: focus on civic board service, nonprofit board roles (ProPublica 990s), and community leadership. Do NOT fabricate electoral race history — if no races exist, say so explicitly.` : `## SECTION 4: POLITICAL RECORD
-**[HIGH/MEDIUM/LOW]**
-
-Races:
-
-| Year | Office | W/L | Votes | Margin | Opponent |
-|---|---|---|---|---|---|
-
-**Committees:** (list)
-**Key Votes:** (date, issue, vote, source)
-**Voter Reg Match?** MyVote address vs actual: Y/N`}
-
-## SECTION 5: FINANCIAL
-**[HIGH/MEDIUM/LOW]**
-
-| Item | Value | Source |
-|---|---|---|
-| Businesses | | WDFI |
-| UCC Liens | | WDFI |
-| Property | | County |
-| Tax Challenges | | Board of Review |
-| RETR Transfers | | DOR |
-| Fed Donations | | FEC |
-| State Donations | | FTM/WDC |
-| Nonprofit Roles | | ProPublica |
-| State Contracts | | OpenBook |
-| OSHA Violations | | OSHA |
-| Delinquent Tax | | DOR |
-| Bankruptcy | | PACER |
-| Conflicts | | |
-
-${section6Prompt}
-
-## SECTION 7: POLICY POSITIONS & PLATFORM
-**[HIGH/MEDIUM/LOW]**
-
-| Issue | Position | Quote | Source | Date |
-|---|---|---|---|---|
-
-Flag contradictions & shifts. Include known stated positions [KNOWN]/[Confirmed], inferred positions [Likely], key district issues, positions differing from party mainstream.
-
-## SECTION 8: AFFILIATIONS & ENDORSEMENTS
-**[HIGH/MEDIUM/LOW]**
-
-| Org | Role | Type | Years | Source |
-|---|---|---|---|---|
-
-**Endorsements In:** (endorser, date, src)
-**Endorsements Out:** (list)
-**PAC/Dark Money:** (InfluenceWatch/WDC)
-
-## SECTION 9: POLITICAL NETWORK & DONORS
-**[HIGH/MEDIUM/LOW]**
-
-Allies:
-
-| Name | Position | Link | Evidence | Src |
-|---|---|---|---|---|
-
-Opponents:
-
-| Name | Position | Conflict | Evidence | Src |
-|---|---|---|---|---|
-
-Key donors, donor categories from official filings [KNOWN]. PAC support. Consulting/vendor relationships from FEC/WECF filings.
-
-## SECTION 10: SOCIAL POSTS
-**[HIGH/MEDIUM/LOW]**
-
-IMPORTANT FORMAT — each social media item MUST use this exact format (same as Section 1):
-
-### [Post description or excerpt](https://url-if-known.com)
-**Platform / Author or Handle** · Month D, YYYY
-One to two sentence summary. Sentiment: +/-/~. **[KNOWN]** or **[Verify]**
-
-If URL unknown, omit link: ### Post description or excerpt
-**Platform / Author** · Month D, YYYY
-
-**By candidate:** (posts made by the candidate on their own accounts)
-List 8-15+ items using ### heading format above. MANDATORY: include EVERY distinct post from the social media research and the real-time X intelligence — do not drop items.
-
-**About candidate:** (posts by others mentioning or discussing the candidate)
-List 5-10+ items using ### heading format above.
-
-Flags per item: Controversial / Policy / Contradiction / Deleted / Endorsement / Accusation / Rumor / Praise
-Target 10-15+ total social media items across both sections.
-
-## SECTION 11: DIGITAL FOOTPRINT
-**[HIGH/MEDIUM/LOW]**
-
-| Platform | Handle | Est. Activity | Notes |
-|---|---|---|---|
-| Site | | | |
-| FB personal | | | |
-| FB campaign | | | |
-| IG | | | |
-| X | | | |
-| LinkedIn | | | |
-| Threads | | | |
-| YT | | | |
-| TikTok | | | |
-
-Est. Activity values: Active / Inactive / Unknown. Do NOT estimate follower counts — they require manual verification and change constantly.
-
-**Deleted content?** Y/N (detail if Y)
-
-## SECTION 12: NARRATIVE & PUBLIC PERCEPTION
-**[HIGH/MEDIUM/LOW]**
-
-**How the press frames this person:** What adjectives, narratives, and characterizations appear repeatedly in coverage? Is framing favorable, unfavorable, or neutral? Cite specific examples.
-
-**Dominant public narrative:** What is the single strongest story the public has about this candidate (positive or negative)? What drives it?
-
-**Key defining quotes:** 2-3 quotes from news or public record that best capture how this person is perceived — include speaker, source, and date.
-
-**Opposition/critic narrative:** How are opponents, critics, or opposition media characterizing this person? What attacks have gained traction?
-
-**Candidate's own messaging:** Primary themes from campaign website, social, and public appearances. Note any contradictions between messaging and public record.
-
-**Press relations:** Receptive or guarded with media? Any patterns of media avoidance, selective access, or off-the-record activity?
-
-**Advertising (documented only):** Digital, mail, TV/radio — cite source. Do not speculate.
-
-**SWOT Analysis**
-A simple four-quadrant assessment of this candidate's political position based on verified public record. Use bullet points for each quadrant — no prose paragraphs. Keep each bullet to 1-2 plain sentences, no jargon.
-
-- **Strengths** (advantages this candidate has right now — e.g. name recognition, fundraising, strong voting record, popular positions):
-  - [bullet]
-  - [bullet]
-
-- **Weaknesses** (documented vulnerabilities — e.g. thin record, controversy, low fundraising, positions out of step with district):
-  - [bullet]
-  - [bullet]
-
-- **Opportunities** (external factors that could help this candidate win — e.g. favorable district trends, opponent weaknesses, open seat):
-  - [bullet]
-  - [bullet]
-
-- **Threats** (external factors that could hurt this candidate — e.g. strong opponent, negative press cycle, unfavorable district trends, legal/ethics exposure):
-  - [bullet]
-  - [bullet]
-
-Base every bullet on verified information from this dossier. Do not speculate. If a quadrant has no verified data, omit it rather than filling it with guesses.
-
-${section13Prompt}
-
-## SECTION 14: VERIFICATION & RESEARCH GAPS
-**[HIGH/MEDIUM/LOW]**
-
-| Finding | Conf | Sources |
-|---|---|---|
-
-Confidence: HIGH=official/3+ · MED=1 credible · LOW=social/1 unverified · UNCONFIRMED=wrong person possible
-
-**Research gaps and open questions:**
-
-| Gap | Why It Matters | Recommended Next Step |
-|---|---|---|
-
-**Sources used in this dossier (AI research):**
-List each source that returned actual data above — e.g. "WEC filing → committee name and date" or "Perplexity news search → 12 articles." Do not fabricate sources.
-
-**Manual research checklist (requires human follow-up — not completed by AI):**
-
-| Database | Priority | What to Look For |
-|---|---|---|
-| WEC (wec.vote) | HIGH | Committee registration, all finance reports, any violations |
-| WCCA (wcca.wicourts.gov) | HIGH | All case types — filter by DOB to confirm identity |
-| Ethics Comm (ethics.wi.gov) | HIGH | Economic interest statements |
-| MyVote (myvote.wi.gov) | HIGH | Voter reg address vs. claimed address |
-| WDFI Corp (apps.dfi.wi.gov) | HIGH | Business ownership, registered agent, dissolution history |
-| Lobbying (lobbying.wi.gov) | HIGH | Self or employer lobbying activity |
-| County Land Records | MEDIUM | Property value, tax delinquency, ownership history |
-| DOR Delinquent List | MEDIUM | Unpaid taxes >$5K |
-| DSPS (licenseverification.wi.gov) | MEDIUM | Professional license status and any discipline |
-| FEC (fec.gov/data) | MEDIUM | Federal donations made and received |
-| WDFI UCC (wims.dfi.wi.gov) | MEDIUM | Liens on business equipment or property |
-| Ballotpedia | MEDIUM | Bio cross-check, prior race history |
-| Wayback Machine | MEDIUM | Deleted campaign content, old business pages, past positions |
-| InfluenceWatch | MEDIUM | Dark money and PAC connections |
-| PACER (pacer.gov) | MEDIUM | Federal bankruptcy or civil lawsuits |
-| OSHA (osha.gov) | LOW | Workplace violations at employer or owned business |
-| DPI (dpi.wi.gov/licensing) | LOW | Educator credentials — only if applicable |
-| DOC (appsdoc.wi.gov/public) | LOW | Offender registry |
-| OpenBook (openbook.wi.gov) | LOW | State contracts to candidate's business |
-| DNR (dnr.wisconsin.gov) | LOW | Environmental violations |
-| RETR (revenue.wi.gov) | LOW | Property transfer history and prices |
-| MuckRock (muckrock.com) | LOW | Existing FOIA requests about this subject |
-| McBride / Sykes / McKenna | LOW | Conservative and progressive political commentary |
-
----
-⚠️ DOSSIER FOOTER:
-*AI-Generated Political Intelligence Report · Badger Board · The Bluejack Group · badgerboardwi.com*
-*This report is AI-generated from publicly available sources. It has NOT been independently verified. All information must be independently verified before use in any campaign, publication, or professional context. Do not use for FCRA-regulated purposes. The Bluejack Group assumes no liability for accuracy of AI-generated content. Use constitutes acceptance of the Badger Board Research Use Disclaimer.*
-
----
-## CANDIDATE UPDATES (output AFTER Section 14 — do not number this as a section)
-
-After completing all 14 sections, output EXACTLY this block. Use JSON null (not the string "null") for any field you cannot verify with a source:
-
-CANDIDATE_UPDATES:
-\`\`\`json
-{
-  "verified_party": "<Democrat|Republican|Independent|Nonpartisan|Green|Libertarian|Working Families|null>",
-  "party_confidence": "<KNOWN|Confirmed|Likely|RESEARCH_REQUIRED>",
-  "verified_status": "<exploring|declared|primary_winner|general|elected|lost|withdrawn|null>",
-  "status_notes": "<one sentence of evidence for status change, or null>",
-  "research_note": {"finding": "<one or two sentences: the discrepancy between the request premise and the evidence>", "evidence": "<the specific source + date that establishes it>", "suggested_status": "<a status from the list above if the fix is a status change, else null>"}
-}
-\`\`\`
-
-Rules:
-- verified_party: ONLY include if you found independent verification (WEC filing, ActBlue/Anedot page, official party listing, news). Otherwise null.
-- party_confidence: KNOWN = official primary source confirmed; Confirmed = 2+ independent sources agree; Likely = one credible indirect source; RESEARCH_REQUIRED = ambiguous or contradictory evidence.
-- verified_status: ONLY update from current status (${safe.status || 'unknown'}) if your research clearly shows a change — WEC committee filed = "declared", certified election result = "elected" or "lost", public withdrawal statement = "withdrawn". Otherwise null.
-- status_notes: required if verified_status is not null. One sentence citing the specific evidence (source + date).
-- research_note: use JSON null unless your research uncovered a MATERIAL discrepancy with the request premise (wrong office, already declared/elected, withdrawn, identity mismatch risk). This block is the ONLY place such findings may appear — NEVER narrate them as prose in or before the dossier body.
-
-OUTPUT DISCIPLINE: your dossier output must begin DIRECTLY with "## SECTION 1" — no preamble, no "I need to flag...", no narration of your research process anywhere in the document.`
+  // ─── Writer prompt (v5 — _profile-prompt.js) ────────────────────────────
+  const userPrompt = buildWriterUserPrompt({
+    safe, officeLine, mode, canViewSection6, today,
+    identity: identityCard,
+    packets: {
+      official: officialData, identity: identityData, news: perplexityNews, incumbent: perplexityIncumbent,
+      political: politicalData, finance: financeData, affiliations: affiliationsData, social: socialMediaData, grok: grokData,
+    },
+    teamNotes: aiNotesBlock,
+    budget: WRITER_BUDGET,
+  })
 
   const { candidate_id } = body
   // Verified user ID, never from the body. Internal (cron) runs save with
@@ -1683,41 +1257,14 @@ OUTPUT DISCIPLINE: your dossier output must begin DIRECTLY with "## SECTION 1" �
     console.log(`[dossier-bg] Starting: model=${CLAUDE_MODEL}, candidate=${safe.name}, perplexity_sources=${perplexityCount}/7`)
     const startTime = Date.now()
 
-    // ─── #18: Call Claude with automatic retry on 529 overload ─────────────
-    // Live web search: the writer fills research gaps & verifies claims itself.
-    const webSearchDirective = `
-
-LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 searches):
-1. GAPS FIRST: When the research context above is missing or thin for a section (especially Sections 4 Political Record, 5 Financial, 6 Controversies), run one targeted search before writing that section.
-2. OFFICIAL SOURCES FIRST: WI campaign finance -> site:campaignfinance.wi.gov (Wisconsin Ethics Commission CFIS); WI legislation & votes -> site:docs.legis.wisconsin.gov; election results -> site:elections.wi.gov; federal finance -> site:fec.gov.
-3. VERIFY BEFORE [KNOWN]: A high-impact claim (legal, financial, controversy) gets [KNOWN] only if backed by official records above or a verifying search.
-4. Never search for facts already provided in the research context. Never let searching prevent completing every section — if the budget runs out, write with what you have.`
-
-    const webSearchTools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }]
-    const claudePayload = {
-      model: CLAUDE_MODEL,
-      max_tokens: claudeMaxTokens(16000),
-      ...CLAUDE.QUALITY,
-      system: systemPrompt + webSearchDirective,
-      tools: webSearchTools,
-      messages: [{ role: 'user', content: userPrompt }],
-    }
-    const response = await callClaudeWithRetry(claudePayload)
-    console.log(`[dossier-bg] Claude responded in ${Date.now() - startTime}ms, status=${response.status}`)
-
-    if (!response.ok) {
-      const errText = await response.text()
-      console.error(`[dossier-bg] Claude error: ${errText.slice(0, 500)}`)
-      throw new Error(`Anthropic API error: ${response.status}`)
-    }
-
-    const data = await response.json()
-    // v1.20: real cost metering — main writer call with actual token counts
-    logAiUsage({ userId: user_id, endpoint: 'profiler', provider: 'anthropic', model: CLAUDE_MODEL,
-      inputTokens: data?.usage?.input_tokens || 0, outputTokens: data?.usage?.output_tokens || 0 })
-    const extractClaudeText = (d) => (d?.content || []).filter(b => b.type === 'text' && b.text).map(b => b.text).join('')
+    // ─── Writer: Opus 5.5 with live web_search + web_fetch ─────────────────
+    // Server tools run inside the API's own loop; a long turn can come back
+    // with stop_reason "pause_turn", which we continue (same tools, content
+    // passed back as-is) a bounded number of times.
+    const { text: writerText, usedTools } = await runWriter({ userPrompt, userId: user_id })
+    console.log(`[dossier-bg] Claude responded in ${Date.now() - startTime}ms (tools=${usedTools.map(t => t.name).join('+')})`)
     reportStage(body.candidate_id, 4)                       // Verifying claims
-    let content = extractClaudeText(data)
+    let content = writerText
     // Strip any AI reasoning/thinking tags that should never be stored or shown to users
     if (content) {
       content = content.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
@@ -1743,26 +1290,25 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     console.log(`[dossier-bg] Sections found: ${sectionCount}/14`)
     if (sectionCount < 10) {
       console.log('[dossier-bg] Too few sections — retrying with continuation prompt')
-      const retryPrompt = `The dossier you just generated for ${safe.name} was cut short — only ${sectionCount} of 14 sections were included. Continue from where it was cut off and complete ALL missing sections. Start with the next missing ## SECTION header and continue through ## SECTION 14. Do not repeat sections already written.\n\nPrevious output (partial):\n${content.slice(-3000)}`
-      const retryResp = await callClaudeWithRetry({ model: CLAUDE_MODEL, max_tokens: claudeMaxTokens(16000), ...CLAUDE.QUALITY, system: systemPrompt + webSearchDirective, tools: webSearchTools, messages: [{ role: 'user', content: retryPrompt }] })
-      if (retryResp.ok) {
-        const retryData = await retryResp.json()
-        logAiUsage({ userId: user_id, endpoint: 'profiler', provider: 'anthropic', model: CLAUDE_MODEL,
-          inputTokens: retryData?.usage?.input_tokens || 0, outputTokens: retryData?.usage?.output_tokens || 0 })
-        const continuation = extractClaudeText(retryData)
+      const retryPrompt = `The profile you just generated for ${safe.name} was cut short — only ${sectionCount} of 14 sections were included. Continue from where it was cut off and complete ALL missing sections. Start with the next missing ## SECTION header and continue through ## SECTION 14, then the CANDIDATE_UPDATES block. Do not repeat sections already written.\n\nPrevious output (partial):\n${content.slice(-3000)}`
+      try {
+        const { text: continuation } = await runWriter({ userPrompt: retryPrompt, userId: user_id, maxContinuations: 1 })
         if (continuation) {
-          content = content + '\n\n' + continuation
+          const { content: contStripped, updates: contUpdates } = parseCandidateUpdates(continuation)
+          content = content + '\n\n' + contStripped
+          if (contUpdates && !candidateUpdates && candidate_id) applyCandidateUpdates(candidate_id, candidate, contUpdates).catch(() => {})
           console.log(`[dossier-bg] After continuation: ${countSections(content)} sections, ${content.length} chars`)
         }
-      }
+      } catch (e) { console.error('[dossier-bg] continuation failed:', e.message) }
     }
 
-    // ─── #1: Secondary Haiku verification pass on high-risk sections ────────
-    const verificationFlags = await runVerificationPass(content, safe.name)
+    // ─── QA pass: Sonnet 5.5 reviews the whole profile ───────────────────────
+    const verificationFlags = await runQaPass({ content, candidateName: safe.name, officeLine, identity: identityCard, userId: user_id })
     if (verificationFlags) {
-      console.log(`[dossier-bg] Verification flags found: ${verificationFlags.length} chars`)
-      content = content + `\n\n---\n## ⚠️ VERIFICATION FLAGS (AI Quality Check)\n*The following potential issues were flagged by a secondary review pass. Verify before use.*\n\n${verificationFlags}`
+      console.log(`[dossier-bg] QA flags: ${verificationFlags.count}`)
+      content = content + `\n\n---\n## ⚠️ VERIFICATION FLAGS (AI Quality Check)\n*The following potential issues were flagged by a secondary review pass. Verify before use.*\n\n${verificationFlags.markdown}`
     }
+
 
     // ─── #10: Change detection vs previous dossier ──────────────────────────
     const changeSummary = await detectChanges(candidate_id, content)
@@ -1794,7 +1340,9 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
       : null
     if (researchNote && !researchNote.finding) researchNote = null
     {
-      const firstSection = content.search(/^##\s*SECTION\s*\d+/im)
+      // The report starts at "## PROFILE SNAPSHOT" (v5) or, failing that, at the first section header.
+      const snapAt = content.search(/^##\s*PROFILE SNAPSHOT/im)
+      const firstSection = snapAt >= 0 ? snapAt : content.search(/^##\s*SECTION\s*\d+/im)
       if (firstSection > 0) {
         const preamble = content.slice(0, firstSection).replace(/^[-#*\s]+/, '').trim()
         content = content.slice(firstSection).trim()
@@ -1893,3 +1441,6 @@ LIVE WEB SEARCH — you have a web_search tool. Use it surgically (max ~8 search
     return { statusCode: 500, body: '' }
   }
 }
+
+// Test seam for the v5 pipeline helpers (pure functions + constants only).
+exports._v5 = { parseJsonObject, WRITER_BUDGET, WRITER_EFFORT, WRITER_MAX_TOKENS, WRITER_CONTINUATIONS, runWriter, runQaPass, resolveIdentity }
