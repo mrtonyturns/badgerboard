@@ -86,6 +86,27 @@ exports.handler = async (event) => {
     if (!ANTHROPIC_API_KEY) {
       return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: 'ANTHROPIC_API_KEY is not set.' }) }
     }
+    // Perplexity diagnostic: fire N short sonar-pro queries at once and report
+    // each one's status/timing (the profile pipeline fans out seven at once).
+    if (body.pplx) {
+      if (!PERPLEXITY_API_KEY) return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: 'PERPLEXITY_API_KEY is not set.' }) }
+      const n = Math.min(6, Math.max(1, Number(body.n) || 3))
+      const model = body.model === 'sonar' ? 'sonar' : 'sonar-pro'
+      const one = async (i) => {
+        const t0 = Date.now()
+        const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 40000)
+        try {
+          const r = await fetch('https://api.perplexity.ai/chat/completions', { method: 'POST', signal: ctrl.signal,
+            headers: { Authorization: `Bearer ${PERPLEXITY_API_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model, max_tokens: 120, messages: [{ role: 'user', content: `In one sentence: who is the current sheriff of ${['Marathon', 'Waupaca', 'Portage', 'Wood', 'Lincoln', 'Shawano'][i]} County, Wisconsin?` }] }) })
+          const txt = await r.text()
+          return { i, status: r.status, ms: Date.now() - t0, len: txt.length, head: r.ok ? '' : txt.slice(0, 160), ratelimit: { remaining: r.headers.get('x-ratelimit-remaining-requests'), limit: r.headers.get('x-ratelimit-limit-requests'), retry: r.headers.get('retry-after') } }
+        } catch (e) { return { i, status: 'ERR', ms: Date.now() - t0, error: e.message } }
+        finally { clearTimeout(to) }
+      }
+      const results = await Promise.all(Array.from({ length: n }, (_, i) => one(i)))
+      return { statusCode: 200, headers, body: JSON.stringify({ ok: true, model, results }) }
+    }
     if (body.deep) {
       try {
         const ctrl = new AbortController()
