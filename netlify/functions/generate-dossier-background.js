@@ -864,7 +864,18 @@ exports.handler = async (event) => {
         return { statusCode: 200, headers, body: JSON.stringify({ ok: false, error: e.message, hint: 'API call failed or timed out' }) }
       }
     }
-    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, key_set: true, key_prefix: ANTHROPIC_API_KEY.slice(0, 8) + '...', perplexity: !!PERPLEXITY_API_KEY }) }
+    // Effective model ids (admin-only diagnostic): shows whether a stale
+    // env override is still pinning an old model somewhere.
+    const models = {
+      profiles: CLAUDE_MODEL, grok: GROK_MODEL, fast: HAIKU_MODEL,
+      events_and_history: process.env.CLAUDE_RESEARCH_MODEL || MODELS.CLAUDE_QUALITY,
+      polling_synth: process.env.POLLING_SYNTH_MODEL || MODELS.CLAUDE_QUALITY,
+      polling_grok: process.env.POLLING_GROK_MODEL || MODELS.GROK,
+      polling_research: process.env.POLLING_RESEARCH_MODEL || MODELS.PPLX_PRO,
+      polling_gemini: process.env.POLLING_GEMINI_MODEL || MODELS.GEMINI,
+      env_overrides: ['CLAUDE_RESEARCH_MODEL', 'POLLING_SYNTH_MODEL', 'POLLING_GROK_MODEL', 'POLLING_RESEARCH_MODEL', 'POLLING_SOCIAL_MODEL', 'POLLING_GEMINI_MODEL'].filter(k => process.env[k]),
+    }
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, key_set: true, key_prefix: ANTHROPIC_API_KEY.slice(0, 8) + '...', perplexity: !!PERPLEXITY_API_KEY, xai: !!process.env.XAI_API_KEY, gemini: !!process.env.GEMINI_API_KEY, models }) }
   }
 
   if (!ANTHROPIC_API_KEY) {
