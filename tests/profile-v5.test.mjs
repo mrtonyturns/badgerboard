@@ -213,6 +213,59 @@ console.log('\n[8b] live-run fixes — CANDIDATE_UPDATES stripping, mode refinem
   check('UI copy says 5–8 minutes', !/2–4 minutes/.test(readFileSync(new URL('../src/pages/Dossiers.jsx', import.meta.url), 'utf8')))
 }
 
+console.log('\n[8c] out-of-state history → deep research expansion')
+{
+  const det = G._v5.detectOutOfStateFromText
+  const codes = (t) => det(t).map(e => `${e.state}:${e.kind}`).join(',')
+  check('"grew up in Connecticut" → CT grew_up', codes('She grew up in Connecticut and moved to Wausau in 2015') === 'CT:grew_up')
+  check('"went to college in Alabama" → AL college', codes('went to college in Alabama, then law school at Marquette') === 'AL:college')
+  check('"practiced law in Pennsylvania" → PA work', codes('practiced law in Pennsylvania before 2011') === 'PA:work')
+  check('"stationed in Texas" → TX military', codes('He served in the Army and was stationed in Texas') === 'TX:military')
+  check('a state name with no residence/education verb is ignored', det('Co-authored a bill with the Minnesota delegation on the Mississippi River') .length === 0)
+  check('"Washington County" and "George Washington" are not states', det('lived in Washington County his whole life; admires George Washington').length === 0)
+  check('Wisconsin never counts', det('born and raised in Wisconsin').length === 0)
+  check('no text → nothing', det('').length === 0 && det(null).length === 0)
+
+  const norm = G._v5.normalizeOutOfState
+  const card = { out_of_state_history: [
+    { state: 'Connecticut', place: 'Hartford', period: '1984–2002', kind: 'grew_up', evidence: 'https://bio' },
+    { state: 'al', place: 'University of Alabama', period: '2002–2006', kind: 'college', evidence: 'https://alumni' },
+    { state: 'WI', place: 'Madison', kind: 'lived' },
+    { state: 'Narnia', kind: 'lived' },
+    { state: 'CT', place: 'dup', kind: 'other' },
+  ] }
+  const n = norm(card, { research_context: 'worked in Minnesota briefly' })
+  check('card entries validated: names→codes, WI and unknown dropped, states deduped, text signal appended', n.map(e => e.state).join() === 'CT,AL,MN' && n[0].place === 'Hartford' && n[1].kind === 'college' && n[2].kind === 'work')
+  check('capped at 4 states', norm({ out_of_state_history: ['CA', 'NY', 'TX', 'FL', 'OH', 'GA'].map(s => ({ state: s, kind: 'lived' })) }, {}).length === 4)
+  check('no card + no signal → empty', norm(null, { research_context: 'dentist in Mosinee' }).length === 0)
+  check('toStateCode handles names and codes', G._v5.toStateCode('New York') === 'NY' && G._v5.toStateCode('ny') === 'NY' && G._v5.toStateCode('Mars') === null)
+
+  const dirv = P.outOfStateDirective(n)
+  check('directive names each state, kind and years', /CT \(Hartford\): grew up, 1984–2002/.test(dirv) && /AL \(University of Alabama\): college \/ graduate school, 2002–2006/.test(dirv) && /MN: worked/.test(dirv))
+  check('directive demands that state\'s courts, news, business, donations and Section 14 databases', /court records/.test(dirv) && /campus's news archives/.test(dirv) && /Section 14 manual follow-up/.test(dirv) && /age band and the exact years/.test(dirv))
+  check('no history → no directive', P.outOfStateDirective([]) === '' && P.outOfStateDirective(null) === '')
+
+  const u = P.buildWriterUserPrompt({ safe, officeLine, mode: 'challenger', canViewSection6: true, today: 'x', identity, packets: { outOfState: '--- Connecticut ---\nfound x' }, outOfState: n, budget: { searches: 14, fetches: 11 } })
+  check('writer task carries the directive, the packet and the bigger budget', /OUT-OF-STATE HISTORY — DEEP RESEARCH REQUIRED/.test(u) && /=== OUT-OF-STATE RECORD RESEARCH/.test(u) && /web_search up to 14, web_fetch up to 11/.test(u))
+  const u0 = P.buildWriterUserPrompt({ safe, officeLine, mode: 'challenger', canViewSection6: true, today: 'x', identity, packets: {} })
+  check('…and none of it when there is no history', !/OUT-OF-STATE HISTORY/.test(u0) && !/OUT-OF-STATE RECORD RESEARCH/.test(u0))
+  check('system prompt has the standing rule (expand even when the task did not list it)', /OUT-OF-STATE HISTORY EXPANDS THE PROFILE/.test(P.WRITER_SYSTEM) && /If you discover out-of-state years that the task did not list/.test(P.WRITER_SYSTEM))
+  check('identity prompt asks for out_of_state_history with kinds and evidence', /"out_of_state_history"/.test(P.resolveIdentityPrompt({ safe, officeLine, mode: 'challenger' })) && /grew_up\|college\|work\|military\|lived\|other/.test(P.resolveIdentityPrompt({ safe, officeLine, mode: 'challenger' })))
+  const tpl = P.sectionTemplate({ mode: 'challenger', canViewSection6: true })
+  check('template: Section 2 row, Section 3 years, Section 14 other-state databases', /Lived outside Wisconsin/.test(tpl) && /INCLUDING every year spent outside Wisconsin/.test(tpl) && /for every state they lived in, that state's court-records portal/.test(tpl))
+  check('pipeline: extra budget +4 searches +3 fetches and the packet is fetched per state', G._v5.OOS_EXTRA_BUDGET.searches === 4 && G._v5.OOS_EXTRA_BUDGET.fetches === 3 && /fetchPerplexityOutOfState\(safe\.name, outOfState, ctx, identityCard\)/.test(SRC) && /toolBudget: outOfState\.length \? writerBudget : null/.test(SRC))
+
+  // writer loop honours the bigger budget
+  const realFetch = globalThis.fetch
+  let sent = null
+  globalThis.fetch = async (url, init) => { sent = JSON.parse(init.body); return { status: 200, ok: true, clone() { return this }, async text() { return '{}' }, async json() { return { stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }], usage: {} } } } }
+  await G._v5.runWriter({ userPrompt: 'x', userId: 'u', toolBudget: { searches: 14, fetches: 11 } })
+  check('runWriter raises max_uses on both tools for an out-of-state run', sent.tools[0].max_uses === 14 && sent.tools[1].max_uses === 11)
+  await G._v5.runWriter({ userPrompt: 'x', userId: 'u' })
+  check('…and keeps the defaults otherwise', sent.tools[0].max_uses === 10 && sent.tools[1].max_uses === 8)
+  globalThis.fetch = realFetch
+}
+
 console.log('\n[9] pipeline wiring (source checks)')
 {
   check('identity stage is launched alongside the research fan-out', /const identityCardPromise = resolveIdentity\(/.test(SRC))

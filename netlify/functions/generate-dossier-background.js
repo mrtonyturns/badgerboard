@@ -623,12 +623,113 @@ function refineModeFromIdentity({ mode, officeLine, safe, card }) {
   return out
 }
 
+// ─── Out-of-state history ────────────────────────────────────────────────────
+// Wisconsin databases only cover Wisconsin years. When the identity stage (or
+// the candidate record / user context) shows years spent in another state, the
+// profile expands: an extra Perplexity packet per state and a bigger tool
+// budget for the writer, plus the prompt directive in _profile-prompt.js.
+const US_STATES = { AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland', MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WY: 'Wyoming', DC: 'District of Columbia' }
+const STATE_CODE_BY_NAME = Object.fromEntries(Object.entries(US_STATES).map(([c, n]) => [n.toLowerCase(), c]))
+const OOS_MAX_STATES = 4
+const OOS_EXTRA_BUDGET = { searches: 4, fetches: 3 }
+const OOS_KINDS = new Set(['grew_up', 'college', 'work', 'military', 'lived', 'other'])
+
+function toStateCode(v) {
+  if (!v) return null
+  const s = String(v).trim()
+  if (/^[A-Za-z]{2}$/.test(s) && US_STATES[s.toUpperCase()]) return s.toUpperCase()
+  return STATE_CODE_BY_NAME[s.toLowerCase()] || null
+}
+
+// Cheap signal from the user's own words ("grew up in Connecticut", "went to
+// college in Alabama", "moved here from Minnesota in 2019") so the expansion
+// still happens when the identity stage misses it.
+const OOS_CONTEXT_RE = /\b(grew up|raised|born|from|moved (?:here )?from|lived|living|resided|worked|practiced|stationed|served|college|university|law school|graduate school|studied|attended|went to school)\b/i
+function detectOutOfStateFromText(text) {
+  const out = []
+  const t = String(text || '')
+  if (!t) return out
+  for (const [code, name] of Object.entries(US_STATES)) {
+    const re = new RegExp(`\\b${name.replace(/ /g, '\\s+')}\\b`, 'i')
+    const m = t.match(re)
+    if (!m) continue
+    // "Washington County", "Jefferson County" (WI), "George Washington", street
+    // names: a state name followed by County/Street/etc. is not a state.
+    const after = t.slice(m.index + name.length, m.index + name.length + 12)
+    if (/^\s*(County|Co\.|Street|St\.|Avenue|Ave\.|Road|Township|High School)/i.test(after)) continue
+    if (code === 'WA' && /George\s+$/i.test(t.slice(Math.max(0, m.index - 8), m.index))) continue
+    // Require a residence/education/work verb within ~80 characters.
+    const window = t.slice(Math.max(0, m.index - 80), m.index + name.length + 80)
+    if (!OOS_CONTEXT_RE.test(window)) continue
+    const kind = /college|university|law school|graduate school|studied|attended|went to school/i.test(window) ? 'college'
+      : /grew up|raised|born/i.test(window) ? 'grew_up'
+      : /stationed|served/i.test(window) ? 'military'
+      : /worked|practiced/i.test(window) ? 'work' : 'lived'
+    out.push({ state: code, place: null, period: null, kind, evidence: 'candidate record / user context' })
+  }
+  return out
+}
+
+// Merge the identity card's list with the text signal; validated, deduped by
+// state (first evidence wins), Wisconsin dropped, capped.
+function normalizeOutOfState(card, safe) {
+  const entries = []
+  const fromCard = Array.isArray(card?.out_of_state_history) ? card.out_of_state_history : []
+  for (const e of fromCard) {
+    if (!e || typeof e !== 'object') continue
+    const state = toStateCode(e.state)
+    if (!state || state === 'WI') continue
+    entries.push({
+      state,
+      place: e.place ? String(e.place).slice(0, 80) : null,
+      period: e.period ? String(e.period).slice(0, 40) : null,
+      kind: OOS_KINDS.has(e.kind) ? e.kind : 'other',
+      evidence: e.evidence ? String(e.evidence).slice(0, 200) : null,
+    })
+  }
+  for (const e of detectOutOfStateFromText(`${safe?.research_context || ''} ${safe?.bio_summary || ''}`)) {
+    if (e.state !== 'WI') entries.push(e)
+  }
+  const seen = new Set(); const out = []
+  for (const e of entries) {
+    if (seen.has(e.state)) continue
+    seen.add(e.state); out.push(e)
+    if (out.length >= OOS_MAX_STATES) break
+  }
+  return out
+}
+
+// One deep Perplexity pass per out-of-state period (max 3 — the writer's own
+// tool budget covers the rest). Returns one combined packet or null.
+async function fetchPerplexityOutOfState(name, entries, ctx, card) {
+  if (!PERPLEXITY_API_KEY || !entries?.length) return null
+  const who = [card?.legal_name && card.legal_name !== name ? `(legal name ${card.legal_name})` : '', card?.disambiguation ? `Distinguishing details: ${card.disambiguation}.` : '', ctx ? `Context: ${ctx}.` : ''].filter(Boolean).join(' ')
+  const parts = []
+  for (const e of entries.slice(0, 3)) {
+    const stateName = US_STATES[e.state] || e.state
+    const where = `${e.place ? `${e.place}, ` : ''}${stateName}`
+    const when = e.period ? ` around ${e.period}` : ''
+    const why = { grew_up: 'grew up there', college: 'attended college or graduate school there', work: 'worked there', military: 'was stationed there', lived: 'lived there', other: 'spent time there' }[e.kind] || 'spent time there'
+    const text = await queryPerplexity(
+      `You are an opposition researcher. Report only sourced facts with URLs and dates. Public records and credible reporting only — no sealed or juvenile matters, no speculation. If a result could be a different person with the same name, say so explicitly. Say NOT FOUND for any category with nothing.`,
+      `${name} ${who} is now a Wisconsin political figure but ${why}: ${where}${when}. Research their time in ${stateName}. Search ${stateName} court records (criminal convictions, civil suits, bankruptcies, liens, evictions), local and campus news archives for ${where}, ${stateName} business filings and professional licenses, property records, political donations and activity in ${stateName} (FEC, the ${stateName} campaign-finance portal, OpenSecrets, FollowTheMoney), employer or alumni coverage, student-newspaper mentions, and any public controversy from those years. For every item give: what happened, when, the source and URL, and why you believe it is the same person (age band, years, employer, hometown).`,
+      1800, 'sonar-pro', `out-of-state ${e.state}`
+    )
+    if (text) parts.push(`--- ${stateName}${e.place ? ` (${e.place})` : ''}${e.period ? `, ${e.period}` : ''} — ${why} ---\n${text}`)
+  }
+  return parts.length ? parts.join('\n\n') : null
+}
+
 // Stage 2 — the writer. One Opus 5.5 turn with web_search + web_fetch,
 // continued through pause_turn, retried on 529, and downgraded to
 // search-only if the org has web fetch turned off (400 naming web_fetch).
 // Resolves { data, text, usedTools }; throws on a hard failure.
-async function runWriter({ userPrompt, userId, maxContinuations = WRITER_CONTINUATIONS, deadlineMs = Infinity }) {
-  let tools = WRITER_TOOLS
+async function runWriter({ userPrompt, userId, maxContinuations = WRITER_CONTINUATIONS, deadlineMs = Infinity, toolBudget = null }) {
+  // Optional bigger budget (out-of-state research): same tools, higher max_uses.
+  const baseTools = toolBudget
+    ? WRITER_TOOLS.map(t => ({ ...t, max_uses: t.name === 'web_search' ? toolBudget.searches : t.name === 'web_fetch' ? toolBudget.fetches : t.max_uses }))
+    : WRITER_TOOLS
+  let tools = baseTools
   const messages = [{ role: 'user', content: userPrompt }]
   const body = () => ({
     model: CLAUDE_MODEL,
@@ -651,7 +752,7 @@ async function runWriter({ userPrompt, userId, maxContinuations = WRITER_CONTINU
     let response
     try {
       response = await callClaudeWithRetry(body(), 2, ctrl.signal)
-      if (response.status === 400 && tools === WRITER_TOOLS) {
+      if (response.status === 400 && tools === baseTools) {
         const detail = await response.text().catch(() => '')
         if (/web_fetch/i.test(detail)) {
           console.warn('[dossier-bg] web_fetch rejected by the API — continuing with web_search only')
@@ -1274,6 +1375,18 @@ exports.handler = async (event) => {
   // record alone; if the identity stage found them on a ballot or in office,
   // use that instead so the writer researches the right thing.
   const { mode: writerMode, officeLine: writerOfficeLine } = refineModeFromIdentity({ mode, officeLine, safe, card: identityCard })
+  // Years outside Wisconsin → an extra research packet per state and a bigger
+  // tool budget for the writer (see the OUT-OF-STATE directive in the prompt).
+  const outOfState = normalizeOutOfState(identityCard, safe)
+  let outOfStateData = null
+  if (outOfState.length) {
+    console.log(`[dossier-bg] out-of-state history: ${outOfState.map(e => `${e.state}/${e.kind}${e.period ? `/${e.period}` : ''}`).join(', ')} — running deep research`)
+    outOfStateData = await fetchPerplexityOutOfState(safe.name, outOfState, ctx, identityCard)
+    if (outOfStateData) logAiUsage({ userId: user?.id || null, endpoint: 'profiler', provider: 'perplexity', model: 'sonar-pro', flatUsd: 0.004 * Math.min(3, outOfState.length), estimated: true })
+  }
+  const writerBudget = outOfState.length
+    ? { searches: WRITER_BUDGET.searches + OOS_EXTRA_BUDGET.searches, fetches: WRITER_BUDGET.fetches + OOS_EXTRA_BUDGET.fetches }
+    : WRITER_BUDGET
   if (writerMode !== mode || writerOfficeLine !== officeLine) console.log(`[dossier-bg] mode refined by identity card: ${mode} → ${writerMode}; office: ${officeLine} → ${writerOfficeLine}`)
 
   // Team notes & documents — enters the prompt ONLY through the single
@@ -1292,9 +1405,11 @@ exports.handler = async (event) => {
     packets: {
       official: officialData, identity: identityData, news: perplexityNews, incumbent: perplexityIncumbent,
       political: politicalData, finance: financeData, affiliations: affiliationsData, social: socialMediaData, grok: grokData,
+      outOfState: outOfStateData,
     },
     teamNotes: aiNotesBlock,
-    budget: WRITER_BUDGET,
+    budget: writerBudget,
+    outOfState,
   })
 
   const { candidate_id } = body
@@ -1312,7 +1427,7 @@ exports.handler = async (event) => {
     // Server tools run inside the API's own loop; a long turn can come back
     // with stop_reason "pause_turn", which we continue (same tools, content
     // passed back as-is) a bounded number of times.
-    const { text: writerText, usedTools } = await runWriter({ userPrompt, userId: user_id, deadlineMs: handlerStartedAt + FUNCTION_BUDGET_MS })
+    const { text: writerText, usedTools } = await runWriter({ userPrompt, userId: user_id, deadlineMs: handlerStartedAt + FUNCTION_BUDGET_MS, toolBudget: outOfState.length ? writerBudget : null })
     console.log(`[dossier-bg] Claude responded in ${Date.now() - startTime}ms (tools=${usedTools.map(t => t.name).join('+')}, ${Math.round(remainingMs(handlerStartedAt) / 1000)}s left in the function)`)
     reportStage(body.candidate_id, 4)                       // Verifying claims
     let content = writerText
@@ -1496,4 +1611,4 @@ exports.handler = async (event) => {
 }
 
 // Test seam for the v5 pipeline helpers (pure functions + constants only).
-exports._v5 = { parseJsonObject, remainingMs, FUNCTION_BUDGET_MS, refineModeFromIdentity, parseCandidateUpdates, WRITER_BUDGET, WRITER_EFFORT, WRITER_MAX_TOKENS, WRITER_CONTINUATIONS, runWriter, runQaPass, resolveIdentity }
+exports._v5 = { parseJsonObject, detectOutOfStateFromText, normalizeOutOfState, toStateCode, OOS_EXTRA_BUDGET, remainingMs, FUNCTION_BUDGET_MS, refineModeFromIdentity, parseCandidateUpdates, WRITER_BUDGET, WRITER_EFFORT, WRITER_MAX_TOKENS, WRITER_CONTINUATIONS, runWriter, runQaPass, resolveIdentity }

@@ -78,6 +78,8 @@ function resolveIdentityPrompt({ safe, officeLine, mode }) {
     ``,
     `Research mode: ${mode}.`,
     ``,
+    `Also look specifically for time spent OUTSIDE Wisconsin: where they were born and raised, where they went to college or graduate school, where they worked or were stationed, any years living in another state. A bio line like "grew up in Connecticut", "University of Alabama", "practiced law in Pennsylvania" or "moved to Wisconsin in 2015" is what you are after. Record each one in out_of_state_history with its source.`,
+    ``,
     `Use web_search (at most 5 searches). Prefer official and primary pages: Ballotpedia, the campaign site, the Wisconsin Legislature member page (legis.wisconsin.gov), the WI Ethics Commission campaign-finance system (cfis.wi.gov), county/municipal government pages, LinkedIn, and major Wisconsin outlets. Do not fetch anything — only search.`,
     ``,
     `Return ONLY a JSON object (no prose, no code fence) with exactly these keys:`,
@@ -92,6 +94,7 @@ function resolveIdentityPrompt({ safe, officeLine, mode }) {
     `  "disambiguation": "how to tell this person from others with the same name (employer, age band, town), or null",`,
     `  "suggested_mode": "prospect|newly_declared|challenger|incumbent",   // prospect = no announced run; newly_declared = first candidacy just announced; challenger = on a ballot (nominee / general / running again); incumbent = currently holds the office`,
     `  "suggested_mode_evidence": "one sentence with the source, or null",`,
+    `  "out_of_state_history": [ { "state": "two-letter code, not WI", "place": "city or institution or null", "period": "years or 'briefly' or null", "kind": "grew_up|college|work|military|lived|other", "evidence": "url or source name" } ],   // every documented period outside Wisconsin — childhood, college, graduate school, jobs, military postings, a few years elsewhere. [] if none found. Never guess a state.`,
     `  "canonical_urls": {`,
     `    "ballotpedia": "url or null", "campaign_site": "url or null", "legislature_page": "url or null",`,
     `    "cfis": "url or null", "government_page": "url or null", "linkedin": "url or null",`,
@@ -105,6 +108,21 @@ function resolveIdentityPrompt({ safe, officeLine, mode }) {
     `Disambiguation discipline: a page that matches this person on name AND location or role (e.g. a law-firm bio that mentions the same town, mayoralty or legislature) is the SAME person — say so. Only declare a page to be a different person when it positively conflicts (different city, age band, occupation or party). Never assert "not the same person" from silence.`,
   ]
   return lines.filter(l => l !== null).join('\n')
+}
+
+// ─── Out-of-state history ────────────────────────────────────────────────────
+// Rendered into the writer's task when the identity stage (or the candidate
+// record / user context) shows years spent outside Wisconsin. The system
+// prompt carries the general rule; this names the specific states and years so
+// the writer's extra search budget goes exactly there.
+const KIND_LABEL = { grew_up: 'grew up', college: 'college / graduate school', work: 'worked', military: 'military service', lived: 'lived', other: 'time spent' }
+function outOfStateDirective(entries = []) {
+  const list = (Array.isArray(entries) ? entries : []).filter(e => e && e.state)
+  if (!list.length) return ''
+  const lines = list.map(e => `- ${e.state}${e.place ? ` (${e.place})` : ''}: ${KIND_LABEL[e.kind] || 'time spent'}${e.period ? `, ${e.period}` : ''}${e.evidence ? ` — source: ${e.evidence}` : ''}`)
+  return `⚠️ OUT-OF-STATE HISTORY — DEEP RESEARCH REQUIRED. This person spent documented time outside Wisconsin:
+${lines.join('\n')}
+Wisconsin records will not cover those years. For EACH state above, research as thoroughly as you research Wisconsin: that state's court records (criminal convictions, civil suits, bankruptcies, liens), the city's and campus's news archives, business filings and professional licenses there, property records, campaign donations and political activity in that state (FEC, OpenSecrets, FollowTheMoney, the state's own disclosure portal), employer and alumni coverage, student-newspaper and local-paper mentions. Use the OUT-OF-STATE RECORD RESEARCH packet first, then your tool budget (extra searches and fetches are reserved for this). Report: every out-of-state year in Section 3; out-of-state education, employment and residence in Section 2; records in Sections 5, 6 and 8; and that state's specific databases in the Section 14 manual follow-up. Tie each record to this person by age band and the exact years there — a same-name hit from the wrong decade is not a match.`
 }
 
 // ─── Stage 2: writer ─────────────────────────────────────────────────────────
@@ -123,8 +141,9 @@ HOW TO WORK
 2. PACKETS FIRST, TOOLS FOR GAPS. Read the packets, then spend tool calls where they add the most: (a) web_fetch the canonical pages in the IDENTITY CARD — Ballotpedia, the campaign site, the legislature member page, the CFIS committee page — they are primary sources; (b) web_search for gaps in Political Record, Finance, Controversies and Policy Positions; (c) verify any high-impact claim (legal, financial, ethical) before badging it [KNOWN]. Never search for something the packets already give you with a source. Never let research stop you from finishing: if the budget is spent, write with what you have and list the gap in Section 14.
 3. OFFICIAL SOURCES OUTRANK EVERYTHING. Wisconsin: cfis.wi.gov and ethics.wi.gov (campaign finance, statements of economic interest), docs.legis.wisconsin.gov and legis.wisconsin.gov (bills, votes, members), elections.wi.gov (results), wcca.wicourts.gov (court records — convictions only; dismissed cases on third-party aggregators are OFF LIMITS), apps.dfi.wi.gov (business filings), licensesearch.wi.gov / DSPS (licenses, discipline), lobbying.wi.gov, revenue.wi.gov (delinquent taxpayers). Federal: fec.gov, opensecrets.org, courtlistener.com, pacer. Then Ballotpedia, WisPolitics, Wisconsin Examiner, Urban Milwaukee, the Milwaukee Journal Sentinel, Wisconsin State Journal, Cap Times, Wausau Pilot & Review, WPR, local TV (WSAW, WAOW, WISN, WKOW, WBAY), county weeklies.
 4. WRITE FOR ACTION. Lead each section with what matters most. Every item carries: the fact, a source (URL or named record), a date, and a confidence badge. Dates as Month D, YYYY. Use "&" instead of "and" inside table cells. Keep table cells short. No preamble, no narration of your process, no sentences that say information could not be found — a missing table row is the correct way to show "not found", EXCEPT where the absence itself matters (for example, a "declared" candidate with no CFIS registration).
-5. NEVER FABRICATE. No invented URLs, dates, vote counts, dollar figures, quotes or case numbers. If you have the fact but not the exact figure, say what you know and badge it [Verify].
-6. VERIFY THE PARTY. The candidate record's party is a claim. Confirm it from CFIS registration, the donation platform (ActBlue = Democrat, Anedot / WinRed = Republican), party endorsements, the campaign site, or news that names the party — and report the result in CANDIDATE_UPDATES.
+5. OUT-OF-STATE HISTORY EXPANDS THE PROFILE. Wisconsin databases only cover Wisconsin years. If the identity card, the packets, or anything you read shows this person grew up, studied, worked, served or lived in another state — even briefly — research that state the way you research Wisconsin: that state's court records (convictions, civil suits, bankruptcies), news archives for that city or campus, business and professional-license registries, property records, campaign donations and political activity there (FEC and that state's disclosure portal, OpenSecrets, FollowTheMoney), employer coverage, and alumni or student-newspaper mentions. Put every out-of-state year in Section 3, every out-of-state record in the section it belongs to (2, 5, 6, 8), and name that state's databases in the Section 14 manual follow-up. If you discover out-of-state years that the task did not list, say so in Section 14 and spend search budget there anyway. Badge items as usual; out-of-state identity matching is stricter — tie each record to this person by age band and the exact years they were there.
+6. NEVER FABRICATE. No invented URLs, dates, vote counts, dollar figures, quotes or case numbers. If you have the fact but not the exact figure, say what you know and badge it [Verify].
+7. VERIFY THE PARTY. The candidate record's party is a claim. Confirm it from CFIS registration, the donation platform (ActBlue = Democrat, Anedot / WinRed = Republican), party endorsements, the campaign site, or news that names the party — and report the result in CANDIDATE_UPDATES.
 
 CONFIDENCE BADGES — one on every claim:
 [KNOWN] — in an official record or confirmed by credible reporting you have seen
@@ -262,6 +281,7 @@ Identity lock first, one line: Legal name · Age or DOB (if public) · City/Town
 | Businesses (WDFI) | | |
 | Professional license (DSPS) | | |
 | Property (county) | | |
+| Lived outside Wisconsin | state · years · why (school, work, military, family) | |
 
 Include only rows you can fill with a source. Then 2–4 sentences of narrative background: path into public life, what they are known for.
 
@@ -271,7 +291,7 @@ Include only rows you can fill with a source. Then 2–4 sentences of narrative 
 | Year | Event | Source |
 |---|---|---|
 
-Career, civic, political, legal and financial milestones in order. Flag unexplained gaps of 3+ years.
+Career, civic, political, legal and financial milestones in order, INCLUDING every year spent outside Wisconsin (state and city). Flag unexplained gaps of 3+ years.
 
 ${section4}
 
@@ -377,7 +397,7 @@ Confidence: HIGH = official record or 3+ sources · MEDIUM = one credible source
 
 **Sources that returned data for this profile:** one line per source actually used (e.g. "CFIS → committee registration & July report", "Ballotpedia → race history", "web search → 9 articles"). Never list a source you did not use.
 
-**Manual follow-up (not completed by AI):** a short table of the HIGH-priority records a human should pull for this specific person, chosen from: WCCA (wcca.wicourts.gov, filter by DOB), CFIS full reports (cfis.wi.gov), Ethics Commission statements of economic interest (ethics.wi.gov), MyVote registration (myvote.wi.gov), WDFI corporate records (apps.dfi.wi.gov), county register of deeds, DOR delinquent taxpayer list, DSPS license lookup, PACER, FEC. Three to six rows, each with what to look for and why it matters for THIS person.
+**Manual follow-up (not completed by AI):** a short table of the HIGH-priority records a human should pull for this specific person, chosen from: WCCA (wcca.wicourts.gov, filter by DOB), CFIS full reports (cfis.wi.gov), Ethics Commission statements of economic interest (ethics.wi.gov), MyVote registration (myvote.wi.gov), WDFI corporate records (apps.dfi.wi.gov), county register of deeds, DOR delinquent taxpayer list, DSPS license lookup, PACER, FEC — and, for every state they lived in, that state's court-records portal, secretary-of-state business search, professional-licensing lookup and campaign-finance portal, named specifically (e.g. "Connecticut Judicial Branch case look-up", "Alabama Secretary of State business search"). Three to eight rows, each with what to look for and why it matters for THIS person.
 
 ---
 ⚠️ DOSSIER FOOTER:
@@ -415,8 +435,9 @@ Rules: verified_party only with independent verification (CFIS, donation platfor
  * @param {string} [o.teamNotes]       formatted team-notes block (may be '')
  * @param {object} [o.budget]          { searches, fetches }
  */
-function buildWriterUserPrompt({ safe, officeLine, mode, canViewSection6, today, identity, packets = {}, teamNotes = '', budget = { searches: 10, fetches: 8 } }) {
+function buildWriterUserPrompt({ safe, officeLine, mode, canViewSection6, today, identity, packets = {}, teamNotes = '', budget = { searches: 10, fetches: 8 }, outOfState = [] }) {
   const dir = (MODE_DIRECTIVES[mode] || MODE_DIRECTIVES.challenger)(officeLine, safe.status)
+  const oos = outOfStateDirective(outOfState)
 
   const record = [
     `CANDIDATE RECORD (user-entered — verify party and status):`,
@@ -474,6 +495,7 @@ Notes: ${identity.notes || 'none'}\nThe card comes from a quick search step and 
     packet('CAMPAIGN FINANCE RESEARCH', packets.finance, 'Section 5. Figures need a filing or a credible report behind them.'),
     packet('AFFILIATIONS & ENDORSEMENTS RESEARCH', packets.affiliations, 'Section 8.'),
     packet('SOCIAL MEDIA RESEARCH', packets.social, 'Section 10 — posts BY and ABOUT the candidate, with platform and author.'),
+    packet('OUT-OF-STATE RECORD RESEARCH (web — the years this person spent outside Wisconsin)', packets.outOfState, 'Use for Sections 2, 3, 5, 6 and 8. Identity matching is stricter here: keep a record only if it fits this person\'s age band and the exact years they were in that state.'),
     packet('REAL-TIME X & BREAKING INTELLIGENCE (Grok live search, as of today)', packets.grok, 'Newest material available. Use for Section 1 (breaking items), Section 10 (X posts, sentiment), Section 6 (emerging matters) and Section 12 (current sentiment). Badge Grok-only items [X/Live] or [Web/Live].'),
   ].join('')
 
@@ -482,6 +504,7 @@ Notes: ${identity.notes || 'none'}\nThe card comes from a quick search step and 
 TOOL BUDGET for this profile: web_search up to ${budget.searches}, web_fetch up to ${budget.fetches}.
 
 ${dir}
+${oos ? `\n${oos}` : ''}
 ${teamNotes ? `\n${teamNotes}` : ''}
 ${record}
 
@@ -528,6 +551,7 @@ ${content}`
 
 module.exports = {
   MODE_DIRECTIVES,
+  outOfStateDirective,
   resolveIdentityPrompt,
   WRITER_SYSTEM,
   WRITER_TOOLS,
