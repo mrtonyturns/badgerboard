@@ -18,6 +18,7 @@ import config from './_config.js'
 import entitlements from './_entitlements.js'
 import aiUsage from './_ai-usage.js'
 import models from './_models.js'
+import { planAllows } from '../../src/lib/tiers.js'
 
 const { ADMIN_EMAILS } = config
 const { resolveEntitlement } = entitlements
@@ -43,9 +44,13 @@ async function requireBroadsideFetch(token) {
   const user = await verifyUser(token)
   if (!user?.id) return { error: jsonRes(401, { error: 'Invalid or expired token' }) }
   if (ADMIN_EMAILS.includes((user.email || '').toLowerCase())) return { user }
-  const { plan } = await resolveEntitlement(user)
-  if (!BROADSIDE_PLANS.includes(plan)) {
+  const ent = await resolveEntitlement(user)
+  if (!BROADSIDE_PLANS.includes(ent.plan) && ent.source !== 'beta') {
     return { error: jsonRes(403, { error: 'Broadside is included with paid Badger Board plans. Upgrade to unlock it.' }) }
+  }
+  // Nov 15 2026 lineup: Broadside is a Candidate-plan feature (tiers.js).
+  if (!planAllows(ent, 'broadside')) {
+    return { error: jsonRes(403, { error: 'Broadside is included with paid Candidate plans.' }) }
   }
   return { user }
 }

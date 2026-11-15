@@ -11,7 +11,6 @@ const SUPABASE_ANON     = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPA
 const MODEL = MODELS.CLAUDE_QUALITY
 
 const { ADMIN_EMAILS } = require('./_config')
-const CAMPAIGN_PLUS  = ['campaign', 'agency', 'c_active', 'c_campaign', 'a_monitor', 'a_active', 'a_campaign']
 
 // ─── Sanitization & allowlists ────────────────────────────────────────────────
 function sanitize(val, maxLen = 200) {
@@ -55,11 +54,10 @@ exports.handler = async (event) => {
   }
   // ── Tier check ────────────────────────────────────────────────────────────────
   const caller = await authRes.json()
-  const plan = ADMIN_EMAILS.includes(caller.email?.toLowerCase())
-    ? 'agency'
-    : (await require('./_entitlements').resolveEntitlement(caller)).plan  // v1.18: honors beta + trials
-  if (!CAMPAIGN_PLUS.includes(plan)) {
-    return { statusCode: 403, headers, body: JSON.stringify({ error: 'Campaign plan or higher required.' }) }
+  // Nov 15 2026 lineup: AI discovery is an Action-plan feature (tiers.js).
+  const { planAllowsUser, FEATURE_MESSAGES } = require('./_plan-gate')
+  if (!ADMIN_EMAILS.includes(caller.email?.toLowerCase()) && !(await planAllowsUser(caller, 'discoverCandidates'))) {
+    return { statusCode: 403, headers, body: JSON.stringify({ error: FEATURE_MESSAGES.discoverCandidates }) }
   }
 
   // ── Durable per-user rate limit ───────────────────────────────────────────────

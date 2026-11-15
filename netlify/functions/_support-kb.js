@@ -10,9 +10,9 @@ This is the mission briefing. Every feature. How to run it. No excuses.
 ── THE PLATFORM ──
 Badger Board is Wisconsin political intelligence. One platform. Your whole operation: research, planning, outreach, monitoring. You bring the discipline. It brings the intel. Get after it.
 
-── DASHBOARD ──
+── HOME / DASHBOARD ──
 Mission: situational awareness at a glance.
-Execution: it is the first screen after login. Review it every morning. Check your numbers, check your calendar, move out.
+Execution: it is the first screen after login. Candidate plans get the Field home: the race countdown, field numbers for the week (volunteers now; doors knocked, yard signs to drop off and website sign-ups as the door-knocking app and website connection go live), this week's to-dos from the Game Plan, and what changed with your opponents. Action plans get the portfolio Dashboard across every candidate they run. Review it every morning. Move out.
 
 ── OFFICES ──
 Mission: know every battlefield in Wisconsin.
@@ -35,14 +35,14 @@ Execution:
 2. Filter by party, status, county. Every big dropdown is searchable — type to filter.
 3. The candidate page holds records (votes, endorsements, controversies), notes, and files.
 4. Notes and files each have an AI toggle. Default is OFF. AI touches nothing unless you flip the toggle. Your call. Your data.
-Availability: Discover and Autofill require Active tier or above.
+Availability: Candidate plans get a basic Candidates page — a plain list of you and your opponents. The map view, CSV import, Discover and Autofill are Action-plan tools.
 
 ── PROFILER (CANDIDATE PROFILES) ──
 Mission: deep-dive intelligence dossiers on any candidate.
 Execution:
 1. Pick a candidate. Hit generate. Grok, Perplexity, and Claude scour the web, news, and social media. A full profile comes back: background, positions, votes, funding, controversies, news, social activity — with sources.
 2. The snapshot at the top gives you the person in one paragraph. Read it first.
-3. Share button: export PDF, or generate a timed share link (1 hour to 7 days). The link dies on schedule. Send it to whoever needs it.
+3. Share button (Action plans): export PDF, or generate a timed share link (1 hour to 7 days). The link dies on schedule. Candidate plans do not include sharing.
 4. What's New card: on refresh, the profile diffs against last week and lists what changed.
 Limits: monthly profile generation is capped by plan (Scout and Monitor: 1. Candidate Active: 2. Candidate Campaign: 6. Action plans scale with your candidate bracket). Credit packs top you up when you need more.
 
@@ -73,7 +73,7 @@ Execution:
 3. It talks fast now: replies stream sentence-by-sentence, the silence detector adapts to short answers, or hit Done Talking to hand over instantly. Start talking mid-sentence and barge-in cuts them off.
 4. Topics get drilled, not skimmed: the opponent escalates on one topic until you land 2 strong answers or flub 3. Set the pace with Drill Depth; force depth with the Drill Topic button.
 5. End every session with the report card — message discipline on defense, attack sharpness and follow-through on offense. OPPO LAG in the console tracks reply latency.
-Availability: all paid plans. Beta — report rough edges.
+Availability: paid Candidate plans. Not part of Action plans. Report rough edges.
 
 ── PROSPECTING ──
 Mission: build target lists of potential candidates and contacts.
@@ -87,17 +87,22 @@ Execution:
 2. Filter by party, county, district. Build saved lists. View voters on the map when addresses geocode.
 3. Load voters on demand — big lists stay fast because nothing loads until you ask.
 Privacy: voter data is yours alone. Row-level security walls it off from every other account, and the support AI cannot see it at all. Period.
-Availability: CSV import on Monitor and above.
+Availability: Action plans. Candidate plans do not include Voter Lists.
+
+── COMPARE ──
+Mission: two candidates, side by side.
+Execution: open Compare from Intelligence (or a profile's Compare button), pick two candidates with profiles, read across: news, record, finance, controversies, policy, affiliations.
+Availability: Action plans.
 
 ── TEMPORARILY OFF ──
-The Compare tool, the Elections page, the election-results board and the Campaign Calendar tab are switched off for now while the app is simplified. If someone asks for them: they are temporarily unavailable, not gone for good. The dashboard still shows the next race countdown and upcoming elections. Do not send anyone to /compare, /elections, or a Calendar or Results tab.
+The Elections page, the election-results board and the Campaign Calendar tab are switched off. If someone asks: they are not part of any plan right now. Do not send anyone to /elections, or a Calendar or Results tab.
 
 ── EVENTS ──
 Mission: show up where the voters already are.
 Execution:
 1. Pick any district, county, or city. The AI researches upcoming community events — fairs, markets, festivals, parades, civic meetings — and classifies the likely crowd lean.
 2. Add an event to your own calendar (Google, Apple, Outlook) with one click.
-3. Action plans with Campaign Connect: select multiple events with the checkboxes and push them to any connected candidates' calendars in bulk. Fill their schedule with opportunities.
+Availability: Candidate plans (including Scout). Not part of Action plans.
 
 ── CAMPAIGN CONNECT ──
 Mission: the bridge between an action org and its candidates.
@@ -117,17 +122,17 @@ Execution: the bell, top right. All announcements land there. Success notices al
 
 ── SETTINGS ──
 Mission: configure once, then execute.
-Execution: display name, connected calendars, default calendars, event reminders, weekly digest email toggle, notification preferences. Set it up on day one.
+Execution: display name, connected calendars (Candidate plans), default calendars, event reminders, weekly digest email toggle, notification preferences. Set it up on day one.
 
 ── PLANS & BILLING ──
 Two tracks. Pick your lane:
 CANDIDATE PLANS (one campaign, flat monthly):
-- Scout — Free. Dashboard, one lite profile a month. The recon tier.
-- Monitor — $79/mo. Game Plan, full profiles (1/mo), CSV import, Broadside.
-- Active — $119/mo. Adds Campaign Intel, Discover, 2 profiles/mo.
+- Scout — Free. Field home, Candidates list, Events, one lite profile a month. The recon tier.
+- Monitor — $79/mo. Game Plan, full profiles (1/mo), Broadside.
+- Active — $119/mo. Adds Campaign Intel, 2 profiles/mo, 1 monitored candidate.
 - Campaign — $189/mo. Adds weekly auto-refresh monitoring, 6 profiles/mo. The full kit.
 ACTION PLANS (orgs running multiple candidates, priced by roster bracket: 1 / 2–5 / 6–10 / 11–25 / 26–50 / 51–100 / 100+ enterprise):
-- Monitor — from $89/mo. Multi-candidate Game Plan, Prospecting, Offices, Campaign Intel.
+- Monitor — from $89/mo. Multi-candidate Game Plan, Prospecting, Recruit, Offices, Voter Lists, Compare, Campaign Intel, profile sharing.
 - Active — from $149/mo. Adds weekly monitoring, more profiles per candidate.
 - Campaign — from $219/mo. Everything, maximum profile volume.
 Billing periods: monthly, quarterly (5% off), semiannual (10% off), annual (2 months free). Trials available — the app warns you 3 days before a trial ends. Credit packs cover extra profile generations. Upgrades are instant; downgrades prorate.

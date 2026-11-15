@@ -584,6 +584,15 @@ const handler = async (event) => {
     const force   = Boolean(body.force) && isAdmin
     const todayIso = centralTodayIso()
 
+    // Nov 15 2026 lineup: the Events finder is a Candidate-plan feature.
+    if (!isAdmin) {
+      const { planAllowsUser, FEATURE_MESSAGES } = require('./_plan-gate')
+      if (!(await planAllowsUser(authUser, 'events'))) {
+        await reportError(FEATURE_MESSAGES.events)
+        return reply(403, { error: FEATURE_MESSAGES.events })
+      }
+    }
+
     // ── Re-run policy: only stale caches are re-researched (before the rate
     //    limiter, so a no-op never spends a user's budget) ──────────────────
     if (!force) {

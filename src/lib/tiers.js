@@ -312,6 +312,64 @@ export const ACTION_PLAN_CONFIG = {
   },
 }
 
+// ─── Plan-family feature lineup (Nov 15 2026 revamp) ─────────────────────────
+// Tony's broad-strokes cut list, applied on top of the per-plan flags above so
+// the whole lineup lives in one place. Candidate plans become a simple field
+// campaign tool (paired with the campaign site builder); Action plans stay the
+// research / recruiting tool for agencies and parties. Admins and beta testers
+// bypass these (FeatureRoute, navItemVisible and planAllows() all let them by).
+//
+//   Candidate plans CUT: old dashboard (→ Field home), full candidate tracking
+//     (map, CSV import, AI autofill + discovery), sharing profiles (PDF + share
+//     links), Offices & district maps, voter lists, election results, Compare.
+//   Action plans CUT: Events finder, Broadside, calendar feed, election results.
+//   Action plans BRING BACK: Compare (every action plan).
+export const FAMILY_FEATURES = {
+  candidate: {
+    fieldHome:          true,
+    candidateMap:       false,
+    csvImport:          false,
+    autofill:           false,
+    discoverCandidates: false,
+    sharing:            false,
+    offices:            false,
+    voterLists:         false,
+    compare:            false,
+    events:             true,
+    calendarFeed:       true,
+    electionResults:    false,
+  },
+  action: {
+    fieldHome:          false,
+    candidateMap:       true,
+    autofill:           true,
+    sharing:            true,
+    offices:            true,
+    voterLists:         true,
+    compare:            true,
+    events:             false,
+    broadside:          false,
+    calendarFeed:       false,
+    electionResults:    false,
+  },
+}
+for (const cfg of Object.values(CANDIDATE_PLAN_CONFIG)) Object.assign(cfg.features, FAMILY_FEATURES.candidate)
+for (const cfg of Object.values(ACTION_PLAN_CONFIG))    Object.assign(cfg.features, FAMILY_FEATURES.action)
+
+// Unlock copy follows the lineup — never advertise a cut feature.
+const CUT_COPY = {
+  candidate: /compare|csv import|ai candidate discovery|social media links/i,
+  action:    /broadside|events|calendar/i,
+}
+for (const cfg of Object.values(CANDIDATE_PLAN_CONFIG)) {
+  cfg.unlocks     = cfg.unlocks.filter(u => !CUT_COPY.candidate.test(u))
+  cfg.nextUnlocks = cfg.nextUnlocks.filter(u => !CUT_COPY.candidate.test(u))
+}
+for (const cfg of Object.values(ACTION_PLAN_CONFIG)) {
+  cfg.unlocks     = cfg.unlocks.filter(u => !CUT_COPY.action.test(u))
+  cfg.nextUnlocks = cfg.nextUnlocks.filter(u => !CUT_COPY.action.test(u))
+}
+
 // ─── Combined config (all plans) ─────────────────────────────────────────────
 
 export const PLAN_CONFIG = {
@@ -616,9 +674,27 @@ function rawPaidPlan(user) {
   return p && PLAN_CONFIG[p] ? normalizePlan(p) : 'scout'
 }
 
+// ─── Admin plan preview ──────────────────────────────────────────────────────
+// Lets an admin see the app exactly as a customer on a given plan would:
+// /?preview=c_active turns it on for this browser tab, /?preview=off ends it.
+// Client-side only — the server still treats the account as an admin.
+const PREVIEW_KEY = 'bb_preview_plan'
+export function getAdminPreviewPlan() {
+  try {
+    const p = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(PREVIEW_KEY) : null
+    return p && CANDIDATE_PLAN_CONFIG[p] ? p : (p && ACTION_PLAN_CONFIG[p] ? p : null)
+  } catch { return null }
+}
+export function setAdminPreviewPlan(plan) {
+  try {
+    if (plan && (CANDIDATE_PLAN_CONFIG[plan] || ACTION_PLAN_CONFIG[plan])) sessionStorage.setItem(PREVIEW_KEY, plan)
+    else sessionStorage.removeItem(PREVIEW_KEY)
+  } catch { /* storage unavailable */ }
+}
+
 export function getUserPlan(user) {
   if (!user) return 'scout'
-  if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return 'a_campaign'
+  if (ADMIN_EMAILS.includes(user.email?.toLowerCase())) return getAdminPreviewPlan() || 'a_campaign'
   if (isBetaActive(user)) return BETA_PLAN
   const paid  = rawPaidPlan(user)
   const trial = getActiveTrial(user)
@@ -671,6 +747,17 @@ export function getBracketConfig(bracketKey) {
 // Feature key aliases for backward compatibility (old name → new name)
 const FEATURE_ALIASES = {
   dossierLimit:  'profileLimit',   // renamed in tiers.js rewrite
+}
+
+/**
+ * Server-and-client gate that honours the admin / beta bypass. `ent` is an
+ * entitlement ({ plan, source }) from netlify/functions/_entitlements.js, or
+ * a bare plan key.
+ */
+export function planAllows(ent, feature) {
+  const e = typeof ent === 'string' ? { plan: ent } : (ent || {})
+  if (e.source === 'admin' || e.source === 'beta') return true
+  return hasFeature(e.plan, feature)
 }
 
 export function hasFeature(planKey, feature) {

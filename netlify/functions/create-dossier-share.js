@@ -104,6 +104,13 @@ exports.handler = async (event) => {
   if (!SHARE_PLANS.includes(plan)) {
     return { statusCode: 403, headers: CORS, body: JSON.stringify({ error: 'Shareable links are available on paid Badger Board plans. Upgrade to share profiles.' }) }
   }
+  // Nov 15 2026 lineup: sharing is an Action-plan feature (tiers.js).
+  {
+    const { planAllowsUser, FEATURE_MESSAGES } = require('./_plan-gate')
+    if (!(await planAllowsUser(user, 'sharing'))) {
+      return { statusCode: 403, headers: CORS, body: JSON.stringify({ error: FEATURE_MESSAGES.sharing }) }
+    }
+  }
 
   // Parse body
   let body

@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Users, Plus, Search, ExternalLink, Trash2, X, Phone, Mail, Globe, Telescope, Lock, Wand2, CheckCircle, AlertCircle, Map, LayoutList, Upload, Zap, FileText } from 'lucide-react'
 import { supabase, getCandidates, getOffices, getElections, createCandidate, deleteCandidate, updateCandidate } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import useFeature from '../lib/useFeature'
 import { getUserTier, getUserPlanType, getMonitoringSlotMax, canMonitorCandidates, monitoringUnlockLabel, hasFeature, SCOUT_CANDIDATE_LIMIT, featureUnlockLabel } from '../lib/tiers'
 import { WebOnlyCta, NATIVE_PLAN_NOTE } from '../components/UpgradeCta'
 import LeafletMapView from '../components/LeafletMapView'
@@ -587,6 +588,13 @@ export default function Candidates() {
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }))
   const userTier    = getUserTier(user)
   const canDiscover = hasFeature(userTier, 'discoverCandidates')
+  // Nov 15 2026 lineup: Candidate plans get a BASIC Candidates page — a plain
+  // list of you and your opponents. No map view, CSV import, AI autofill or
+  // AI discovery (those stay on Action plans). Admins/beta see everything.
+  const basicPage = !useFeature('candidateMap')
+  const canAutofill = hasFeature(userTier, 'campaignIntel') && hasFeature(userTier, 'autofill')
+  // A saved 'map' view from before the lineup change must not strand a basic page on a hidden map.
+  useEffect(() => { if (basicPage && viewMode === 'map') setViewMode('table') }, [basicPage, viewMode])
   // Active Monitoring is sold as SLOTS, so the gate is "does your plan include
   // one" — not features.weeklyProfile, which is the separate weekly auto-refresh
   // perk and is false on c_active and on every Action plan. Gating on it hid the
@@ -702,7 +710,7 @@ export default function Candidates() {
       <div className="flex flex-col sm:flex-row sm:items-center gap-4">
         <p className="text-sm text-gray-500"><span className="font-semibold text-gray-700">{candidates.length}</span> tracked</p>
         <div className="sm:ml-auto flex items-center gap-2">
-          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+          {!basicPage && <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
             <button
               onClick={() => switchView('table')}
               className={`p-1.5 rounded transition-colors ${viewMode === 'table' ? 'bg-white text-brand-red shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
@@ -717,8 +725,8 @@ export default function Candidates() {
             >
               <Map className="w-4 h-4" />
             </button>
-          </div>
-          {canDiscover ? (
+          </div>}
+          {basicPage ? null : canDiscover ? (
             <button
               onClick={() => setShowDiscover(true)}
               className="btn-secondary flex items-center gap-2 text-sm"
@@ -733,7 +741,7 @@ export default function Candidates() {
               <span className="text-xs font-bold bg-gray-300 text-gray-600 px-1.5 py-0.5 rounded-full">{discoverPlanName}</span>
             </span>
           )}
-          {canCsvImport ? (
+          {basicPage ? null : canCsvImport ? (
             <button onClick={() => { setCsvRows([]); setCsvHeaders([]); setCsvResult(null); setCsvError(''); setShowCsvModal(true) }}
               className="btn-secondary flex items-center gap-2">
               <Upload className="w-4 h-4" /> Upload CSV
@@ -1469,9 +1477,9 @@ export default function Candidates() {
                         placeholder="Select election..."
                         searchPlaceholder="Search elections..." />
                     </div>
-                    {/* AI Autofill */}
-                    <div className="pt-1">
-                      {hasFeature(userTier, 'campaignIntel') ? (
+                    {/* AI Autofill — not part of the basic Candidates page */}
+                    {!basicPage && <div className="pt-1">
+                      {canAutofill ? (
                         <>
                           <button
                             type="button"
@@ -1506,7 +1514,7 @@ export default function Candidates() {
                           </span>
                         </div>
                       )}
-                    </div>
+                    </div>}
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>

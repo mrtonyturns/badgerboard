@@ -14,7 +14,6 @@ const MODEL = MODELS.CLAUDE_QUALITY
 
 const { ADMIN_EMAILS } = require('./_config')
 // Include all new-format plan keys that have campaignIntel access (tiers.js: c_active+)
-const CAMPAIGN_PLUS  = ['campaign', 'agency', 'c_active', 'c_campaign', 'a_monitor', 'a_active', 'a_campaign']
 
 function sanitize(val, maxLen = 200) {
   if (val === null || val === undefined) return ''
@@ -54,12 +53,10 @@ exports.handler = async (event) => {
   }
   // ── Tier check ────────────────────────────────────────────────────────────────
   const caller = await authRes.json()
-  const plan = ADMIN_EMAILS.includes(caller.email?.toLowerCase())
-    ? 'agency'
-    : (await require('./_entitlements').resolveEntitlement(caller)).plan  // v1.18: honors beta + trials
-  if (!CAMPAIGN_PLUS.includes(plan)) {
-    // Gate opens at c_active (see CAMPAIGN_PLUS above) — name the real floor.
-    return { statusCode: 403, headers, body: JSON.stringify({ error: 'Active plan or higher required.' }) }
+  // Nov 15 2026 lineup: AI autofill is an Action-plan feature (tiers.js).
+  const { planAllowsUser, FEATURE_MESSAGES } = require('./_plan-gate')
+  if (!ADMIN_EMAILS.includes(caller.email?.toLowerCase()) && !(await planAllowsUser(caller, 'autofill'))) {
+    return { statusCode: 403, headers, body: JSON.stringify({ error: FEATURE_MESSAGES.autofill }) }
   }
 
   // ── Durable per-user rate limit ───────────────────────────────────────────────

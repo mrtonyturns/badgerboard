@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { supabase, updateCandidate, getDossier } from '../../lib/supabase'
+import useFeature from '../../lib/useFeature'
 import {
   T, Card, EmptyState, CtaButton, TextLink, Btn, ViewHead, NewBadge,
   LockedView, Spinner, CategoryPill, useDossierSection, SectionContent,
@@ -529,6 +530,7 @@ const SEVERITY = {
 }
 
 export function OppositionView({ candidate, dossiers, canIntel, weaknesses, oppositionUpdated, nav }) {
+  const canBroadside = useFeature('broadside')
   const { content, loading } = useDossierSection(dossiers, [6, 13])
   const [panel, setPanel] = useState('weaknesses')
 
@@ -619,7 +621,7 @@ export function OppositionView({ candidate, dossiers, canIntel, weaknesses, oppo
                   {(!headline || headline !== body) && (
                     <div style={{ fontSize: 12.5, color: T.ink3, lineHeight: 1.55 }}>{body}</div>
                   )}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 10, flexWrap: 'wrap' }}>
+                  {canBroadside && <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 10, flexWrap: 'wrap' }}>
                     {/* A `title` on a DISABLED button never shows — browsers
                         swallow hover events on disabled controls, so the "why
                         is this greyed out?" answer was unreachable. Same
@@ -640,7 +642,7 @@ export function OppositionView({ candidate, dossiers, canIntel, weaknesses, oppo
                     <span style={{ fontSize: 11, color: T.faint }}>
                       From the profile{newest?.generated_at ? ` · ${fmtDate(newest.generated_at)}` : ''}
                     </span>
-                  </div>
+                  </div>}
                 </Card>
               )
             })}
@@ -657,7 +659,7 @@ export function OppositionView({ candidate, dossiers, canIntel, weaknesses, oppo
               emptyMessage="No controversies section was found in the latest profile. Regenerate it to try again."
             />
           )}
-          {newest && (
+          {newest && canBroadside && (
             <div style={{ marginTop: 14 }}>
               <Btn kind="primary" onClick={() => nav(sparHref)}>Spar on this in Broadside</Btn>
             </div>
@@ -674,7 +676,7 @@ export function OppositionView({ candidate, dossiers, canIntel, weaknesses, oppo
               emptyMessage="No attack & defense section was found in the latest profile. Regenerate it to try again."
             />
           )}
-          {newest && (
+          {newest && canBroadside && (
             <div style={{ marginTop: 14 }}>
               <Btn kind="primary" onClick={() => nav(sparHref)}>Spar on this in Broadside</Btn>
             </div>

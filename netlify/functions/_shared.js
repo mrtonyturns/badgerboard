@@ -80,9 +80,14 @@ async function requireBroadside(event) {
   if (res.errorResponse) return res
   if (ADMIN_EMAILS.includes((res.user.email || '').toLowerCase())) return res
   const { resolveEntitlement } = require('./_entitlements')
-  const { plan } = await resolveEntitlement(res.user)
-  if (!BROADSIDE_PLANS.includes(plan)) {
+  const ent = await resolveEntitlement(res.user)
+  if (!BROADSIDE_PLANS.includes(ent.plan) && ent.source !== 'beta') {
     return { errorResponse: json(403, { error: 'Broadside is included with paid Badger Board plans. Upgrade to unlock it.' }) }
+  }
+  // Nov 15 2026 lineup: Broadside is a Candidate-plan feature (tiers.js).
+  const { planAllows } = require('../../src/lib/tiers.js')
+  if (!planAllows(ent, 'broadside')) {
+    return { errorResponse: json(403, { error: 'Broadside is included with paid Candidate plans.' }) }
   }
   return res
 }

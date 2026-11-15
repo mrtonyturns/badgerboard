@@ -11,7 +11,9 @@
 // When flipping one back on, also restore its section in
 // netlify/functions/_support-kb.js so the support chat knows it exists again.
 
-export const COMPARE_ENABLED           = false  // /compare + every "Compare" button
+// Nov 15 2026: Compare is back for Action plans (gated by the `compare` plan
+// feature — Candidate plans don't have it).
+export const COMPARE_ENABLED           = true   // /compare + every "Compare" button
 export const ELECTIONS_ENABLED         = false  // /elections (Intelligence → Elections)
 export const RESULTS_ENABLED           = false  // results boards (/elections?tab=results, /game-plan?tab=results)
 export const ELECTION_CALENDAR_ENABLED = false  // Campaign → Calendar (/game-plan?tab=calendar)

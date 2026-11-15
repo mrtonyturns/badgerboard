@@ -250,8 +250,8 @@ const AppRoutes = () => {
         }
       >
         <Route index element={<Dashboard />} />
-        <Route path="offices" element={<Offices />} />
-        <Route path="places/:countySlug/:nameSlug" element={<CityDemographics />} />
+        <Route path="offices" element={<FeatureRoute feature="offices"><Offices /></FeatureRoute>} />
+        <Route path="places/:countySlug/:nameSlug" element={<FeatureRoute feature="offices"><CityDemographics /></FeatureRoute>} />
         {/* Elections / Results / Compare are switched off in lib/featureFlags.js —
             old links and bookmarks land on the dashboard instead of a dead page. */}
         <Route path="elections" element={ELECTIONS_ENABLED ? <Elections /> : <Navigate to="/" replace />} />
@@ -265,7 +265,7 @@ const AppRoutes = () => {
             exactly like Prospecting — the page sells the upgrade instead of
             bouncing the user to the dashboard. */}
         <Route path="recruit" element={<Recruit />} />
-        <Route path="voter-lists" element={<VoterLists />} />
+        <Route path="voter-lists" element={<FeatureRoute feature="voterLists"><VoterLists /></FeatureRoute>} />
         {/* <Route path="door-knocking" element={<AdminRoute><DoorKnocking /></AdminRoute>} /> */}
         <Route path="dossiers" element={<Dossiers />} />
         <Route path="profiler" element={<Dossiers />} />
@@ -273,7 +273,7 @@ const AppRoutes = () => {
             page has no in-page gate of its own — without this any Scout/Monitor
             account could reach it by URL. */}
         <Route path="compare" element={COMPARE_ENABLED ? <FeatureRoute feature="compare"><Compare /></FeatureRoute> : <Navigate to="/" replace />} />
-        <Route path="events" element={<Events />} />
+        <Route path="events" element={<FeatureRoute feature="events"><Events /></FeatureRoute>} />
         <Route path="campaign-connect" element={<CampaignConnect />} />
         {/* Settings panes are deep-linkable: /settings/plan, /settings/security, …
             /settings alone renders the default pane (Your account). */}

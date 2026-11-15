@@ -166,8 +166,12 @@ console.log('F4 — tier gates (403 for under-tier)')
 
   mockPlan = 'c_active'
   t('generate-prospecting 403 even for c_active (action-plan entitlement)', (await call('../netlify/functions/generate-prospecting.js', { listName: 'x' })).statusCode === 403)
+  // Nov 15 2026 lineup: AI discovery moved to Action plans only.
+  t('discover-candidates 403 for c_active (Action-plan feature now)', (await call('../netlify/functions/discover-candidates.js', { mode: 'county', county: 'Dane' })).statusCode === 403)
+  mockPlan = 'a_monitor'
   const rDisc = await call('../netlify/functions/discover-candidates.js', { mode: 'county', county: 'Dane' })
-  t('discover-candidates passes tier gate for c_active (not 401/403)', rDisc.statusCode !== 403 && rDisc.statusCode !== 401)
+  t('discover-candidates passes tier gate for a_monitor (not 401/403)', rDisc.statusCode !== 403 && rDisc.statusCode !== 401)
+  mockPlan = 'c_active'
 
   mockPlan = 'a_monitor'
   const rPros = await call('../netlify/functions/generate-prospecting.js', { listName: 'x' })

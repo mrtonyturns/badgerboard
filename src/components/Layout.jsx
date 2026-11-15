@@ -10,7 +10,7 @@ import {
 import { useAuth } from '../contexts/AuthContext'
 import BluejackLogo from './BluejackLogo'
 import BadgerBoardLogo from './BadgerBoardLogo'
-import { getUserTier, getTierConfig, isBetaActive, getUserPlanType } from '../lib/tiers'
+import { getUserTier, getTierConfig, isBetaActive, getUserPlanType, PLAN_CONFIG } from '../lib/tiers'
 import { isNativeApp } from '../lib/native'
 import { COMPARE_ENABLED, ELECTIONS_ENABLED, RESULTS_ENABLED, ELECTION_CALENDAR_ENABLED } from '../lib/featureFlags'
 
@@ -594,7 +594,8 @@ const CHANGELOG = [
 //      no plan flag at all (available on every plan) and Polling is beta-gated,
 //      not plan-gated — so neither belongs here.
 const NAV_SECTIONS = [
-  { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, direct: { to: '/', end: true } },
+  // Candidate plans: the dashboard became the Field home (Nov 15 2026 revamp).
+  { key: 'dashboard', label: 'Dashboard', candidateLabel: 'Home', icon: LayoutDashboard, direct: { to: '/', end: true } },
   { key: 'todo',      label: 'Todo',      icon: Target, direct: { to: '/game-plan' } },
   { key: 'candidates', label: 'Candidates', icon: Users, direct: { to: '/candidates' } },
   // v1.30: /elections was orphaned (reachable only by typing the URL) — it now
@@ -608,7 +609,7 @@ const NAV_SECTIONS = [
   // lacks the plan feature still sees the link here — exactly one link either
   // way, which is why they are NOT also listed under Beta.
   { key: 'intelligence', label: 'Intelligence', icon: Building2, extra: ['/places', '/dossiers'], items: [
-    { to: '/offices',   icon: Building2,    label: 'Offices' },
+    { to: '/offices',   icon: Building2,    label: 'Offices', feature: 'offices' },
     { to: '/elections', icon: CalendarDays, label: 'Elections', disabled: !ELECTIONS_ENABLED },
     { to: '/profiler',  icon: FileText,     label: 'Profiler' },
     { to: '/compare',   icon: Scale,        label: 'Compare',   feature: 'compare', disabled: !COMPARE_ENABLED },
@@ -617,8 +618,8 @@ const NAV_SECTIONS = [
   { key: 'campaign', label: 'Campaign', icon: CalendarDays, items: [
     { to: '/game-plan?tab=calendar', icon: CalendarDays, label: 'Calendar', q: { path: '/game-plan', tab: 'calendar' }, disabled: !ELECTION_CALENDAR_ENABLED },
     { to: '/game-plan?tab=results',  icon: BarChart2,    label: 'Results',  q: { path: '/game-plan', tab: 'results' }, disabled: !RESULTS_ENABLED },
-    { to: '/events',      icon: CalendarDays, label: 'Events', badge: 'New' },
-    { to: '/voter-lists', icon: UserCheck,    label: 'Voter Lists' },
+    { to: '/events',      icon: CalendarDays, label: 'Events', feature: 'events' },
+    { to: '/voter-lists', icon: UserCheck,    label: 'Voter Lists', feature: 'voterLists' },
   ] },
   { key: 'connect', label: 'Campaign Connect', icon: Users2, paidOnly: true, direct: { to: '/campaign-connect' } },
   // v1.29: Action is a real tab strip now — Recruit joins Prospecting. Both are
@@ -866,7 +867,7 @@ const Sidebar = React.memo(function Sidebar({ isAdmin, isBeta, isActionPlan, isP
           const gates = { isAdmin, isBeta, isActionPlan, isPaid, tierConfig }
           if (!sectionVisible(sec, gates)) return null
           if (sec.direct) {
-            const item = { to: sec.direct.to, icon: sec.icon, label: sec.label, end: sec.direct.end }
+            const item = { to: sec.direct.to, icon: sec.icon, label: (sec.candidateLabel && !isActionPlan) ? sec.candidateLabel : sec.label, end: sec.direct.end }
             return <NavItem key={sec.key} item={item} onNavigate={onNavigate}
               activeOverride={currentSectionKey === sec.key} />
           }
@@ -1348,7 +1349,7 @@ function SectionTabs({ items, pathname, tab }) {
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 export default function Layout() {
-  const { user, signOut, isAdmin } = useAuth()
+  const { user, signOut, isAdmin, previewPlan, exitPreview } = useAuth()
   // Full-bleed routes own the whole content area (no padding, no outer scroll)
   const { pathname } = useLocation()
   const fullBleed = pathname.startsWith('/broadside')
@@ -1617,6 +1618,12 @@ export default function Layout() {
 
         {/* Offline indicator */}
         <OfflineBanner />
+        {previewPlan && (
+          <div role="status" style={{ background: '#FEF3C7', borderBottom: '1px solid #FCD34D', color: '#78350F', fontSize: 13, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span>Previewing the <strong>{PLAN_CONFIG[previewPlan]?.name || previewPlan}</strong> {PLAN_CONFIG[previewPlan]?.planType === 'action' ? 'Action' : 'Candidate'} plan the way a customer sees it.</span>
+            <button onClick={() => { exitPreview(); window.location.assign('/') }} style={{ fontWeight: 700, textDecoration: 'underline' }}>Exit preview</button>
+          </div>
+        )}
 
         {/* Page content.
             Route transitions used to fall through to App.jsx's outer Suspense

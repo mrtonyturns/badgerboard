@@ -228,18 +228,21 @@ const C_FEATURES = [
       { label: 'Full 14-section report',      scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'A la carte credit packs',     scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Campaign Intelligence briefs',scout: false,       c_monitor: false,  c_active: true,   c_campaign: true   },
-      { label: 'AI candidate discovery',      scout: false,       c_monitor: false,  c_active: true,   c_campaign: true   },
       { label: 'Broadside — AI opposition sparring', scout: false, c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Weekly auto-refresh',         scout: false,       c_monitor: false,  c_active: false,  c_campaign: true   },
     ],
   },
   { section: 'Candidate Tools',
     rows: [
-      { label: 'Dashboard',                   scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
+      // Nov 15 2026 lineup: Candidate plans get the Field home and a basic
+      // Candidates page; Compare, CSV import, discovery, sharing, Offices and
+      // voter lists moved to Action plans only.
+      { label: 'Field home',                  scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
+      { label: 'Candidates list (you + opponents)', scout: true,  c_monitor: true,   c_active: true,   c_campaign: true   },
+      { label: 'Events finder',               scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
+      { label: 'Calendar feed',               scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
       { label: 'Active candidate slots',      scout: '0',         c_monitor: '0',    c_active: '1',    c_campaign: '3'    },
       { label: 'Game Plan',                   scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
-      ...(COMPARE_ENABLED ? [{ label: 'Compare tool',                scout: false,       c_monitor: false,  c_active: true,   c_campaign: true   }] : []),
-      { label: 'CSV bulk import',             scout: false,       c_monitor: true,   c_active: true,   c_campaign: true   },
       // Social handles are plain fields on the candidate record (Candidates.jsx
       // add/edit form) with no gate anywhere — every plan can enter and read
       // them, so the table says so rather than selling an unlock that isn't one.
@@ -255,10 +258,7 @@ const C_FEATURES = [
       // matrix does not silently omit a tool the other ladder sells.
       { label: 'Recruit from voter list',     scout: recruitCell('scout'), c_monitor: recruitCell('c_monitor'),
         c_active: recruitCell('c_active'), c_campaign: recruitCell('c_campaign') },
-      // /offices is not gated by features.offices anywhere in the app — the page
-      // ships on every plan, including Scout. The row used to read false across
-      // the Candidate family, which was simply untrue.
-      { label: 'Offices section',             scout: true,        c_monitor: true,   c_active: true,   c_campaign: true   },
+      { label: 'Offices & district maps',     scout: false,       c_monitor: false,  c_active: false,  c_campaign: false  },
     ],
   },
 ]
@@ -269,7 +269,6 @@ const A_FEATURES = [
       { label: 'Profiles per month',          a_monitor: '1 per candidate', a_active: '2 per candidate', a_campaign: '4 per candidate' },
       { label: 'Campaign Intelligence briefs',a_monitor: true,           a_active: true,             a_campaign: true           },
       { label: 'AI candidate discovery',      a_monitor: true,           a_active: true,             a_campaign: true           },
-      { label: 'Broadside — AI opposition sparring', a_monitor: true,    a_active: true,             a_campaign: true           },
       { label: 'Weekly auto-refresh',         a_monitor: false,          a_active: true,             a_campaign: true           },
       { label: 'Bulk Profiler (CSV runs)',     a_monitor: false,          a_active: false,            a_campaign: 'With credits' },
     ],
@@ -281,7 +280,7 @@ const A_FEATURES = [
       // lets any plan file a milestone under any candidate. Labelled plainly so
       // the table stops implying an Action-only capability.
       { label: 'Game Plan',                   a_monitor: true,           a_active: true,             a_campaign: true           },
-      ...(COMPARE_ENABLED ? [{ label: 'Compare tool',                a_monitor: false,          a_active: true,             a_campaign: true           }] : []),
+      ...(COMPARE_ENABLED ? [{ label: 'Compare tool',                a_monitor: true,           a_active: true,             a_campaign: true           }] : []),
       { label: 'Prospecting lists',           a_monitor: true,           a_active: true,             a_campaign: true           },
       // Reputation lookups are a monthly allowance, not a metered SKU — the
       // numbers come straight from RECRUIT_MONTHLY_LOOKUPS in tiers.js.
@@ -370,14 +369,13 @@ const C_CARD_FEATURES = {
   c_monitor: [
     '1 full AI profile per month',
     'Game Plan',
-    'CSV bulk import',
+    'Broadside debate practice',
     'A la carte credit packs',
   ],
   c_active: [
     '2 profiles per month',
     '1 active candidate slot',
     'Campaign Intel briefs',
-    ...(COMPARE_ENABLED ? ['Compare tool'] : []),
   ],
   c_campaign: [
     '6 profiles per month',
@@ -396,10 +394,10 @@ const A_CARD_FEATURES = {
     'Prospecting lists',
     'Game Plan',
     'Office & district maps',
+    ...(COMPARE_ENABLED ? ['Compare tool'] : []),
   ],
   a_active: [
     '2 profiles per candidate / month',
-    ...(COMPARE_ENABLED ? ['Compare tool'] : []),
     'Weekly auto-refresh',
     '2 user seats',
   ],
@@ -865,7 +863,7 @@ export default function Pricing() {
                   ctaLabel={cardState.ctaLabel}
                   loading={checkoutLoading}
                   onSelect={(key) => checkout({ plan: key, billing }, key)}
-                  note={pk === 'scout' ? 'Includes a lite profile — biography and political record sections visible. Game Plan, full 14-section profiles, and CSV import unlock on paid plans.' : null}
+                  note={pk === 'scout' ? 'Includes a lite profile — biography and political record sections visible. Game Plan, full 14-section profiles and Broadside unlock on paid plans.' : null}
                 />
               )
             })}

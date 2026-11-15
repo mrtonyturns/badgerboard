@@ -17,6 +17,7 @@ import {
   Loader2, AlertTriangle, X, Trash2, CheckCircle, AlertCircle, ArrowRight, ChevronRight,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import useFeature from '../lib/useFeature'
 import { supabase, logActivity } from '../lib/supabase'
 import { getEffectiveProfileLimit, getMonitoringSlotMax } from '../lib/tiers'
 import { useDialog } from '../lib/useDialog'
@@ -114,6 +115,9 @@ const toggleWrite = (prefs) => NOTIF_KEYS.reduce((acc, k) => ({ ...acc, [k]: pre
 
 export default function Settings() {
   const { user, session, signOut, refreshSession, isDowngradeLocked, downgradedAt } = useAuth()
+  // Calendar feed is a Candidate-plan feature (Nov 15 2026 lineup).
+  const canCalendar = useFeature('calendarFeed')
+  const paneAllowed = (id) => id !== 'calendars' || canCalendar
   const navigate = useNavigate()
   const location = useLocation()
   const { pane: paneParam } = useParams()
@@ -617,7 +621,7 @@ export default function Settings() {
 
       {/* ── Chip row (below 900px) ───────────────────────────────────────── */}
       <div className="st-chips" style={{ display: 'none', gap: 6, overflowX: 'auto', paddingBottom: 14 }}>
-        {NAV_ITEMS.map(item => railItem(item, true))}
+        {NAV_ITEMS.filter(i => paneAllowed(i.id)).map(item => railItem(item, true))}
       </div>
 
       <div style={{ display: 'flex', gap: 26, alignItems: 'flex-start', paddingBottom: 120 }}>
@@ -633,7 +637,7 @@ export default function Settings() {
                 color: T.faint, padding: '0 10px 7px',
               }}>{group.label}</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {group.items.map(item => railItem(item, false))}
+                {group.items.filter(i => paneAllowed(i.id)).map(item => railItem(item, false))}
               </div>
             </div>
           ))}
@@ -693,7 +697,7 @@ export default function Settings() {
             />
           )}
 
-          {pane === 'calendars' && <CalendarsPane user={user} />}
+          {pane === 'calendars' && canCalendar && <CalendarsPane user={user} />}
 
           {pane === 'privacy' && (
             <PrivacyPane

@@ -9,6 +9,7 @@
 // chart (SPEC rule 4 / §4 "never render zero-filled charts").
 
 import { COMPARE_ENABLED } from '../../lib/featureFlags'
+import useFeature from '../../lib/useFeature'
 import { useEffect, useState } from 'react'
 import { format } from 'date-fns'
 import { getDossier } from '../../lib/supabase'
@@ -167,6 +168,9 @@ export default function Overview({
   candidate, dossiers, monitored, canMonitor, unseen, bioSummary,
   onNavigate, onToggleMonitoring, onAcceptStatus, nav, incumbentRecordCount,
 }) {
+  const canCompare = useFeature('compare')
+  const canBroadside = useFeature('broadside')
+  const canVoterLists = useFeature('voterLists')
   const newest = dossiers[0] || null
   const prev = dossiers[1] || null
   const digest = newest?.weekly_digest || null
@@ -207,14 +211,14 @@ export default function Overview({
   ]
 
   const actions = [
-    {
+    ...(canBroadside ? [{
       label: 'Spar in Broadside',
       sub: newest ? 'Practice against this profile' : 'Generate a profile first',
       glyph: 'B', tileBg: '#FBEAEA', tileFg: T.red,
       disabled: !newest,
       go: () => newest && nav(`/broadside?dossier=${newest.id}`),
-    },
-    ...(COMPARE_ENABLED ? [{
+    }] : []),
+    ...(COMPARE_ENABLED && canCompare ? [{
       label: 'Compare vs. opponent',
       sub: 'Side-by-side with another candidate',
       glyph: 'C', tileBg: '#F3EDFB', tileFg: '#7C3AED',
@@ -226,12 +230,12 @@ export default function Overview({
       glyph: 'G', tileBg: '#E7F0FD', tileFg: '#1D4ED8',
       go: () => nav('/game-plan'),
     },
-    {
+    ...(canVoterLists ? [{
       label: 'Pull voter list',
       sub: 'Build a list for this district',
       glyph: 'V', tileBg: '#E6F5EC', tileFg: '#15803D',
       go: () => nav('/voter-lists'),
-    },
+    }] : []),
   ]
 
   return (

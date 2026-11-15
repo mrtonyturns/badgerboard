@@ -21,6 +21,7 @@ import {
   updateCandidate, supabase,
 } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+import useFeature from '../lib/useFeature'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 import {
   getUserTier, getEffectiveProfileLimit, getBankedProfileCredits,
@@ -131,6 +132,8 @@ export default function Dossiers() {
   const limit     = getEffectiveProfileLimit(user)
   const unlimited = limit === Infinity
   const canBulk   = hasFeature(userTier, 'bulkProfiler')
+  const canShare   = useFeature('sharing')
+  const canCompare = useFeature('compare')
   const isLite    = isLiteProfileOnly(userTier)
   const bankedCredits = getBankedProfileCredits(user)
 
@@ -853,8 +856,8 @@ export default function Dossiers() {
                   }}
                 >Spar</Link>
               )}
-              {COMPARE_ENABLED && <Btn onClick={() => navigate('/compare')} tap={false} style={{ minHeight: 40 }}>Compare</Btn>}
-              <Btn onClick={() => setShowShare(true)} tap={false} style={{ minHeight: 40 }}>Share</Btn>
+              {COMPARE_ENABLED && canCompare && <Btn onClick={() => navigate('/compare')} tap={false} style={{ minHeight: 40 }}>Compare</Btn>}
+              {canShare && <Btn onClick={() => setShowShare(true)} tap={false} style={{ minHeight: 40 }}>Share</Btn>}
               <div style={{ position: 'relative' }}>
                 <Btn onClick={() => setMoreOpen(v => !v)} tap={false} style={{ minHeight: 40 }}>More</Btn>
                 {moreOpen && (

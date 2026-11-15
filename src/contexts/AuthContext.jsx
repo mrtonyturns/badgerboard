@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import { ADMIN_EMAILS, setGlobalBetaEnabled } from '../lib/tiers'
+import { ADMIN_EMAILS, setGlobalBetaEnabled, getAdminPreviewPlan, setAdminPreviewPlan } from '../lib/tiers'
 import { isNativeApp, API_ORIGIN } from '../lib/native'
 import { cacheClearAll } from '../lib/offlineCache'
 
@@ -205,7 +205,21 @@ export const AuthProvider = ({ children }) => {
     return () => clearInterval(id)
   }, [user, refreshSession])
 
-  const isAdmin = Boolean(user && ADMIN_EMAILS.includes(user.email?.toLowerCase()))
+  const isRealAdmin = Boolean(user && ADMIN_EMAILS.includes(user.email?.toLowerCase()))
+  // Admin plan preview (?preview=<plan key> / ?preview=off): while previewing,
+  // the admin is treated as a customer on that plan everywhere in the UI.
+  const [previewPlan, setPreviewPlanState] = useState(() => getAdminPreviewPlan())
+  useEffect(() => {
+    if (!isRealAdmin) return
+    try {
+      const q = new URLSearchParams(window.location.search).get('preview')
+      if (q === null) return
+      setAdminPreviewPlan(q === 'off' ? null : q)
+      setPreviewPlanState(getAdminPreviewPlan())
+    } catch { /* no window */ }
+  }, [isRealAdmin])
+  const exitPreview = useCallback(() => { setAdminPreviewPlan(null); setPreviewPlanState(null) }, [])
+  const isAdmin = isRealAdmin && !previewPlan
 
   const isPaymentLocked = Boolean(
     user &&
@@ -308,6 +322,9 @@ export const AuthProvider = ({ children }) => {
     session,
     loading,
     isAdmin,
+    isRealAdmin,
+    previewPlan: isRealAdmin ? previewPlan : null,
+    exitPreview,
     globalBetaEnabled,
     isPaymentLocked,
     isDowngradeLocked,

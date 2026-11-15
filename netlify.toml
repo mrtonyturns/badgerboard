@@ -100,8 +100,10 @@
 #   election day 22:00-23:59 CT  -> hourly (minute < 5)
 #   next day     00:00-03:59 CT  -> hourly (minute < 5)
 #   next day     10:00-10:04 CT  -> one final run
+# Nov 15 2026: election results are cut from every plan — the schedule is off
+# so the poller no longer runs (or spends AI money). Restore the line to resume.
 [functions."election-results-poller"]
-  schedule = "*/5 * * * *"
+  # schedule = "*/5 * * * *"
   timeout  = 30
 
 # Certification watch — Thursday 15:00 UTC (~9-10am CT), once a week.
@@ -111,8 +113,9 @@
 # have 'called' contests, asks ONE cited question per election, and flips them
 # to 'certified' only on a confirmed answer. Thursday keeps it off the Monday
 # AI/email crons and the Tuesday purge.
+# Nov 15 2026: off with the rest of election results (see the poller above).
 [functions."certification-watch"]
-  schedule = "0 15 * * 4"
+  # schedule = "0 15 * * 4"
   timeout  = 30
 
 [[headers]]
