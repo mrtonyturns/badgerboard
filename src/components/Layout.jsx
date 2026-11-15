@@ -1398,7 +1398,8 @@ export default function Layout() {
     // No /plans entry: Pricing renders standalone (outside Layout), so this
     // header could never match.
     { match: /^\/admin/,            title: 'Admin Panel',            sub: 'Platform health, accounts, billing & controls' },
-    { match: /^\/$/,                title: 'Intelligence Dashboard', sub: 'Wisconsin statewide political tracking' },
+    // Candidate plans' home is the Field home, which carries its own greeting.
+    ...(isActionPlan ? [{ match: /^\/$/,  title: 'Intelligence Dashboard', sub: 'Wisconsin statewide political tracking' }] : []),
   ]
   const pageHeader = PAGE_HEADERS.find(h => h.match.test(pathname + search)) || null
   const navigate           = useNavigate()
