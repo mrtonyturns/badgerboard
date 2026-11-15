@@ -1,4 +1,6 @@
-import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, Suspense } from 'react'
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, Suspense, lazy } from 'react'
+import { welcomePending } from '../lib/welcome'
+const WelcomeSplash = lazy(() => import('./WelcomeSplash'))
 import { Outlet, NavLink, useNavigate, useLocation, Link } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, CalendarDays, Target, Users, ListChecks,
@@ -1350,6 +1352,8 @@ function SectionTabs({ items, pathname, tab }) {
 // ─── Layout ───────────────────────────────────────────────────────────────────
 export default function Layout() {
   const { user, signOut, isAdmin, previewPlan, exitPreview } = useAuth()
+  // Post-sign-in welcome animation (logo + days to the election), once per sign-in.
+  const [showWelcome] = useState(() => welcomePending())
   // Full-bleed routes own the whole content area (no padding, no outer scroll)
   const { pathname } = useLocation()
   const fullBleed = pathname.startsWith('/broadside')
@@ -1619,6 +1623,7 @@ export default function Layout() {
 
         {/* Offline indicator */}
         <OfflineBanner />
+        {showWelcome && <Suspense fallback={null}><WelcomeSplash /></Suspense>}
         {previewPlan && (
           <div role="status" style={{ background: '#FEF3C7', borderBottom: '1px solid #FCD34D', color: '#78350F', fontSize: 13, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <span>Previewing the <strong>{PLAN_CONFIG[previewPlan]?.name || previewPlan}</strong> {PLAN_CONFIG[previewPlan]?.planType === 'action' ? 'Action' : 'Candidate'} plan the way a customer sees it.</span>

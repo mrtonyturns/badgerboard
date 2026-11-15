@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import { armWelcomeSplash } from '../lib/welcome'
 import SearchableSelect from '../components/SearchableSelect'
 import { useNavigate, Link } from 'react-router-dom'
 import { Eye, EyeOff, AlertCircle, CheckCircle, User, Building2, Phone, Mail, Briefcase } from 'lucide-react'
@@ -114,7 +115,7 @@ export default function Login() {
     if (mode === 'signin') {
       const { error } = await signIn(email, password)
       if (error) setError(error.message)
-      else navigate('/')
+      else { armWelcomeSplash(); navigate('/') }
     } else {
       const { error } = await signUp(email, password, {
         first_name: firstName.trim(), last_name: lastName.trim(),
