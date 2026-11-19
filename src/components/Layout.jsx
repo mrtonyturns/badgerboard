@@ -95,6 +95,7 @@ const CHANGELOG = [
       'Home is a grid of tiles: your playbook for the week (tick things off right there), opponents, profiles, events, Broadside, Campaign Connect and volunteers',
       'Todo is now your Campaign Playbook: every step from filing to Election Day for your next race, Wisconsin deadlines built in, grouped by week. A finished race no longer leaves hundreds of overdue tasks',
       'Profiler shows your profiles as small document tiles you can open, with a simple New profile button instead of the big form, stat boxes and table',
+      'Candidates is a set of big tiles for you and your opponents. Adding someone starts with their name: we look them up, you confirm, done. Mark which one is you with “This is me”',
     ],
   },
   {
@@ -1396,7 +1397,7 @@ export default function Layout() {
     ...(RESULTS_ENABLED ? [{ match: /^\/game-plan\?.*tab=results/, title: 'Results', sub: 'Election night results', useSearch: true }] : []),
     { match: /^\/game-plan/,        title: isActionPlan ? 'Todo' : 'Playbook', sub: isActionPlan ? 'Campaign tasks & priorities' : 'Every step from filing to Election Day, week by week' },
     { match: /^\/candidates\/.+/,  title: 'Candidates',             sub: 'Candidate profile' },
-    { match: /^\/candidates/,       title: 'Candidates',             sub: 'All tracked candidates across Wisconsin' },
+    { match: /^\/candidates/,       title: 'Candidates',             sub: isActionPlan ? 'All tracked candidates across Wisconsin' : 'You and the people you’re running against' },
     { match: /^\/prospecting/,      title: 'Prospecting Lists',      sub: 'AI-powered candidate prospecting for political marketing outreach' },
     { match: /^\/recruit/,          title: 'Recruit',                sub: 'Find and vet candidate prospects for local seats from your voter list' },
     { match: /^\/voter-lists/,      title: 'Voter Lists',            sub: 'Upload voter CSV files, map addresses, and build targeted prospect lists' },
