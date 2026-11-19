@@ -93,6 +93,7 @@ const CHANGELOG = [
     changes: [
       'A new look: the same style as mycandidatepage.com, with DM Sans type, a floating black top bar instead of the sidebar, and big tiles',
       'Home is a grid of tiles: your playbook for the week (tick things off right there), opponents, profiles, events, Broadside, Campaign Connect and volunteers',
+      'Todo is now your Campaign Playbook: every step from filing to Election Day for your next race, Wisconsin deadlines built in, grouped by week. A finished race no longer leaves hundreds of overdue tasks',
     ],
   },
   {
