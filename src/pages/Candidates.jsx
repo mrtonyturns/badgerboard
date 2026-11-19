@@ -16,6 +16,7 @@ import { partyGroup, partyBadgeClasses, normalizePartyForDb } from '../lib/party
 import { SCOUT_CAP_MESSAGE, scoutCapMessage, monitoringToggleError } from '../lib/capErrors'
 import { useDialog } from '../lib/useDialog'
 import OnboardingStepHint from '../components/onboarding/OnboardingStepHint'
+import CandidateTiles from './candidates/CandidateTiles'
 
 // How long the search box waits before it queries the server. The input itself
 // stays instant — only the network call is debounced, because keying it on
@@ -148,7 +149,16 @@ const notesToV2 = (text, by = 'You') => {
   })
 }
 
+// v2.0 facelift (Nov 19 2026): Candidate plans track a handful of people, so
+// they get a tile grid (pages/candidates/CandidateTiles.jsx) with a look-them-
+// up-by-name add sheet. Action plans keep the list/table/map below, untouched.
+// getUserPlanType honours an admin's ?preview=c_* plan, so previews see tiles.
 export default function Candidates() {
+  const { user } = useAuth()
+  return getUserPlanType(user) === 'candidate' ? <CandidateTiles /> : <CandidatesList />
+}
+
+function CandidatesList() {
   const { user, session } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -588,9 +598,10 @@ export default function Candidates() {
   const f = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }))
   const userTier    = getUserTier(user)
   const canDiscover = hasFeature(userTier, 'discoverCandidates')
-  // Nov 15 2026 lineup: Candidate plans get a BASIC Candidates page — a plain
-  // list of you and your opponents. No map view, CSV import, AI autofill or
-  // AI discovery (those stay on Action plans). Admins/beta see everything.
+  // Nov 15 2026 lineup: a plan without candidateMap gets a BASIC list — no map
+  // view, CSV import, AI autofill or AI discovery. Since Nov 19 Candidate plans
+  // render CandidateTiles instead of this list (see Candidates() above), so this
+  // is a guard for any future Action plan without the map. Admins/beta see everything.
   const basicPage = !useFeature('candidateMap')
   const canAutofill = hasFeature(userTier, 'campaignIntel') && hasFeature(userTier, 'autofill')
   // A saved 'map' view from before the lineup change must not strand a basic page on a hidden map.

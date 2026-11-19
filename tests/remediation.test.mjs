@@ -159,7 +159,11 @@ console.log('F4 — tier gates (403 for under-tier)')
 
   mockPlan = 'c_monitor'
   t('discover-candidates 403 for c_monitor', (await call('../netlify/functions/discover-candidates.js', { mode: 'county', county: 'Dane' })).statusCode === 403)
-  t('autofill-candidate 403 for c_monitor',  (await call('../netlify/functions/autofill-candidate.js', { name: 'X' })).statusCode === 403)
+  // Nov 19 2026: the candidate lookup is back on for Candidate plans (the add
+  // sheet's "Look them up"), so c_monitor now gets past the plan gate — the
+  // stubbed Anthropic call 500s here, which is still neither 401 nor 403.
+  const rAuto = await call('../netlify/functions/autofill-candidate.js', { name: 'X' })
+  t('autofill-candidate passes the plan gate for c_monitor (not 401/403)', rAuto.statusCode !== 403 && rAuto.statusCode !== 401)
   t('generate-campaign-intel 403 for c_monitor', (await call('../netlify/functions/generate-campaign-intel.js', { candidate: { name: 'X' } })).statusCode === 403)
   t('generate-prospecting 403 for c_monitor', (await call('../netlify/functions/generate-prospecting.js', { listName: 'x' })).statusCode === 403)
   t('classify-csv-prospects 403 for c_monitor', (await call('../netlify/functions/classify-csv-prospects.js', { prospects: [{ name: 'A' }] })).statusCode === 403)

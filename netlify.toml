@@ -64,6 +64,12 @@
 [functions."broadside-prep"]
   timeout = 26
 
+# Candidate lookup (add-candidate sheet / AI Autofill): one Opus call at medium
+# effort plus a ≤3.5s fetch of the candidate's site for its share photo — can
+# run past the 10s default.
+[functions."autofill-candidate"]
+  timeout = 26
+
 
 # Auto-regenerate stale dossiers every Monday at 9am CT (UTC-6 standard / UTC-5 daylight)
 # Using 15:00 UTC to cover CT regardless of DST

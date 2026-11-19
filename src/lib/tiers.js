@@ -320,8 +320,11 @@ export const ACTION_PLAN_CONFIG = {
 // bypass these (FeatureRoute, navItemVisible and planAllows() all let them by).
 //
 //   Candidate plans CUT: old dashboard (→ Field home), full candidate tracking
-//     (map, CSV import, AI autofill + discovery), sharing profiles (PDF + share
+//     (map, CSV import, AI discovery), sharing profiles (PDF + share
 //     links), Offices & district maps, voter lists, election results, Compare.
+//   Candidate plans GET BACK (Nov 19 2026): the AI candidate lookup (`autofill`)
+//     — the add-candidate sheet looks a person up by name + office and fills in
+//     what it finds for the user to confirm (pages/candidates/AddCandidateSheet).
 //   Action plans CUT: Events finder, Broadside, calendar feed, election results.
 //   Action plans BRING BACK: Compare (every action plan).
 export const FAMILY_FEATURES = {
@@ -329,7 +332,7 @@ export const FAMILY_FEATURES = {
     fieldHome:          true,
     candidateMap:       false,
     csvImport:          false,
-    autofill:           false,
+    autofill:           true,   // name lookup in the add-candidate sheet
     discoverCandidates: false,
     sharing:            false,
     offices:            false,

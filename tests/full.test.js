@@ -1250,10 +1250,11 @@ async function runInputValidation() {
     assertStatus(res.status, 403, 'monitor user should be blocked by tier check')
   })
 
-  await test('autofill-candidate: monitor user → 403 (Campaign+ required)', async () => {
-    // tokenA is monitor plan — tier check blocks before input validation
+  await test('autofill-candidate: monitor user → 400 without a name (lookup is on for Candidate plans)', async () => {
+    // tokenA is monitor plan. Since Nov 19 2026 the candidate lookup is part of
+    // every Candidate plan, so the tier check passes and input validation runs.
     const res = await fnPost('autofill-candidate', { party: 'Republican' }, tokenA)
-    assertStatus(res.status, 403, 'monitor user should be blocked by tier check')
+    assertStatus(res.status, 400, 'monitor user passes the tier check; a missing name is a 400')
   })
 
   await test('volunteer-auth: missing action → 401 (no token)', async () => {

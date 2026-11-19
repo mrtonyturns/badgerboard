@@ -3,6 +3,17 @@
 // look up and return any publicly available information to auto-populate
 // the Add Candidate form fields.
 // ANTHROPIC_API_KEY must be set in Netlify environment variables
+//
+// Callers: the Action plans' Add Candidate modal (Candidates.jsx, "AI Autofill")
+// and, since Nov 19 2026, the Candidate plans' add sheet
+// (src/pages/candidates/AddCandidateSheet.jsx, "Look them up").
+//
+// Response (200): { fields, name } — `fields` holds only the keys that had a
+// value: any of email, phone, website, campaign_address, campaign_city,
+// campaign_zip, campaign_committee, campaign_manager, treasurer, occupation,
+// employer, bio_summary, twitter_handle, facebook_url, instagram_handle, party,
+// notes — plus photo_url when the candidate's own website publishes a share
+// image (og:image / twitter:image). The model never writes photo_url itself.
 
 const { enforceRateLimit } = require('./_rate-limit')
 const { logAiUsage } = require('./_ai-usage')
@@ -14,6 +25,66 @@ const MODEL = MODELS.CLAUDE_QUALITY
 
 const { ADMIN_EMAILS } = require('./_config')
 // Include all new-format plan keys that have campaignIntel access (tiers.js: c_active+)
+
+// ── Photo: the share image on the candidate's own website ────────────────────
+// Best effort and bounded: https only, public hostnames only, 3.5s, first
+// 400 KB of HTML. Any failure just means "no photo" — the user can paste one.
+const PHOTO_FETCH_MS = 3500
+const PHOTO_MAX_BYTES = 400 * 1024
+
+function isFetchablePublicHttps(raw) {
+  let u
+  try { u = new URL(raw) } catch { return false }
+  if (u.protocol !== 'https:') return false
+  const h = u.hostname.toLowerCase()
+  if (!h.includes('.') || h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal')) return false
+  if (/^[\d.]+$/.test(h) || h.includes(':') || h.startsWith('[')) return false   // IP literals
+  return true
+}
+
+/** og:image / twitter:image / image_src from a page's HTML, made absolute (https only). */
+function photoFromHtml(html, pageUrl) {
+  const src = String(html || '')
+  const pats = [
+    /<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image(?::secure_url)?["']/i,
+    /<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["']/i,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image(?::src)?["']/i,
+    /<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i,
+  ]
+  for (const re of pats) {
+    const m = src.match(re)
+    if (!m) continue
+    try {
+      const abs = new URL(m[1].replace(/&amp;/g, '&').trim(), pageUrl)
+      if (abs.protocol === 'https:') return abs.href
+    } catch { /* malformed — try the next pattern */ }
+  }
+  return null
+}
+
+async function findSitePhoto(siteUrl, fetchImpl = fetch) {
+  if (!isFetchablePublicHttps(siteUrl)) return null
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), PHOTO_FETCH_MS)
+  try {
+    const res = await fetchImpl(siteUrl, {
+      signal: ctrl.signal,
+      redirect: 'follow',
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BadgerBoard candidate lookup)', Accept: 'text/html' },
+    })
+    if (!res || !res.ok) return null
+    if (res.url && !isFetchablePublicHttps(res.url)) return null
+    const type = res.headers?.get?.('content-type') || ''
+    if (type && !/html/i.test(type)) return null
+    const html = (await res.text()).slice(0, PHOTO_MAX_BYTES)
+    return photoFromHtml(html, res.url || siteUrl)
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 function sanitize(val, maxLen = 200) {
   if (val === null || val === undefined) return ''
@@ -53,7 +124,8 @@ exports.handler = async (event) => {
   }
   // ── Tier check ────────────────────────────────────────────────────────────────
   const caller = await authRes.json()
-  // Nov 15 2026 lineup: AI autofill is an Action-plan feature (tiers.js).
+  // Plan lineup (tiers.js): every Action plan, and — since Nov 19 2026 — every
+  // Candidate plan (the add sheet's "Look them up"). Admins and beta pass.
   const { planAllowsUser, FEATURE_MESSAGES } = require('./_plan-gate')
   if (!ADMIN_EMAILS.includes(caller.email?.toLowerCase()) && !(await planAllowsUser(caller, 'autofill'))) {
     return { statusCode: 403, headers, body: JSON.stringify({ error: FEATURE_MESSAGES.autofill }) }
@@ -115,12 +187,14 @@ Return ONLY a valid JSON object with exactly these keys. No markdown, no explana
   "twitter_handle": null,
   "facebook_url": null,
   "instagram_handle": null,
+  "party": null,
   "notes": null
 }
 
 Additional rules:
 - website: full URL including https:// — only if you know the actual campaign or official site
 - twitter_handle: include the @ symbol — only if you know the verified handle
+- party: only if you know this person's party for certain — one of Republican, Democrat, Independent, Libertarian, Green, Constitution, Nonpartisan. Do not guess it from the office or the region.
 - notes: briefly describe what you do and don't know about this person, and remind the user to verify everything independently
 - All values must be strings or null — never boolean or number
 - When in doubt, return null. An empty form is better than wrong data.`
@@ -154,6 +228,12 @@ Additional rules:
     const populated = Object.fromEntries(
       Object.entries(fields).filter(([, v]) => v !== null && v !== '')
     )
+    // A model never invents a photo link; the only photo comes from the site itself.
+    delete populated.photo_url
+    if (typeof populated.website === 'string') {
+      const photo = await findSitePhoto(populated.website)
+      if (photo) populated.photo_url = photo
+    }
 
     return { statusCode: 200, headers, body: JSON.stringify({ fields: populated, name }) }
   } catch (err) {
@@ -161,3 +241,6 @@ Additional rules:
     return { statusCode: 500, headers, body: JSON.stringify({ error: 'An internal error occurred' }) }
   }
 }
+
+// Exposed for tests/candidate-tiles.test.mjs — not part of the HTTP contract.
+exports._photo = { photoFromHtml, findSitePhoto, isFetchablePublicHttps }

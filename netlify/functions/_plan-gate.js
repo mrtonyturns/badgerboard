@@ -23,7 +23,7 @@ const FEATURE_MESSAGES = {
   events:             'The Events finder is included with Candidate plans.',
   broadside:          'Broadside is included with paid Candidate plans.',
   sharing:            'Profile sharing is included with Action plans.',
-  autofill:           'AI autofill is included with Action plans.',
+  autofill:           'Candidate lookup isn’t included with your plan.',
   discoverCandidates: 'AI candidate discovery is included with Action plans.',
   offices:            'Offices and district maps are included with Action plans.',
 }
