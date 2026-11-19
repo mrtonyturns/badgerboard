@@ -11,12 +11,13 @@
 // app can't know yet is left out, not shown as a dash.
 
 import { useEffect, useMemo, useState } from 'react'
-import { endOfWeek, format } from 'date-fns'
+import { format } from 'date-fns'
 import {
   ListChecks, Users, FileText, CalendarDays, Swords, Users2, HandHeart, Check, Footprints,
 } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
-import { supabase, getDashboardBootstrap, getCandidates, getElections, getDossiers, getTasks, updateTask } from '../../lib/supabase'
+import { supabase, getDashboardBootstrap, getCandidates, getElections, getDossiers, getTasks, getTaskProjects, updateTask } from '../../lib/supabase'
+import { playbookSnapshot, localToday } from '../../lib/playbook.js'
 import { getUserPlan, hasFeature, getUserTier } from '../../lib/tiers'
 import { isNativeApp } from '../../lib/native'
 import { resolveSelfCandidate } from './CandidateDashboard'
@@ -62,6 +63,7 @@ export default function FieldHome() {
   const [elections, setElections]   = useState([])
   const [dossiers, setDossiers]     = useState([])
   const [tasks, setTasks]           = useState([])
+  const [projects, setProjects]     = useState([])
   const [volunteers, setVolunteers] = useState(null)
   const [busy, setBusy]             = useState(null)
 
@@ -72,17 +74,19 @@ export default function FieldHome() {
       const [c, e, d] = boot
         ? [{ data: boot.candidates }, { data: boot.elections }, { data: boot.dossiers }]
         : await Promise.all([getCandidates({}), getElections(), getDossiers(null, { list: true })])
-      const [t, v] = await Promise.all([
+      const [t, v, p] = await Promise.all([
         getTasks().catch(() => ({ data: [] })),
         user?.id
           ? supabase.from('volunteers').select('id', { count: 'exact', head: true }).eq('created_by', user.id)
           : Promise.resolve({ count: null }),
+        getTaskProjects().catch(() => ({ data: [] })),
       ])
       if (dead) return
       setCandidates(c.data || [])
       setElections(e.data || [])
       setDossiers(d.data || [])
       setTasks((t.data || []).filter(x => !x.parent_id && !x.completed))
+      setProjects(p?.data || [])
       setVolunteers(v?.error ? null : (v?.count ?? null))
       setLoading(false)
     })()
@@ -101,16 +105,18 @@ export default function FieldHome() {
   }, [elections, self])
   const daysLeft = race ? daysUntil(race.election_date) : null
 
-  // This week's to-dos: anything due by Sunday. Items more than a month
-  // overdue belong to a race that's over — they're the playbook's job to
-  // retire, not this tile's to shout about.
-  const weekEnd = format(endOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd')
-  const staleBefore = format(new Date(Date.now() - 30 * 864e5), 'yyyy-MM-dd')
-  const todos = useMemo(() => tasks
-    .filter(t => t.due_date && t.due_date <= weekEnd && t.due_date >= staleBefore)
-    .sort((a, b) => String(a.due_date).localeCompare(String(b.due_date)) || (a.priority || 4) - (b.priority || 4)),
-  [tasks, weekEnd, staleBefore])
+  // This week's to-dos come from the playbook module: the same rule the
+  // Playbook screen uses, so the two always agree. A playbook whose race is
+  // over is the Playbook screen's job to retire, never this tile's to shout
+  // about as hundreds of days overdue.
+  const playbook = useMemo(() => playbookSnapshot({ projects, tasks, elections, today: localToday() }), [projects, tasks, elections])
+  const todos = playbook.thisWeek
   const overdue = todos.filter(t => t.due_date < todayISO()).length
+  const emptyLine = playbook.state === 'stale'
+    ? `The ${playbook.staleRace?.name || 'last race'} is over. Open the playbook to start the next one.`
+    : playbook.state === 'none'
+      ? 'Open the playbook to build your plan from your election date.'
+      : "Nothing due this week. Open the playbook to see what's next."
 
   // What changed with each opponent this week (from weekly monitoring digests).
   const opponentNews = useMemo(() => opponents.map(o => {
@@ -204,7 +210,7 @@ export default function FieldHome() {
                   </span>
                 </li>
               ))}
-              {todos.length === 0 && <li className="text-[15px] text-white/70">Nothing due this week. Open the playbook to see what's next.</li>}
+              {todos.length === 0 && <li className="text-[15px] text-white/70">{emptyLine}</li>}
             </ul>
             <div className="mt-auto flex justify-end pt-5"><OpenCue dark /></div>
           </div>

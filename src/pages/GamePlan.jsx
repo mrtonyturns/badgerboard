@@ -1,5 +1,7 @@
 // GamePlan.jsx — Campaign election calendar + results shell
-// The Tasks tab renders <TaskBoard />; Calendar and Results live here.
+// The Tasks tab renders <Playbook /> for Candidate plans (the campaign
+// playbook built from the election date) and <TaskBoard /> for Action plans;
+// Calendar and Results live here.
 
 import { useEffect, useState, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -28,11 +30,12 @@ import {
 import ElectionResultsBoard from './ElectionResultsBoard'
 import LoadingBar from '../components/LoadingBar'
 import TaskBoard from '../components/TaskBoard'
+import Playbook from './Playbook'
 import { useDialog } from '../lib/useDialog'
 import UpgradePrompt from '../components/UpgradePrompt'
 import { useAuth } from '../contexts/AuthContext'
 import { ELECTION_CALENDAR_ENABLED, RESULTS_ENABLED } from '../lib/featureFlags'
-import { getUserPlan, hasFeature, PLAN_CONFIG } from '../lib/tiers'
+import { getUserPlan, getUserPlanType, hasFeature, PLAN_CONFIG } from '../lib/tiers'
 import { ELECTION_TYPE_LABELS, ELECTION_TYPE_COLORS } from '../lib/campaignEnums'
 
 // ─── R3B PURE HELPERS BEGIN ───────────────────────────────────────────────────
@@ -239,6 +242,9 @@ export default function GamePlan() {
   // ── Plan gate — Game Plan unlocks at Monitor (locked on Scout) ────────────
   const userPlan = getUserPlan(user)
   const gamePlanUnlocked = hasFeature(userPlan, 'gameplan')
+  // Candidate plans get the Campaign Playbook; Action plans keep the
+  // Todoist-style TaskBoard exactly as it was.
+  const isCandidatePlan = getUserPlanType(user) === 'candidate'
 
   const _rawElection = searchParams.get('election')
   const selectedResultsId = (_rawElection && _rawElection !== 'null' && _rawElection !== 'undefined')
@@ -466,6 +472,8 @@ export default function GamePlan() {
       <LoadingBar loading={loading} />
 
       {/* ── Page header lives in the top bar (v1.24.1) ── */}
+      {/* (The Playbook carries its own head, so this empty action row would only add a gap above it.) */}
+      {!(isCandidatePlan && activeTab === 'milestones') && (
       <div className="flex items-center gap-4">
         <div className="ml-auto flex items-center gap-2">
           {activeTab === 'calendar' && (
@@ -475,6 +483,7 @@ export default function GamePlan() {
           )}
         </div>
       </div>
+      )}
 
       {/* Internal tab bar removed (v1.23) — Todo lives in the sidebar; Calendar and Results are Campaign top-bar tabs. ?tab= routing unchanged. */}
 
@@ -483,7 +492,7 @@ export default function GamePlan() {
       {/* ══════════════════════════════════════════════════════════ */}
       {/* Kept mounted across tab switches so the board doesn't refetch on every flip */}
       <div className={activeTab === 'milestones' ? '' : 'hidden'}>
-        <TaskBoard />
+        {isCandidatePlan ? <Playbook /> : <TaskBoard />}
       </div>
 
       {/* ══════════════════════════════════════════════════════════ */}

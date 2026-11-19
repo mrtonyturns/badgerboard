@@ -606,7 +606,7 @@ const CHANGELOG = [
 const NAV_SECTIONS = [
   // Candidate plans: the dashboard became the Field home (Nov 15 2026 revamp).
   { key: 'dashboard', label: 'Dashboard', candidateLabel: 'Home', icon: LayoutDashboard, direct: { to: '/', end: true } },
-  { key: 'todo',      label: 'Todo',      icon: Target, direct: { to: '/game-plan' } },
+  { key: 'todo',      label: 'Todo',      candidateLabel: 'Playbook', icon: Target, direct: { to: '/game-plan' } },
   { key: 'candidates', label: 'Candidates', icon: Users, direct: { to: '/candidates' } },
   // v1.30: /elections was orphaned (reachable only by typing the URL) — it now
   // owns a tab in this strip, so it comes OUT of `extra`. `extra` is only for
@@ -1392,7 +1392,7 @@ export default function Layout() {
     { match: /^\/places/,           title: 'City demographics',      sub: 'Census profile & comparisons' },
     ...(ELECTION_CALENDAR_ENABLED ? [{ match: /^\/game-plan\?.*tab=calendar/, title: 'Calendar', sub: 'Election calendar & key dates', useSearch: true }] : []),
     ...(RESULTS_ENABLED ? [{ match: /^\/game-plan\?.*tab=results/, title: 'Results', sub: 'Election night results', useSearch: true }] : []),
-    { match: /^\/game-plan/,        title: 'Todo',                   sub: 'Campaign tasks & priorities' },
+    { match: /^\/game-plan/,        title: isActionPlan ? 'Todo' : 'Playbook', sub: isActionPlan ? 'Campaign tasks & priorities' : 'Every step from filing to Election Day, week by week' },
     { match: /^\/candidates\/.+/,  title: 'Candidates',             sub: 'Candidate profile' },
     { match: /^\/candidates/,       title: 'Candidates',             sub: 'All tracked candidates across Wisconsin' },
     { match: /^\/prospecting/,      title: 'Prospecting Lists',      sub: 'AI-powered candidate prospecting for political marketing outreach' },
