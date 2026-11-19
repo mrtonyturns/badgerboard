@@ -561,7 +561,7 @@ function TurfBuilder({ candKey, cfg, houses, districtGeo, geoLoading, listId }) 
       map.addSource('route', { type: 'geojson', data: empty })
       map.addLayer({
         id: 'route-line', type: 'line', source: 'route',
-        paint: { 'line-color': '#8B0000', 'line-width': 2.5, 'line-opacity': 0.75, 'line-dasharray': [6, 3] },
+        paint: { 'line-color': '#C0392B', 'line-width': 2.5, 'line-opacity': 0.75, 'line-dasharray': [6, 3] },
       })
     }
   }, [mapLoaded])
@@ -754,9 +754,9 @@ function TurfBuilder({ candKey, cfg, houses, districtGeo, geoLoading, listId }) 
   const btnStyle = (active) => ({
     padding:'4px 11px', borderRadius:6, fontSize:12, fontWeight:600,
     cursor:'pointer', border:'1px solid',
-    background: active ? '#0A1628' : '#fff',
+    background: active ? '#0E1A3A' : '#fff',
     color:      active ? '#fff'    : '#374151',
-    borderColor:active ? '#0A1628' : '#E5E7EB',
+    borderColor:active ? '#0E1A3A' : '#E5E7EB',
     transition:'all .15s',
   })
 
@@ -792,8 +792,8 @@ function TurfBuilder({ candKey, cfg, houses, districtGeo, geoLoading, listId }) 
               disabled={selectedId === null}
               title={selectedId === null ? 'Select a net to show its walking route' : routeVisible ? 'Hide walking route' : 'Show street-based walking route for selected net'}
               style={{ display:'inline-flex', alignItems:'center', gap:5, padding:'4px 10px', borderRadius:6, fontSize:12, fontWeight:700, cursor: selectedId === null ? 'not-allowed' : 'pointer', border:'1px solid',
-                background: routeVisible ? '#8B0000' : '#faf5ff',
-                borderColor: routeVisible ? '#8B0000' : '#e9d5ff',
+                background: routeVisible ? '#C0392B' : '#faf5ff',
+                borderColor: routeVisible ? '#C0392B' : '#e9d5ff',
                 color: routeVisible ? '#fff' : '#7e22ce',
                 opacity: selectedId === null ? 0.5 : 1,
               }}>
@@ -1131,7 +1131,7 @@ function TeamMobile({ listId }) {
             <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
               {volunteers.map((vol, i) => {
                 const initials = vol.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
-                const COLORS = ['#0A1628','#ef4444','#3b82f6','#8b5cf6','#16a34a','#d97706']
+                const COLORS = ['#0E1A3A','#ef4444','#3b82f6','#8b5cf6','#16a34a','#d97706']
                 const bg = COLORS[i % COLORS.length]
                 const isPending = vol.status === 'invited'
                 const roleBg = vol.role === 'captain' ? '#dbeafe' : '#f3f4f6'
@@ -1171,7 +1171,7 @@ function TeamMobile({ listId }) {
             </div>
             <div style={{ display:'flex', gap:8, alignItems:'center' }}>
               <button onClick={sendInvite} disabled={sending || !inviteName.trim()}
-                style={{ padding:'7px 16px', borderRadius:7, fontSize:12, fontWeight:700, cursor: inviteName.trim() ? 'pointer' : 'not-allowed', border:'none', background: sent ? '#22c55e' : '#8B0000', color:'#fff', display:'flex', alignItems:'center', gap:6, transition:'background .3s', opacity: inviteName.trim() ? 1 : 0.6 }}>
+                style={{ padding:'7px 16px', borderRadius:7, fontSize:12, fontWeight:700, cursor: inviteName.trim() ? 'pointer' : 'not-allowed', border:'none', background: sent ? '#22c55e' : '#C0392B', color:'#fff', display:'flex', alignItems:'center', gap:6, transition:'background .3s', opacity: inviteName.trim() ? 1 : 0.6 }}>
                 {sent ? <><CheckCircle size={13}/> Sent!</> : sending ? 'Sending…' : <><Send size={13}/> Send Invite</>}
               </button>
             </div>
@@ -1216,7 +1216,7 @@ function FollowUpQueue({ listId }) {
         <div style={{ fontSize:14, fontWeight:700 }}>Follow-up Queue <span style={{ background:'#fee2e2', color:'#b91c1c', borderRadius:999, padding:'2px 8px', fontSize:12, fontWeight:700, marginLeft:6 }}>{queue.length}</span></div>
         <div style={{ display:'flex', gap:6 }}>
           <button disabled title="Coming soon" style={{ padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'not-allowed', opacity:.5, border:'1px solid #E5E7EB', background:'#fff', color:'#374151' }}>Export List</button>
-          <button disabled title="Coming soon" style={{ padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'not-allowed', opacity:.5, border:'none', background:'#8B0000', color:'#fff' }}>Assign All</button>
+          <button disabled title="Coming soon" style={{ padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600, cursor:'not-allowed', opacity:.5, border:'none', background:'#C0392B', color:'#fff' }}>Assign All</button>
         </div>
       </div>
       {loading ? (
@@ -1245,7 +1245,7 @@ function FollowUpQueue({ listId }) {
                   </td>
                   <td style={{ padding:'10px 14px', borderBottom:'1px solid #f3f4f6', fontSize:11, color:'#6B7280' }}>{relTime(q.created_at)}</td>
                   <td style={{ padding:'10px 14px', borderBottom:'1px solid #f3f4f6' }}>
-                    <button disabled title="Coming soon" style={{ padding:'3px 10px', borderRadius:5, fontSize:11, fontWeight:600, cursor:'not-allowed', opacity:.5, border:'none', background:'#0A1628', color:'#fff' }}>Assign →</button>
+                    <button disabled title="Coming soon" style={{ padding:'3px 10px', borderRadius:5, fontSize:11, fontWeight:600, cursor:'not-allowed', opacity:.5, border:'none', background:'#0E1A3A', color:'#fff' }}>Assign →</button>
                   </td>
                 </tr>
               ))}
@@ -1324,7 +1324,7 @@ function VoterFileTab({ listId }) {
       <div style={{ maxWidth:680 }}>
         <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16 }}>
           <div style={{ background:'#fff', border:'1px solid #E5E7EB', borderRadius:10, padding:'10px 18px' }}>
-            <div style={{ fontSize:22, fontWeight:800, color:'#0A1628' }}>{count ?? '—'}</div>
+            <div style={{ fontSize:22, fontWeight:800, color:'#0E1A3A' }}>{count ?? '—'}</div>
             <div style={{ fontSize:11, color:'#6B7280' }}>Voter file entries</div>
           </div>
         </div>
@@ -1358,7 +1358,7 @@ function VoterFileTab({ listId }) {
 
           {parsed.length > 0 && (
             <button onClick={handleImport} disabled={importing}
-              style={{ padding:'8px 20px', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', border:'none', background:'#8B0000', color:'#fff' }}>
+              style={{ padding:'8px 20px', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', border:'none', background:'#C0392B', color:'#fff' }}>
               {importing ? 'Importing…' : `Import ${parsed.length} rows`}
             </button>
           )}
@@ -1510,7 +1510,7 @@ function ShiftsTab({ listId }) {
           <div style={{ fontSize:11, color:'#6B7280', marginTop:2 }}>Schedule who's showing up, when, and which turf they're covering</div>
         </div>
         <button onClick={() => setShowForm(v => !v)}
-          style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', borderRadius:8, fontSize:12, fontWeight:700, border:'none', background:'#8B0000', color:'#fff', cursor:'pointer' }}>
+          style={{ display:'flex', alignItems:'center', gap:6, padding:'7px 14px', borderRadius:8, fontSize:12, fontWeight:700, border:'none', background:'#C0392B', color:'#fff', cursor:'pointer' }}>
           <Plus size={13}/> Add Shift
         </button>
       </div>
@@ -1574,7 +1574,7 @@ function ShiftsTab({ listId }) {
             </button>
             <button onClick={handleSave} disabled={saving || !form.volunteer_name.trim()}
               style={{ padding:'7px 16px', borderRadius:7, fontSize:12, fontWeight:700, border:'none',
-                background: form.volunteer_name.trim() ? '#0A1628' : '#D1D5DB', color:'#fff', cursor: form.volunteer_name.trim() ? 'pointer' : 'not-allowed' }}>
+                background: form.volunteer_name.trim() ? '#0E1A3A' : '#D1D5DB', color:'#fff', cursor: form.volunteer_name.trim() ? 'pointer' : 'not-allowed' }}>
               {saving ? 'Saving…' : 'Save Shift'}
             </button>
           </div>
@@ -1608,7 +1608,7 @@ function ShiftsTab({ listId }) {
                 <tr key={s.id}>
                   <td style={{ padding:'10px 14px', borderBottom:'1px solid #f3f4f6', fontWeight:600, fontSize:13 }}>
                     <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                      <div style={{ width:28, height:28, borderRadius:'50%', background:'#0A1628', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:11, fontWeight:800, flexShrink:0 }}>
+                      <div style={{ width:28, height:28, borderRadius:'50%', background:'#0E1A3A', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:11, fontWeight:800, flexShrink:0 }}>
                         {(s.volunteer_name || '?').charAt(0)}
                       </div>
                       {s.volunteer_name}
@@ -1730,7 +1730,7 @@ function ExportTab({ listId, candidateName }) {
 <style>
   * { box-sizing:border-box; margin:0; padding:0 }
   body { font-family: 'Helvetica Neue', Arial, sans-serif; color:#111; background:#fff; padding:40px 48px; font-size:13px; line-height:1.5 }
-  h1 { font-size:22px; font-weight:800; color:#0A1628; margin-bottom:4px }
+  h1 { font-size:22px; font-weight:800; color:#0E1A3A; margin-bottom:4px }
   h2 { font-size:14px; font-weight:700; color:#374151; margin:24px 0 10px }
   .sub { color:#6B7280; font-size:12px; margin-bottom:24px }
   .stats { display:flex; gap:16px; flex-wrap:wrap; margin-bottom:24px }
@@ -1921,7 +1921,7 @@ ${knocks.slice(0, 200).map(k =>
             {EXPORT_COLUMNS.map(c => (
               <label key={c.key} style={{ display:'flex', alignItems:'center', gap:5, fontSize:12, fontWeight:500, color:'#374151', cursor:'pointer' }}>
                 <input type="checkbox" checked={selectedCols.includes(c.key)} onChange={() => toggleCol(c.key)}
-                  style={{ accentColor:'#8B0000' }}/>
+                  style={{ accentColor:'#C0392B' }}/>
                 {c.label}
               </label>
             ))}
@@ -1934,7 +1934,7 @@ ${knocks.slice(0, 200).map(k =>
           disabled={generating || !previewData?.length || (fromDate > toDate)}
           style={{ display:'flex', alignItems:'center', gap:8, padding:'10px 22px', borderRadius:9, fontSize:13, fontWeight:700,
             border:'none', cursor: (previewData?.length > 0 && !generating) ? 'pointer' : 'not-allowed',
-            background: (previewData?.length > 0) ? 'linear-gradient(135deg,#0A1628,#1e3a5f)' : '#D1D5DB', color:'#fff' }}>
+            background: (previewData?.length > 0) ? 'linear-gradient(135deg,#0E1A3A,#1e3a5f)' : '#D1D5DB', color:'#fff' }}>
           <FileText size={15}/> {generating ? 'Generating…' : 'Generate PDF Report'}
         </button>
         <button onClick={downloadCSV}
@@ -2077,7 +2077,7 @@ function MessagesTab({ listId, coordinatorName }) {
             <button onClick={handleSend} disabled={sending || !text.trim()}
               style={{ display:'flex', alignItems:'center', gap:6, padding:'9px 16px', borderRadius:8, fontSize:12, fontWeight:700,
                 border:'none', cursor: text.trim() ? 'pointer' : 'not-allowed',
-                background: text.trim() ? '#8B0000' : '#D1D5DB', color:'#fff' }}>
+                background: text.trim() ? '#C0392B' : '#D1D5DB', color:'#fff' }}>
               <Send size={13}/> {sending ? 'Sending…' : 'Send'}
             </button>
           </div>
@@ -2199,7 +2199,7 @@ function SurveyQuestionsModal({ candidate, onClose, onSaved }) {
           <button onClick={onClose} style={{ flex:1, padding:'8px', borderRadius:8, border:'1px solid #E5E7EB', background:'#fff', fontSize:13, fontWeight:600, cursor:'pointer', color:'#374151' }}>
             Cancel
           </button>
-          <button onClick={handleSave} disabled={saving} style={{ flex:2, padding:'8px', borderRadius:8, border:'none', background:'#8B0000', color:'#fff', fontSize:13, fontWeight:700, cursor:saving?'wait':'pointer', opacity:saving?.7:1 }}>
+          <button onClick={handleSave} disabled={saving} style={{ flex:2, padding:'8px', borderRadius:8, border:'none', background:'#C0392B', color:'#fff', fontSize:13, fontWeight:700, cursor:saving?'wait':'pointer', opacity:saving?.7:1 }}>
             {saving ? 'Saving…' : `Save ${questions.filter(q=>q.text?.trim()).length} Question${questions.filter(q=>q.text?.trim()).length!==1?'s':''}`}
           </button>
         </div>
@@ -2215,7 +2215,7 @@ function ScoutUpgradePrompt({ feature }) {
       <div style={{ fontSize:32, fontWeight:800, color:'#94A3B8' }}>▣</div>
       <div style={{ fontSize:16, fontWeight:700, color:'#111827' }}>{feature} — Campaign Plan & above</div>
       <div style={{ fontSize:13, color:'#6B7280', maxWidth:360 }}>Upgrade to unlock exports, volunteer management, unlimited doors, and more.</div>
-      <a href="/plans" style={{ display:'inline-block', background:'#8B0000', color:'#fff', padding:'10px 24px', borderRadius:8, fontSize:14, fontWeight:600, textDecoration:'none' }}>View Plans →</a>
+      <a href="/plans" style={{ display:'inline-block', background:'#C0392B', color:'#fff', padding:'10px 24px', borderRadius:8, fontSize:14, fontWeight:600, textDecoration:'none' }}>View Plans →</a>
     </div>
   )
 }
@@ -2497,7 +2497,7 @@ export default function DoorKnocking() {
           )}
           {candidatesLoading ? (
             <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:12, color:'#6B7280' }}>
-              <div style={{ width:14, height:14, border:'2px solid #E5E7EB', borderTopColor:'#8B0000', borderRadius:'50%', animation:'spin 0.8s linear infinite' }}/>
+              <div style={{ width:14, height:14, border:'2px solid #E5E7EB', borderTopColor:'#C0392B', borderRadius:'50%', animation:'spin 0.8s linear infinite' }}/>
               Loading your candidates…
             </div>
           ) : candidateList.length > 0 ? (
@@ -2533,7 +2533,7 @@ export default function DoorKnocking() {
             <button
               type="button"
               onClick={e => { e.preventDefault(); e.stopPropagation(); openNewCampaign() }}
-              style={{ padding:'6px 13px', borderRadius:7, fontSize:12, fontWeight:600, cursor:'pointer', border:'none', background:'#8B0000', color:'#fff', display:'inline-flex', alignItems:'center', gap:5 }}
+              style={{ padding:'6px 13px', borderRadius:7, fontSize:12, fontWeight:600, cursor:'pointer', border:'none', background:'#C0392B', color:'#fff', display:'inline-flex', alignItems:'center', gap:5 }}
             >
               <Plus size={13}/> New Campaign
             </button>
@@ -2547,7 +2547,7 @@ export default function DoorKnocking() {
           <span style={{ fontSize:12, fontWeight:600, color:'#92400e' }}>
             Free plan · {houses.length}/100 doors used · Upgrade for unlimited doors, surveys, exports &amp; volunteer management
           </span>
-          <a href="/plans" style={{ fontSize:12, fontWeight:700, color:'#8B0000', textDecoration:'none', marginLeft:16 }}>Upgrade →</a>
+          <a href="/plans" style={{ fontSize:12, fontWeight:700, color:'#C0392B', textDecoration:'none', marginLeft:16 }}>Upgrade →</a>
         </div>
       )}
 
@@ -2573,7 +2573,7 @@ export default function DoorKnocking() {
           </p>
           <a
             href="/candidates"
-            style={{ padding:'10px 22px', borderRadius:8, fontSize:13, fontWeight:700, background:'#8B0000', color:'#fff', textDecoration:'none', display:'inline-flex', alignItems:'center', gap:7 }}
+            style={{ padding:'10px 22px', borderRadius:8, fontSize:13, fontWeight:700, background:'#C0392B', color:'#fff', textDecoration:'none', display:'inline-flex', alignItems:'center', gap:7 }}
           >
             <Plus size={15}/> Add a Candidate
           </a>
@@ -2680,7 +2680,7 @@ export default function DoorKnocking() {
               <button
                 onClick={handleAddCampaign}
                 disabled={!newCampId}
-                style={{ padding:'8px 18px', borderRadius:8, fontSize:13, fontWeight:600, border:'none', background: newCampId ? '#8B0000' : '#D1D5DB', color:'#fff', cursor: newCampId ? 'pointer' : 'not-allowed' }}
+                style={{ padding:'8px 18px', borderRadius:8, fontSize:13, fontWeight:600, border:'none', background: newCampId ? '#C0392B' : '#D1D5DB', color:'#fff', cursor: newCampId ? 'pointer' : 'not-allowed' }}
               >
                 Add Campaign
               </button>

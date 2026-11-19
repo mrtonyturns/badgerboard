@@ -164,7 +164,7 @@ function DistrictHeatMap({ geometry, popPoints, navigate }) {
       attribution: '&copy; OpenStreetMap', maxZoom: 18,
     }).addTo(map)
     const boundary = L.geoJSON({ type: 'Feature', geometry }, {
-      style: { color: '#8B0000', weight: 3, fillColor: '#8B0000', fillOpacity: 0.05 },
+      style: { color: '#C0392B', weight: 3, fillColor: '#C0392B', fillOpacity: 0.05 },
     }).addTo(map)
     map.fitBounds(boundary.getBounds(), { padding: [14, 14] })
 
@@ -331,7 +331,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
     note: { fontWeight: 600, letterSpacing: 0, textTransform: 'none', fontSize: 12, color: '#94A3B8' },
     card: { background: '#fff', borderRadius: 18, padding: '18px 20px', boxShadow: '0 2px 12px rgba(15,23,42,0.05)' },
     stat: { background: '#F8FAFC', borderRadius: 12, padding: '10px 13px', borderLeft: '4px solid #E2E8F0', marginBottom: 8 },
-    statHot: { borderLeftColor: '#8B0000' },
+    statHot: { borderLeftColor: '#C0392B' },
     statLabel: { fontSize: 10.5, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' },
     statVal: { fontSize: 21, fontWeight: 900, color: '#0F172A', letterSpacing: '-0.02em', lineHeight: 1.3 },
     pill: (bg, fg) => ({ fontSize: 11, fontWeight: 800, padding: '2px 9px', borderRadius: 99, background: bg, color: fg, whiteSpace: 'nowrap' }),
@@ -345,11 +345,11 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
         <div style={{ background: '#F4F6FA', borderRadius: 22, overflow: 'hidden', boxShadow: '0 32px 80px rgba(0,0,0,0.55)' }}>
 
           {/* hero */}
-          <div style={{ background: 'linear-gradient(135deg, #0A1628 0%, #12203A 60%, #1A0A0A 100%)', padding: '26px 28px 22px', color: '#fff', position: 'relative' }}>
+          <div style={{ background: 'linear-gradient(135deg, #0E1A3A 0%, #12203A 60%, #1A0A0A 100%)', padding: '26px 28px 22px', color: '#fff', position: 'relative' }}>
             <div style={S.kicker}>District intelligence</div>
             <h1 style={{ fontSize: 30, fontWeight: 900, letterSpacing: '-0.02em', lineHeight: 1.05, margin: '6px 0 0' }}>{district.name}</h1>
             <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              <span style={{ ...S.pill('#8B0000', '#fff'), padding: '5px 12px' }}>{meta.badge}</span>
+              <span style={{ ...S.pill('#C0392B', '#fff'), padding: '5px 12px' }}>{meta.badge}</span>
               {countyMix && (
                 <span style={{ ...S.pill('transparent', 'rgba(255,255,255,0.85)'), border: '1px solid rgba(255,255,255,0.25)', padding: '4px 12px' }}>
                   {Object.entries(countyMix).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([c]) => c).join(', ')} {Object.keys(countyMix).length > 4 ? `+${Object.keys(countyMix).length - 4}` : ''} Co.
@@ -419,7 +419,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#64748B' }}>
-                    <span style={{ width: 22, height: 12, borderRadius: 4, background: 'rgba(139,0,0,0.14)', border: '2.5px solid #8B0000' }} /> Boundary
+                    <span style={{ width: 22, height: 12, borderRadius: 4, background: 'rgba(139,0,0,0.14)', border: '2.5px solid #C0392B' }} /> Boundary
                   </span>
                   <span style={{ fontSize: 12, fontWeight: 700, color: '#22C55E' }}>Low</span>
                   <div style={{ flex: 1, minWidth: 120, height: 10, borderRadius: 99, background: 'linear-gradient(to right, #22C55E, #EAB308, #F97316, #DC2626)' }} />
@@ -433,14 +433,14 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
 
                 {!history && !hasContestResults && !histLoading && (
                   <div style={{ textAlign: 'center', padding: '28px 10px' }}>
-                    <Sparkles size={26} style={{ color: '#8B0000', margin: '0 auto 10px' }} />
+                    <Sparkles size={26} style={{ color: '#C0392B', margin: '0 auto 10px' }} />
                     <p style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>{id.chamber === 'county' ? 'Research this county\'s flagship seat' : "Research this seat's history"}</p>
                     <p style={{ fontSize: 12.5, color: '#94A3B8', margin: '6px 0 14px', lineHeight: 1.5 }}>
                       {id.chamber === 'county'
                         ? 'AI researches the elected County Sheriff — every officeholder since 2010 with bios and results — then saves it for everyone.'
                         : 'AI finds every officeholder since 2010 with bios and results, then saves it for everyone. Takes ~20 seconds, runs once.'}
                     </p>
-                    <button onClick={() => researchHistory(false)} style={{ ...S.btn, background: '#8B0000', borderColor: '#8B0000', color: '#fff' }}>
+                    <button onClick={() => researchHistory(false)} style={{ ...S.btn, background: '#C0392B', borderColor: '#C0392B', color: '#fff' }}>
                       <Sparkles size={13} style={{ display: 'inline', verticalAlign: -2, marginRight: 6 }} />Research history
                     </button>
                     {histErr && <p style={{ fontSize: 12, color: '#B91C1C', marginTop: 10, fontWeight: 600 }}>{histErr}</p>}
@@ -448,7 +448,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
                 )}
                 {histLoading && (
                   <div style={{ textAlign: 'center', padding: '36px 10px' }}>
-                    <Loader2 size={26} style={{ color: '#8B0000', margin: '0 auto 10px', animation: 'spin 1s linear infinite' }} />
+                    <Loader2 size={26} style={{ color: '#C0392B', margin: '0 auto 10px', animation: 'spin 1s linear infinite' }} />
                     <p style={{ fontSize: 13, fontWeight: 700, color: '#475569' }}>Researching officeholders…</p>
                   </div>
                 )}
@@ -456,7 +456,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
                 {(history || hasContestResults) && !histLoading && (
                   <>
                     {current && (
-                      <div style={{ background: 'linear-gradient(135deg, #12203A, #0A1628)', borderRadius: 14, padding: 15, color: '#fff', marginBottom: 12 }}>
+                      <div style={{ background: 'linear-gradient(135deg, #12203A, #0E1A3A)', borderRadius: 14, padding: 15, color: '#fff', marginBottom: 12 }}>
                         <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#FCA5A5' }}>Current officeholder</div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 8 }}>
                           <div style={{ width: 44, height: 44, borderRadius: 13, background: partyColorHex(current.party), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 900, flexShrink: 0 }}>
@@ -505,7 +505,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
               {districtCandidates.length === 0 ? (
                 <p style={{ fontSize: 13.5, color: '#94A3B8', fontWeight: 600 }}>
                   None of your tracked candidates are linked to offices in this district yet.
-                  <button onClick={() => navigate('/candidates')} style={{ background: 'none', border: 'none', color: '#8B0000', fontWeight: 800, cursor: 'pointer', fontSize: 13.5 }}>Add one →</button>
+                  <button onClick={() => navigate('/candidates')} style={{ background: 'none', border: 'none', color: '#C0392B', fontWeight: 800, cursor: 'pointer', fontSize: 13.5 }}>Add one →</button>
                 </p>
               ) : (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 10 }}>
@@ -519,11 +519,11 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
                         if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); navigate(`/candidates/${c.id}`) }
                       }}
                       style={{ border: '1.5px solid #E9EDF3', borderRadius: 14, padding: 14, display: 'flex', gap: 12, alignItems: 'center', cursor: 'pointer' }}
-                      onMouseEnter={ev => { ev.currentTarget.style.borderColor = '#8B0000' }}
+                      onMouseEnter={ev => { ev.currentTarget.style.borderColor = '#C0392B' }}
                       onMouseLeave={ev => { ev.currentTarget.style.borderColor = '#E9EDF3' }}
-                      onFocus={ev => { ev.currentTarget.style.borderColor = '#8B0000' }}
+                      onFocus={ev => { ev.currentTarget.style.borderColor = '#C0392B' }}
                       onBlur={ev => { ev.currentTarget.style.borderColor = '#E9EDF3' }}>
-                      <div style={{ width: 44, height: 44, borderRadius: 13, background: c.party ? partyColorHex(c.party) : '#0A1628', color: '#fff', fontWeight: 800, fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <div style={{ width: 44, height: 44, borderRadius: 13, background: c.party ? partyColorHex(c.party) : '#0E1A3A', color: '#fff', fontWeight: 800, fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                         {(c.name || '?').split(' ').map(w => w[0]).slice(0, 2).join('')}
                       </div>
                       <div style={{ minWidth: 0 }}>
@@ -540,7 +540,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
             {/* eligible to run */}
             <div style={{ ...S.card, marginBottom: 14 }}>
               <div style={S.cardTitle}>Eligible to run — people in your lists <span style={S.note}>Addresses inside this district</span></div>
-              <div style={{ background: '#0A1628', borderRadius: 14, padding: '15px 18px', fontSize: 13.5, color: 'rgba(255,255,255,0.85)', lineHeight: 1.65, fontWeight: 500 }}>
+              <div style={{ background: '#0E1A3A', borderRadius: 14, padding: '15px 18px', fontSize: 13.5, color: 'rgba(255,255,255,0.85)', lineHeight: 1.65, fontWeight: 500 }}>
                 <b style={{ color: '#fff', fontWeight: 800 }}>To run for this seat:</b> {meta.elig(id.num, id.countyName)}
               </div>
               {eligible === null ? (
@@ -573,7 +573,7 @@ export default function DistrictDashboard({ district, panelOffices, allCandidate
                       <Users size={13} style={{ display: 'inline', verticalAlign: -2 }} /> {eligible.length.toLocaleString()} {eligible.length === 1 ? 'person' : 'people'} in your lists live in this district
                     </span>
                     {eligible.length > 4 && (
-                      <button onClick={() => setShowAllElig(s => !s)} style={{ ...S.btn, background: '#8B0000', borderColor: '#8B0000', color: '#fff' }}>
+                      <button onClick={() => setShowAllElig(s => !s)} style={{ ...S.btn, background: '#C0392B', borderColor: '#C0392B', color: '#fff' }}>
                         {showAllElig ? 'Show fewer' : `See all ${eligible.length.toLocaleString()} eligible residents →`}
                       </button>
                     )}

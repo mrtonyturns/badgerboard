@@ -9,7 +9,14 @@
 
 @layer base {
   body {
-    @apply bg-brand-gray font-sans text-gray-900 antialiased;
+    @apply bg-brand-gray font-sans text-brand-ink antialiased;
+  }
+
+  /* v2.0 facelift: headings are DM Sans heavy with tight tracking, the
+     mycandidatepage.com voice. Pages that size their own headings keep their
+     size; only weight and tracking change. */
+  h1, h2 {
+    letter-spacing: -0.025em;
   }
 
   * {
@@ -31,7 +38,7 @@
   summary:focus-visible,
   [role="button"]:focus-visible,
   [tabindex]:focus-visible {
-    outline: 2px solid rgba(10, 22, 40, 0.4);   /* brand.navy #0A1628 @ 40% */
+    outline: 2px solid rgba(17, 22, 28, 0.4);   /* brand ink #11161C @ 40% */
     outline-offset: 2px;
   }
 }
@@ -41,19 +48,37 @@
      ring on a red button was invisible, and on the white one it read as an
      error. `focus-visible` so a mouse click doesn't paint a ring. */
   .btn-primary {
-    @apply bg-brand-red hover:bg-brand-red-dark text-white font-semibold px-4 py-2 rounded-lg transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-navy/40 focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply bg-brand-red hover:bg-brand-red-dark text-white font-bold px-4 py-2 rounded-xl shadow-e1 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-ink/40 focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
   .btn-secondary {
-    @apply bg-white hover:bg-gray-50 text-gray-700 font-medium px-4 py-2 rounded-lg border border-gray-300 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-navy/40 focus-visible:ring-offset-2 disabled:opacity-50;
+    @apply bg-white hover:bg-gray-50 text-brand-ink font-semibold px-4 py-2 rounded-xl border border-black/10 shadow-e1 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-ink/40 focus-visible:ring-offset-2 disabled:opacity-50;
   }
 
   .btn-navy {
-    @apply bg-brand-navy hover:bg-brand-navy-light text-white font-semibold px-4 py-2 rounded-lg transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-navy/40 focus-visible:ring-offset-2;
+    @apply bg-brand-ink hover:bg-black text-white font-bold px-4 py-2 rounded-xl transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-ink/40 focus-visible:ring-offset-2;
   }
 
   .card {
-    @apply bg-white rounded-xl shadow-sm border border-gray-200 p-6;
+    @apply bg-white rounded-tile shadow-e2 p-6;
+  }
+
+  /* ── v2.0 tile kit (see src/components/ui.jsx) ──────────────────────────── */
+  .tile {
+    @apply bg-white rounded-tile shadow-e2;
+  }
+  .tile-link {
+    @apply transition-shadow duration-200 hover:shadow-e4 focus-visible:shadow-e4;
+  }
+  .display {
+    @apply font-extrabold tracking-display text-brand-ink;
+  }
+  .eyebrow {
+    @apply inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-brand-ink shadow-e1;
+  }
+  .eyebrow::before {
+    content: "";
+    @apply h-1.5 w-1.5 rounded-full bg-brand-red;
   }
 
   .badge-republican {
@@ -73,7 +98,7 @@
   }
 
   .input {
-    @apply w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-navy/40 focus:border-transparent transition-colors;
+    @apply w-full px-3 py-2 border border-black/15 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-ink/30 focus:border-transparent transition-colors;
   }
 
   .label {
@@ -99,7 +124,7 @@
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background: #cbd5e1;

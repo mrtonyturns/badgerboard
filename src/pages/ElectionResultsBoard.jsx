@@ -195,7 +195,7 @@ const ELECTION_TYPE_LABEL = {
 // (or by an admin override). Badge copy and colour live here; the redesign
 // token language is 9.5px/700 pills on Geist, so these are inline-styled
 // rather than Tailwind text-xs.
-const BADGE_FONT = "'Geist','Inter',system-ui,-apple-system,sans-serif"
+const BADGE_FONT = "'DM Sans','Inter',system-ui,-apple-system,sans-serif"
 
 const STATUS_UI = {
   waiting:          { label: 'AWAITING RESULTS',          fg: '#57534E', bg: '#F1F1EF', ring: 'border-gray-200'   },

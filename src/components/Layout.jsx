@@ -45,7 +45,7 @@ import LoadingBar from './LoadingBar'
 import PaymentLockOverlay from './PaymentLockOverlay'
 import { useDossierStatus } from '../contexts/DossierStatusContext'
 
-const APP_VERSION = 'v1.42.2'
+const APP_VERSION = 'v1.43.0'
 
 // ─── z-index scale (v1.34.1 — audit fix B1) ──────────────────────────────────
 // One ladder for everything that floats, lowest to highest:
@@ -87,6 +87,14 @@ export const Z = {
 
 // ─── Changelog (newest first) ────────────────────────────────────────────────
 const CHANGELOG = [
+  {
+    version: 'v1.43.0',
+    date: 'November 19, 2026',
+    changes: [
+      'A new look: the same style as mycandidatepage.com, with DM Sans type, a floating black top bar instead of the sidebar, and big tiles',
+      'Home is a grid of tiles: your playbook for the week (tick things off right there), opponents, profiles, events, Broadside, Campaign Connect and volunteers',
+    ],
+  },
   {
     version: 'v1.42.2',
     date: 'September 30, 2026',
@@ -1043,13 +1051,13 @@ function DossierStatusIndicator() {
   if (phase === 'generating') {
     return (
       <div
-        className="relative flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand-navy/8 border border-brand-navy/15"
+        className="relative flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 border border-white/15"
         title={`Generating profile${candidateName ? ` for ${candidateName}` : ''}…`}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
       >
-        <Sparkles className="w-4 h-4 text-brand-navy animate-pulse flex-shrink-0" />
-        <span className="text-xs font-medium text-brand-navy hidden sm:block max-w-28 truncate">
+        <Sparkles className="w-4 h-4 text-white animate-pulse flex-shrink-0" />
+        <span className="text-xs font-medium text-white hidden sm:block max-w-28 truncate">
           {candidateName ? `Generating…` : 'Generating…'}
         </span>
         {/* Pulsing dot */}
@@ -1111,8 +1119,8 @@ const CHAT_API = '/.netlify/functions/support-chat'
 // tailwind.config.js `brand.red` / `brand.navy` — the widget used to run on
 // #dc2626 and #1e3a5f, which is two of the four reds and three navies the UI
 // audit found. Keep these in step with the Tailwind tokens.
-const BRAND_RED  = '#8B0000'
-const BRAND_NAVY = '#0A1628'
+const BRAND_RED  = '#C0392B'
+const BRAND_NAVY = '#0E1A3A'
 
 function SupportChatWidget() {
   const { session }             = useAuth()
@@ -1319,7 +1327,7 @@ function SectionTabs({ items, pathname, tab }) {
   }
   return (
     <div
-      className="bg-white border-b border-gray-200 px-4 md:px-6 lg:px-8 flex items-center gap-1 overflow-x-auto flex-shrink-0"
+      className="mb-5 inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-2xl bg-white p-1 shadow-e1"
       role="tablist"
       aria-label="Section pages"
     >
@@ -1330,10 +1338,11 @@ function SectionTabs({ items, pathname, tab }) {
           <Link
             key={item.to}
             to={item.to}
-            className={`flex items-center gap-1.5 px-3 text-sm font-medium whitespace-nowrap border-b-2 -mb-px transition-colors ${
-              active ? 'border-brand-red text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-800'
+            role="tab"
+            aria-selected={active}
+            className={`flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-[14px] font-semibold whitespace-nowrap transition-colors ${
+              active ? 'bg-brand-ink text-white' : 'text-brand-mute hover:text-brand-ink'
             }`}
-            style={{ minHeight: 44 }}
           >
             <Icon className="w-4 h-4" />
             {item.label}
@@ -1446,32 +1455,14 @@ export default function Layout() {
     setSidebarOpen(false)
   }, [navigate])
 
-  return (
-    <div className="flex h-screen overflow-hidden bg-brand-gray">
-      {/* Sidebar — visible on md+ (iPad portrait and up) */}
-      <aside className="hidden md:flex md:flex-col w-64 flex-shrink-0">
-        <Sidebar
-          currentSectionKey={currentSectionKey}
-          onGoSection={onGoSection}
-          isActionPlan={isActionPlan}
-          isPaid={isPaid}
-          isAdmin={isAdmin}
-          isBeta={isBetaActive(user)}
-          onNavigate={onNavigate}
-          onSignOut={handleSignOut}
-          tierConfig={tierConfig}
-        />
-      </aside>
+  const gates = { isAdmin, isBeta: isBetaActive(user), isActionPlan, isPaid, tierConfig }
 
-      {/* Mobile sidebar overlay — phones only (< md).
-          B1: z-drawer (35) — above the support chat (30), below every modal
-          (40+), instead of the old z-[9990] which beat the whole app.
-          B2: the panel is a single normal-flow column that owns the only
-          scroller (max-height + overflow-y on the Sidebar root), so the nav
-          group and the admin group are plain block siblings — they cannot
-          overlap however many items either one has. */}
+  return (
+    <div className="flex h-screen flex-col overflow-hidden bg-brand-gray">
+      {/* Mobile / tablet drawer (< lg) — the old sidebar, one scrolling column.
+          z-drawer (35): above the support chat (30), below every modal (40+). */}
       {sidebarOpen && (
-        <div className="md:hidden fixed inset-0 z-drawer flex">
+        <div className="lg:hidden fixed inset-0 z-drawer flex">
           <div className="fixed inset-0 bg-black/60" onClick={() => setSidebarOpen(false)} />
           <div className="relative flex flex-col w-72 max-w-xs h-full max-h-[100dvh]">
             <Sidebar
@@ -1488,6 +1479,7 @@ export default function Layout() {
             />
             <button
               type="button"
+              aria-label="Close menu"
               onClick={() => setSidebarOpen(false)}
               className="absolute top-4 right-4 text-white/70 hover:text-white"
             >
@@ -1497,53 +1489,65 @@ export default function Layout() {
         </div>
       )}
 
-      {/* Main content */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Top bar */}
-        <header className="bg-white border-b border-gray-200 px-4 md:px-6 lg:px-8 py-3 flex items-center gap-4 flex-shrink-0">
+      {/* v2.0 facelift: a floating black top bar replaces the sidebar
+          (mycandidatepage.com's dashboard chrome). Main sections sit in the
+          bar; a section's pages are a pill strip under the page title. */}
+      <div className="flex-shrink-0 px-3 pt-3 md:px-4 md:pt-4">
+        <header className="flex h-[60px] items-center gap-2 rounded-2xl bg-brand-ink-deep pl-2 pr-2 text-white shadow-e3 md:pl-4">
           <button
             type="button"
-            className="md:hidden p-2 rounded-lg hover:bg-gray-100 transition-colors"
+            aria-label="Open menu"
+            className="lg:hidden rounded-lg p-2 text-white/80 hover:bg-white/10 transition-colors"
             onClick={() => setSidebarOpen(true)}
           >
-            <Menu className="w-5 h-5 text-gray-600" />
+            <Menu className="w-5 h-5" />
           </button>
+          <Link to="/" className="flex-shrink-0" aria-label="Badger Board home">
+            <BadgerBoardLogo width={86} />
+          </Link>
 
-          {pageHeader && (
-            <div className="min-w-0 flex items-baseline gap-3">
-              <h1 className="text-lg md:text-xl font-bold text-gray-900 whitespace-nowrap flex items-center gap-2">
-                {pageHeader.title}
-                {/* Neutral chip, not a purple pill: purple appears nowhere else
-                    in a red/navy app, and a solid saturated badge shouted louder
-                    than the page title it labels. */}
-                {pageHeader.badge && (
-                  <span className="text-[9px] font-extrabold uppercase tracking-wider bg-brand-navy/10 text-brand-navy border border-brand-navy/15 px-1.5 py-0.5 rounded-full">{pageHeader.badge}</span>
-                )}
-              </h1>
-              <p className="hidden lg:block text-xs text-gray-400 truncate">{pageHeader.sub}</p>
-            </div>
-          )}
+          <nav className="hidden lg:flex flex-1 items-center justify-center gap-1" aria-label="Main">
+            {NAV_SECTIONS.map(sec => {
+              if (!sectionVisible(sec, gates)) return null
+              const label = (sec.candidateLabel && !isActionPlan) ? sec.candidateLabel : sec.label
+              const active = currentSectionKey === sec.key
+              const cls = `rounded-xl px-3 py-2 text-[14px] font-semibold whitespace-nowrap transition-colors ${
+                active ? 'bg-white text-brand-ink' : 'text-white/80 hover:text-white hover:bg-white/10'
+              }`
+              if (sec.direct) return <Link key={sec.key} to={sec.direct.to} className={cls} aria-current={active ? 'page' : undefined}>{label}</Link>
+              const items = sectionItems(sec, gates)
+              if (!items.length) return null
+              if (items.length === 1 && !items[0].q) return <Link key={sec.key} to={items[0].to} className={cls} aria-current={active ? 'page' : undefined}>{label}</Link>
+              return (
+                <button key={sec.key} type="button" onClick={() => onGoSection(sec, items)} className={cls} aria-current={active ? 'page' : undefined}>
+                  {label}
+                  {sec.key === 'beta' && <span className="ml-1.5 rounded-full bg-white/15 px-1.5 py-0.5 text-[10px]">Beta</span>}
+                </button>
+              )
+            })}
+          </nav>
 
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex items-center gap-1.5">
             {/* Dossier generation status indicator */}
             <DossierStatusIndicator />
 
             {/* v1.19.2: all announcements land here; success ones also pop up 10s */}
-            <NotificationCenter />
+            <NotificationCenter onDark />
 
             {/* Profile dropdown */}
             <div className="relative" ref={profileRef}>
               <button
                 type="button"
                 onClick={() => setProfileOpen(o => !o)}
-                className="flex items-center gap-1.5 rounded-xl hover:bg-gray-100 pl-1 pr-2 py-1 transition-colors"
+                aria-label="Account menu"
+                className="flex items-center gap-1.5 rounded-xl hover:bg-white/10 pl-1 pr-2 py-1 transition-colors"
               >
                 <AccountAvatar user={user} size={32} />
-                <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-150 ${profileOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`w-3.5 h-3.5 text-white/60 transition-transform duration-150 ${profileOpen ? 'rotate-180' : ''}`} />
               </button>
 
               {profileOpen && (
-                <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-xl shadow-xl border border-gray-200 py-2 z-50">
+                <div className="absolute right-0 top-full mt-3 w-64 bg-white text-brand-ink rounded-2xl shadow-e4 py-2 z-50">
                   {/* User info header */}
                   <div className="px-4 py-3 border-b border-gray-100">
                     <div className="flex items-center gap-3">
@@ -1599,6 +1603,25 @@ export default function Layout() {
                   </div>
 
                   <div className="border-t border-gray-100 py-1">
+                    {isAdmin && (
+                      <Link to="/admin" onClick={() => setProfileOpen(false)} className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+                        <ShieldCheck className="w-4 h-4 text-gray-400" />
+                        Admin Panel
+                      </Link>
+                    )}
+                    {!isNativeApp && (
+                      <Link to="/plans" onClick={() => setProfileOpen(false)} className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+                        <Tag className="w-4 h-4 text-gray-400" />
+                        Plans &amp; Pricing
+                      </Link>
+                    )}
+                    <Link to="/terms" onClick={() => setProfileOpen(false)} className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+                      <FileText className="w-4 h-4 text-gray-400" />
+                      Terms of Service
+                    </Link>
+                  </div>
+
+                  <div className="border-t border-gray-100 py-1">
                     <button
                       type="button"
                       onClick={handleSignOut}
@@ -1613,41 +1636,48 @@ export default function Layout() {
             </div>
           </div>
         </header>
-
-        {/* Section pages (consolidated nav v1.23) */}
-        {activeSection && !activeSection.direct && (() => {
-          const items = sectionItems(activeSection, { isAdmin, isBeta: isBetaActive(user), isPaid, isActionPlan, tierConfig })
-          if (items.length < 2) return null
-          return <SectionTabs items={items} pathname={pathname} tab={gpTab} />
-        })()}
-
-        {/* Offline indicator */}
-        <OfflineBanner />
-        {showWelcome && <Suspense fallback={null}><WelcomeSplash /></Suspense>}
-        {previewPlan && (
-          <div role="status" style={{ background: '#FEF3C7', borderBottom: '1px solid #FCD34D', color: '#78350F', fontSize: 13, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <span>Previewing the <strong>{PLAN_CONFIG[previewPlan]?.name || previewPlan}</strong> {PLAN_CONFIG[previewPlan]?.planType === 'action' ? 'Action' : 'Candidate'} plan the way a customer sees it.</span>
-            <button onClick={() => { exitPreview(); window.location.assign('/') }} style={{ fontWeight: 700, textDecoration: 'underline' }}>Exit preview</button>
-          </div>
-        )}
-
-        {/* Page content.
-            Route transitions used to fall through to App.jsx's outer Suspense
-            fallback, which swapped the whole content area for a bordered
-            spinner box — a partial red outline where the page had been. Inside
-            the app chrome the wait is announced the same way every in-page
-            fetch announces one: the thin brand-red LoadingBar across the very
-            top (LoadingBar.jsx, z-9999 = Z.TOAST). Nothing else moves. */}
-        <main className={`flex-1 relative ${fullBleed ? 'overflow-hidden' : 'overflow-y-auto'}`}>
-          <PaymentLockOverlay>
-            <div className={fullBleed ? 'h-full' : 'px-4 pt-2 pb-4 md:px-6 md:pb-6 lg:px-8 lg:pb-8 lg:pt-2'}>
-              <Suspense fallback={<LoadingBar loading />}>
-                <Outlet />
-              </Suspense>
-            </div>
-          </PaymentLockOverlay>
-        </main>
       </div>
+
+      {/* Offline indicator */}
+      <OfflineBanner />
+      {showWelcome && <Suspense fallback={null}><WelcomeSplash /></Suspense>}
+      {previewPlan && (
+        <div role="status" style={{ background: '#FEF3C7', borderBottom: '1px solid #FCD34D', color: '#78350F', fontSize: 13, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span>Previewing the <strong>{PLAN_CONFIG[previewPlan]?.name || previewPlan}</strong> {PLAN_CONFIG[previewPlan]?.planType === 'action' ? 'Action' : 'Candidate'} plan the way a customer sees it.</span>
+          <button onClick={() => { exitPreview(); window.location.assign('/') }} style={{ fontWeight: 700, textDecoration: 'underline' }}>Exit preview</button>
+        </div>
+      )}
+
+      {/* Page content.
+          Route transitions are announced by the thin brand-red LoadingBar
+          across the very top (LoadingBar.jsx, z-9999 = Z.TOAST). Nothing else
+          moves. Pages get a heavy title (PAGE_HEADERS) and, when their section
+          has several pages, a pill strip of those pages under it. */}
+      <main className={`flex-1 relative ${fullBleed ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+        <PaymentLockOverlay>
+          <div className={fullBleed ? 'h-full pt-3' : 'mx-auto w-full max-w-[1320px] px-4 pb-10 md:px-6 lg:px-8'}>
+            {!fullBleed && pageHeader && (
+              <div className="flex flex-wrap items-end gap-x-4 gap-y-1 pt-6 pb-4">
+                <h1 className="display text-[28px] leading-tight md:text-[32px] flex items-center gap-2">
+                  {pageHeader.title}
+                  {pageHeader.badge && (
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider bg-brand-ink/5 text-brand-ink border border-brand-ink/10 px-2 py-0.5 rounded-full">{pageHeader.badge}</span>
+                  )}
+                </h1>
+                {pageHeader.sub && <p className="pb-1 text-[14px] text-brand-mute">{pageHeader.sub}</p>}
+              </div>
+            )}
+            {activeSection && !activeSection.direct && (() => {
+              const items = sectionItems(activeSection, gates)
+              if (items.length < 2) return null
+              return <SectionTabs items={items} pathname={pathname} tab={gpTab} />
+            })()}
+            <Suspense fallback={<LoadingBar loading />}>
+              <Outlet />
+            </Suspense>
+          </div>
+        </PaymentLockOverlay>
+      </main>
 
       {/* Floating support chat widget */}
       <SupportChatWidget />

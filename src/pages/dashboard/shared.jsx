@@ -34,25 +34,25 @@ import { getMonitoringSlotMax } from '../../lib/tiers'
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
 export const T = {
-  page:    '#FBFBFA',
+  page:    '#F7F8FA',
   card:    '#FFFFFF',
-  border:  '#ECECEA',
-  divider: '#F2F2F0',
-  ink:     '#18181B',
-  ink2:    '#3F3F46',
-  ink3:    '#52525B',
-  muted:   '#71717A',
-  faint:   '#A1A19A',
-  red:     '#8B0000',
-  redDark: '#7E141B',
+  border:  '#E6E8EB',
+  divider: '#EFF1F3',
+  ink:     '#11161C',
+  ink2:    '#2B323A',
+  ink3:    '#4A525B',
+  muted:   '#5B636C',
+  faint:   '#9099A1',
+  red:     '#C0392B',
+  redDark: '#A93226',
   redHot:  '#B91C1C',
-  navy:    '#0A1628',
-  hover:   '#FAFAF9',
-  chip:    '#F1F1EF',
+  navy:    '#0E1A3A',
+  hover:   '#F7F8FA',
+  chip:    '#F0F2F4',
   warmBg:  '#FDF6F0',
   warmBr:  '#F4E4D4',
   warmInk: '#B45309',
-  font:    "'Geist','Inter',system-ui,-apple-system,sans-serif",
+  font:    "'DM Sans','Inter',system-ui,-apple-system,sans-serif",
 }
 
 export const cardStyle = {
@@ -909,7 +909,7 @@ export function DistrictHeatMap({ geometry, popPoints, height = 168 }) {
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map)
 
     const boundary = L.geoJSON({ type: 'Feature', geometry }, {
-      style: { color: '#8B0000', weight: 2, fillColor: '#8B0000', fillOpacity: 0.05 },
+      style: { color: '#C0392B', weight: 2, fillColor: '#C0392B', fillOpacity: 0.05 },
     }).addTo(map)
     try { map.fitBounds(boundary.getBounds(), { padding: [10, 10] }) } catch (_) {}
 

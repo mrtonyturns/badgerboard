@@ -14,36 +14,36 @@ import { partyGroup } from '../../lib/party'
 import { plural } from '../../lib/text'
 
 export const T = {
-  page:    '#FBFBFA',
+  page:    '#F7F8FA',
   card:    '#FFFFFF',
-  border:  '#ECECEA',
-  divider: '#F2F2F0',
-  line:    '#F0EFEC',
-  ink:     '#18181B',
-  ink2:    '#27272A',
-  ink3:    '#3F3F46',
-  ink4:    '#52525B',
-  muted:   '#6B6B73',   // darker than #71717A — safe on white
-  faint:   '#71717A',   // the lightest grey allowed on white
+  border:  '#E6E8EB',
+  divider: '#EFF1F3',
+  line:    '#EFF1F3',
+  ink:     '#11161C',
+  ink2:    '#1E252D',
+  ink3:    '#363E47',
+  ink4:    '#4A525B',
+  muted:   '#5B636C',   // darker than #71717A — safe on white
+  faint:   '#6B747D',   // the lightest grey allowed on white
   // Brand accent = tailwind.config.js `brand.red` / `brand.navy`, exactly. The
   // redesign shipped its own slightly different red and navy, which is how the
   // UI audit found four brand reds and three navies across the app.
   // `redDark` is the hover shade and `redHot` the danger/alert shade — both are
   // semantic, not the accent, and are deliberately left alone.
-  red:     '#8B0000',
-  redDark: '#7E141B',
+  red:     '#C0392B',
+  redDark: '#A93226',
   redHot:  '#B91C1C',
-  navy:    '#0A1628',
+  navy:    '#0E1A3A',
   green:   '#15803D',
   amber:   '#B45309',
   amberBar:'#D9A036',
   warmBg:  '#FDF6F0',
   warmBr:  '#F4E4D4',
-  hover:   '#FAFAF9',
-  chip:    '#F1F1EF',
+  hover:   '#F7F8FA',
+  chip:    '#F0F2F4',
   field:   '#DEDEDA',
   track:   '#EDECE8',
-  font:    "'Geist','Inter',system-ui,-apple-system,sans-serif",
+  font:    "'DM Sans','Inter',system-ui,-apple-system,sans-serif",
 }
 
 export const cardStyle = {

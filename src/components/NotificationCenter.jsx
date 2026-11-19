@@ -77,7 +77,7 @@ function useAnnouncements() {
 }
 
 // ── main component: render inside the header where the bell lives ────────────
-export default function NotificationCenter() {
+export default function NotificationCenter({ onDark = false }) {
   const { announcements, loadFailed } = useAnnouncements()
   const [open, setOpen] = useState(false)
   const [readIds, setReadIds] = useState(() => loadSet(READ_KEY))
@@ -149,9 +149,9 @@ export default function NotificationCenter() {
           type="button"
           onClick={openPanel}
           aria-label={`Notifications${unread.length ? ` (${unread.length} unread)` : ''}`}
-          className="relative p-2 rounded-lg hover:bg-gray-100 transition-colors"
+          className={`relative p-2 rounded-lg transition-colors ${onDark ? 'hover:bg-white/10' : 'hover:bg-gray-100'}`}
         >
-          <Bell className="w-4 h-4 text-gray-600" />
+          <Bell className={`w-4 h-4 ${onDark ? 'text-white/80' : 'text-gray-600'}`} />
           {unread.length > 0 && (
             <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 bg-brand-red text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none">
               {unread.length > 9 ? '9+' : unread.length}

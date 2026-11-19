@@ -28,7 +28,7 @@ function takeWelcomeFlag() {
   } catch { return false }
 }
 
-const NAVY = '#0A1628'
+const NAVY = '#0E1A3A'
 const RED = '#B91C1C'
 const SHOW_MS = 3200          // whole animation, including the fade-out
 const DATA_WAIT_MS = 1400     // never hold the logo longer than this for the number
@@ -134,7 +134,7 @@ export default function WelcomeSplash() {
       />
       <div style={{ height: 3, width: 'min(300px, 62vw)', marginTop: 22, background: RED, transformOrigin: 'left', animation: calm ? 'none' : 'bbSweep 900ms 250ms cubic-bezier(.2,.8,.2,1) both' }} />
 
-      <div style={{ minHeight: 120, marginTop: 26, fontFamily: "'Geist','Inter',system-ui,sans-serif" }}>
+      <div style={{ minHeight: 120, marginTop: 26, fontFamily: "'DM Sans','Inter',system-ui,sans-serif" }}>
         {race && days !== null && (
           <div style={{ animation: calm ? 'none' : 'bbFadeUp 500ms 350ms both' }}>
             {today ? (

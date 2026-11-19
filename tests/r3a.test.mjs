@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Badger Board — R3A: the approved COSMETIC items from the Aug-16 UI audit.
 //
-// Covers the one brand accent (#8B0000 / #0A1628), Geist-first typography, the
+// Covers the one brand accent (#C0392B / #0E1A3A), DM Sans-first typography, the
 // single focus ring, the Layout top-bar/account-menu fixes, the "Badger Board"
 // spelling, UpgradePrompt's retired default price, the Settings pane scroll
 // reset, the security-activity verb humanizer, and the Profiler polish.
@@ -50,21 +50,21 @@ async function loadPureBlock(file, tag = 'R3A') {
 const settingsShared = await loadPureBlock('src/pages/settings/shared.jsx')
 
 // ═══ 1 — Brand tokens: ONE red, ONE navy ═════════════════════════════════════
-console.log('1 — one brand accent (#8B0000 red / #0A1628 navy)')
+console.log('1 — one brand accent (#C0392B red / #0E1A3A navy)')
 {
   const tw = src('tailwind.config.js')
-  t('tailwind brand.red is still the canonical #8B0000', /red:\s*'#8B0000'/.test(tw))
-  t('tailwind brand.navy is still the canonical #0A1628', /navy:\s*'#0A1628'/.test(tw))
+  t('tailwind brand.red is still the canonical #C0392B', /red:\s*'#C0392B'/.test(tw))
+  t('tailwind brand.navy is still the canonical #0E1A3A', /navy:\s*'#0E1A3A'/.test(tw))
 
   const pf = src('src/pages/profiler/shared.jsx')
-  t('profiler token red is #8B0000',  /\n\s*red:\s*'#8B0000',/.test(pf))
-  t('profiler token navy is #0A1628', /\n\s*navy:\s*'#0A1628',/.test(pf))
+  t('profiler token red is #C0392B',  /\n\s*red:\s*'#C0392B',/.test(pf))
+  t('profiler token navy is #0E1A3A', /\n\s*navy:\s*'#0E1A3A',/.test(pf))
   t('profiler redHot (danger shade) is untouched at #B91C1C', /redHot:\s*'#B91C1C'/.test(pf))
   t('no #A51C24 left in the profiler tokens', !/#A51C24/i.test(pf))
 
   const st = src('src/pages/settings/shared.jsx')
-  t('settings token red is #8B0000',  /\n\s*red:\s*'#8B0000',/.test(st))
-  t('settings token navy is #0A1628', /\n\s*navy:\s*'#0A1628',/.test(st))
+  t('settings token red is #C0392B',  /\n\s*red:\s*'#C0392B',/.test(st))
+  t('settings token navy is #0E1A3A', /\n\s*navy:\s*'#0E1A3A',/.test(st))
   t('settings error tints (redBg/redBr) are untouched',
     /redBg:\s*'#FEF2F2'/.test(st) && /redBr:\s*'#FBD5D5'/.test(st))
 
@@ -72,23 +72,23 @@ console.log('1 — one brand accent (#8B0000 red / #0A1628 navy)')
   t('no #dc2626 left in Layout (support-chat widget)', !/#dc2626/i.test(layout))
   t('no #1e3a5f left in Layout (support-chat widget)', !/#1e3a5f/i.test(layout))
   t('Layout declares the two brand literals once',
-    /const BRAND_RED\s*=\s*'#8B0000'/.test(layout) && /const BRAND_NAVY\s*=\s*'#0A1628'/.test(layout))
+    /const BRAND_RED\s*=\s*'#C0392B'/.test(layout) && /const BRAND_NAVY\s*=\s*'#0E1A3A'/.test(layout))
 
   // Semantic reds are NOT part of the accent and must survive untouched.
   t('party red (lib/party.js) is untouched', /R:\s*'#dc2626'/.test(src('src/lib/party.js')))
 }
 
-// ═══ 2 — Geist-first typography ══════════════════════════════════════════════
-console.log('2 — Geist is the app-wide primary typeface')
+// ═══ 2 — DM Sans-first typography ══════════════════════════════════════════════
+console.log('2 — DM Sans is the app-wide primary typeface')
 {
   const tw = src('tailwind.config.js')
   const m  = tw.match(/sans:\s*\[([^\]]+)\]/)
   t('tailwind fontFamily.sans exists', !!m)
   const stack = (m ? m[1] : '').split(',').map(s => s.trim().replace(/^'|'$/g, ''))
-  eq('the sans stack starts with Geist, then Inter', stack.slice(0, 2), ['Geist', 'Inter'])
+  eq('the sans stack starts with DM Sans, then Inter', stack.slice(0, 2), ['DM Sans', 'Inter'])
 
   const html = src('index.html')
-  t('Geist is actually loaded in index.html', /family=[^"']*Geist/.test(html))
+  t('DM Sans is actually loaded in index.html', /family=[^"']*DM\+Sans/.test(html))
   t('Inter is still loaded as the first fallback', /family=[^"']*Inter/.test(html))
 }
 
@@ -96,12 +96,12 @@ console.log('2 — Geist is the app-wide primary typeface')
 console.log('3 — one focus ring, and it is not red')
 {
   const css = src('src/index.css')
-  t('a global :focus-visible ring exists', /:focus-visible\s*,?[\s\S]{0,400}?outline:\s*2px solid rgba\(10,\s*22,\s*40/.test(css))
+  t('a global :focus-visible ring exists', /:focus-visible\s*,?[\s\S]{0,400}?outline:\s*2px solid rgba\(17,\s*22,\s*28/.test(css))
   t('inputs, selects, textareas and buttons are all covered',
     /input:focus-visible/.test(css) && /select:focus-visible/.test(css) &&
     /textarea:focus-visible/.test(css) && /button:focus-visible/.test(css))
   t('no focus ring in brand red is left in index.css', !/focus(-visible)?:ring-brand-red/.test(css))
-  t('the .input helper focuses navy, not red', /\.input[\s\S]{0,300}?focus:ring-brand-navy\/40/.test(css))
+  t('the .input helper focuses ink, not red', /\.input[\s\S]{0,300}?focus:ring-brand-ink\/30/.test(css))
 
   // The two redesigns used to kill the outline outright (the "grey ring").
   t('.pf-input no longer suppresses the outline',
@@ -138,8 +138,8 @@ console.log('4 — Layout top bar and account menu')
   t('LoadingBar is imported', /import LoadingBar from '\.\/LoadingBar'/.test(s))
 
   t('the nav/page BETA badge is no longer purple', !/bg-purple-600/.test(s))
-  t('it is a neutral brand-navy chip that keeps its label',
-    /bg-brand-navy\/10 text-brand-navy[\s\S]{0,120}?\{pageHeader\.badge\}/.test(s))
+  t('it is a neutral ink chip that keeps its label',
+    /bg-brand-ink\/5 text-brand-ink[\s\S]{0,120}?\{pageHeader\.badge\}/.test(s))
 }
 
 // ═══ 5 — Product name is "Badger Board" ══════════════════════════════════════

@@ -106,7 +106,7 @@ export default function CampaignConnect() {
       </div>
 
       {/* ── Hero ─────────────────────────────────────────────── */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-brand-navy via-[#0d1b30] to-[#16273f] text-white p-7 sm:p-9" style={{ backgroundImage: `${DOTS}, linear-gradient(to bottom right, #0A1628, #16273f)` }}>
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-brand-navy via-[#0d1b30] to-[#16273f] text-white p-7 sm:p-9" style={{ backgroundImage: `${DOTS}, linear-gradient(to bottom right, #0E1A3A, #16273f)` }}>
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-center gap-6">
           <div className="flex-1">
             <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider bg-white/10 rounded-full px-3 py-1 mb-3 backdrop-blur">

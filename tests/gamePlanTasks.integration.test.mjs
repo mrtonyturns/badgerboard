@@ -34,7 +34,7 @@ try {
 
   console.log('— candidate: own-plan CRUD')
   const { data: proj, error: pe } = await cand.client.from('gp_projects')
-    .insert({ name: 'Test Campaign', color: '#8B0000', created_by: cand.id, owner_id: cand.id }).select().single()
+    .insert({ name: 'Test Campaign', color: '#C0392B', created_by: cand.id, owner_id: cand.id }).select().single()
   ok('candidate creates project', !!proj && !pe, pe?.message)
   const { data: sec } = await cand.client.from('gp_sections')
     .insert({ project_id: proj.id, name: 'GOTV', created_by: cand.id, owner_id: cand.id }).select().single()

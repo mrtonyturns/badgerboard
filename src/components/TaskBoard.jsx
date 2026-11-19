@@ -71,9 +71,9 @@ export const PRIORITIES = [
 const PRI = Object.fromEntries(PRIORITIES.map(x => [x.p, x]))
 
 export const PROJECT_COLORS = [
-  '#8B0000', '#DB4035', '#FF9933', '#FAD000', '#7ECC49',
+  '#C0392B', '#DB4035', '#FF9933', '#FAD000', '#7ECC49',
   '#299438', '#14AAF5', '#4073FF', '#884DFF', '#EB96EB',
-  '#808080', '#0A1628',
+  '#808080', '#0E1A3A',
 ]
 
 // WI campaign plan template (offsets = days relative to election day)
@@ -976,7 +976,7 @@ export default function TaskBoard() {
     if (!canEdit) return
     const base = parseISO(election.election_date)
     const { data: proj } = await createTaskProject({
-      name: `Campaign — ${election.name}`, color: '#8B0000', is_favorite: true,
+      name: `Campaign — ${election.name}`, color: '#C0392B', is_favorite: true,
       sort_order: projects.length,
     }, ownerId)
     if (!proj) return

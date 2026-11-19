@@ -39,7 +39,7 @@ export default function OnboardingStepHint({ stepId, to, linkLabel = 'Back to yo
       {to && (
         <>
           {' · '}
-          <Link to={to} style={{ color: '#8B0000', fontWeight: 600, textDecoration: 'none' }}>
+          <Link to={to} style={{ color: '#C0392B', fontWeight: 600, textDecoration: 'none' }}>
             {linkLabel} →
           </Link>
         </>
