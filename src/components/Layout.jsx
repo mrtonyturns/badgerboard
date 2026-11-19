@@ -96,6 +96,7 @@ const CHANGELOG = [
       'Todo is now your Campaign Playbook: every step from filing to Election Day for your next race, Wisconsin deadlines built in, grouped by week. A finished race no longer leaves hundreds of overdue tasks',
       'Profiler shows your profiles as small document tiles you can open, with a simple New profile button instead of the big form, stat boxes and table',
       'Candidates is a set of big tiles for you and your opponents. Adding someone starts with their name: we look them up, you confirm, done. Mark which one is you with “This is me”',
+      'Candidate profiles are simpler: four tabs, a bold header, X posts that load on their own, a SWOT with evidence and a plan for each point, Attack & defense as big cards, and past races from the profile. The Profile Data tab is gone; Edit covers the basics',
     ],
   },
   {
@@ -1396,7 +1397,8 @@ export default function Layout() {
     ...(ELECTION_CALENDAR_ENABLED ? [{ match: /^\/game-plan\?.*tab=calendar/, title: 'Calendar', sub: 'Election calendar & key dates', useSearch: true }] : []),
     ...(RESULTS_ENABLED ? [{ match: /^\/game-plan\?.*tab=results/, title: 'Results', sub: 'Election night results', useSearch: true }] : []),
     { match: /^\/game-plan/,        title: isActionPlan ? 'Todo' : 'Playbook', sub: isActionPlan ? 'Campaign tasks & priorities' : 'Every step from filing to Election Day, week by week' },
-    { match: /^\/candidates\/.+/,  title: 'Candidates',             sub: 'Candidate profile' },
+    // A candidate profile carries its own hero header (name, party, office), so no page title.
+    { match: /^\/candidates\/.+/,  title: null },
     { match: /^\/candidates/,       title: 'Candidates',             sub: isActionPlan ? 'All tracked candidates across Wisconsin' : 'You and the people you’re running against' },
     { match: /^\/prospecting/,      title: 'Prospecting Lists',      sub: 'AI-powered candidate prospecting for political marketing outreach' },
     { match: /^\/recruit/,          title: 'Recruit',                sub: 'Find and vet candidate prospects for local seats from your voter list' },
@@ -1659,7 +1661,7 @@ export default function Layout() {
       <main className={`flex-1 relative ${fullBleed ? 'overflow-hidden' : 'overflow-y-auto'}`}>
         <PaymentLockOverlay>
           <div className={fullBleed ? 'h-full pt-3' : 'mx-auto w-full max-w-[1320px] px-4 pb-10 md:px-6 lg:px-8'}>
-            {!fullBleed && pageHeader && (
+            {!fullBleed && pageHeader?.title && (
               <div className="flex flex-wrap items-end gap-x-4 gap-y-1 pt-6 pb-4">
                 <h1 className="display text-[28px] leading-tight md:text-[32px] flex items-center gap-2">
                   {pageHeader.title}

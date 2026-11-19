@@ -17,7 +17,7 @@
 // carry a real x.com/<user>/status/<id> URL, and when the response cites
 // sources, a post whose status id was never cited is dropped — a post the
 // model made up cannot reach the page. Results are cached per candidate in
-// public.candidate_x_feed (supabase/migrations/20261119000000_candidate_x_feed.sql)
+// public.candidate_x_feed (supabase/migrations/20261119000001_candidate_x_feed.sql)
 // for CACHE_TTL_MS.
 //
 // POST { candidate_id, handle?, refresh? }

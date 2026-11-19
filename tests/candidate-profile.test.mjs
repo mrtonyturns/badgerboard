@@ -456,7 +456,7 @@ console.log('\n[15] page wiring')
   check('X posts load on open: cached read, then a background refresh when stale', /callXFeed\(\{ candidate_id: candidateId, handle: handleRef\.current \|\| undefined \}\)/.test(intel) && /if \(stale\) refresh\(false\)/.test(intel))
   check('no "Load X posts" button gate left', !/Load X posts|Posts are loaded on demand/.test(intel))
   check('perspective comes from resolveSelfCandidate', /resolveSelfCandidate\(user, data \|\| \[\]\)/.test(page))
-  const mig = src('supabase/migrations/20261119000000_candidate_x_feed.sql')
+  const mig = src('supabase/migrations/20261119000001_candidate_x_feed.sql')
   check('migration: cache table + owner-only RLS + photo_url', /create table if not exists public\.candidate_x_feed/.test(mig) && /enable row level security/.test(mig) && /c\.created_by = auth\.uid\(\)/.test(mig) && /add column if not exists photo_url/.test(mig))
 }
 
