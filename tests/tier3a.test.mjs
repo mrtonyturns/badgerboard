@@ -70,9 +70,12 @@ console.log('2 — StatStrip name collision')
     /export function ProfilerStatStrip\(/.test(prof) && !/export function StatStrip\(/.test(prof))
   t('the profiler strip still takes explicit cols + style (why it was not merged)',
     /ProfilerStatStrip\(\{ children, cols, style \}\)/.test(prof))
-  t('both profiler consumers were updated',
-    src('src/pages/Dossiers.jsx').includes('<ProfilerStatStrip cols={3}>') &&
+  // v2.0 facelift: the library's three stat boxes were dropped on purpose (the
+  // quota is one quiet line now), so the reader is the strip's one consumer.
+  t('the reader still renders the 4-up strip',
     src('src/pages/profiler/ReportReader.jsx').includes('<ProfilerStatStrip cols={4}>'))
+  t('the library no longer renders a stat strip',
+    !/<ProfilerStatStrip/.test(src('src/pages/Dossiers.jsx')))
   t('no file imports StatStrip from the profiler shell any more',
     !/StatStrip[^}]*\} from '\.\/profiler\/shared'/.test(src('src/pages/Dossiers.jsx').replace(/ProfilerStatStrip/g, '')))
 }

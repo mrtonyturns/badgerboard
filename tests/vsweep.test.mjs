@@ -101,9 +101,13 @@ console.log('3 — the FLAGS cell separates its chips instead of concatenating t
     flagChips({ riskLabel: '2 MED', verifyLabel: '1 to verify' }).join(' · '),
     '2 MED · 1 to verify')
 
-  const s = src('src/pages/Dossiers.jsx')
-  t('a visible middot separator renders between the risk and verify chips',
-    /r\.flags\.riskLabel && r\.flags\.verifyLabel[\s\S]{0,120}>·</.test(s))
+  // v2.0 facelift: the library is paper tiles now, and a tile's footer carries
+  // only the "to verify" count (the risk chip lives in the reader's strip), so
+  // the two chips can no longer run together on the library at all.
+  const tiles = src('src/pages/profiler/ProfileTiles.jsx')
+  t('the tile footer shows the verify chip on its own',
+    /r\.flags\.verifyLabel && \(/.test(tiles) && !/riskLabel/.test(tiles))
+  t('…and it never wraps mid-label', /whitespace-nowrap[^>]*>\{r\.flags\.verifyLabel\}/.test(tiles))
 }
 
 // ═══ 4 — AdminDashboard: Signup Trends buckets every day, scales to the real max ═

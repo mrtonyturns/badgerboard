@@ -173,6 +173,8 @@ eq('the shared phrase', UNLIMITED_ACCOUNT, 'Unlimited on your account')
 eq('a plan number is labelled as one', planSpecLabel('a_campaign'), 'Campaign plan spec: 4/candidate/mo')
 
 const dossiers  = read('src/pages/Dossiers.jsx')
+// v2.0: the library's quota line is built in profiler/library.js.
+const pfLibrary = read('src/pages/profiler/library.js')
 const bulkModal = read('src/pages/profiler/BulkModal.jsx')
 const candDash  = read('src/pages/dashboard/CandidateDashboard.jsx')
 
@@ -181,7 +183,8 @@ t('ActionDashboard drops the bare plan rate when the account is unlimited',
   actionDash.includes(UNLIMITED_ACCOUNT))
 t('CandidateDashboard uses the phrase', candDash.includes(UNLIMITED_ACCOUNT))
 t('the Profiler no longer says "this plan has no monthly cap"',
-  !/this plan has no monthly cap/.test(dossiers) && dossiers.includes(UNLIMITED_ACCOUNT))
+  !/this plan has no monthly cap/.test(dossiers + pfLibrary) &&
+  dossiers.includes(UNLIMITED_ACCOUNT) && pfLibrary.includes(UNLIMITED_ACCOUNT))
 t('BulkModal attributes the uncapped allowance to the account',
   !/This plan has no monthly profile cap/.test(bulkModal))
 t('PlanPane meters say "on your account", not "on your plan"',

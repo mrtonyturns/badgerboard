@@ -27,7 +27,7 @@ import {
 } from './reportModel'
 import { officeLine } from '../../lib/office'
 import { useDialog } from '../../lib/useDialog'
-import { T, cardStyle, Rich, ProfilerStatStrip, StatCell, RatioBar, plural } from './shared'
+import { T, cardStyle, E1, E5, Rich, ProfilerStatStrip, StatCell, RatioBar, plural } from './shared'
 
 // ─── Model hook ──────────────────────────────────────────────────────────────
 
@@ -282,7 +282,7 @@ function Block({ b, subject, onAsk }) {
       return (
         <div className="pf-kv" style={{
           display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 1,
-          background: T.line, border: `1px solid ${T.line}`, borderRadius: 10,
+          background: T.line, border: `1px solid ${T.line}`, borderRadius: 12,
           overflow: 'hidden', margin: '2px 0 16px', maxWidth: `${MEASURE}ch`,
         }}>
           {b.rows.map((r, i) => (
@@ -323,7 +323,7 @@ function Block({ b, subject, onAsk }) {
       return (
         <div style={{ display: 'flex', flexDirection: 'column', margin: '2px 0 14px', maxWidth: `${MEASURE}ch` }}>
           {b.pairs.map((p, i) => (
-            <div key={i} style={{ padding: '13px 0', borderTop: `1px solid #F5F4F1` }}>
+            <div key={i} style={{ padding: '13px 0', borderTop: `1px solid ${T.line}` }}>
               <div style={{ display: 'flex', gap: 11, marginBottom: p.defense ? 7 : 0 }}>
                 <span style={{
                   flex: 'none', width: 66, paddingTop: 2, fontSize: 11, fontWeight: 700,
@@ -364,7 +364,7 @@ function ContentsRail({ sections, active, onGo, disclaimer }) {
 
   return (
     <div className="pf-rail" style={{ position: 'sticky', top: 0, display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <nav style={{ ...cardStyle, borderRadius: 14, padding: '14px 6px 14px 14px' }} aria-label="Report contents">
+      <nav style={{ ...cardStyle, padding: '16px 8px 14px 14px' }} aria-label="Report contents">
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', color: T.faint, padding: '0 8px 9px' }}>
           CONTENTS
         </div>
@@ -385,8 +385,8 @@ function ContentsRail({ sections, active, onGo, disclaimer }) {
                   onMouseLeave={e => { if (!on) e.currentTarget.style.background = 'transparent' }}
                   style={{
                     width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-                    padding: '7px 8px', borderRadius: 7, border: 0, cursor: 'pointer',
-                    background: on ? '#F5F4F1' : 'transparent', fontFamily: 'inherit',
+                    padding: '7px 8px', borderRadius: 9, border: 0, cursor: 'pointer',
+                    background: on ? T.chip : 'transparent', fontFamily: 'inherit',
                     textAlign: 'left', minHeight: 32,
                   }}
                 >
@@ -411,7 +411,7 @@ function ContentsRail({ sections, active, onGo, disclaimer }) {
         ))}
       </nav>
       {disclaimer !== false && (
-        <div style={{ ...cardStyle, borderRadius: 14, padding: '13px 15px' }}>
+        <div style={{ ...cardStyle, padding: '14px 16px' }}>
           <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.55 }}>
             AI-generated research. Verify every claim through primary sources before public use.
           </div>
@@ -429,7 +429,7 @@ function ViewControls({ mode, setMode, vOnly, setVOnly, hint }) {
     <div className="pf-controls" style={{
       display: 'flex', alignItems: 'center', gap: 9, marginBottom: 16, flexWrap: 'wrap',
     }}>
-      <div role="group" aria-label="Report detail" style={{ display: 'flex', gap: 4, background: T.chip, borderRadius: 99, padding: 4 }}>
+      <div role="group" aria-label="Report detail" style={{ display: 'flex', gap: 2, background: '#fff', borderRadius: 12, padding: 4, boxShadow: E1 }}>
         {MODES.map(m => {
           const on = m.id === mode
           return (
@@ -439,10 +439,10 @@ function ViewControls({ mode, setMode, vOnly, setVOnly, hint }) {
               aria-pressed={on}
               onClick={() => setMode(m.id)}
               style={{
-                borderRadius: 99, padding: '8px 16px', fontSize: 12.5, border: 0,
-                fontWeight: on ? 600 : 500, color: on ? T.ink : T.ink4,
-                background: on ? '#fff' : 'transparent', fontFamily: 'inherit',
-                boxShadow: on ? '0 1px 2px rgba(0,0,0,.06)' : 'none', cursor: 'pointer', minHeight: 34,
+                borderRadius: 9, padding: '7px 14px', fontSize: 13, border: 0,
+                fontWeight: 600, color: on ? '#fff' : T.muted,
+                background: on ? T.ink : 'transparent', fontFamily: 'inherit',
+                cursor: 'pointer', minHeight: 34,
               }}
             >{m.label}</button>
           )
@@ -455,8 +455,8 @@ function ViewControls({ mode, setMode, vOnly, setVOnly, hint }) {
         style={{
           display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontFamily: 'inherit',
           background: vOnly ? T.warmBg : '#fff',
-          border: `1px solid ${vOnly ? T.warmBr : T.border}`,
-          borderRadius: 99, padding: '8px 14px', fontSize: 12, fontWeight: 600,
+          border: `1px solid ${vOnly ? T.warmBr : 'rgba(17,22,28,.1)'}`, boxShadow: vOnly ? 'none' : E1,
+          borderRadius: 12, padding: '8px 14px', fontSize: 13, fontWeight: 600,
           color: vOnly ? T.amber : T.ink4, minHeight: 34,
         }}
       >
@@ -511,14 +511,14 @@ function VerdictLightbox({ claim, current, onPick, onClose }) {
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          background: '#fff', borderRadius: 18, boxShadow: '0 24px 60px rgba(13,21,38,.28)',
-          width: '100%', maxWidth: 420, padding: '20px 22px 18px',
+          background: '#fff', borderRadius: 20, boxShadow: E5,
+          width: '100%', maxWidth: 420, padding: '22px 22px 18px',
         }}
       >
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', color: T.faint }}>
           VERIFY THIS CLAIM
         </div>
-        <div style={{ fontSize: 16, fontWeight: 700, margin: '6px 0 12px', lineHeight: 1.35 }}>
+        <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: '-0.02em', margin: '6px 0 12px', lineHeight: 1.3 }}>
           Did the source confirm this claim?
         </div>
         <div style={{
@@ -536,7 +536,7 @@ function VerdictLightbox({ claim, current, onPick, onClose }) {
                 title={v.hint}
                 onClick={() => onPick(v.id)}
                 style={{
-                  flex: 1, minHeight: 44, borderRadius: 10, cursor: 'pointer',
+                  flex: 1, minHeight: 44, borderRadius: 12, cursor: 'pointer',
                   fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
                   background: v.bg, color: v.fg,
                   border: v.id === 'unsure' ? `1px solid ${T.field}` : '1px solid transparent',
@@ -665,13 +665,14 @@ export default function ReportReader({
 
       <div className="pf-head" style={{ display: 'flex', alignItems: 'flex-start', gap: 16, marginBottom: 16 }}>
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.4px', color: T.faint }}>{eyebrow}</div>
+          {/* v2.0: the same red eyebrow + heavy name the library's paper tiles carry. */}
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.14em', color: T.red }}>{eyebrow}</div>
           <h1 style={{
-            fontSize: 26, fontWeight: 700, letterSpacing: '-.4px', margin: '5px 0 0', lineHeight: 1.2,
+            fontSize: 32, fontWeight: 800, letterSpacing: '-0.035em', margin: '6px 0 0', lineHeight: 1.1,
           }}>{candidate.name || dossier?.title || 'Profile'}</h1>
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 14, marginTop: 6,
-            fontSize: 12.5, color: T.ink4, flexWrap: 'wrap',
+            display: 'flex', alignItems: 'center', gap: 14, marginTop: 8,
+            fontSize: 13.5, color: T.muted, flexWrap: 'wrap',
           }}>
             {officeLabel && <span style={{ fontWeight: 600 }}>{officeLabel}</span>}
             {candidate.party && <span>{candidate.party}</span>}
@@ -787,7 +788,7 @@ export default function ReportReader({
                       fontVariantNumeric: 'tabular-nums',
                     }}>{s.num}</span>
                     <div style={{ minWidth: 0 }}>
-                      <h2 style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-.2px', margin: 0 }}>{s.label}</h2>
+                      <h2 style={{ fontSize: 18, fontWeight: 800, letterSpacing: '-0.02em', margin: 0 }}>{s.label}</h2>
                       <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.8px', color: T.faint, marginTop: 3 }}>
                         {s.group}
                       </div>
@@ -872,8 +873,8 @@ export default function ReportReader({
                     onMouseEnter={e => { e.currentTarget.style.background = T.hover }}
                     onMouseLeave={e => { e.currentTarget.style.background = '#fff' }}
                     style={{
-                      background: '#fff', border: `1px solid ${T.border}`, borderRadius: 99,
-                      padding: '10px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                      background: '#fff', border: '1px solid rgba(17,22,28,.1)', borderRadius: 12, boxShadow: E1,
+                      padding: '10px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
                       fontFamily: 'inherit', color: T.ink, minHeight: 40,
                     }}
                   >{exportLabel}</button>

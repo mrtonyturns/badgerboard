@@ -14,43 +14,49 @@ import { partyGroup } from '../../lib/party'
 import { plural } from '../../lib/text'
 
 export const T = {
-  page:    '#FBFBFA',
+  page:    '#F7F8FA',
   card:    '#FFFFFF',
-  border:  '#ECECEA',
-  divider: '#F2F2F0',
-  line:    '#F0EFEC',
-  ink:     '#18181B',
-  ink2:    '#27272A',
-  ink3:    '#3F3F46',
-  ink4:    '#52525B',
-  muted:   '#6B6B73',   // darker than #71717A — safe on white
-  faint:   '#71717A',   // the lightest grey allowed on white
+  border:  '#E6E8EB',
+  divider: '#EFF1F3',
+  line:    '#EFF1F3',
+  ink:     '#11161C',
+  ink2:    '#1E252D',
+  ink3:    '#363E47',
+  ink4:    '#4A525B',
+  muted:   '#5B636C',   // darker than #71717A — safe on white
+  faint:   '#6B747D',   // the lightest grey allowed on white
   // Brand accent = tailwind.config.js `brand.red` / `brand.navy`, exactly. The
   // redesign shipped its own slightly different red and navy, which is how the
   // UI audit found four brand reds and three navies across the app.
   // `redDark` is the hover shade and `redHot` the danger/alert shade — both are
   // semantic, not the accent, and are deliberately left alone.
-  red:     '#8B0000',
-  redDark: '#7E141B',
+  red:     '#C0392B',
+  redDark: '#A93226',
   redHot:  '#B91C1C',
-  navy:    '#0A1628',
+  navy:    '#0E1A3A',
   green:   '#15803D',
   amber:   '#B45309',
   amberBar:'#D9A036',
   warmBg:  '#FDF6F0',
   warmBr:  '#F4E4D4',
-  hover:   '#FAFAF9',
-  chip:    '#F1F1EF',
+  hover:   '#F7F8FA',
+  chip:    '#F0F2F4',
   field:   '#DEDEDA',
   track:   '#EDECE8',
-  font:    "'Geist','Inter',system-ui,-apple-system,sans-serif",
+  font:    "'DM Sans','Inter',system-ui,-apple-system,sans-serif",
 }
+
+// v2.0 facelift elevation (tailwind.config.js boxShadow e1/e2/e4/e5): a hairline
+// ring plus a soft drop, no border. Cards are tiles now — 20px radius, e2.
+export const E1 = '0 0 0 .5px rgba(0,0,0,.05), 0 1px 2px rgba(0,0,0,.06)'
+export const E2 = '0 0 0 .5px rgba(0,0,0,.05), 0 1px 3px rgba(0,0,0,.06), 0 4px 12px rgba(0,0,0,.05)'
+export const E4 = '0 0 0 .5px rgba(0,0,0,.06), 0 4px 12px rgba(0,0,0,.07), 0 18px 40px rgba(0,0,0,.11)'
+export const E5 = '0 0 0 .5px rgba(0,0,0,.06), 0 8px 20px rgba(0,0,0,.1), 0 28px 56px rgba(0,0,0,.18)'
 
 export const cardStyle = {
   background: T.card,
-  border: `1px solid ${T.border}`,
-  borderRadius: 16,
-  boxShadow: '0 1px 3px rgba(0,0,0,.03)',
+  borderRadius: 20,
+  boxShadow: E2,
 }
 
 // Minimum interactive target (SPEC §4). Applied to every button/row control.
@@ -114,9 +120,11 @@ export function ProfilerShell({ children }) {
 
 // ── Buttons ───────────────────────────────────────────────────────────────────
 
+// v2.0: the tile kit's button shape (src/components/ui.jsx Button) — rounded-xl,
+// bold, a hairline e1 lift on the solid kinds.
 const BTN_KINDS = {
-  primary: { background: T.red, color: '#fff', border: '1px solid transparent', hover: T.redDark },
-  ghost:   { background: '#fff', color: T.ink, border: `1px solid ${T.border}`, hover: T.hover },
+  primary: { background: T.red, color: '#fff', border: '1px solid transparent', hover: T.redDark, shadow: E1 },
+  ghost:   { background: '#fff', color: T.ink, border: '1px solid rgba(17,22,28,.1)', hover: T.hover, shadow: E1 },
   warm:    { background: '#fff', color: T.ink4, border: '1px solid #E8D5C0', hover: T.warmBr },
   quiet:   { background: 'transparent', color: T.faint, border: '1px solid transparent', hover: T.hover },
 }
@@ -133,8 +141,8 @@ export function Btn({ children, onClick, kind = 'ghost', disabled, style, title,
       onMouseEnter={e => { if (!disabled) e.currentTarget.style.background = k.hover }}
       onMouseLeave={e => { e.currentTarget.style.background = k.background }}
       style={{
-        background: k.background, color: k.color, border: k.border,
-        borderRadius: 99, padding: '8px 15px', fontSize: 12, fontWeight: 600,
+        background: k.background, color: k.color, border: k.border, boxShadow: k.shadow || 'none',
+        borderRadius: 12, padding: '8px 15px', fontSize: 13, fontWeight: 700,
         fontFamily: 'inherit', lineHeight: 1.2,
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.55 : 1,
@@ -208,7 +216,7 @@ export function ProfilerStatStrip({ children, cols, style }) {
   const cells = React.Children.toArray(children)
   return (
     <div className="pf-strip" style={{
-      ...cardStyle, borderRadius: 14, display: 'grid',
+      ...cardStyle, display: 'grid',
       gridTemplateColumns: `repeat(${cols || cells.length}, minmax(0,1fr))`,
       marginBottom: 16, ...style,
     }}>
