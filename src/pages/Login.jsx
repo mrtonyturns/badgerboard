@@ -141,27 +141,27 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen bg-brand-navy flex flex-col">
-      <div className="flex h-1.5">
-        <div className="flex-1 bg-brand-red" /><div className="flex-1 bg-white" /><div className="flex-1 bg-blue-600" />
-      </div>
+    <div
+      className="min-h-screen flex flex-col"
+      style={{ background: 'radial-gradient(120% 80% at 50% -10%, #1D2F63 0%, #0E1A3A 50%, #0A1330 100%)' }}
+    >
 
       <div className="flex flex-1 items-center justify-center px-4 py-12">
         <div className="w-full max-w-md">
           {/* Branding */}
           <div className="text-center mb-8">
             <div className="flex justify-center mb-4">
-              <BadgerBoardLogo width={260} />
+              <BadgerBoardLogo width={220} />
             </div>
-            <p className="text-white/45 text-xs uppercase" style={{ letterSpacing: '0.2em' }}>Campaigns Made Simple.</p>
+            <p className="text-white/55 text-[11px] font-bold uppercase" style={{ letterSpacing: '0.2em' }}>Campaigns Made Simple.</p>
           </div>
 
           {/* Card */}
-          <div className="bg-white rounded-2xl shadow-2xl p-8">
-            <h2 className="text-xl font-bold text-gray-900 mb-1">
+          <div className="bg-white rounded-tile shadow-e5 p-8">
+            <h2 className="display text-[26px] leading-tight mb-1">
               {mode === 'signin' ? 'Sign in to your account' : mode === 'signup' ? 'Create an account' : 'Reset your password'}
             </h2>
-            <p className="text-sm text-gray-500 mb-6">
+            <p className="text-[15px] text-brand-mute mb-6">
               {mode === 'signin' ? 'Enter your credentials to access the platform' : mode === 'signup' ? 'Fill in your details to get started' : 'Enter your email and we\'ll send you a reset link'}
             </p>
 
