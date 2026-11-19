@@ -1,9 +1,14 @@
 // src/pages/Dossiers.jsx — Profiler (SPEC-profiler.md).
 //
 // Two views on one route, each with the full canvas:
-//   LIBRARY — generate row · real in-flight state · stat strip · conditional
-//             credit CTA · the full profiles table
-//   READER  — one quiet document (src/pages/profiler/ReportReader.jsx)
+//   LIBRARY — v2.0 facelift: one action row (the quota as one quiet line,
+//             Bulk generate where the plan has it, "New profile") · real
+//             in-flight state · a shelf of short paper documents, one per
+//             candidate (src/pages/profiler/ProfileTiles.jsx). The old generate
+//             row, three stat boxes and profiles table are gone — the owner
+//             found them hard to read; generating now lives in a dialog.
+//   READER  — one quiet document (src/pages/profiler/ReportReader.jsx), with
+//             a version switcher when the candidate has been profiled before.
 //
 // The old page split the canvas in two, stated the plan twice, and rendered 15
 // section colour themes plus a badge on nearly every paragraph. Everything that
@@ -13,7 +18,7 @@
 import { COMPARE_ENABLED } from '../lib/featureFlags'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams, createSearchParams, Link, useNavigate } from 'react-router-dom'
-import { Search } from 'lucide-react'
+import { Search, Plus, FileText, Layers, ArrowLeft } from 'lucide-react'
 import { format } from 'date-fns'
 
 import {
@@ -27,17 +32,18 @@ import {
   getUserTier, getEffectiveProfileLimit, getBankedProfileCredits,
   hasFeature, isLiteProfileOnly,
 } from '../lib/tiers'
-import { CANDIDATE_STATUS_LABELS } from '../lib/campaignEnums'
 import { useDialog } from '../lib/useDialog'
 import LoadingBar from '../components/LoadingBar'
 import SearchableSelect from '../components/SearchableSelect'
 import DossierDisclaimerModal, { useDossierAck } from '../components/DossierDisclaimerModal'
-import { UpgradeLink, WebOnlyCta, NATIVE_PLAN_NOTE } from '../components/UpgradeCta'
+import { UpgradeLink, WebOnlyCta } from '../components/UpgradeCta'
+import { Tile, EmptyState, Button } from '../components/ui'
 
 import {
-  T, cardStyle, ProfilerShell, Btn, Pill, Avatar, ProfilerStatStrip, StatCell, RatioBar,
-  relativeAge, plural,
+  T, cardStyle, E5, ProfilerShell, Btn, relativeAge,
 } from './profiler/shared'
+import { DocTile, DocTileSkeleton, TileMenu } from './profiler/ProfileTiles'
+import { groupProfiles, filterGroups, showSearch, quotaParts } from './profiler/library'
 import ReportReader from './profiler/ReportReader'
 import GenerationStrip from './profiler/GenerationStrip'
 import ResearchNote from './profiler/ResearchNote'
@@ -52,7 +58,7 @@ import { rowToCandidatePatch } from './profiler/bulkCsv'
 import { filterSections } from '../lib/profileContent'
 import OnboardingStepHint from '../components/onboarding/OnboardingStepHint'
 
-const PAGE_SIZE = 25
+const PAGE_SIZE = 24   // tiles per page: divides evenly into 2, 3 and 4 columns
 const PROGRESS_POLL_MS = 2500
 const PROGRESS_STALE_MS = 15 * 60 * 1000
 // generate-dossier-background has a 15-minute budget and a heavy run (7 research
@@ -182,7 +188,9 @@ export default function Dossiers() {
   // ── Modals / panels ───────────────────────────────────────────────────────
   const [bulkOpen, setBulkOpen]       = useState(false)
   const [bulkRun, setBulkRun]         = useState(null)
-  const [showNewCand, setShowNewCand] = useState(false)
+  // The New profile dialog: 'pick' an existing candidate, or 'create' one.
+  const [newOpen, setNewOpen]         = useState(false)
+  const [newMode, setNewMode]         = useState('pick')
   const [newCandForm, setNewCandForm] = useState({ name: '', research_context: '' })
   const [creatingCand, setCreatingCand] = useState(false)
   const [modalError, setModalError]   = useState('')
@@ -356,7 +364,8 @@ export default function Dossiers() {
     const newName = params.get('newname')
     if (newName) {
       setNewCandForm({ name: newName, research_context: params.get('context') || '' })
-      setShowNewCand(true)
+      setNewMode('create')
+      setNewOpen(true)
     }
   }, [])
 
@@ -373,6 +382,15 @@ export default function Dossiers() {
     // initSection is a real input. Once deepLinkedRef is set every re-run
     // returns at the guard, so openDossier rewriting ?section= can't loop.
   }, [dossiers, initCandidateId, initSection, openDossier])
+
+  // …and /profiler?candidate=X for someone with NO profile yet (the candidate
+  // record's "Generate profile") lands in the New profile dialog, preselected.
+  const autoNewRef = useRef(false)
+  useEffect(() => {
+    if (autoNewRef.current || loading || !initCandidateId) return
+    autoNewRef.current = true
+    if (!dossiers.some(d => d.candidate_id === initCandidateId)) { setNewMode('pick'); setNewOpen(true) }
+  }, [loading, initCandidateId, dossiers])
 
   // As the reader scrolls or the rail navigates, remember the section in the
   // URL (replace, so history isn't spammed) — refresh lands where you were.
@@ -587,7 +605,7 @@ export default function Dossiers() {
         .select('*, office:offices(id, name, level, office_type, district_name, district_number, county)')
         .eq('id', created.id).single()
       await fetchData()
-      setShowNewCand(false)
+      setNewOpen(false)
       setNewCandForm({ name: '', research_context: '' })
       setCandidateId(created.id)
       requireAck(() => runGenerate(created.id, full || created))
@@ -758,56 +776,52 @@ export default function Dossiers() {
       ? Math.floor((Date.now() - new Date(d.generated_at).getTime()) / 86400000) : null
     return {
       id: d.id,
+      candidateId: d.candidate_id || null,
+      generatedAt: d.generated_at || d.created_at || null,
       name: d.candidate?.name || cand.name || 'Unknown candidate',
       party: d.candidate?.party || cand.party || '',
       office: cand.office?.name || d.candidate?.office?.name || '',
       district: cand.office?.district_name || d.candidate?.office?.district_name || '',
-      status: cand.status ? (CANDIDATE_STATUS_LABELS[cand.status] || cand.status) : '',
       monitored: cand.section_timestamps?.monitoring === true,
       isNew: ageDays != null && ageDays < 7,
       date: d.generated_at ? format(new Date(d.generated_at), 'MMM d, yyyy') : '—',
       age: relativeAge(d.generated_at),
-      sourced: src.ratio == null ? '—' : `${src.strong} of ${src.total}`,
       good: src.strong, weak: src.weak, hasRatio: src.ratio != null,
       flags,
     }
   }), [dossiers, candidateById])
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return rows
-    return rows.filter(r =>
-      r.name.toLowerCase().includes(q) ||
-      r.office.toLowerCase().includes(q) ||
-      r.district.toLowerCase().includes(q))
-  }, [rows, query])
-
-  const monthStats = useMemo(() => {
-    const som = startOfThisMonth().getTime()
-    let auto = 0, manual = 0
-    for (const d of dossiers) {
-      const t = d.generated_at ? new Date(d.generated_at).getTime() : NaN
-      if (!Number.isFinite(t) || t < som) continue
-      if (d.generated_by) manual++
-      else auto++
-    }
-    return { auto, manual, total: auto + manual }
-  }, [dossiers])
-
-  const candidateCount = useMemo(
-    () => new Set(dossiers.map(d => d.candidate_id).filter(Boolean)).size, [dossiers])
+  // One paper tile per candidate: the newest profile, older versions behind it.
+  const groups = useMemo(() => groupProfiles(rows), [rows])
+  const filtered = useMemo(() => filterGroups(groups, query), [groups, query])
+  const searchable = showSearch(groups.length)
 
   const left = unlimited ? Infinity : Math.max(0, limit - dossiersUsed)
   const pctUsed = unlimited || !limit ? 0 : dossiersUsed / limit
-  const showUpsell = !unlimited && (left < 5 || pctUsed >= 0.85)
+  // Low balance: the quota line turns amber and offers a credit pack.
+  const runningLow = !unlimited && (left < 5 || pctUsed >= 0.85)
   const resetLabel = `resets ${format(startOfNextMonth(), 'MMM d')}`
   const balance = { unlimited, left, limit, resetLabel }
+  const quota = quotaParts({ unlimited, left, limit, resetLabel, used: dossiersUsed, banked: bankedCredits })
+  const outOfProfiles = !unlimited && left === 0
 
   const selectedCandidate = candidates.find(c => c.id === candidateId)
   const flaggedCount = selected ? parseFlaggedClaims(selected.content || '').length : 0
   const researchNote = selected?.research_note && typeof selected.research_note === 'object'
     ? selected.research_note : null
 
+  // Every version of the open profile's candidate, newest first — the reader's
+  // version switcher (older versions stay one click away inside the reader).
+  const selectedVersions = useMemo(() => {
+    if (!selected) return []
+    const g = groups.find(x => x.versions.some(v => v.id === selected.id))
+    return g ? g.versions : []
+  }, [groups, selected])
+
+  const openNewProfile = (cid = null) => {
+    if (cid) setCandidateId(cid)
+    setNewMode('pick'); setModalError(''); setNewOpen(true)
+  }
   // ── Reader ────────────────────────────────────────────────────────────────
   if (selected) {
     return (
@@ -832,6 +846,13 @@ export default function Dossiers() {
           verdicts={verdicts}
           onVerdict={saveVerdict}
           onSectionChange={rememberSection}
+          headerExtra={selectedVersions.length > 1 ? (
+            <VersionSwitcher
+              versions={selectedVersions}
+              currentId={selected.id}
+              onPick={id => { if (id !== selected.id) openDossier(id) }}
+            />
+          ) : null}
           back={(
             <button
               type="button"
@@ -839,9 +860,9 @@ export default function Dossiers() {
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6, background: 'none',
                 border: 0, padding: '0 0 16px', cursor: 'pointer', fontFamily: 'inherit',
-                fontSize: 12, color: T.faint,
+                fontSize: 13.5, fontWeight: 600, color: T.muted,
               }}
-            >← All profiles</button>
+            ><ArrowLeft style={{ width: 16, height: 16 }} aria-hidden="true" />All profiles</button>
           )}
           actions={(
             <>
@@ -850,8 +871,8 @@ export default function Dossiers() {
                   to={`/broadside?dossier=${selected.id}`}
                   title="Spar against this profile in Broadside"
                   style={{
-                    background: '#fff', border: `1px solid ${T.border}`, borderRadius: 99,
-                    padding: '10px 14px', fontSize: 12, fontWeight: 600, color: T.ink,
+                    background: '#fff', border: '1px solid rgba(17,22,28,.1)', borderRadius: 12,
+                    padding: '10px 14px', fontSize: 13, fontWeight: 700, color: T.ink,
                     textDecoration: 'none', display: 'inline-flex', alignItems: 'center', minHeight: 40,
                   }}
                 >Spar</Link>
@@ -865,7 +886,7 @@ export default function Dossiers() {
                     <div onClick={() => setMoreOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
                     <div style={{
                       position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 41, width: 232,
-                      ...cardStyle, borderRadius: 12, padding: 6, boxShadow: '0 12px 30px rgba(13,21,38,.14)',
+                      ...cardStyle, borderRadius: 14, padding: 6, boxShadow: E5,
                     }}>
                       <MoreItem onClick={() => { setShowReviewer(true); setMoreOpen(false) }}>
                         Review flagged claims{flaggedCount ? ` (${flaggedCount})` : ''}
@@ -965,6 +986,11 @@ export default function Dossiers() {
   }
 
   // ── Library ───────────────────────────────────────────────────────────────
+  // A shelf of short paper documents, one per candidate. Layout.jsx already
+  // renders the page's one <h1> ("Profiler") and the Intelligence pill strip,
+  // so this view starts at its own action row: what you have, what you have
+  // left, and the one primary action.
+  const shelfEmpty = !loading && groups.length === 0
   return (
     <ProfilerShell>
       <LoadingBar loading={generating} />
@@ -975,35 +1001,66 @@ export default function Dossiers() {
         />
       )}
 
-      {/* No page title here. Layout.jsx's top bar already renders the H1 for
-          this route ("Profiler — AI-generated 14-section political intelligence
-          reports", PAGE_HEADERS), so this block put a SECOND <h1> saying
-          "Profiler" with a second one-line description directly beneath it.
-          One title, one description, one heading level — the row keeps only
-          the page's own actions. */}
-      <div className="pf-head" style={{ display: 'flex', alignItems: 'flex-start', gap: 16, marginBottom: 20 }}>
-        <div style={{ minWidth: 0, flex: 1 }} />
-        <div className="pf-headright" style={{ flex: 'none', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Btn onClick={() => { setShowNewCand(true); setModalError('') }}>New candidate</Btn>
+      <div className="pf-head" style={{ display: 'flex', alignItems: 'flex-end', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <h2 className="display" style={{ fontSize: 22, lineHeight: 1.15, margin: 0 }}>
+            Your profiles{groups.length > 0 && <span style={{ color: T.faint, fontWeight: 700 }}> · {groups.length}</span>}
+          </h2>
+          {/* The plan, stated once, as one quiet line. */}
+          <div style={{ fontSize: 13.5, color: runningLow ? T.amber : T.muted, marginTop: 5, lineHeight: 1.5 }}>
+            {quota.join(' · ')}
+            {!unlimited && (
+              // Hidden in the native app — store rules don't allow an in-app
+              // link into an external purchase flow.
+              <WebOnlyCta>
+                {' · '}
+                <Link to="/plans" style={{ color: T.red, fontWeight: 700, textDecoration: 'none' }}>
+                  {outOfProfiles ? 'Buy a credit pack' : 'Add more'}
+                </Link>
+              </WebOnlyCta>
+            )}
+          </div>
+        </div>
+        <div className="pf-headright" style={{ flex: 'none', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {canBulk ? (
-            <Btn onClick={() => setBulkOpen(true)}>Bulk generate</Btn>
-          ) : (
-            <WebOnlyCta
-              native={(
-                <Btn
-                  disabled
-                  title={`Bulk generate is part of the Action Campaign plan. ${NATIVE_PLAN_NOTE}`}
-                >Bulk generate</Btn>
-              )}
-            >
-              <Btn
-                onClick={() => navigate('/plans')}
-                title="Bulk generate is part of the Action Campaign plan"
-              >Bulk generate</Btn>
-            </WebOnlyCta>
+            <Button variant="secondary" icon={Layers} onClick={() => setBulkOpen(true)}>Bulk generate</Button>
+          ) : null}
+          {/* An empty shelf carries its own New profile button — one is enough. */}
+          {!shelfEmpty && (
+            <Button
+              icon={Plus}
+              onClick={() => openNewProfile()}
+              disabled={generating}
+              title={generating ? 'A profile is being written — one at a time' : undefined}
+            >New profile</Button>
           )}
         </div>
       </div>
+
+      {searchable && (
+        // Only once the shelf is long enough to need it (more than ~8 tiles).
+        <div style={{ position: 'relative', display: 'flex', maxWidth: 420, marginBottom: 18 }}>
+          <Search
+            aria-hidden="true"
+            style={{
+              position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)',
+              width: 16, height: 16, color: T.faint, pointerEvents: 'none',
+            }}
+          />
+          <input
+            className="pf-input"
+            value={query}
+            onChange={e => { setQuery(e.target.value); setShown(PAGE_SIZE) }}
+            placeholder="Search by name or office"
+            aria-label="Search profiles"
+            style={{
+              flex: 1, minWidth: 0, boxSizing: 'border-box', border: '1px solid rgba(17,22,28,.12)',
+              borderRadius: 12, padding: '11px 15px 11px 40px', fontSize: 14, fontFamily: 'inherit',
+              color: T.ink, minHeight: 44, background: '#fff',
+            }}
+          />
+        </div>
+      )}
 
       {ackState === 'pending' && (
         <Banner tone="warm" action={<Btn kind="warm" onClick={() => setShowDisclaimerModal(true)}>Acknowledge</Btn>}>
@@ -1015,74 +1072,6 @@ export default function Dossiers() {
       )}
 
       {error && <Banner tone="error" onDismiss={() => setError('')}>{error}</Banner>}
-
-      {/* ── Generate row ─────────────────────────────────────────────────── */}
-      <div style={{ ...cardStyle, padding: '18px 22px', marginBottom: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 14, fontWeight: 700 }}>Generate a profile</span>
-          <span style={{ fontSize: 11.5, color: T.muted }}>
-            14 sections · 5–8 minutes · Claude confirms who they are, Grok and Perplexity search the web, news and filings, then Claude reads the primary sources and writes the report
-          </span>
-        </div>
-        <div className="pf-genrow" style={{
-          display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.5fr) auto',
-          gap: 12, alignItems: 'end',
-        }}>
-          <div>
-            <div style={{ fontSize: 11.5, fontWeight: 600, color: T.ink3, marginBottom: 6 }}>
-              Candidate
-            </div>
-            <SearchableSelect
-              value={candidateId}
-              onChange={setCandidateId}
-              options={(Array.isArray(candidates) ? candidates : []).map(c => ({
-                value: c.id,
-                label: `${c.name}${c.party ? ` (${c.party})` : ''} — ${c.office?.name || 'No office'}`,
-              }))}
-              placeholder="Choose a candidate"
-              searchPlaceholder="Search candidates"
-            />
-          </div>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, marginBottom: 6, flexWrap: 'wrap' }}>
-              <label htmlFor="pf-context" style={{ fontSize: 11.5, fontWeight: 600, color: T.ink3 }}>
-                Research context
-              </label>
-              <span style={{ fontSize: 11, color: T.muted }}>recommended for pre-announcement candidates</span>
-            </div>
-            <input
-              id="pf-context"
-              className="pf-input"
-              value={researchContext}
-              onChange={e => setResearchContext(e.target.value)}
-              maxLength={1000}
-              placeholder="City, employer, profession — anything that disambiguates this person"
-              style={{
-                width: '100%', boxSizing: 'border-box', border: `1px solid ${T.field}`,
-                borderRadius: 10, padding: '12px 13px', fontSize: 13, fontFamily: 'inherit',
-                color: T.ink, minHeight: 44,
-              }}
-            />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <Btn
-              kind="primary"
-              onClick={handleGenerate}
-              disabled={!candidateId || generating || (!unlimited && left === 0)}
-              style={{ borderRadius: 10, padding: '12px 22px', fontSize: 13 }}
-              title={!unlimited && left === 0 ? 'No profiles left in this month’s allowance' : undefined}
-            >
-              {generating ? 'Generating…' : 'Generate profile'}
-            </Btn>
-          </div>
-        </div>
-        {selectedCandidate && !selectedCandidate.research_context && !researchContext.trim() && (
-          <div style={{ fontSize: 11.5, color: T.muted, marginTop: 10 }}>
-            {selectedCandidate.name} has no saved research context. Adding one materially improves
-            the odds of profiling the right person.
-          </div>
-        )}
-      </div>
 
       {/* ── In-flight ────────────────────────────────────────────────────── */}
       {(generating || genFailure) && (
@@ -1105,253 +1094,54 @@ export default function Dossiers() {
         />
       )}
 
-      {/* ── Stat strip: the ONE place the plan is stated ─────────────────── */}
-      <ProfilerStatStrip cols={3}>
-        <StatCell
-          center
-          label="Saved profiles"
-          value={dossiers.length}
-          sub={candidateCount ? `across ${plural(candidateCount, 'candidate')}` : 'no candidates profiled yet'}
-        />
-        <StatCell
-          center
-          label="Generated this month"
-          value={monthStats.total}
-          sub={monthStats.total
-            ? `${monthStats.auto} automatic · ${monthStats.manual} manual`
-            : 'nothing generated yet this month'}
-        />
-        {unlimited ? (
-          // "Profiles this month" sat next to "Generated this month" showing a
-          // number that is usually identical, because the two labels described
-          // the same month. They do NOT count the same thing: the cell to the
-          // left counts every profile generated this month including the free
-          // weekly auto-refreshes, this one counts only the ones YOU generated
-          // by hand (generated_by = you), which is the number an allowance is
-          // drawn from. The label now says which is which.
-          <StatCell
-            center
-            label="Generated by you"
-            value={dossiersUsed}
-            // The allowance is unlimited because of the ACCOUNT's entitlement
-            // (admin / beta / enterprise bracket), not because "this plan" has
-            // no cap — plans do. Same phrase as the dashboards and Settings.
-            sub="Unlimited on your account"
+      {/* ── The shelf ────────────────────────────────────────────────────── */}
+      {shelfEmpty ? (
+        <Tile className="p-6 md:p-8">
+          <EmptyState
+            icon={FileText}
+            color="ink"
+            title="No profiles yet"
+            body="A profile is a 14-section research report on one candidate: who they are, their record, their money, and what still needs checking. Each one takes 5–8 minutes to write."
+            action={<Button icon={Plus} onClick={() => openNewProfile()}>New profile</Button>}
           />
-        ) : (
-          <StatCell
-            center
-            label="Profiles left on your plan"
-            value={left}
-            of={`of ${limit}`}
-            valueColor={left === 0 ? T.red : left <= 5 ? T.amber : T.ink}
-            sub={left === 0 ? 'monthly allowance used' : resetLabel}
-            right={(
-              // Hidden in the native app — store rules don't allow an in-app
-              // link into an external purchase flow.
-              <WebOnlyCta>
-                <Btn
-                  kind="primary"
-                  tap={false}
-                  onClick={() => navigate('/plans')}
-                  style={{ padding: '5px 11px', fontSize: 11, minHeight: 28 }}
-                >Add more</Btn>
-              </WebOnlyCta>
-            )}
-          />
-        )}
-      </ProfilerStatStrip>
-
-      {/* ── Credit CTA: ≥85% consumed or fewer than 5 left ───────────────── */}
-      {showUpsell && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 14, background: T.warmBg,
-          border: `1px solid ${T.warmBr}`, borderRadius: 14, padding: '14px 18px',
-          marginBottom: 16, flexWrap: 'wrap',
-        }}>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>
-              {left === 0
-                ? 'You’ve used every profile in this month’s allowance'
-                : `${plural(left, 'profile')} left this month — need more before ${format(startOfNextMonth(), 'MMM d')}?`}
-            </div>
-            <div style={{ fontSize: 12, color: T.ink4, lineHeight: 1.55, marginTop: 3, maxWidth: '74ch' }}>
-              Credit packs add profiles on top of your monthly allowance and never expire. Weekly
-              Active Monitoring refreshes stay free and don't draw from this balance.
-              {bankedCredits > 0 && ` You have ${plural(bankedCredits, 'credit')} banked, already counted above.`}
-            </div>
+          <OnboardingStepHint stepId="profile" to="/" />
+        </Tile>
+      ) : (
+        <>
+          <div className="grid gap-5 [grid-template-columns:repeat(auto-fill,minmax(216px,1fr))] max-[520px]:grid-cols-2 max-[520px]:gap-3">
+            {loading
+              ? [0, 1, 2, 3].map(i => <DocTileSkeleton key={i} />)
+              : filtered.slice(0, shown).map(g => (
+                  <DocTile
+                    key={g.key}
+                    group={g}
+                    onOpen={id => openDossier(id)}
+                    menu={(
+                      <TileMenu
+                        group={g}
+                        onOpen={id => openDossier(id)}
+                        onCandidate={cid => navigate(`/candidates/${cid}`)}
+                        onNewVersion={g.latest.candidateId && !generating ? () => openNewProfile(g.latest.candidateId) : null}
+                      />
+                    )}
+                  />
+                ))}
           </div>
-          {/* Purchase CTAs swap to neutral copy inside the native app. */}
-          <WebOnlyCta
-            native={(
-              <div style={{ marginLeft: 'auto', flex: 'none', fontSize: 12, color: T.ink4, maxWidth: '38ch' }}>
-                {NATIVE_PLAN_NOTE}
-              </div>
-            )}
-          >
-            <div style={{ marginLeft: 'auto', flex: 'none', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <Btn kind="warm" onClick={() => navigate('/plans')}>Compare plans</Btn>
-              <Btn kind="primary" onClick={() => navigate('/plans')}>Buy a credit pack</Btn>
+
+          {!loading && query && filtered.length === 0 && (
+            <div style={{ fontSize: 13.5, color: T.muted, padding: '18px 2px' }}>
+              No profiles match “{query.trim()}”. Search looks at candidate names and offices.
             </div>
-          </WebOnlyCta>
-        </div>
+          )}
+          {!loading && shown < filtered.length && (
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 20 }}>
+              <Button variant="secondary" onClick={() => setShown(s => s + PAGE_SIZE)}>
+                Show {Math.min(PAGE_SIZE, filtered.length - shown)} more
+              </Button>
+            </div>
+          )}
+        </>
       )}
-
-      {/* ── Profiles table ───────────────────────────────────────────────── */}
-      <div style={{ ...cardStyle, overflow: 'hidden' }}>
-        <div className="pf-controls" style={{
-          display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 9,
-          padding: '15px 20px', borderBottom: `1px solid ${T.divider}`,
-        }}>
-          {/* Magnifier, like every other search field in the app (Candidates,
-              Offices, Admin, SearchableSelect): lucide <Search>, muted, inside
-              the field on the left. This was the one search box without one. */}
-          <div style={{ position: 'relative', flex: 1, minWidth: 160, display: 'flex' }}>
-            <Search
-              aria-hidden="true"
-              style={{
-                position: 'absolute', left: 15, top: '50%', transform: 'translateY(-50%)',
-                width: 15, height: 15, color: T.faint, pointerEvents: 'none',
-              }}
-            />
-            <input
-              className="pf-input"
-              value={query}
-              onChange={e => { setQuery(e.target.value); setShown(PAGE_SIZE) }}
-              placeholder="Search candidates or offices"
-              aria-label="Search profiles"
-              style={{
-                flex: 1, minWidth: 0, boxSizing: 'border-box', border: `1px solid ${T.field}`,
-                borderRadius: 99, padding: '11px 15px 11px 38px', fontSize: 12.5, fontFamily: 'inherit',
-                color: T.ink, minHeight: 44,
-              }}
-            />
-          </div>
-          <span style={{ fontSize: 11.5, color: T.muted, whiteSpace: 'nowrap' }}>
-            {query
-              ? `${filtered.length} of ${plural(rows.length, 'profile')}`
-              : plural(rows.length, 'profile')}
-          </span>
-        </div>
-
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 14, padding: '9px 20px',
-          background: T.hover, borderBottom: `1px solid ${T.divider}`,
-        }}>
-          <span style={{ flex: 1, minWidth: 200, fontSize: 11, fontWeight: 700, letterSpacing: '.7px', color: T.ink4 }}>CANDIDATE</span>
-          <span className="pf-rowmeta" style={{ flex: 'none', width: 150, fontSize: 11, fontWeight: 700, letterSpacing: '.7px', color: T.ink4 }}>GENERATED</span>
-          <span className="pf-rowmeta" style={{ flex: 'none', width: 132, fontSize: 11, fontWeight: 700, letterSpacing: '.7px', color: T.ink4 }}>SOURCING</span>
-          {/* 132, not 112: at 112 a row with BOTH a risk chip and a verify chip
-              wrapped onto a second line and grew ~6px taller than its
-              neighbours, so the table's row heights came out ragged. */}
-          <span className="pf-rowmeta" style={{ flex: 'none', width: 132, fontSize: 11, fontWeight: 700, letterSpacing: '.7px', color: T.ink4 }}>FLAGS</span>
-          <span style={{ flex: 'none', width: 62 }} />
-        </div>
-
-        {filtered.length === 0 ? (
-          <div style={{ padding: '38px 20px', textAlign: 'center' }}>
-            <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 5 }}>
-              {loading ? 'Loading profiles…' : rows.length === 0 ? 'No profiles yet' : 'No profiles match that search'}
-            </div>
-            {!loading && (
-              <div style={{ fontSize: 12.5, color: T.muted, lineHeight: 1.6 }}>
-                {rows.length === 0
-                  ? 'Pick a candidate above and generate the first one — it takes 5–8 minutes.'
-                  : 'Search runs over candidate names and offices.'}
-              </div>
-            )}
-            {!loading && rows.length === 0 && (
-              <OnboardingStepHint stepId="profile" to="/" />
-            )}
-          </div>
-        ) : filtered.slice(0, shown).map(r => (
-          <div
-            key={r.id}
-            className="pf-row"
-            role="button"
-            tabIndex={0}
-            onClick={() => openDossier(r.id)}
-            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDossier(r.id) } }}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 14, padding: '13px 20px',
-              borderBottom: '1px solid #F5F4F1', minHeight: 60,
-            }}
-          >
-            <div style={{ flex: 1, minWidth: 200, display: 'flex', alignItems: 'center', gap: 12 }}>
-              <Avatar name={r.name} party={r.party} />
-              <div style={{ minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{
-                    fontSize: 13.5, fontWeight: 600, whiteSpace: 'nowrap',
-                    overflow: 'hidden', textOverflow: 'ellipsis',
-                  }}>{r.name}</span>
-                  {r.monitored && <Pill c={T.green} bg="#E6F5EC">WEEKLY</Pill>}
-                  {r.isNew && <Pill c={T.red} bg="#FBEAEA">NEW</Pill>}
-                </div>
-                <div style={{
-                  fontSize: 11.5, color: T.muted, marginTop: 2, whiteSpace: 'nowrap',
-                  overflow: 'hidden', textOverflow: 'ellipsis',
-                }}>
-                  {[r.office || 'No office linked', r.party, r.status].filter(Boolean).join(' · ')}
-                </div>
-              </div>
-            </div>
-            <div className="pf-rowmeta" style={{ flex: 'none', width: 150 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 500 }}>{r.date}</div>
-              <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>{r.age}</div>
-            </div>
-            <div className="pf-rowmeta" style={{ flex: 'none', width: 132 }}>
-              <div style={{ fontSize: 12, fontWeight: 600 }}>{r.sourced}</div>
-              {r.hasRatio
-                ? <RatioBar good={r.good} weak={r.weak} style={{ marginTop: 5 }} />
-                : <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>under 5 tagged claims</div>}
-            </div>
-            {/* One line, always. A row with a risk chip AND a verify chip used
-                to wrap inside a 112px cell and stand taller than the rows
-                around it; the cell is now 132px and `nowrap`, so every row in
-                the table is the same height whatever its flags say. The verify
-                chip is the one that gives way (ellipsis) if it ever has to. */}
-            <div className="pf-rowmeta" style={{
-              flex: 'none', width: 132, display: 'flex', gap: 6,
-              flexWrap: 'nowrap', alignItems: 'center', overflow: 'hidden',
-            }}>
-              {r.flags.riskLabel && (
-                <span style={{ fontSize: 11, fontWeight: 700, color: r.flags.riskColor, whiteSpace: 'nowrap', flex: 'none' }}>{r.flags.riskLabel}</span>
-              )}
-              {/* A consistent " · " separator, not just the row's own flex gap —
-                  two chips with only a gap between them ("2 MED  1 to verify")
-                  read as a spacing bug, not two distinct values. */}
-              {r.flags.riskLabel && r.flags.verifyLabel && (
-                <span style={{ fontSize: 11, color: T.faint, flex: 'none' }} aria-hidden="true">·</span>
-              )}
-              {r.flags.verifyLabel && (
-                <span
-                  title={r.flags.verifyLabel}
-                  style={{
-                    fontSize: 11, fontWeight: 700, color: T.amber, whiteSpace: 'nowrap',
-                    minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
-                  }}
-                >{r.flags.verifyLabel}</span>
-              )}
-              {r.flags.clean && <span style={{ fontSize: 11, fontWeight: 600, color: T.muted, whiteSpace: 'nowrap' }}>None</span>}
-            </div>
-            <span style={{ flex: 'none', width: 62, textAlign: 'right', fontSize: 11.5, fontWeight: 600, color: T.faint }}>
-              Open
-            </span>
-          </div>
-        ))}
-
-        {filtered.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 20px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 11.5, color: T.muted }}>
-              Showing {Math.min(shown, filtered.length)} of {plural(filtered.length, 'profile')}
-            </span>
-            {shown < filtered.length && (
-              <Btn style={{ marginLeft: 'auto' }} onClick={() => setShown(s => s + PAGE_SIZE)}>Load more</Btn>
-            )}
-          </div>
-        )}
-      </div>
 
       {/* ── Modals ───────────────────────────────────────────────────────── */}
       <BulkModal
@@ -1362,50 +1152,118 @@ export default function Dossiers() {
         onRun={rows => requireAck(() => runBulk(rows))}
       />
 
-      {showNewCand && (
-        <Modal title="Add a candidate and generate" onClose={() => setShowNewCand(false)}>
-          <div style={{ fontSize: 12.5, color: T.ink4, lineHeight: 1.55, marginBottom: 14 }}>
-            Creates the candidate record, then starts a full 14-section profile.
+      {newOpen && (
+        <Modal
+          title={newMode === 'create' ? 'Profile someone new' : 'New profile'}
+          onClose={() => setNewOpen(false)}
+          maxWidth={520}
+        >
+          <div style={{ fontSize: 13, color: T.muted, lineHeight: 1.55, marginBottom: 18 }}>
+            14 sections · 5–8 minutes. Claude confirms who they are, Grok and Perplexity search the
+            web, news and filings, then Claude reads the primary sources and writes the report.
           </div>
-          <label style={{ display: 'block', fontSize: 11.5, fontWeight: 600, color: T.ink3, marginBottom: 6 }}>
-            Full name
-          </label>
-          <input
-            autoFocus
-            className="pf-input"
-            value={newCandForm.name}
-            onChange={e => setNewCandForm(p => ({ ...p, name: e.target.value }))}
-            placeholder="First Last"
-            style={{
-              width: '100%', boxSizing: 'border-box', border: `1px solid ${T.field}`,
-              borderRadius: 10, padding: '12px 13px', fontSize: 13, fontFamily: 'inherit',
-              marginBottom: 14, minHeight: 44,
-            }}
-          />
-          <label style={{ display: 'block', fontSize: 11.5, fontWeight: 600, color: T.ink3, marginBottom: 6 }}>
-            Research context <span style={{ fontWeight: 500, color: T.muted }}>— recommended</span>
-          </label>
-          <textarea
-            rows={3}
-            className="pf-input"
-            maxLength={1000}
-            value={newCandForm.research_context}
-            onChange={e => setNewCandForm(p => ({ ...p, research_context: e.target.value }))}
-            placeholder="City, employer, profession, office they're considering — anything that identifies the right person"
-            style={{
-              width: '100%', boxSizing: 'border-box', border: `1px solid ${T.field}`,
-              borderRadius: 10, padding: '12px 13px', fontSize: 13, fontFamily: 'inherit',
-              resize: 'vertical',
-            }}
-          />
-          {modalError && (
-            <div style={{ fontSize: 12, color: '#B91C1C', marginTop: 10 }}>{modalError}</div>
+
+          {newMode === 'pick' ? (
+            <>
+              <FieldLabel>Candidate</FieldLabel>
+              <SearchableSelect
+                value={candidateId}
+                onChange={setCandidateId}
+                options={(Array.isArray(candidates) ? candidates : []).map(c => ({
+                  value: c.id,
+                  label: `${c.name}${c.party ? ` (${c.party})` : ''} — ${c.office?.name || 'No office'}`,
+                }))}
+                placeholder="Choose a candidate"
+                searchPlaceholder="Search candidates"
+              />
+              <button
+                type="button"
+                onClick={() => { setNewMode('create'); setModalError('') }}
+                style={{
+                  background: 'none', border: 0, padding: '8px 0 0', cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 13, fontWeight: 600, color: T.red,
+                }}
+              >Not on your list? Add someone new</button>
+
+              <FieldLabel htmlFor="pf-context" hint="optional · recommended for pre-announcement candidates" style={{ marginTop: 16 }}>
+                Research context
+              </FieldLabel>
+              <textarea
+                id="pf-context"
+                rows={2}
+                className="pf-input"
+                value={researchContext}
+                onChange={e => setResearchContext(e.target.value)}
+                maxLength={1000}
+                placeholder="City, employer, profession — anything that disambiguates this person"
+                style={fieldStyle}
+              />
+              {selectedCandidate && !selectedCandidate.research_context && !researchContext.trim() && (
+                <div style={{ fontSize: 12.5, color: T.muted, marginTop: 8, lineHeight: 1.5 }}>
+                  {selectedCandidate.name} has no saved research context. Adding one materially improves
+                  the odds of profiling the right person.
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <FieldLabel htmlFor="pf-newname">Full name</FieldLabel>
+              <input
+                id="pf-newname"
+                autoFocus
+                className="pf-input"
+                value={newCandForm.name}
+                onChange={e => setNewCandForm(p => ({ ...p, name: e.target.value }))}
+                placeholder="First Last"
+                style={{ ...fieldStyle, minHeight: 44 }}
+              />
+              <FieldLabel htmlFor="pf-newctx" hint="recommended" style={{ marginTop: 16 }}>Research context</FieldLabel>
+              <textarea
+                id="pf-newctx"
+                rows={3}
+                className="pf-input"
+                maxLength={1000}
+                value={newCandForm.research_context}
+                onChange={e => setNewCandForm(p => ({ ...p, research_context: e.target.value }))}
+                placeholder="City, employer, profession, office they're considering — anything that identifies the right person"
+                style={fieldStyle}
+              />
+              <div style={{ fontSize: 12.5, color: T.muted, marginTop: 8, lineHeight: 1.5 }}>
+                Adds them to your candidates, then starts their profile.{' '}
+                <button
+                  type="button"
+                  onClick={() => { setNewMode('pick'); setModalError('') }}
+                  style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, color: T.red }}
+                >Pick an existing candidate instead</button>
+              </div>
+            </>
           )}
-          <div style={{ display: 'flex', gap: 8, marginTop: 18, justifyContent: 'flex-end' }}>
-            <Btn onClick={() => setShowNewCand(false)}>Cancel</Btn>
-            <Btn kind="primary" disabled={creatingCand || !newCandForm.name.trim()} onClick={handleCreateAndRun}>
-              {creatingCand ? 'Creating…' : 'Create and generate'}
-            </Btn>
+
+          {modalError && (
+            <div style={{ fontSize: 12.5, color: '#B91C1C', marginTop: 12 }}>{modalError}</div>
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 22, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12.5, color: outOfProfiles ? T.red : T.muted, marginRight: 'auto' }}>
+              {unlimited ? 'Unlimited on your account' : outOfProfiles ? 'No profiles left this month' : `${left} of ${limit} left this month`}
+            </span>
+            {/* Buttons stay together: on a phone the quota line wraps above them. */}
+            <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+              <Button variant="secondary" onClick={() => setNewOpen(false)}>Cancel</Button>
+              {newMode === 'pick' ? (
+                <Button
+                  onClick={() => { setNewOpen(false); handleGenerate() }}
+                  disabled={!candidateId || generating || outOfProfiles}
+                  title={outOfProfiles ? 'No profiles left in this month’s allowance' : undefined}
+                >{generating ? 'Generating…' : 'Generate profile'}</Button>
+              ) : (
+                <Button
+                  disabled={creatingCand || !newCandForm.name.trim() || generating || outOfProfiles}
+                  onClick={handleCreateAndRun}
+                  title={outOfProfiles ? 'No profiles left in this month’s allowance' : undefined}
+                >{creatingCand ? 'Creating…' : 'Create and generate'}</Button>
+              )}
+            </div>
           </div>
         </Modal>
       )}
@@ -1422,6 +1280,54 @@ export default function Dossiers() {
 }
 
 // ─── Small pieces ────────────────────────────────────────────────────────────
+
+const fieldStyle = {
+  width: '100%', boxSizing: 'border-box', border: '1px solid rgba(17,22,28,.15)',
+  borderRadius: 12, padding: '11px 13px', fontSize: 14, fontFamily: 'inherit',
+  color: T.ink, resize: 'vertical', background: '#fff', display: 'block',
+}
+
+function FieldLabel({ children, htmlFor, hint, style }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, marginBottom: 6, flexWrap: 'wrap', ...style }}>
+      <label htmlFor={htmlFor} style={{ fontSize: 13, fontWeight: 700, color: T.ink }}>{children}</label>
+      {hint && <span style={{ fontSize: 12, color: T.muted }}>{hint}</span>}
+    </div>
+  )
+}
+
+/**
+ * Inside the reader: every version of this candidate's profile, newest first.
+ * The library shows only the newest as a tile; the older ones live here (and
+ * in the tile's ⋯ menu).
+ */
+function VersionSwitcher({ versions, currentId, onPick }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 12, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink, marginRight: 2 }}>
+        {versions.length} versions
+      </span>
+      {versions.map((v, i) => {
+        const on = v.id === currentId
+        return (
+          <button
+            key={v.id}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onPick(v.id)}
+            title={v.age || undefined}
+            style={{
+              borderRadius: 10, padding: '5px 10px', fontSize: 12.5, fontWeight: 600,
+              fontFamily: 'inherit', cursor: on ? 'default' : 'pointer', minHeight: 30,
+              border: on ? '1px solid transparent' : '1px solid rgba(17,22,28,.1)',
+              background: on ? T.ink : '#fff', color: on ? '#fff' : T.ink4,
+            }}
+          >{v.date}{i === 0 ? ' · latest' : ''}</button>
+        )
+      })}
+    </div>
+  )
+}
 
 function MoreItem({ children, onClick, danger }) {
   return (
@@ -1448,7 +1354,7 @@ function Banner({ children, tone = 'warm', action, onDismiss }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12, background: t.bg,
-      border: `1px solid ${t.br}`, borderRadius: 14, padding: '12px 16px', marginBottom: 16,
+      border: `1px solid ${t.br}`, borderRadius: 16, padding: '12px 16px', marginBottom: 16,
       flexWrap: 'wrap',
     }}>
       <div style={{ fontSize: 12.5, color: t.fg, lineHeight: 1.55, flex: 1, minWidth: 220 }}>{children}</div>
@@ -1466,7 +1372,7 @@ function Banner({ children, tone = 'warm', action, onDismiss }) {
   )
 }
 
-function Modal({ title, children, onClose }) {
+function Modal({ title, children, onClose, maxWidth = 460 }) {
   // Escape closes and the library behind stops scrolling. The backdrop click
   // and every child's own Cancel/X button are untouched.
   useDialog(onClose)
@@ -1484,11 +1390,11 @@ function Modal({ title, children, onClose }) {
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          background: '#fff', borderRadius: 18, boxShadow: '0 24px 60px rgba(13,21,38,.28)',
-          width: '100%', maxWidth: 460, padding: '20px 24px 22px',
+          background: '#fff', borderRadius: 20, boxShadow: E5,
+          width: '100%', maxWidth, padding: '24px 24px 22px',
         }}
       >
-        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>{title}</div>
+        <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-0.03em', marginBottom: 8 }}>{title}</div>
         {children}
       </div>
     </div>

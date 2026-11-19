@@ -34,7 +34,7 @@ export default function GenerationStrip({ candidateName, startedAt, stage = 1, s
   const activeIx = complete ? STAGE_LABELS.length : Math.min(Math.max(Number(stage) || 1, 1), 4) - 1
 
   return (
-    <div style={{ ...cardStyle, border: `1px solid ${failed ? '#FBD5D5' : '#DDE1E7'}`, padding: '16px 22px', marginBottom: 16 }}>
+    <div style={{ ...cardStyle, ...(failed ? { border: '1px solid #FBD5D5' } : null), padding: '16px 22px', marginBottom: 18 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 12, flexWrap: 'wrap' }}>
         <span style={{
           width: 7, height: 7, borderRadius: '50%', flex: 'none',
