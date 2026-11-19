@@ -35,7 +35,7 @@ Execution:
 2. Filter by party, status, county. Every big dropdown is searchable — type to filter.
 3. The candidate page holds records (votes, endorsements, controversies), notes, and files.
 4. Notes and files each have an AI toggle. Default is OFF. AI touches nothing unless you flip the toggle. Your call. Your data.
-Availability: Candidate plans get a basic Candidates page — a plain list of you and your opponents. The map view, CSV import, Discover and Autofill are Action-plan tools.
+Availability: Candidate plans get a tile page — one big tile for you (first, marked You) and one per opponent, with party, office, monitoring on/off and a red dot when this week's digest has news. "Add a candidate" asks who you're adding (you or an opponent) plus their name and office, then "Look them up" fills in what it finds (photo from their site, party, website, X, Facebook) for you to check before saving; "Skip the lookup and fill it in myself" opens the same short form empty. A tile's ⋯ menu has "This is me" if the app picked the wrong record as yours. The map view, CSV import and Discover are Action-plan tools.
 
 ── PROFILER (CANDIDATE PROFILES) ──
 Mission: deep-dive intelligence dossiers on any candidate.

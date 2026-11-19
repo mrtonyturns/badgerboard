@@ -15,8 +15,11 @@ console.log('\n[1] candidate plans')
 for (const k of T.CANDIDATE_PLAN_ORDER) {
   const f = T.PLAN_CONFIG[k].features
   t(`${k}: field home, events, calendar feed`, f.fieldHome && f.events && f.calendarFeed)
-  t(`${k}: no map / CSV / autofill / discovery / sharing / offices / voter lists / compare / results`,
-    !f.candidateMap && !f.csvImport && !f.autofill && !f.discoverCandidates && !f.sharing && !f.offices && !f.voterLists && !f.compare && !f.electionResults)
+  t(`${k}: no map / CSV / discovery / sharing / offices / voter lists / compare / results`,
+    !f.candidateMap && !f.csvImport && !f.discoverCandidates && !f.sharing && !f.offices && !f.voterLists && !f.compare && !f.electionResults)
+  // Nov 19 2026: the candidate lookup (autofill) came back for Candidate plans —
+  // the add-candidate sheet looks people up by name (tests/candidate-tiles.test.mjs).
+  t(`${k}: candidate lookup (autofill) is on`, f.autofill === true)
   t(`${k}: unlock copy never sells a cut feature`, ![...T.PLAN_CONFIG[k].unlocks, ...T.PLAN_CONFIG[k].nextUnlocks].some(u => /compare|csv import|discovery/i.test(u)))
 }
 t('paid candidate plans keep Broadside; Scout does not', ['c_monitor', 'c_active', 'c_campaign'].every(k => T.hasFeature(k, 'broadside')) && !T.hasFeature('scout', 'broadside'))
