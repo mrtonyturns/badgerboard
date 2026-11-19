@@ -1,21 +1,38 @@
-// candidate/IntelViews.jsx — SPEC-candidate-profile.md §5, Intel group.
+// candidate/IntelViews.jsx — the Intel tab of the candidate profile.
 //
-//   News Feed  · SWOT · Opposition · Allies
+// One tab, four parts picked with a Segmented control (no sub-tab rows):
 //
-// Every data path from the previous tabs survives: Section 1 / Section 10
-// parsing, the live X feed, the SWOT edit + AI-generate flow, the weaknesses /
-// Section 6 / Section 13 opposition panels, and the Sections 8 & 9 allies
-// content. The plan gate (canIntel) and its Lock behavior are preserved.
+//   X & news          live X posts (fetch-candidate-x-feed: cached first, then
+//                     refreshed in the background when stale) next to the
+//                     profile's own news items (Section 1) and X posts (Section 10)
+//   SWOT              four bold quadrant tiles, every point with its evidence,
+//                     its rank in this race and what to do with it
+//   Attack & defense  big cards: the attack line, the evidence, the defense —
+//                     then key weaknesses and controversies as cards
+//   Allies            endorsers and network (Sections 8 & 9) as cards
+//
+// What it reads: candidates.swot_data (research-swot v2, or older bullet
+// strings), the newest dossier's content via ./intelModel.js, and the X feed
+// function. The old Opposition view read candidates.weaknesses, which nothing
+// writes — see intelModel.js.
 
-import { useEffect, useRef, useState } from 'react'
-import { supabase, updateCandidate, getDossier } from '../../lib/supabase'
-import useFeature from '../../lib/useFeature'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  T, Card, EmptyState, CtaButton, TextLink, Btn, ViewHead, NewBadge,
-  LockedView, Spinner, CategoryPill, useDossierSection, SectionContent,
-  parseNewsItems, parseSocialItems, parseSection, detectPlatform, initialsOf, fmtDate,
-  headlineFrom, fetchDossierContent, Chip,
+  AtSign, Newspaper, Target, Swords, Handshake, AlertTriangle, ShieldCheck,
+  Flame, RefreshCw, Sparkles, Pencil, Quote, TrendingUp, TrendingDown,
+} from 'lucide-react'
+import { supabase, updateCandidate } from '../../lib/supabase'
+import useFeature from '../../lib/useFeature'
+import { Tile, Segmented, Avatar, EmptyState, Button, ICON_COLORS } from '../../components/ui'
+import {
+  LockedView, Spinner, parseSection, fmtDate, Chip,
 } from './shared'
+import { SectionHead, Pill, ConfidencePill, SourceLine, ImpactPips, ExtLink, hostOf } from './kit'
+import {
+  normalizeSwot, effectiveSwot, swotHasPoints, QUADRANT_KEYS,
+  parseAttackDefense, parseControversies, keyWeaknesses,
+  profileNews, profileXPosts,
+} from './intelModel'
 
 // ═══ Raw-AI-output display guards ═════════════════════════════════════════════
 // DISPLAY LAYER ONLY. None of this rewrites a dossier or anything stored — it
@@ -45,10 +62,9 @@ export function splitSwotPoints(value) {
 }
 
 /**
- * News summaries come out of parseNewsItems (shared.jsx) already cut to 250
- * characters with a hard .slice(), so a long summary lands mid-word with no
- * marker — "…a difference of" just stops. Trim back to the last whole word and
- * say so with an ellipsis. Text comfortably under the cap is returned as-is.
+ * News summaries come out of the feed parser cut long, so a long summary can
+ * land mid-word with no marker. Trim back to the last whole word and say so
+ * with an ellipsis. Text comfortably under the cap is returned as-is.
  */
 export function trimToWord(text, max = 250) {
   const s = String(text ?? '').trim()
@@ -118,11 +134,11 @@ export function splitBracketTokens(text) {
 // ─── R1C PURE HELPERS END ───
 
 /** Renders text with any [BRACKET] tokens promoted to chips. */
-function TokenText({ text, style }) {
+function TokenText({ text, className }) {
   const parts = splitBracketTokens(text)
-  if (!parts.some(p => p.type === 'badge')) return <span style={style}>{String(text ?? '')}</span>
+  if (!parts.some(p => p.type === 'badge')) return <span className={className}>{String(text ?? '')}</span>
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', ...style }}>
+    <span className={`inline-flex flex-wrap items-center gap-1.5 ${className || ''}`}>
       {parts.map((p, i) => p.type === 'badge'
         ? <Chip key={i} label={p.value} />
         : <span key={i}>{p.value}</span>)}
@@ -141,238 +157,289 @@ export function isNewByDate(dateStr, lastViewed) {
   return t > Date.parse(lastViewed)
 }
 
-// ═══ News Feed ════════════════════════════════════════════════════════════════
+const newestDossierDate = (dossiers) => dossiers?.[0]?.generated_at ? fmtDate(dossiers[0].generated_at, 'MMM d, yyyy') : null
 
-function NewsCard({ item, isNew }) {
-  const category = item.isSocial ? 'social' : 'news'
+// ═══ Intel tab ════════════════════════════════════════════════════════════════
+
+export const INTEL_VIEWS = [
+  { value: 'x',      label: 'X & news' },
+  { value: 'swot',   label: 'SWOT' },
+  { value: 'attack', label: 'Attack & defense' },
+  { value: 'allies', label: 'Allies' },
+]
+// Deep links written before the redesign.
+export const LEGACY_INTEL_VIEW = { news: 'x', opposition: 'attack' }
+
+export default function IntelView({
+  candidate, dossiers, content, contentLoading, canIntel, view, onView,
+  perspective, onPerspective, xHandle, lastViewed, unseenByView = {}, onRefresh, nav,
+}) {
+  if (!canIntel) return <LockedView title="Intel" onSeePlans={() => nav('/plans')} />
+
+  const options = INTEL_VIEWS.map(o => ({ ...o, count: unseenByView[o.value] ? `${unseenByView[o.value]} new` : undefined }))
+
   return (
-    <div style={{
-      background: '#fff', border: `1px solid ${isNew ? '#F4D8D9' : T.border}`,
-      borderRadius: 14, padding: '16px 20px', boxShadow: '0 1px 3px rgba(0,0,0,.03)',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 7, flexWrap: 'wrap' }}>
-        <CategoryPill category={category} width={72} />
-        <span style={{ fontSize: 11, color: T.faint }}>
-          {[item.source, item.date].filter(Boolean).join(' · ') || 'Source not recorded'}
-        </span>
-        {isNew && <NewBadge />}
-        {item.flag && (
-          <span style={{
-            fontSize: 9, fontWeight: 700, background: '#FEF3C7', color: '#92400E',
-            borderRadius: 99, padding: '3px 8px',
-          }}>{item.flag}</span>
-        )}
+    <div className="flex flex-col gap-6">
+      <div className="-mx-1 overflow-x-auto px-1 pb-1 scrollbar-hide">
+        <Segmented options={options} value={view} onChange={onView} className="w-max !p-1.5 [&>button]:whitespace-nowrap [&>button]:!px-3.5 [&>button]:!py-2.5 [&>button]:!text-[14px]" />
       </div>
-      <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.4, marginBottom: 5 }}>{item.title}</div>
-      {item.description && (
-        <div style={{ fontSize: 12.5, color: T.ink3, lineHeight: 1.55 }}>{trimToWord(item.description)}</div>
+
+      {!dossiers?.length && view !== 'swot' ? (
+        <NoProfileTile candidate={candidate} nav={nav} />
+      ) : contentLoading ? (
+        <Tile className="p-8"><Spinner /></Tile>
+      ) : view === 'x' ? (
+        <XAndNews candidate={candidate} content={content} xHandle={xHandle} lastViewed={lastViewed} dossiers={dossiers} />
+      ) : view === 'swot' ? (
+        <SwotSection candidate={candidate} dossiers={dossiers} content={content} perspective={perspective} onPerspective={onPerspective} onRefresh={onRefresh} />
+      ) : view === 'attack' ? (
+        <AttackDefense candidate={candidate} dossiers={dossiers} content={content} perspective={perspective} onPerspective={onPerspective} nav={nav} />
+      ) : (
+        <AlliesSection candidate={candidate} dossiers={dossiers} content={content} nav={nav} />
       )}
-      <a
-        className="cp-a"
-        href={item.searchUrl || item.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        style={{ display: 'inline-flex', alignItems: 'center', fontSize: 11.5, marginTop: 9, minHeight: 24 }}
-      >Read source →</a>
     </div>
   )
 }
 
-// Live X / Twitter feed — unchanged behavior, restyled shell.
-function XFeed({ candidate }) {
-  const [tweets, setTweets] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [fetched, setFetched] = useState(false)
-  const [error, setError] = useState('')
-
-  const loadTweets = async () => {
-    setLoading(true); setError('')
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      const res = await fetch('/.netlify/functions/fetch-candidate-x-feed', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-        body: JSON.stringify({
-          candidateName: candidate?.name || '',
-          handle: candidate?.twitter_handle || '',
-          district: candidate?.office?.district_name || '',
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || `Error ${res.status}`)
-      setTweets(data.tweets || [])
-      setFetched(true)
-    } catch (e) { setError(e.message) } finally { setLoading(false) }
-  }
-
+function NoProfileTile({ candidate, nav }) {
   return (
-    <Card style={{ padding: '18px 20px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13.5, fontWeight: 700 }}>X / Twitter</span>
-        {fetched && tweets.length > 0 && (
-          <span style={{ fontSize: 10.5, color: T.faint }}>{tweets.length} posts</span>
-        )}
-        <span style={{ marginLeft: 'auto' }}>
-          <TextLink onClick={loadTweets}>
-            {loading ? 'Loading…' : fetched ? 'Refresh' : 'Load posts'}
-          </TextLink>
-        </span>
-      </div>
-
-      {!fetched && !loading && !error && (
-        <EmptyState
-          title="Posts are loaded on demand"
-          body={`Pulls recent public posts about ${candidate?.name || 'this candidate'} from X. Nothing is fetched until you ask for it.`}
-          action={<CtaButton onClick={loadTweets}>Load X posts</CtaButton>}
-        />
-      )}
-      {loading && <Spinner pad={24} />}
-      {error && (
-        <div style={{ fontSize: 11.5, color: T.redHot, lineHeight: 1.55 }}>
-          Could not load X posts: {error}
-          <div style={{ marginTop: 8 }}><TextLink onClick={loadTweets}>Try again</TextLink></div>
-        </div>
-      )}
-      {fetched && !loading && tweets.length === 0 && (
-        <EmptyState
-          title="No recent posts found"
-          body={candidate?.twitter_handle
-            ? `Nothing recent came back for @${String(candidate.twitter_handle).replace('@', '')}.`
-            : 'Add this candidate’s X handle under Profile Data to narrow the search.'}
-        />
-      )}
-      {fetched && tweets.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 520, overflowY: 'auto' }}>
-          {tweets.map(t => (
-            <a
-              key={t.id}
-              href={t.author_username ? `https://x.com/${t.author_username}/status/${t.id}` : `https://x.com/search?q=${encodeURIComponent(t.text?.slice(0, 40) || '')}`}
-              target="_blank" rel="noopener noreferrer"
-              style={{ textDecoration: 'none', color: 'inherit' }}
-            >
-              <div className="cp-row" style={{ border: `1px solid ${T.divider}`, borderRadius: 10, padding: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 11.5, fontWeight: 700 }}>{t.author_name}</span>
-                  {t.author_username && <span style={{ fontSize: 11, color: T.faint }}>@{t.author_username}</span>}
-                  {t.created_at && (
-                    <span style={{ marginLeft: 'auto', fontSize: 10.5, color: T.faint }}>{fmtDate(t.created_at)}</span>
-                  )}
-                </div>
-                <div style={{ fontSize: 12, color: T.ink2, lineHeight: 1.5 }}>{t.text}</div>
-              </div>
-            </a>
-          ))}
-        </div>
-      )}
-    </Card>
+    <Tile className="p-7">
+      <EmptyState
+        icon={Sparkles}
+        color="red"
+        title="No research profile yet"
+        body={`Intel comes from ${candidate.name}'s research profile: news and X posts, the SWOT, attack lines with defenses, and allies. Generate one and this fills in.`}
+        action={<Button icon={Sparkles} onClick={() => nav(`/dossiers?candidate=${candidate.id}`)}>Generate profile</Button>}
+      />
+    </Tile>
   )
 }
 
-export function NewsFeedView({ candidate, dossiers, canIntel, lastViewed, nav }) {
-  const [loading, setLoading] = useState(false)
-  const [newsItems, setNewsItems] = useState(null)
-  const [socialItems, setSocialItems] = useState(null)
-  const [error, setError] = useState('')
+function PerspectiveToggle({ perspective, onPerspective }) {
+  return (
+    <Segmented
+      value={perspective}
+      onChange={onPerspective}
+      options={[{ value: 'opponent', label: 'Opponent' }, { value: 'self', label: 'My candidate' }]}
+    />
+  )
+}
+
+// ═══ X & news ═════════════════════════════════════════════════════════════════
+
+const XFEED_TTL_MS = 6 * 60 * 60 * 1000
+const xKey = (id) => `bb:xfeed:${id}`
+function readLocalFeed(id) {
+  try { return JSON.parse(localStorage.getItem(xKey(id)) || 'null') } catch { return null }
+}
+function writeLocalFeed(id, value) {
+  try { localStorage.setItem(xKey(id), JSON.stringify(value)) } catch { /* private mode */ }
+}
+
+async function callXFeed(body) {
+  const { data: { session } } = await supabase.auth.getSession()
+  const res = await fetch('/.netlify/functions/fetch-candidate-x-feed', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token || ''}` },
+    body: JSON.stringify(body),
+  })
+  let data = {}
+  try { data = await res.json() } catch { /* non-JSON error page */ }
+  if (!res.ok) throw new Error(data.error || `X search failed (${res.status})`)
+  return data
+}
+
+/**
+ * Loads X posts automatically when the tab opens: the cached feed first (no
+ * AI call), then — when that is older than six hours or missing — a fresh
+ * search in the background. A browser copy stands in while the server cache
+ * table is not there yet, so a page open never re-pays for a search it ran
+ * an hour ago.
+ */
+export function useXFeed(candidateId, handle) {
+  const [state, setState] = useState(() => {
+    const local = readLocalFeed(candidateId)
+    return { posts: local?.posts || [], handle: local?.handle || null, fetchedAt: local?.fetched_at || null, loading: true, refreshing: false, error: '' }
+  })
+  const handleRef = useRef(handle)
+  handleRef.current = handle
+  const idRef = useRef(candidateId)
+  idRef.current = candidateId
+
+  const refresh = useCallback(async (force = false) => {
+    const local = readLocalFeed(candidateId)
+    if (!force && local?.attempted_at && Date.now() - Date.parse(local.attempted_at) < XFEED_TTL_MS) return
+    writeLocalFeed(candidateId, { ...(local || {}), attempted_at: new Date().toISOString() })
+    setState(s => ({ ...s, refreshing: true, error: '' }))
+    try {
+      const data = await callXFeed({ candidate_id: candidateId, handle: handleRef.current || undefined, refresh: true })
+      const next = { posts: data.posts || [], handle: data.handle || null, fetched_at: data.fetched_at || new Date().toISOString(), attempted_at: new Date().toISOString() }
+      writeLocalFeed(candidateId, next)
+      if (idRef.current !== candidateId) return
+      setState(s => ({ ...s, posts: next.posts, handle: next.handle, fetchedAt: next.fetched_at, refreshing: false, error: data.refresh_error || '' }))
+    } catch (e) {
+      if (idRef.current === candidateId) setState(s => ({ ...s, refreshing: false, error: e.message }))
+    }
+  }, [candidateId])
 
   useEffect(() => {
-    if (!dossiers || dossiers.length === 0) return
-    const latest = dossiers[0]
-    const extract = (content) => {
-      const section1 = parseSection(content, 1)
-      const sec1Items = section1 ? parseNewsItems(section1) : []
-      const keep = (it) => (it.source || it.url) && !it.title.startsWith('NOT FOUND')
-      const news = sec1Items.filter(it => keep(it) && !it.isSocial)
-      const sec1Social = sec1Items.filter(it => keep(it) && it.isSocial)
-      const sec10 = parseSocialItems(content).filter(keep)
-      const seen = new Set()
-      const social = []
-      for (const item of [...sec10, ...sec1Social]) {
-        const k = item.title.toLowerCase().trim()
-        if (!seen.has(k)) { seen.add(k); social.push(item) }
+    let cancelled = false
+    const local = readLocalFeed(candidateId)
+    setState({ posts: local?.posts || [], handle: local?.handle || null, fetchedAt: local?.fetched_at || null, loading: true, refreshing: false, error: '' })
+    ;(async () => {
+      let stale
+      try {
+        const data = await callXFeed({ candidate_id: candidateId, handle: handleRef.current || undefined })
+        if (cancelled) return
+        const serverNewer = data.fetched_at && (!local?.fetched_at || Date.parse(data.fetched_at) >= Date.parse(local.fetched_at))
+        if (serverNewer) {
+          writeLocalFeed(candidateId, { ...(local || {}), posts: data.posts || [], handle: data.handle || null, fetched_at: data.fetched_at })
+          setState(s => ({ ...s, posts: data.posts || [], handle: data.handle || s.handle, fetchedAt: data.fetched_at }))
+        }
+        const newest = serverNewer ? data.fetched_at : local?.fetched_at
+        stale = !newest || Date.now() - Date.parse(newest) > XFEED_TTL_MS
+      } catch (e) {
+        if (!cancelled) setState(s => ({ ...s, error: e.message }))
+        stale = false   // the function is unreachable; don't stack a refresh on it
       }
-      setNewsItems(news)
-      setSocialItems(social)
-      if (news.length === 0 && social.length === 0) {
-        setError('No structured news items were found in the latest profile.')
-      }
+      if (cancelled) return
+      setState(s => ({ ...s, loading: false }))
+      if (stale) refresh(false)
+    })()
+    return () => { cancelled = true }
+  }, [candidateId, refresh])
+
+  return { ...state, refresh: () => refresh(true) }
+}
+
+/** "Aug 17, 2026" / ISO / "May–Jun 2026" → a short date, or the original text when it isn't one. */
+function postDate(v) {
+  if (!v) return ''
+  // Only a string that names a day is a date; "May–Jun 2026" stays as written.
+  if (!/\d{4}-\d{2}-\d{2}|[A-Za-z]{3,}\.? \d{1,2},? \d{4}/.test(String(v))) return String(v)
+  const t = Date.parse(v)
+  if (Number.isNaN(t)) return String(v)
+  return new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function PostCard({ post }) {
+  const when = postDate(post.created_at)
+  return (
+    <a
+      href={post.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="tile tile-link block p-5"
+    >
+      <div className="flex items-center gap-3">
+        <Avatar name={(post.author_name || '').replace(/^@/, '') || post.author_username} size={40} color={post.about === 'by_candidate' ? ICON_COLORS.ink : ICON_COLORS.gray} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[15px] font-bold text-brand-ink">{post.author_name || `@${post.author_username}`}</div>
+          <div className="truncate text-[13px] text-brand-faint">@{post.author_username}{when ? ` · ${when}` : ''}</div>
+        </div>
+        {post.from === 'profile' && <Pill>From profile</Pill>}
+      </div>
+      <p className="mt-3 whitespace-pre-line text-[15px] leading-relaxed text-brand-ink">{post.text}</p>
+      <div className="mt-3 text-[13px] font-semibold text-brand-mute">View on X →</div>
+    </a>
+  )
+}
+
+function NewsCard({ item, isNew }) {
+  return (
+    <div className="tile p-5">
+      <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-brand-faint">
+        <span className="font-semibold text-brand-mute">{item.source || (item.url ? hostOf(item.url) : 'Source not recorded')}</span>
+        {item.date && <span>· {item.date}</span>}
+        {isNew && <Pill tone="red">New</Pill>}
+        <ConfidencePill value={item.confidence} />
+      </div>
+      <div className="mt-1.5 text-[16px] font-bold leading-snug text-brand-ink">
+        {item.url ? <a href={item.url} target="_blank" rel="noopener noreferrer" className="hover:underline">{item.title}</a> : item.title}
+      </div>
+      {item.description && <p className="mt-1.5 text-[14px] leading-relaxed text-brand-mute">{trimToWord(item.description)}</p>}
+      {item.url && <div className="mt-2"><ExtLink href={item.url} className="text-[13px]">Read the story</ExtLink></div>}
+    </div>
+  )
+}
+
+function XAndNews({ candidate, content, xHandle, lastViewed, dossiers }) {
+  const feed = useXFeed(candidate.id, xHandle)
+  const fromProfile = useMemo(() => profileXPosts(content), [content])
+  const news = useMemo(() => profileNews(content).map(n => ({ ...n, description: n.summary })), [content])
+
+  const posts = useMemo(() => {
+    const seen = new Set()
+    const out = []
+    for (const p of [...(feed.posts || []), ...fromProfile]) {
+      if (seen.has(p.id)) continue
+      seen.add(p.id)
+      out.push(p)
     }
-    if (latest.content) { extract(latest.content); return }
-    setLoading(true)
-    getDossier(latest.id).then(({ data, error: err }) => {
-      setLoading(false)
-      if (err || !data?.content) { setError('Could not load profile content'); return }
-      extract(data.content)
-    })
-  }, [dossiers])
+    return out.sort((a, b) => (Date.parse(b.created_at || 0) || 0) - (Date.parse(a.created_at || 0) || 0))
+  }, [feed.posts, fromProfile])
 
-  if (!canIntel) return <LockedView title="News Feed" onSeePlans={() => nav('/plans')} />
-
-  if (!dossiers?.length) {
-    return (
-      <Card style={{ padding: '20px 24px' }}>
-        <ViewHead title="News feed" sub="from Section 1 and Section 10 of the latest profile" />
-        <EmptyState
-          title="No profile generated yet"
-          body={`Press coverage and social activity for ${candidate.name} come out of the AI profile. Generate one and this feed fills in.`}
-          action={<CtaButton onClick={() => nav(`/dossiers?candidate=${candidate.id}`)}>Generate profile</CtaButton>}
-        />
-      </Card>
-    )
-  }
-
-  if (loading) return <Card style={{ padding: 20 }}><Spinner /></Card>
-
-  const hasNews = newsItems && newsItems.length > 0
-  const hasSocial = socialItems && socialItems.length > 0
+  const handle = feed.handle || xHandle
+  const updated = feed.fetchedAt ? fmtDate(feed.fetchedAt, 'MMM d, h:mm a') : null
 
   return (
-    <div className="cp-cols" style={{ display: 'grid', gridTemplateColumns: '1.7fr 1fr', gap: 16, alignItems: 'start' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
-        {hasNews ? newsItems.map((item, i) => (
-          <NewsCard key={i} item={item} isNew={isNewByDate(item.date, lastViewed)} />
-        )) : (
-          <Card style={{ padding: '20px 24px' }}>
-            <ViewHead title="News feed" />
+    <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
+      <section className="flex min-w-0 flex-col gap-4">
+        <SectionHead
+          icon={AtSign}
+          color="ink"
+          title="On X"
+          sub={handle
+            ? <>Posts by <ExtLink href={`https://x.com/${handle}`} className="text-[14px]">@{handle}</ExtLink> and about {candidate.name}</>
+            : `Posts about ${candidate.name}`}
+          right={
+            <Button variant="secondary" icon={RefreshCw} onClick={feed.refresh} disabled={feed.refreshing} className={feed.refreshing ? '[&>svg]:animate-spin' : ''}>
+              {feed.refreshing ? 'Searching X…' : 'Refresh'}
+            </Button>
+          }
+        />
+        <div className="text-[12.5px] text-brand-faint">
+          {feed.refreshing
+            ? 'Searching X for new posts — this takes about half a minute. What we already have is below.'
+            : updated ? `Searched ${updated}.` : null}
+          {feed.error && !feed.refreshing && <span className="text-[#B42318]"> {feed.error}</span>}
+        </div>
+        {feed.loading && !posts.length ? (
+          <Tile className="p-6"><Spinner pad={16} /></Tile>
+        ) : posts.length ? (
+          <div className="flex flex-col gap-3">
+            {posts.map(p => <PostCard key={p.id} post={p} />)}
+          </div>
+        ) : (
+          <Tile className="p-6">
             <EmptyState
-              title="No press items in the latest profile"
-              body={error || 'Regenerate the profile to search for new coverage.'}
-              action={<CtaButton onClick={() => nav(`/dossiers?candidate=${candidate.id}`)}>Regenerate profile</CtaButton>}
+              icon={AtSign}
+              title={feed.refreshing ? 'Looking for posts…' : 'No X posts found yet'}
+              body={handle
+                ? `Nothing recent came back for @${handle}.`
+                : `We search X by name and place. If ${candidate.name} has an X account, add it with Edit and the next search pulls their own posts.`}
             />
-          </Card>
+          </Tile>
         )}
-      </div>
+      </section>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
-        <XFeed candidate={candidate} />
-        <Card style={{ padding: '18px 20px' }}>
-          <ViewHead
-            title="Social posts"
-            sub={hasSocial ? `${socialItems.length} from the profile` : null}
-          />
-          {hasSocial ? (
-            /* paddingBottom: the scroll box ended flush with the last card, so
-               its platform · date row was sliced in half at the clip edge. */
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 520, overflowY: 'auto', paddingBottom: 8 }}>
-              {socialItems.map((item, i) => (
-                <a key={i} href={item.searchUrl || item.url} target="_blank" rel="noopener noreferrer"
-                  style={{ textDecoration: 'none', color: 'inherit' }}>
-                  <div className="cp-row" style={{ border: `1px solid ${T.divider}`, borderRadius: 10, padding: 10 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 600, lineHeight: 1.45 }}>{item.title}</div>
-                    <div style={{ fontSize: 10.5, color: T.faint, marginTop: 3 }}>
-                      {[detectPlatform(item.source) || item.source, item.date].filter(Boolean).join(' · ')}
-                    </div>
-                  </div>
-                </a>
-              ))}
-            </div>
-          ) : (
-            <EmptyState
-              title="No social posts in the latest profile"
-              body="Section 10 of the profile holds social activity. Regenerate the profile to search again."
-            />
-          )}
-        </Card>
-      </div>
+      <section className="flex min-w-0 flex-col gap-4">
+        <SectionHead
+          icon={Newspaper}
+          color="blue"
+          title="In the news"
+          sub={news.length ? `${news.length} ${news.length === 1 ? 'story' : 'stories'} in the ${newestDossierDate(dossiers) || 'latest'} profile` : 'From the latest profile'}
+        />
+        {news.length ? (
+          <div className="flex flex-col gap-3">
+            {news.map((item, i) => <NewsCard key={`${item.title}-${i}`} item={item} isNew={isNewByDate(item.date, lastViewed)} />)}
+          </div>
+        ) : (
+          <Tile className="p-6">
+            <EmptyState icon={Newspaper} title="No press coverage found" body="The latest profile found no news stories. The next refresh searches again." />
+          </Tile>
+        )}
+      </section>
     </div>
   )
 }
@@ -380,308 +447,376 @@ export function NewsFeedView({ candidate, dossiers, canIntel, lastViewed, nav })
 // ═══ SWOT ═════════════════════════════════════════════════════════════════════
 
 const QUADRANTS = [
-  { key: 'strengths',     label: 'Strengths',     color: '#15803d' },
-  { key: 'weaknesses',    label: 'Weaknesses',    color: '#b91c1c' },
-  { key: 'opportunities', label: 'Opportunities', color: '#1d4ed8' },
-  { key: 'threats',       label: 'Threats',       color: '#b45309' },
+  { key: 'strengths',     label: 'Strengths',     color: '#16803C', icon: TrendingUp },
+  { key: 'weaknesses',    label: 'Weaknesses',    color: '#E0362C', icon: TrendingDown },
+  { key: 'opportunities', label: 'Opportunities', color: '#2F6BFF', icon: Target },
+  { key: 'threats',       label: 'Threats',       color: '#C2410C', icon: AlertTriangle },
 ]
 
-// Empty SWOT. Module-scope constant: state updates are always immutable
-// spreads (setSwot(p => ({ ...p, ... }))), so sharing it is safe.
+/** What the "play" on a point means, by quadrant and perspective. */
+export function playLabel(quadrant, perspective) {
+  const bad = quadrant === 'weaknesses' || quadrant === 'threats'
+  if (perspective === 'self') return bad ? 'How to defend it' : 'How to press it'
+  return bad ? 'How to use it' : 'How to blunt it'
+}
+
+function SwotPoint({ item, rank, quadrant, color, perspective }) {
+  return (
+    <li className="flex gap-3">
+      {item.impact
+        ? <span className="mt-0.5 inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[13px] font-extrabold text-white" style={{ background: color }} title="Rank in this race">{rank}</span>
+        : <span className="mt-2 h-2 w-2 flex-shrink-0 rounded-full" style={{ background: color }} />}
+      <div className="min-w-0 flex-1">
+        <div className="text-[15.5px] font-bold leading-snug text-brand-ink">{item.point}</div>
+        {item.evidence && <p className="mt-1 text-[13.5px] leading-relaxed text-brand-mute">{item.evidence}</p>}
+        {(item.source || item.impact) && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <ImpactPips value={item.impact} color={color} />
+            {item.source && <span className="text-[12.5px] text-brand-faint">Source: {item.source}</span>}
+          </div>
+        )}
+        {item.play && (
+          <div className="mt-2.5 rounded-xl px-3.5 py-2.5" style={{ background: `${color}10` }}>
+            <div className="text-[11px] font-extrabold uppercase tracking-[0.08em]" style={{ color }}>{playLabel(quadrant, perspective)}</div>
+            <div className="mt-0.5 text-[14px] leading-snug text-brand-ink">{item.play}</div>
+          </div>
+        )}
+      </div>
+    </li>
+  )
+}
+
 const BLANK_SWOT = { strengths: '', weaknesses: '', opportunities: '', threats: '' }
 
-export function SwotView({ candidate, dossiers, canIntel, swotUpdated, onRefresh, nav }) {
-  const [swot, setSwot] = useState(candidate.swot_data || BLANK_SWOT)
+/** Edited text (one point per line) → v2 items, keeping the evidence of unchanged points. */
+export function swotFromEdit(draft, previous, perspective) {
+  const prev = normalizeSwot(previous)
+  const out = { v: 2, perspective, generated_at: prev.generated_at || new Date().toISOString(), bottom_line: prev.bottom_line || '' }
+  for (const k of QUADRANT_KEYS) {
+    const byPoint = new Map(prev[k].map(x => [x.point.trim().toLowerCase(), x]))
+    out[k] = splitSwotPoints(draft[k]).map(p => byPoint.get(p.toLowerCase()) || { point: p, evidence: '', source: '', impact: null, play: '' })
+  }
+  return out
+}
+
+function SwotSection({ candidate, dossiers, content, perspective, onPerspective, onRefresh }) {
   const [editing, setEditing] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [aiLoading, setAiLoading] = useState(false)
-  const [aiError, setAiError] = useState('')
+  const [draft, setDraft] = useState(BLANK_SWOT)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
 
-  // Re-seed the local draft ONLY when the candidate changes. swot_data is a
-  // fresh object on every parent refetch (onRefresh → fetchAll), so keying on
-  // it would clobber in-progress edits; read the latest value via a ref instead.
-  const swotDataRef = useRef(candidate.swot_data)
-  swotDataRef.current = candidate.swot_data
-  useEffect(() => { setSwot(swotDataRef.current || BLANK_SWOT) }, [candidate.id])
+  const swot = useMemo(() => effectiveSwot(candidate.swot_data, content), [candidate.swot_data, content])
+  const sharp = swot.v === 2 && QUADRANT_KEYS.some(k => swot[k].some(x => x.evidence || x.play))
+  const stalePerspective = sharp && swot.perspective && swot.perspective !== perspective
 
-  if (!canIntel) return <LockedView title="SWOT" onSeePlans={() => nav('/plans')} />
-
-  const hasContent = QUADRANTS.some(q => splitSwotPoints(swot[q.key]).length > 0)
-
-  const handleSave = async () => {
-    setSaving(true); setAiError('')
-    const { error } = await updateCandidate(candidate.id, { swot_data: swot })
-    setSaving(false)
-    if (error) {
-      setAiError(error.message || 'Could not save the SWOT — your edits were not stored.')
-      return   // stay in edit mode so nothing typed is lost
-    }
-    setEditing(false); onRefresh()
+  const startEdit = () => {
+    setDraft(Object.fromEntries(QUADRANT_KEYS.map(k => [k, swot[k].map(x => x.point).join('\n')])))
+    setEditing(true)
   }
 
-  const handleAiGenerate = async () => {
+  const save = async () => {
+    setBusy(true); setError('')
+    const next = swotFromEdit(draft, candidate.swot_data, perspective)
+    const { error: err } = await updateCandidate(candidate.id, { swot_data: next })
+    setBusy(false)
+    if (err) { setError(err.message || 'Could not save the SWOT — your edits are still here.'); return }
+    setEditing(false)
+    onRefresh()
+  }
+
+  const rebuild = async () => {
     if (!dossiers?.length) return
-    setAiLoading(true); setAiError('')
+    setBusy(true); setError('')
     try {
       const { data: { session } } = await supabase.auth.getSession()
       const res = await fetch('/.netlify/functions/research-swot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token || ''}` },
-        body: JSON.stringify({ candidate_id: candidate.id, candidate_name: candidate.name }),
+        body: JSON.stringify({ candidate_id: candidate.id, perspective }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'SWOT analysis failed')
-      setSwot(data.swot)
+      let data = {}
+      try { data = await res.json() } catch { /* non-JSON error page */ }
+      if (!res.ok) throw new Error(data.error || `SWOT failed (${res.status})`)
       const { error: saveErr } = await updateCandidate(candidate.id, { swot_data: data.swot })
-      if (saveErr) throw new Error(saveErr.message || 'SWOT was generated but could not be saved.')
+      if (saveErr) throw new Error(saveErr.message || 'The SWOT was built but could not be saved.')
       onRefresh()
-    } catch (err) { setAiError(err.message || 'Failed to generate SWOT') }
-    setAiLoading(false)
+    } catch (e) { setError(e.message || 'Failed to build the SWOT') }
+    setBusy(false)
   }
 
+  const builtOn = swot.generated_at ? fmtDate(swot.generated_at, 'MMM d, yyyy') : null
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 14, fontWeight: 700 }}>SWOT</span>
-        <span style={{ fontSize: 11.5, color: T.faint }}>strategic read of this candidate</span>
-        <span style={{ marginLeft: 'auto', display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-          {dossiers?.length > 0 && !editing && (
-            <Btn onClick={handleAiGenerate} disabled={aiLoading}>
-              {aiLoading ? 'Analyzing…' : 'AI generate'}
-            </Btn>
-          )}
-          {!editing && <Btn onClick={() => setEditing(true)}>Edit</Btn>}
-          {editing && (
-            <>
-              <Btn onClick={() => { setEditing(false); setSwot(candidate.swot_data || BLANK_SWOT) }}>Cancel</Btn>
-              <Btn kind="primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Btn>
-            </>
-          )}
-        </span>
-      </div>
+    <section className="flex flex-col gap-5">
+      <SectionHead
+        icon={Target}
+        color="purple"
+        title="SWOT"
+        sub={sharp
+          ? `Ranked by how much each point matters in this race${builtOn ? ` · built ${builtOn}` : ''}`
+          : swot.from === 'profile' ? `The quick read from the ${newestDossierDate(dossiers) || 'latest'} profile` : 'Strengths, weaknesses, opportunities and threats'}
+        right={!editing && (
+          <>
+            <PerspectiveToggle perspective={perspective} onPerspective={onPerspective} />
+            {dossiers?.length > 0 && (
+              <Button variant={sharp && !stalePerspective ? 'secondary' : 'primary'} icon={Sparkles} onClick={rebuild} disabled={busy}>
+                {busy ? 'Building… (about 30s)' : sharp ? 'Rebuild' : 'Build the full SWOT'}
+              </Button>
+            )}
+            <Button variant="ghost" icon={Pencil} onClick={startEdit}>Edit</Button>
+          </>
+        )}
+      />
 
-      {aiError && (
-        <div style={{
-          background: T.warmBg, border: `1px solid ${T.warmBr}`, borderRadius: 12,
-          padding: '10px 14px', fontSize: 11.5, color: T.warmInk,
-        }}>{aiError}</div>
-      )}
+      {error && <div className="rounded-xl bg-[#FFF1E6] px-4 py-3 text-[14px] text-[#B54708]">{error}</div>}
 
-      {!hasContent && !editing ? (
-        <Card style={{ padding: '20px 24px' }}>
-          <EmptyState
-            title="No SWOT yet"
-            body={dossiers?.length
-              ? 'Run AI generate to build one from the latest profile, or Edit to write it yourself.'
-              : 'Generate a profile first — the AI SWOT reads from it. You can also write one by hand with Edit.'}
-          />
-        </Card>
-      ) : (
-        <div className="cp-cols2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-          {QUADRANTS.map(q => (
-            <Card key={q.key} style={{ padding: '18px 20px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-                <span style={{ width: 8, height: 8, borderRadius: 2, background: q.color }} />
-                <span style={{ fontSize: 13.5, fontWeight: 700 }}>{q.label}</span>
-                {swotUpdated && <NewBadge label="UPDATED" />}
-              </div>
-              {editing ? (
-                <textarea
-                  /* Strings edit verbatim; an array would render as "a,b,c" in
-                     a textarea, so only arrays get flattened to one per line. */
-                  value={typeof swot[q.key] === 'string'
-                    ? swot[q.key]
-                    : splitSwotPoints(swot[q.key]).join('\n')}
-                  onChange={e => setSwot(p => ({ ...p, [q.key]: e.target.value }))}
-                  placeholder={`Enter ${q.label.toLowerCase()}…`}
-                  style={{
-                    width: '100%', boxSizing: 'border-box', minHeight: 96, border: '1px solid #DEDEDA',
-                    borderRadius: 11, padding: '11px 13px', fontSize: 12.5, lineHeight: 1.55,
-                    fontFamily: 'inherit', resize: 'vertical', outline: 'none',
-                  }}
-                />
-              ) : splitSwotPoints(swot[q.key]).length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-                  {splitSwotPoints(swot[q.key]).map((point, i) => (
-                    <div key={i} style={{ display: 'flex', gap: 9 }}>
-                      <span style={{ flexShrink: 0, width: 5, height: 5, borderRadius: '50%', background: q.color, marginTop: 6 }} />
-                      <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>{point}</div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ fontSize: 12, color: T.faint }}>Not yet analyzed.</div>
-              )}
-            </Card>
-          ))}
+      {!editing && dossiers?.length > 0 && (!sharp || stalePerspective) && swotHasPoints(swot) && (
+        <div className="flex flex-wrap items-center gap-3 rounded-tile bg-brand-navy px-5 py-4 text-white shadow-e2">
+          <Sparkles className="h-5 w-5 flex-shrink-0 text-white/80" />
+          <p className="min-w-0 flex-1 text-[14.5px] leading-snug text-white/90">
+            {stalePerspective
+              ? `This SWOT was written as if ${candidate.name} were ${swot.perspective === 'self' ? 'your candidate' : 'an opponent'}. Rebuild it to get ${perspective === 'self' ? 'how to defend' : 'how to use'} each weakness.`
+              : `Build the full SWOT: every point backed by evidence from the profile, ranked by how much it matters in this race, with ${perspective === 'self' ? 'how to defend' : 'how to use'} each weakness and threat.`}
+          </p>
         </div>
       )}
-    </div>
+
+      {swot.bottom_line && !editing && (
+        <Tile className="p-6">
+          <div className="flex gap-3">
+            <Quote className="h-6 w-6 flex-shrink-0 text-brand-red" />
+            <div>
+              <div className="text-[11px] font-extrabold uppercase tracking-[0.1em] text-brand-faint">Bottom line</div>
+              <p className="mt-1 text-[19px] font-bold leading-snug tracking-tight text-brand-ink">{swot.bottom_line}</p>
+            </div>
+          </div>
+        </Tile>
+      )}
+
+      {!swotHasPoints(swot) && !editing ? (
+        <Tile className="p-7">
+          <EmptyState
+            icon={Target}
+            color="purple"
+            title="No SWOT yet"
+            body={dossiers?.length
+              ? 'Build one from the latest profile, or write it yourself with Edit.'
+              : 'Generate a profile first — the SWOT reads from it. You can also write one by hand with Edit.'}
+          />
+        </Tile>
+      ) : (
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+          {QUADRANTS.map(q => {
+            const items = swot[q.key] || []
+            return (
+              <Tile key={q.key} className="flex flex-col p-6" style={{ borderTop: `5px solid ${q.color}` }}>
+                <div className="flex items-center gap-2.5">
+                  <q.icon className="h-5 w-5" style={{ color: q.color }} />
+                  <span className="text-[20px] font-extrabold tracking-display text-brand-ink">{q.label}</span>
+                  {!editing && <span className="ml-auto inline-flex h-7 min-w-[28px] items-center justify-center rounded-full px-2 text-[13px] font-bold text-white" style={{ background: q.color }}>{items.length}</span>}
+                </div>
+                {editing ? (
+                  <textarea
+                    value={typeof draft[q.key] === 'string' ? draft[q.key] : splitSwotPoints(draft[q.key]).join('\n')}
+                    onChange={e => setDraft(p => ({ ...p, [q.key]: e.target.value }))}
+                    placeholder={`One ${q.label.toLowerCase().replace(/s$/, '').replace(/ie$/, 'y')} per line…`}
+                    className="input mt-4 min-h-[140px] resize-y text-[14px] leading-relaxed"
+                  />
+                ) : items.length ? (
+                  <ol className="mt-4 flex flex-col gap-4">
+                    {items.map((item, i) => (
+                      <SwotPoint key={`${q.key}-${i}`} item={item} rank={i + 1} quadrant={q.key} color={q.color} perspective={perspective} />
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="mt-4 text-[14px] text-brand-faint">Nothing here the profile can back up.</p>
+                )}
+              </Tile>
+            )
+          })}
+        </div>
+      )}
+
+      {editing && (
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => { setEditing(false); setError('') }}>Cancel</Button>
+          <Button variant="dark" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save SWOT'}</Button>
+        </div>
+      )}
+    </section>
   )
 }
 
-// ═══ Opposition ═══════════════════════════════════════════════════════════════
+// ═══ Attack & defense ═════════════════════════════════════════════════════════
 
-const SEVERITY = {
-  critical: { label: 'HIGH',   c: '#b91c1c', bg: '#fee2e2' },
-  high:     { label: 'HIGH',   c: '#b91c1c', bg: '#fee2e2' },
-  medium:   { label: 'MEDIUM', c: '#c2410c', bg: '#ffedd5' },
-  low:      { label: 'LOW',    c: '#52525b', bg: '#f1f1ef' },
-}
+const PRIORITY_TONE = { HIGH: 'red', MEDIUM: 'orange', LOW: 'gray' }
 
-export function OppositionView({ candidate, dossiers, canIntel, weaknesses, oppositionUpdated, nav }) {
-  const canBroadside = useFeature('broadside')
-  const { content, loading } = useDossierSection(dossiers, [6, 13])
-  const [panel, setPanel] = useState('weaknesses')
-
-  if (!canIntel) return <LockedView title="Opposition research" onSeePlans={() => nav('/plans')} />
-
-  const newest = dossiers?.[0] || null
-  const hasDossier = !!newest
-  // Unfilled model output ('[RESEARCH REQUIRED]' with an empty body) used to
-  // render as a card whose entire title was the placeholder. Drop those before
-  // anything counts them — including the panel's own "(N)" badge — so the tab
-  // falls through to its empty state rather than showing hollow cards.
-  const list = (weaknesses || []).filter(w => !isPlaceholderOnly(typeof w === 'string' ? w : w?.text))
-
-  const panels = [
-    { id: 'weaknesses',    label: 'Key weaknesses', count: list.length },
-    hasDossier && { id: 'controversies', label: 'Controversies' },
-    hasDossier && { id: 'attack',        label: 'Attack & defense' },
-  ].filter(Boolean)
-
-  const sparHref = newest ? `/broadside?dossier=${newest.id}` : null
-
-  if (!hasDossier && list.length === 0) {
-    return (
-      <Card style={{ padding: '20px 24px' }}>
-        <ViewHead title="Opposition research" />
-        <EmptyState
-          title="Nothing on file"
-          body={`Weaknesses, controversies and attack lines for ${candidate.name} come out of the AI profile (Sections 6 and 13). Generate one to populate this view.`}
-          action={<CtaButton onClick={() => nav(`/dossiers?candidate=${candidate.id}`)}>Generate profile</CtaButton>}
-        />
-      </Card>
-    )
-  }
-
+function AttackCard({ pair, perspective }) {
+  const self = perspective === 'self'
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {panels.length > 1 && (
-        <div className="cp-nav" style={{ display: 'flex', gap: 7, flexWrap: 'nowrap', overflowX: 'auto' }}>
-          {panels.map(p => (
-            <button
-              key={p.id}
-              type="button"
-              onClick={() => setPanel(p.id)}
-              style={{
-                border: `1px solid ${panel === p.id ? T.navy : T.border}`,
-                background: panel === p.id ? T.navy : '#fff',
-                color: panel === p.id ? '#fff' : T.muted,
-                borderRadius: 99, padding: '8px 14px', fontSize: 12, fontWeight: 600,
-                fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap', minHeight: 36,
-              }}
-            >{p.label}{p.count != null ? ` (${p.count})` : ''}</button>
-          ))}
+    <Tile className="flex flex-col p-6 md:p-7">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[12px] font-extrabold uppercase tracking-[0.12em] text-brand-red">{pair.title}</span>
+        <ConfidencePill value={pair.confidence} />
+      </div>
+      <p className="mt-2 text-[24px] font-extrabold leading-[1.15] tracking-display text-brand-ink md:text-[28px]">
+        “{pair.line}”
+      </p>
+      {pair.evidence && (
+        <div className="mt-4">
+          <div className="text-[11px] font-extrabold uppercase tracking-[0.1em] text-brand-faint">The evidence</div>
+          <p className="mt-1 text-[15px] leading-relaxed text-brand-ink">{pair.evidence}</p>
+          <SourceLine source={pair.source} url={pair.url} className="mt-1" />
         </div>
       )}
-
-      {panel === 'weaknesses' && (
-        list.length === 0 ? (
-          <Card style={{ padding: '20px 24px' }}>
-            <EmptyState
-              title="No key weaknesses recorded"
-              body="Weaknesses are extracted when a profile is generated. Regenerate the profile if you expect some."
-            />
-          </Card>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {list.map((w, i) => {
-              const text = typeof w === 'string' ? w : w.text
-              const sev = typeof w === 'object' && w.severity ? SEVERITY[String(w.severity).toLowerCase()] : null
-              // Headline is lifted from the weakness text itself — first
-              // sentence / clause, cut at a word boundary. When nothing can be
-              // extracted the card keeps its positional label.
-              const headline = headlineFrom(text)
-              const body = String(text || '').trim()
-              return (
-                <Card key={i} style={{ padding: '16px 20px', borderRadius: 14 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6, flexWrap: 'wrap' }}>
-                    {sev && (
-                      <span style={{
-                        fontSize: 9, fontWeight: 700, letterSpacing: '.4px',
-                        color: sev.c, background: sev.bg, borderRadius: 99, padding: '3px 9px',
-                      }}>{sev.label}</span>
-                    )}
-                    <span style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.4 }}>
-                      {headline || `Weakness ${i + 1}`}
-                    </span>
-                    {oppositionUpdated && <NewBadge />}
-                  </div>
-                  {(!headline || headline !== body) && (
-                    <div style={{ fontSize: 12.5, color: T.ink3, lineHeight: 1.55 }}>{body}</div>
-                  )}
-                  {canBroadside && <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 10, flexWrap: 'wrap' }}>
-                    {/* A `title` on a DISABLED button never shows — browsers
-                        swallow hover events on disabled controls, so the "why
-                        is this greyed out?" answer was unreachable. Same
-                        group-hover span pattern as Candidates.jsx. */}
-                    <span className="relative group" style={{ display: 'inline-flex' }}>
-                      <Btn
-                        kind="primary"
-                        disabled={!sparHref}
-                        title={sparHref ? 'Open Broadside and spar against this profile' : undefined}
-                        onClick={() => sparHref && nav(sparHref)}
-                      >Spar on this in Broadside</Btn>
-                      {!sparHref && (
-                        <span className="absolute bottom-full left-0 mb-2 w-56 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl hidden group-hover:block z-20 leading-relaxed">
-                          Generate a profile first — Broadside spars against the profile's content.
-                        </span>
-                      )}
-                    </span>
-                    <span style={{ fontSize: 11, color: T.faint }}>
-                      From the profile{newest?.generated_at ? ` · ${fmtDate(newest.generated_at)}` : ''}
-                    </span>
-                  </div>}
-                </Card>
-              )
-            })}
+      {pair.defense && (
+        <div className="mt-5 rounded-2xl bg-[#E8F6EE] p-4">
+          <div className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-[0.1em] text-[#16803C]">
+            <ShieldCheck className="h-4 w-4" /> {self ? 'Your answer' : 'Their likely defense'}
           </div>
-        )
+          {pair.defense.response && <p className="mt-1.5 text-[16px] font-bold leading-snug text-brand-ink">{pair.defense.response}</p>}
+          {pair.defense.context && <p className="mt-1 text-[14px] leading-relaxed text-brand-mute">{pair.defense.context}</p>}
+        </div>
+      )}
+    </Tile>
+  )
+}
+
+function ControversyCard({ c }) {
+  return (
+    <Tile className="flex flex-col p-5">
+      <div className="flex flex-wrap items-center gap-2">
+        {c.date && <Pill tone="dark">{c.date}</Pill>}
+        {c.priority && <Pill tone={PRIORITY_TONE[c.priority]}>{c.priority.toLowerCase()} priority</Pill>}
+        {c.status && <Pill>{c.status}</Pill>}
+        <ConfidencePill value={c.confidence} />
+      </div>
+      <div className="mt-2.5 text-[18px] font-extrabold leading-snug tracking-tight text-brand-ink">{c.issue}</div>
+      {c.summary && <p className="mt-1.5 text-[14.5px] leading-relaxed text-brand-mute">{c.summary}</p>}
+      {c.response && (
+        <p className="mt-2 text-[14px] leading-relaxed text-brand-ink"><span className="font-bold">Their response: </span>{c.response}</p>
+      )}
+      <SourceLine source={c.source} url={c.url} className="mt-auto pt-3" />
+    </Tile>
+  )
+}
+
+function AttackDefense({ candidate, dossiers, content, perspective, onPerspective, nav }) {
+  const canBroadside = useFeature('broadside')
+  const swot = useMemo(() => effectiveSwot(candidate.swot_data, content), [candidate.swot_data, content])
+  const pairs = useMemo(() => parseAttackDefense(content), [content])
+  const controversies = useMemo(() => parseControversies(content), [content])
+  // candidates.weaknesses is never written by the pipeline; it is only merged
+  // in for rows that carry hand-entered ones. Placeholders are dropped first.
+  const weaknesses = useMemo(() => {
+    const legacy = (candidate.weaknesses || []).filter(w => !isPlaceholderOnly(typeof w === 'string' ? w : w?.text))
+    return keyWeaknesses(swot, legacy)
+  }, [swot, candidate.weaknesses])
+  const self = perspective === 'self'
+  const newest = dossiers?.[0]
+  const sparHref = newest ? `/broadside?dossier=${newest.id}` : null
+
+  // No Section 13 table (older or lite profiles): the ranked weaknesses that
+  // carry a play stand in as attack cards.
+  const cards = pairs.length ? pairs : weaknesses.filter(w => w.play).slice(0, 4).map(w => ({
+    title: 'Weakness', line: w.point, evidence: w.evidence, source: w.source, url: null, confidence: '',
+    defense: self ? { response: w.play, context: '' } : null,
+  }))
+
+  const nothing = !cards.length && !weaknesses.length && !controversies.length
+
+  return (
+    <div className="flex flex-col gap-10">
+      <section className="flex flex-col gap-5">
+        <SectionHead
+          icon={Swords}
+          color="red"
+          title="Attack & defense"
+          sub={self
+            ? `What opponents will say about ${candidate.name} — and your answer`
+            : `The lines to run against ${candidate.name} — and how they will answer`}
+          right={
+            <>
+              <PerspectiveToggle perspective={perspective} onPerspective={onPerspective} />
+              {canBroadside && sparHref && (
+                <span className="group relative inline-flex">
+                  <Button
+                    variant="dark"
+                    icon={Swords}
+                    onClick={() => sparHref && nav(sparHref)}
+                    disabled={!sparHref}
+                    title={sparHref ? 'Open Broadside and spar against this profile' : undefined}
+                  >Spar in Broadside</Button>
+                  {!sparHref && (
+                    <span className="absolute bottom-full left-0 z-20 mb-2 w-56 hidden group-hover:block rounded-lg bg-gray-900 px-3 py-2 text-xs leading-relaxed text-white shadow-xl">
+                      Generate a profile first — Broadside spars against the profile's content.
+                    </span>
+                  )}
+                </span>
+              )}
+            </>
+          }
+        />
+        {nothing ? (
+          <Tile className="p-7">
+            <EmptyState
+              icon={Swords}
+              color="red"
+              title="Nothing to attack or defend yet"
+              body="The latest profile found no documented vulnerabilities. Build the full SWOT or regenerate the profile to look again."
+            />
+          </Tile>
+        ) : cards.length ? (
+          <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+            {cards.map((p, i) => <AttackCard key={`${p.title}-${i}`} pair={p} perspective={perspective} />)}
+          </div>
+        ) : null}
+      </section>
+
+      {weaknesses.length > 0 && (
+        <section className="flex flex-col gap-5">
+          <SectionHead
+            icon={TrendingDown}
+            color="orange"
+            title="Key weaknesses"
+            sub={swot.v === 2 ? 'From the SWOT, strongest first' : `From the ${swot.from === 'profile' ? 'profile’s' : 'saved'} SWOT`}
+          />
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {weaknesses.map((w, i) => (
+              <Tile key={`${w.point}-${i}`} className="flex flex-col p-5" style={{ borderTop: '5px solid #C2410C' }}>
+                {w.impact ? (
+                  <div className="mb-2 flex items-center gap-2">
+                    <span className="text-[28px] font-extrabold leading-none tracking-display text-[#C2410C]">{i + 1}</span>
+                    <ImpactPips value={w.impact} color="#C2410C" />
+                  </div>
+                ) : null}
+                <div className="text-[16px] font-bold leading-snug text-brand-ink">{w.point}</div>
+                {w.evidence && <p className="mt-1.5 text-[13.5px] leading-relaxed text-brand-mute">{w.evidence}</p>}
+                {w.source && <div className="mt-1 text-[12.5px] text-brand-faint">Source: {w.source}</div>}
+                {w.play && (
+                  <div className="mt-3 rounded-xl bg-[#FFF1E6] px-3.5 py-2.5">
+                    <div className="text-[11px] font-extrabold uppercase tracking-[0.08em] text-[#C2410C]">{playLabel('weaknesses', perspective)}</div>
+                    <div className="mt-0.5 text-[14px] leading-snug text-brand-ink">{w.play}</div>
+                  </div>
+                )}
+              </Tile>
+            ))}
+          </div>
+        </section>
       )}
 
-      {panel === 'controversies' && (
-        <Card style={{ padding: '20px 24px' }}>
-          <ViewHead title="Controversies & opposition research" sub="Section 6 of the latest profile" />
-          {loading ? <Spinner /> : (
-            <SectionContent
-              sectionText={content?.[6]}
-              emptyMessage="No controversies section was found in the latest profile. Regenerate it to try again."
-            />
-          )}
-          {newest && canBroadside && (
-            <div style={{ marginTop: 14 }}>
-              <Btn kind="primary" onClick={() => nav(sparHref)}>Spar on this in Broadside</Btn>
-            </div>
-          )}
-        </Card>
-      )}
-
-      {panel === 'attack' && (
-        <Card style={{ padding: '20px 24px' }}>
-          <ViewHead title="Attack & defense" sub="Section 13 of the latest profile" />
-          {loading ? <Spinner /> : (
-            <SectionContent
-              sectionText={content?.[13]}
-              emptyMessage="No attack & defense section was found in the latest profile. Regenerate it to try again."
-            />
-          )}
-          {newest && canBroadside && (
-            <div style={{ marginTop: 14 }}>
-              <Btn kind="primary" onClick={() => nav(sparHref)}>Spar on this in Broadside</Btn>
-            </div>
-          )}
-        </Card>
+      {controversies.length > 0 && (
+        <section className="flex flex-col gap-5">
+          <SectionHead
+            icon={Flame}
+            color="ink"
+            title="Controversies"
+            sub="What the public record shows — documented items only, highest research priority first"
+          />
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {controversies.map((c, i) => <ControversyCard key={`${c.issue}-${i}`} c={c} />)}
+          </div>
+        </section>
       )}
     </div>
   )
@@ -690,9 +825,8 @@ export function OppositionView({ candidate, dossiers, canIntel, weaknesses, oppo
 // ═══ Allies ═══════════════════════════════════════════════════════════════════
 
 // Sections 8 & 9 are free-form markdown. Where the model produced a table or a
-// "**Name** — role" bullet the rows are lifted into the card list from the
-// mockup; anything that doesn't parse is rendered as the original markdown
-// underneath so no content is ever dropped.
+// "**Name** — role" bullet the rows are lifted into cards; header rows and the
+// schema template row are dropped.
 export function parseAllies(sectionText) {
   if (!sectionText) return []
   const out = []
@@ -705,7 +839,7 @@ export function parseAllies(sectionText) {
       const cells = line.split('|').slice(1, -1).map(c => c.replace(/\*\*/g, '').trim())
       if (cells.length < 2) continue
       if (/^(name|organi[sz]ation|entity|ally)$/i.test(cells[0])) continue
-      if (!cells[0] || cells[0] === '—') continue
+      if (!cells[0] || cells[0] === '—' || /^(not found|none|n\/a|unknown)\b/i.test(cells[0])) continue
       out.push({ name: cells[0], role: cells.slice(1).filter(Boolean).join(' · ') })
       continue
     }
@@ -715,147 +849,54 @@ export function parseAllies(sectionText) {
   return out.filter(a => a.name.length > 1 && a.name.length < 90).slice(0, 40)
 }
 
-// Names present in the newest profile's Sections 8 & 9 but absent from the
-// previous profile's. Pure set difference on the same parser — no model call,
-// no guessing — and it simply doesn't run when there is no previous dossier.
-function usePreviousAllyNames(dossiers) {
-  const prevId = dossiers?.[1]?.id || null
-  // Keyed on the previous dossier's id, not the array identity (the parent
-  // hands down a fresh array on every refetch). The row itself is read through
-  // a latest-value ref so the effect gets the current object without making
-  // its identity a trigger.
-  const prevRef = useRef(null)
-  prevRef.current = dossiers?.[1] || null
-  const [names, setNames] = useState(null)
-  useEffect(() => {
-    const prev = prevRef.current
-    if (!prev) { setNames(null); return }
-    let cancelled = false
-    fetchDossierContent(prev).then(content => {
-      if (cancelled) return
-      if (!content) { setNames(null); return }
-      const found = [
-        ...parseAllies(parseSection(content, 8)),
-        ...parseAllies(parseSection(content, 9)),
-      ].map(a => a.name.trim().toLowerCase())
-      setNames(new Set(found))
+function AlliesSection({ candidate, dossiers, content, nav }) {
+  const rows = useMemo(() => {
+    const all = [...parseAllies(parseSection(content, 8)), ...parseAllies(parseSection(content, 9))]
+      .filter(a => !isAllyTemplateRow(a))
+    const seen = new Set()
+    return all.filter(a => {
+      const k = a.name.toLowerCase()
+      if (seen.has(k)) return false
+      seen.add(k)
+      return true
     })
-    return () => { cancelled = true }
-  }, [prevId])
-  return names
-}
-
-export function AlliesView({ candidate, dossiers, canIntel, alliesUpdated, nav }) {
-  const { content, loading } = useDossierSection(dossiers, [8, 9])
-  const prevAllyNames = usePreviousAllyNames(dossiers)
-
-  if (!canIntel) return <LockedView title="Allies" onSeePlans={() => nav('/plans')} />
-
-  if (!dossiers?.length) {
-    return (
-      <Card style={{ padding: '20px 24px' }}>
-        <ViewHead title="Allies & endorsements" />
-        <EmptyState
-          title="No profile generated yet"
-          body={`Endorsements and the political network for ${candidate.name} come from Sections 8 and 9 of the AI profile.`}
-          action={<CtaButton onClick={() => nav(`/dossiers?candidate=${candidate.id}`)}>Generate profile</CtaButton>}
-        />
-      </Card>
-    )
-  }
-
-  if (loading || content === null) return <Card style={{ padding: 20 }}><Spinner /></Card>
-
-  const s8 = content?.[8] || ''
-  const s9 = content?.[9] || ''
-  const newestDate = dossiers[0]?.generated_at ? fmtDate(dossiers[0].generated_at, 'MMM d') : null
-  // The schema template row ('Org' / 'Role · Type · Years · Source') parses
-  // exactly like a real ally, so it was rendered as one. Drop it — and any row
-  // that is only unfilled bracket tokens — before de-duplicating.
-  const allies = [...parseAllies(s8), ...parseAllies(s9)].filter(a => !isAllyTemplateRow(a))
-  const seen = new Set()
-  const rows = allies.filter(a => {
-    const k = a.name.toLowerCase()
-    if (seen.has(k)) return false
-    seen.add(k)
-    return true
-  })
-
-  if (!s8.trim() && !s9.trim()) {
-    return (
-      <Card style={{ padding: '20px 24px' }}>
-        <ViewHead title="Allies & endorsements" />
-        <EmptyState
-          title="No ally or endorsement data in the latest profile"
-          body="Regenerate the profile to search again for endorsements and network connections."
-          action={<CtaButton onClick={() => nav(`/dossiers?candidate=${candidate.id}`)}>Regenerate profile</CtaButton>}
-        />
-      </Card>
-    )
-  }
+  }, [content])
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {rows.length > 0 && (
-        <Card style={{ padding: '20px 24px' }}>
-          <ViewHead
-            title="Allies & endorsements"
-            sub="from profile sections 8 & 9"
-            right={alliesUpdated ? <NewBadge label="UPDATED" /> : null}
-          />
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {rows.map((a, i) => {
-              const isNewAlly = !!prevAllyNames && !prevAllyNames.has(a.name.trim().toLowerCase())
-              return (
-              <div key={`${a.name}-${i}`} style={{
-                display: 'flex', alignItems: 'center', gap: 12,
-                padding: '11px 0', borderTop: `1px solid ${T.divider}`, minHeight: 44,
-              }}>
-                <span style={{
-                  flexShrink: 0, width: 32, height: 32, borderRadius: '50%', background: T.chip,
-                  color: T.ink3, fontSize: 10.5, fontWeight: 700,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>{initialsOf(String(a.name).replace(/\[[^\]]*\]/g, '').trim() || a.name)}</span>
-                <div style={{ minWidth: 0 }}>
-                  {/* [KNOWN] / [X/Live] used to sit here as literal text. Same
-                      chip renderer the Section 8 markdown table uses. */}
-                  <div style={{ fontSize: 12.5, fontWeight: 600 }}>
-                    <TokenText text={a.name} />
-                  </div>
-                  {a.role && !isPlaceholderOnly(a.role) && (
-                    <div style={{ fontSize: 11, color: T.faint, marginTop: 1 }}>
-                      <TokenText text={a.role} />
-                    </div>
-                  )}
+    <section className="flex flex-col gap-5">
+      <SectionHead
+        icon={Handshake}
+        color="green"
+        title="Allies & network"
+        sub={rows.length ? `${rows.length} organizations and people from the ${newestDossierDate(dossiers) || 'latest'} profile` : 'Endorsements, organizations and political network'}
+        right={dossiers?.[0] && <Button variant="secondary" onClick={() => nav(`/dossiers?view=${dossiers[0].id}`)}>Full profile</Button>}
+      />
+      {rows.length ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {rows.map((a, i) => (
+            <Tile key={`${a.name}-${i}`} className="flex items-start gap-3 p-4">
+              <Avatar name={String(a.name).replace(/\[[^\]]*\]/g, '').trim() || a.name} size={40} color={ICON_COLORS.green} />
+              <div className="min-w-0">
+                <div className="text-[15px] font-bold leading-snug text-brand-ink">
+                  <TokenText text={a.name} />
                 </div>
-                {isNewAlly && newestDate && (
-                  <span style={{ marginLeft: 'auto', flexShrink: 0 }}>
-                    <NewBadge label={`New ${newestDate}`} />
-                  </span>
+                {a.role && !isPlaceholderOnly(a.role) && (
+                  <div className="mt-0.5 text-[13px] leading-snug text-brand-mute"><TokenText text={a.role} /></div>
                 )}
               </div>
-              )
-            })}
-          </div>
-        </Card>
-      )}
-
-      {s8.trim() && (
-        <Card style={{ padding: '20px 24px' }}>
-          <ViewHead title="Affiliations & endorsements" sub="Section 8" />
-          <SectionContent sectionText={s8} />
-        </Card>
-      )}
-      {s9.trim() && (
-        <Card style={{ padding: '20px 24px' }}>
-          <ViewHead
-            title="Political network & allies"
-            sub="Section 9"
-            right={<TextLink onClick={() => nav(`/dossiers?view=${dossiers[0].id}`)}>Full profile →</TextLink>}
+            </Tile>
+          ))}
+        </div>
+      ) : (
+        <Tile className="p-7">
+          <EmptyState
+            icon={Handshake}
+            color="green"
+            title="No allies on record"
+            body={`The latest profile found no endorsements or network ties for ${candidate.name}. The next refresh looks again.`}
           />
-          <SectionContent sectionText={s9} />
-        </Card>
+        </Tile>
       )}
-    </div>
+    </section>
   )
 }

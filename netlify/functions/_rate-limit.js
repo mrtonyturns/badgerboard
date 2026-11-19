@@ -63,6 +63,11 @@ const RATE_LIMITS = {
   // attempts are cheap but password-verifying, so the per-minute cap doubles as
   // brute-force friction.
   'candidate-ai-lock':           { perMinute: 10, perDay: 100 },
+  // Candidate profile → Intel → X posts. Reading the cached feed is a cheap
+  // DB read on every Intel open; a refresh is one Grok x_search call, which
+  // the page asks for at most once per 6-hour cache window per candidate.
+  'fetch-candidate-x-feed':         { perMinute: 30, perDay: 600 },
+  'fetch-candidate-x-feed-refresh': { perMinute: 4,  perDay: 60  },
 }
 
 const DEFAULT_LIMITS = { perMinute: 10, perDay: 100 }

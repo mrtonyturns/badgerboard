@@ -155,8 +155,13 @@ eq('empty / nullish quadrants yield no points',
   [splitSwotPoints(''), splitSwotPoints(null), splitSwotPoints(undefined), splitSwotPoints([])],
   [[], [], [], []])
 
+// Nov 2026 redesign: stored quadrants are read through intelModel's
+// normalizeSwot (which splits the same way), and the Edit textareas go back
+// through splitSwotPoints — neither path splits on '\n' alone.
 t('the SWOT renderer uses the splitter, not .split(\'\\n\')',
-  /splitSwotPoints\(swot\[q\.key\]\)/.test(src('src/pages/candidate/IntelViews.jsx')) &&
+  /splitSwotPoints\(draft\[q\.key\]\)/.test(src('src/pages/candidate/IntelViews.jsx')) &&
+  /effectiveSwot\(candidate\.swot_data, content\)/.test(src('src/pages/candidate/IntelViews.jsx')) &&
+  /split\(\/\\r\?\\n\|•\/\)/.test(src('src/pages/candidate/intelModel.js')) &&
   !/String\(swot\[q\.key\]\)\.split\('\\n'\)/.test(src('src/pages/candidate/IntelViews.jsx')))
 
 t('bare [RESEARCH REQUIRED] is a placeholder', isPlaceholderOnly('[RESEARCH REQUIRED]'))
