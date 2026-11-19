@@ -44,6 +44,15 @@
 [functions."research-district-history"]
   timeout = 60
 
+# Candidate profile → Intel. A Grok x_search for a candidate's X posts and a
+# Sonnet SWOT over the whole profile both run well past the 10s default; each
+# function aborts its own model call at 50s.
+[functions."fetch-candidate-x-feed"]
+  timeout = 60
+
+[functions."research-swot"]
+  timeout = 60
+
 # Broadside: the brain gives the model 12s (+ auth/rate-limit overhead) and the
 # debrief lets Sonnet write a 700-token report card — both overrun the 10s
 # default and used to surface as 502s in the session console.

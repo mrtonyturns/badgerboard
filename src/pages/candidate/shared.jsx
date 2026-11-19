@@ -8,10 +8,11 @@
 // netlify/functions/monitoring-digest.js (the producer). Nothing here defines a
 // second copy of a category, status, party or plan value.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { sanitizeHtml } from '../../lib/sanitize'
 import { getDossier } from '../../lib/supabase'
 import { digestCategory } from '../../lib/campaignEnums'
+import { featureUnlockLabel } from '../../lib/tiers'
 
 export {
   T, cardStyle, Card, CardHead, Pill, PartyPill, StatusPill,
@@ -108,15 +109,12 @@ export function NewBadge({ label = 'NEW' }) {
 // Plan-gated views keep the existing Lock behavior from the old tab bar.
 export function LockedView({ title, onSeePlans }) {
   return (
-    <div style={{
-      background: '#fff', border: `1px solid ${T.border}`, borderRadius: 16,
-      boxShadow: '0 1px 3px rgba(0,0,0,.03)', padding: '48px 24px', textAlign: 'center',
-    }}>
-      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>{title} is locked</div>
-      <div style={{ fontSize: 12.5, color: T.muted, lineHeight: 1.6, maxWidth: 420, margin: '0 auto 16px' }}>
-        Campaign intelligence — news, SWOT, opposition research and allies — unlocks on the
-        Campaign and Agency plans.
-      </div>
+    <div className="tile px-6 py-12 text-center">
+      <div className="text-[20px] font-extrabold tracking-display text-brand-ink">{title} is locked</div>
+      <p className="mx-auto mt-2 mb-5 max-w-md text-[14px] leading-relaxed text-brand-mute">
+        Campaign intelligence — X posts and news, the SWOT, attack &amp; defense and allies —
+        starts on {featureUnlockLabel('campaignIntel') || 'a higher plan'}.
+      </p>
       <Btn kind="primary" onClick={onSeePlans}>View plans</Btn>
     </div>
   )
@@ -151,31 +149,31 @@ export function CategoryPill({ category, width = 86 }) {
 }
 
 // ── Which view owns which profile section ────────────────────────────────────
-// Section numbering comes from the dossier prompt in
-// netlify/functions/generate-dossier-background.js (14 sections).
+// Section numbering comes from the Profiler v5 prompt in
+// netlify/functions/_profile-prompt.js (14 sections). Intel views: x (X &
+// news), swot, attack (Attack & defense), allies. Record is one page.
 export function sectionTarget(sectionName) {
   const s = String(sectionName || '').toUpperCase()
   if (s.includes('SWOT')) return ['intel', 'swot']
   const m = s.match(/SECTION\s+(\d+)/)
   const n = m ? Number(m[1]) : null
-  if (n === 1 || n === 10 || n === 11) return ['intel', 'news']
-  if (n === 6 || n === 13)             return ['intel', 'opposition']
+  if (n === 1 || n === 10 || n === 11) return ['intel', 'x']
+  if (n === 6 || n === 13)             return ['intel', 'attack']
+  if (n === 12)                        return ['intel', 'swot']
   if (n === 8 || n === 9)              return ['intel', 'allies']
-  if (n === 4)                         return ['record', 'results']
-  if (n === 5)                         return ['data', null]
-  return ['record', 'history']
+  return ['record', null]
 }
 
 // Digest item category → the view that shows that item in full.
 export function categoryTarget(category) {
   switch (category) {
-    case 'controversy': return ['intel', 'opposition']
+    case 'controversy': return ['intel', 'attack']
     case 'endorsement': return ['intel', 'allies']
     case 'polling':
     case 'podcast':
     case 'social':
     case 'news':
-    default:            return ['intel', 'news']
+    default:            return ['intel', 'x']
   }
 }
 
@@ -595,65 +593,6 @@ export function useDossierSection(dossiers, sectionNums) {
     })
   }, [dossiers, key])
   return { content, loading, error }
-}
-
-// Haiku-generated snapshot paragraph from the newest dossier. Unchanged from the
-// previous page — same endpoint, same stripping, same auto-fire-once behavior.
-export function useBioSummary(dossiers, candidateName, session, candidateId) {
-  const [summary, setSummary] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
-  const [triggered, setTriggered] = useState(false)
-
-  // /candidates/:id re-renders this hook in place when the user moves from one
-  // candidate to the next, so the auto-fire-once flag has to be scoped to the
-  // candidate. Without this reset the second candidate kept showing (or kept
-  // erroring with) the first candidate's snapshot and never regenerated.
-  useEffect(() => {
-    setSummary(null)
-    setError(null)
-    setLoading(false)
-    setTriggered(false)
-  }, [candidateId])
-
-  const generate = useCallback(async () => {
-    if (!dossiers || dossiers.length === 0) return
-    const latestId = dossiers[0].id
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await fetch('/.netlify/functions/generate-bio-summary', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ dossier_id: latestId, candidate_name: candidateName }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
-      const raw = data.summary || null
-      const stripped = raw
-        ? raw
-            .replace(/^(#{1,6}[^\n]*\n+)+/m, '')
-            .replace(/^Political Intelligence Briefing[^\n]*\n*/im, '')
-            .replace(/^[A-Z][^\n]{0,80}Candidate[^\n]*\n*/m, '')
-            .replace(/^[A-Z][^\n]{0,80}Briefing[^\n]*\n*/m, '')
-            .trim()
-        : null
-      setSummary(stripped || null)
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
-    }
-  }, [dossiers, candidateName, session])
-
-  useEffect(() => {
-    if (!triggered && dossiers && dossiers.length > 0 && session?.access_token) {
-      setTriggered(true)
-      generate()
-    }
-  }, [dossiers, session, triggered, generate])
-
-  return { summary, loading, error, generate }
 }
 
 // ── Notes & files (v2 JSON in candidates.notes) ──────────────────────────────

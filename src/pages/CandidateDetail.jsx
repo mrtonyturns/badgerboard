@@ -1,102 +1,122 @@
-// CandidateDetail.jsx — the candidate profile page (route `candidates/:id`),
-// rebuilt to SPEC-candidate-profile.md against mockups/candidate-profile.dc.html.
+// CandidateDetail.jsx — the candidate profile page (route `candidates/:id`).
 //
-// The eight flat tabs are replaced by four groups (Overview / Intel / Record /
-// Notes & Files / Profile Data) with a sub-tab row, and an Overview that answers
-// "what did this week's refresh actually produce?" from dossiers.weekly_digest
-// and dossiers.refresh_diff.
+// Nov 2026 redesign ("it's a lot of stuff going on and everything looks the
+// same"): a dark hero header (photo, name, party, office, election countdown,
+// weekly watch switch, one primary action and a menu for the rest) over four
+// tabs that each look different:
+//
+//   Overview       who they are, this week, a handful of number tiles
+//   Intel          X & news · SWOT · Attack & defense · Allies (a Segmented
+//                  control, no sub-tab rows)
+//   Record         past races, roles, record in office, profile history
+//   Notes & files  unchanged
+//
+// The Profile Data tab is gone (its cards were mostly empty or wrong); the
+// basics are edited from the header's Edit dialog (candidate/EditCandidate).
 //
 // Nothing on this page is invented: every figure comes from a row (candidates,
-// dossiers, incumbent_records, election_results, profile_views) and every card
-// with no row renders an honest empty state instead of a zero.
-//
-// Shell tokens, category/status/party colors and plan limits are imported from
-// the existing sources (pages/dashboard/shared, lib/campaignEnums, lib/tiers) —
-// this file defines none of them.
+// dossiers, incumbent_records, profile_views) or from the newest profile's own
+// text (candidate/intelModel.js), and anything with nothing behind it is left
+// out rather than shown as an empty panel.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { format, differenceInCalendarDays } from 'date-fns'
-import { Lock } from 'lucide-react'
+import {
+  ArrowLeft, Lock, MoreHorizontal, Pencil, Trash2, Sparkles, Radar,
+  LayoutGrid, Crosshair, Landmark, StickyNote,
+} from 'lucide-react'
 import {
   supabase, getCandidate, updateCandidate, deleteCandidate,
   getDossiers, getIncumbentRecords, logActivity,
 } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import LoadingBar from '../components/LoadingBar'
+import { Tile, Avatar, Button, ICON_COLORS } from '../components/ui'
 import {
   getUserTier, hasFeature, getUserPlanType,
   getMonitoringSlotMax, canMonitorCandidates, monitoringUnlockLabel,
 } from '../lib/tiers'
 import { monitoringToggleError } from '../lib/capErrors'
 import { WebOnlyCta, NATIVE_PLAN_NOTE } from '../components/UpgradeCta'
-import { partyHex, candidateStatusLabel, CANDIDATE_STATUS_HEX } from '../lib/campaignEnums'
+import { partyHex, candidateStatusLabel } from '../lib/campaignEnums'
 import { normalizePartyForDb } from '../lib/party'
 import {
-  T, ProfileStyles, Btn, Spinner, TextLink,
-  fmtDate, safeISO, categoryTarget, sectionTarget, useBioSummary,
-  isDigestItemUnread, useDistrictCounties,
+  ProfileStyles, Spinner, fmtDate, safeISO, categoryTarget, sectionTarget,
+  isDigestItemUnread, useDistrictCounties, fetchDossierContent,
 } from './candidate/shared'
 import Overview from './candidate/Overview'
-import { NewsFeedView, SwotView, OppositionView, AlliesView } from './candidate/IntelViews'
-import { ElectionResultsView, IncumbentRecordView, ProfileHistoryView } from './candidate/RecordViews'
-import ProfileData from './candidate/ProfileData'
+import IntelView, { INTEL_VIEWS, LEGACY_INTEL_VIEW } from './candidate/IntelViews'
+import RecordView from './candidate/RecordViews'
 import NotesFiles, { readLockState } from './candidate/NotesFiles'
+import EditCandidate from './candidate/EditCandidate'
+import { findXHandle } from './candidate/intelModel'
+import { resolveSelfCandidate } from './dashboard/CandidateDashboard'
 
-// ── Navigation model (SPEC §3) ────────────────────────────────────────────────
-const GROUPS = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'intel',    label: 'Intel',    subs: [
-    { id: 'news',       label: 'News Feed' },
-    { id: 'swot',       label: 'SWOT' },
-    { id: 'opposition', label: 'Opposition' },
-    { id: 'allies',     label: 'Allies' },
-  ] },
-  { id: 'record',   label: 'Record',   subs: [
-    { id: 'results',   label: 'Election Results' },
-    { id: 'incumbent', label: 'Incumbent Record' },
-    { id: 'history',   label: 'Profile History' },
-  ] },
-  { id: 'notes',    label: 'Notes & Files' },
-  { id: 'data',     label: 'Profile Data' },
+// ── Navigation model ─────────────────────────────────────────────────────────
+const TABS = [
+  { id: 'overview', label: 'Overview',      icon: LayoutGrid, color: ICON_COLORS.ink },
+  { id: 'intel',    label: 'Intel',         icon: Crosshair,  color: ICON_COLORS.red },
+  { id: 'record',   label: 'Record',        icon: Landmark,   color: ICON_COLORS.blue },
+  { id: 'notes',    label: 'Notes & files', icon: StickyNote, color: ICON_COLORS.purple },
 ]
+const TAB_IDS = new Set(TABS.map(t => t.id))
+const INTEL_IDS = new Set(INTEL_VIEWS.map(v => v.value))
 
-// The intel group is the plan-gated one — same rule the old tab bar used
-// (`campaignIntel` gated intel / swot / opposition, and news / allies rendered
-// their own locked card).
-const GATED_SUBS = new Set(['news', 'swot', 'opposition', 'allies', 'history'])
+/**
+ * ?group=&view= → { tab, view }. Accepts the pre-redesign ids too: the removed
+ * Profile Data tab lands on Overview, News Feed / Opposition land on their
+ * Intel replacements, and the three Record sub-tabs land on the one Record page.
+ */
+export function resolveRoute(group, view) {
+  const tab = TAB_IDS.has(group) ? group : 'overview'
+  if (tab !== 'intel') return { tab, view: null }
+  const v = LEGACY_INTEL_VIEW[view] || view
+  return { tab, view: INTEL_IDS.has(v) ? v : 'x' }
+}
 
 export default function CandidateDetail() {
   const { id } = useParams()
   const nav = useNavigate()
-  const { user, session } = useAuth()
+  const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [candidate, setCandidate] = useState(null)
   const [dossiers, setDossiers]   = useState([])
   const [records, setRecords]     = useState([])
   const [loading, setLoading]     = useState(true)
-
-  const [group, setGroup] = useState(searchParams.get('group') || 'overview')
-  const [sub, setSub]     = useState(searchParams.get('view') || null)
+  const [content, setContent]     = useState(null)
+  const [contentLoading, setContentLoading] = useState(false)
 
   const [editing, setEditing] = useState(false)
   const [form, setForm]       = useState({})
   const [saving, setSaving]   = useState(false)
   const [saveError, setSaveError] = useState('')
   const [monitorError, setMonitorError] = useState('')   // why the last monitoring toggle failed
-
   const [monitorSaving, setMonitorSaving] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const [lastViewed, setLastViewed] = useState(null)
+  const [selfId, setSelfId] = useState(null)
+  const [perspectiveChoice, setPerspectiveChoice] = useState(null)
   const viewMarkedRef = useRef(false)
+  const menuRef = useRef(null)
 
-  // `id` (not candidate?.id) so the auto-fire-once flag resets the instant the
-  // route changes, before the new candidate row has finished loading.
-  const bioSummary = useBioSummary(dossiers, candidate?.name, session, id)
+  // The ⋯ menu closes on any click outside it or on Escape.
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDown = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false) }
+    const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('touchstart', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('touchstart', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
 
   // Counties covered by this candidate's district, from the static places map.
-  // Null (and nothing rendered) whenever the office doesn't resolve to an
-  // assembly-N / senate-N / congress-N key or the file can't be read.
   const districtCounties = useDistrictCounties(candidate?.office)
 
   // ── data ────────────────────────────────────────────────────────────────────
@@ -105,7 +125,6 @@ export default function CandidateDetail() {
       getCandidate(id), getDossiers(id), getIncumbentRecords(id),
     ])
     setCandidate(c)
-    setForm(c || {})
     setDossiers(d || [])
     setRecords(ir || [])
     return c
@@ -115,40 +134,63 @@ export default function CandidateDetail() {
     let cancelled = false
     setLoading(true)
     viewMarkedRef.current = false
-    // Same mounted-across-:id-changes trap as the view sync below: an edit
-    // session opened on the previous candidate must not carry over.
-    setEditing(false); setSaveError('')
+    // React Router keeps this component mounted across :id changes, so an
+    // edit session or a perspective flip on the previous candidate must not
+    // carry over.
+    setEditing(false); setSaveError(''); setMenuOpen(false); setPerspectiveChoice(null)
+    setContent(null)
     fetchAll().finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [fetchAll])
 
-  // ── Route → view sync (bug fix) ─────────────────────────────────────────────
-  // React Router keeps this component MOUNTED when only the :id param changes,
-  // so `group`/`sub` — which are seeded from the URL once, at mount — survived
-  // from one candidate to the next. Open candidate A, click Intel → News Feed
-  // or Record → Profile History (both render generated-profile content), go back
-  // to Candidates and click candidate B, and B opened straight into that
-  // generated view instead of B's record. A candidate URL with no ?group=
-  // always means "start on the record's Overview", so re-derive both from the
-  // URL whenever the candidate or the params change.
-  const routeGroup = searchParams.get('group')
-  const routeView  = searchParams.get('view')
+  // The newest profile's text, read once and handed to every tab.
+  const newestId = dossiers[0]?.id || null
+  const newestRef = useRef(null)
+  newestRef.current = dossiers[0] || null
   useEffect(() => {
-    setGroup(routeGroup || 'overview')
-    setSub(routeView || null)
-  }, [id, routeGroup, routeView])
+    if (!newestId) { setContent(null); return }
+    let cancelled = false
+    setContentLoading(true)
+    fetchDossierContent(newestRef.current).then(c => {
+      if (!cancelled) { setContent(c || ''); setContentLoading(false) }
+    })
+    return () => { cancelled = true }
+  }, [newestId])
 
-  // Refresh just the candidate row — used after the AI lock endpoint returns so
-  // ai_access_notes / ai_access_locked_at are re-read from the server.
-  const refreshCandidate = async () => {
-    const { data: c } = await getCandidate(id)
-    if (c) { setCandidate(c); if (!editing) setForm(c) }
+  // Is this the user's own candidate? Same rule the dashboards use
+  // (resolveSelfCandidate) — it decides whether the SWOT and Attack & defense
+  // talk about how to USE a weakness or how to DEFEND it.
+  useEffect(() => {
+    if (!user?.id) return
+    let cancelled = false
+    supabase.from('candidates').select('id, name, election:elections(election_date)').eq('created_by', user.id)
+      .then(({ data }) => { if (!cancelled) setSelfId(resolveSelfCandidate(user, data || [])?.id || null) })
+    return () => { cancelled = true }
+  }, [user])
+
+  // ── Route → view sync ───────────────────────────────────────────────────────
+  // A candidate URL with no ?group= always means "start on Overview", so both
+  // are re-derived from the URL whenever the candidate or the params change.
+  const route = resolveRoute(searchParams.get('group'), searchParams.get('view'))
+  const tab = route.tab
+  const intelView = route.view || 'x'
+
+  const goto = (g, v = null) => {
+    const next = { group: g }
+    if (g === 'intel') next.view = v || 'x'
+    setSearchParams(next, { replace: true })
+    window.scrollTo?.({ top: 0, behavior: 'smooth' })
   }
 
-  // ── unread tracking (SPEC §2) ───────────────────────────────────────────────
+  // Refresh just the candidate row — used after the AI lock endpoint returns.
+  const refreshCandidate = async () => {
+    const { data: c } = await getCandidate(id)
+    if (c) setCandidate(c)
+  }
+
+  // ── unread tracking ─────────────────────────────────────────────────────────
   // Read the prior profile_views row first, hold it for the badge maths, and
-  // only then stamp the new view. The upsert is best-effort: if the table isn't
-  // there yet the page still renders, it just shows no NEW badges.
+  // only then stamp the new view. Best-effort: no table, no NEW badges.
   useEffect(() => {
     if (!user?.id || !id || loading || viewMarkedRef.current) return
     viewMarkedRef.current = true
@@ -190,9 +232,6 @@ export default function CandidateDetail() {
   const unseen = useMemo(() => {
     const cutoff = lastViewed ? Date.parse(lastViewed) : null
     const isUnseenDossier = (d) => !!cutoff && !!d?.generated_at && Date.parse(d.generated_at) > cutoff
-    // Per-item rule: an item that carries its own date is unread on that date
-    // against viewed_at; items without one inherit their refresh's state. The
-    // count here and the dots on Overview therefore always agree.
     const items = []
     for (const d of dossiers) {
       const dossierUnseen = isUnseenDossier(d)
@@ -205,109 +244,78 @@ export default function CandidateDetail() {
       const [, s] = categoryTarget(it.category)
       byView[s] = (byView[s] || 0) + 1
     }
+    // A refresh that changed a section flags the Intel view that owns it.
+    const newest = dossiers[0]
+    if (newest && isUnseenDossier(newest)) {
+      for (const s of (newest.refresh_diff?.sections || [])) {
+        if (s.status !== 'new' && s.status !== 'updated') continue
+        const [g, v] = sectionTarget(s.section)
+        if (g === 'intel' && v && !byView[v]) byView[v] = Number(s.new_items) || 1
+      }
+    }
     const newDossiers = dossiers.filter(isUnseenDossier).length
-    if (newDossiers) byView.history = newDossiers
-    return {
-      total: items.length,
-      byView,
-      newDossiers,
-      lastViewed,
-      isUnseenDossier,
-      categoryTargetOf: categoryTarget,
-    }
+    return { total: items.length, byView, newDossiers, lastViewed, isUnseenDossier, categoryTargetOf: categoryTarget }
   }, [dossiers, lastViewed])
-
-  // refresh_diff on the newest dossier drives the UPDATED badges on the views
-  // that own each changed section.
-  const diffFlags = useMemo(() => {
-    const d = dossiers[0]
-    if (!d || !unseen.isUnseenDossier(d)) return {}
-    const flags = {}
-    for (const s of (d.refresh_diff?.sections || [])) {
-      if (s.status !== 'new' && s.status !== 'updated') continue
-      const [, viewId] = sectionTarget(s.section)
-      if (viewId) flags[viewId] = true
-    }
-    return flags
-  }, [dossiers, unseen])
 
   // ── derived ─────────────────────────────────────────────────────────────────
   const userTier = getUserTier(user)
   const canIntel = hasFeature(userTier, 'campaignIntel')
-  // Gate on SLOTS, not features.weeklyProfile — see the note on
-  // getMonitoringSlotMax() in lib/tiers.js. weeklyProfile is the weekly
-  // auto-refresh perk and is false on c_active/a_monitor, both of which buy a
-  // monitoring slot; gating the switch on it locked out the paying plans.
+  // Gate on SLOTS, not features.weeklyProfile — see getMonitoringSlotMax().
   const canMonitor = canMonitorCandidates(user)
   const monitored = candidate?.section_timestamps?.monitoring === true
   const timestamps = candidate?.section_timestamps || {}
-  const weaknesses = candidate?.weaknesses || []
   const lock = candidate ? readLockState(candidate) : { locked: false }
-
-  const goto = (g, s = null) => {
-    setGroup(g)
-    const target = GROUPS.find(x => x.id === g)
-    const nextSub = s || target?.subs?.[0]?.id || null
-    setSub(nextSub)
-    const next = { group: g }
-    if (nextSub) next.view = nextSub
-    setSearchParams(next, { replace: true })
-  }
+  const xHandle = useMemo(() => findXHandle(candidate, content), [candidate, content])
+  const perspective = perspectiveChoice || (selfId && selfId === id ? 'self' : 'opponent')
 
   // ── actions ─────────────────────────────────────────────────────────────────
+  const openEdit = () => { setForm({ ...candidate }); setSaveError(''); setEditing(true); setMenuOpen(false) }
+
   const handleSave = async () => {
     setSaving(true); setSaveError('')
     try {
-      const cleanEmail = (form.email || '').split(',').map(v => v.trim()).filter(Boolean).join(',')
       const stamp = {
         updated_at: new Date().toISOString(),
         updated_by: user?.email || user?.user_metadata?.display_name || 'You',
       }
-      // Preserves monitoring / monitoring_updated_at and every other key already
-      // stored on section_timestamps, and stamps the four Profile Data cards.
-      const newTimestamps = {
-        ...(candidate.section_timestamps || {}),
-        profile: stamp, contact: stamp, campaign: stamp, finance: stamp, background: stamp,
-      }
-      const changedFields = Object.keys(form).filter(k => String(candidate[k] ?? '') !== String(form[k] ?? ''))
-      const { error } = await updateCandidate(id, {
-        name: form.name,
-        // "No party" is the empty option in the Party picker, and the
-        // candidates.party CHECK accepts DB_PARTIES or NULL — never ''. Writing
-        // '' returned a raw Postgres check-constraint error and the user lost
-        // the whole edit. normalizePartyForDb() turns blank (and any unknown
-        // free text) into null and canonicalises 'GOP'/'Democratic'/'R'.
+      const changedFields = Object.keys(form).filter(k => typeof form[k] !== 'object' && String(candidate[k] ?? '') !== String(form[k] ?? ''))
+      const payload = {
+        name: String(form.name || '').trim(),
+        // "No party" is the empty option, and the candidates.party CHECK
+        // accepts DB_PARTIES or NULL — never ''. normalizePartyForDb() turns
+        // blank (and unknown free text) into null.
         party: normalizePartyForDb(form.party),
         status: form.status,
-        email: cleanEmail, phone: form.phone, website: form.website,
-        campaign_address: form.campaign_address, campaign_city: form.campaign_city,
-        campaign_zip: form.campaign_zip, campaign_committee: form.campaign_committee,
-        campaign_manager: form.campaign_manager, treasurer: form.treasurer,
-        occupation: form.occupation, employer: form.employer,
-        bio_summary: form.bio_summary,
+        office_id: form.office_id || null,
+        election_id: form.election_id || null,
+        is_incumbent: !!form.is_incumbent,
+        website: form.website || null,
+        twitter_handle: form.twitter_handle ? String(form.twitter_handle).trim().replace(/^@/, '') : null,
+        facebook_url: form.facebook_url || null,
+        instagram_handle: form.instagram_handle || null,
+        linkedin_url: form.linkedin_url || null,
         research_context: form.research_context || null,
-        twitter_handle: form.twitter_handle, facebook_url: form.facebook_url,
-        instagram_handle: form.instagram_handle,
-        total_raised: form.total_raised || null,
-        total_spent: form.total_spent || null,
-        cash_on_hand: form.cash_on_hand || null,
-        is_incumbent: form.is_incumbent || false,
-        incumbent_since: form.incumbent_since || null,
-        section_timestamps: newTimestamps,
-      })
+        // Preserves monitoring and every other key already on section_timestamps.
+        section_timestamps: { ...(candidate.section_timestamps || {}), profile: stamp },
+      }
+      const photoChanged = String(form.photo_url ?? '') !== String(candidate.photo_url ?? '')
+      let { error } = await updateCandidate(id, photoChanged ? { ...payload, photo_url: form.photo_url || null } : payload)
+      // candidates.photo_url arrives with supabase/migrations/20261119000000;
+      // until it is applied, save everything else and say why the photo didn't.
+      let photoNote = ''
+      if (error && photoChanged && /photo_url/i.test(String(error.message || ''))) {
+        ;({ error } = await updateCandidate(id, payload))
+        photoNote = 'Saved — except the photo, which needs a database update this site has not had yet.'
+      }
       if (error) throw error
       logActivity('update', 'candidate', id, {
-        candidate_name: form.name,
-        fields_changed: changedFields,
-        changed_count: changedFields.length,
+        candidate_name: payload.name, fields_changed: changedFields, changed_count: changedFields.length,
       }).catch(() => {})
-      setEditing(false)
       await fetchAll()
+      if (photoNote) { setSaveError(photoNote); return }
+      setEditing(false)
     } catch (err) {
-      // The form stays open and populated on failure (setEditing(false) only
-      // runs after a successful write), so nothing the user typed is lost — but
-      // a bare Postgres string is not an error message. Translate the one the
-      // party column can still throw into something actionable.
+      // The dialog stays open and filled on failure, so nothing typed is lost.
       const msg = String(err?.message || '')
       setSaveError(
         /check constraint/i.test(msg) && /party/i.test(msg)
@@ -320,6 +328,7 @@ export default function CandidateDetail() {
   }
 
   const handleDelete = async () => {
+    setMenuOpen(false)
     if (!window.confirm(`Delete ${candidate.name}? This cannot be undone.`)) return
     logActivity('delete', 'candidate', id, { candidate_name: candidate.name }).catch(() => {})
     await deleteCandidate(id)
@@ -340,8 +349,6 @@ export default function CandidateDetail() {
     setMonitorError('')
     const newVal = !monitored
     if (newVal) {
-      // getMonitoringSlotMax already returns Infinity for admins and for every
-      // bracket-priced Action plan, so this needs no second admin rule.
       const maxSlots = getMonitoringSlotMax(user)
       if (maxSlots !== Infinity) {
         const { count, error: countErr } = await supabase
@@ -367,9 +374,7 @@ export default function CandidateDetail() {
     if (error) {
       setCandidate(prev => prev ? { ...prev, section_timestamps: prevTimestamps } : prev)
       // Never snap the switch back in silence: show the `monitoring_cap`
-      // trigger's own sentence when that is what fired, otherwise the real
-      // error. The pre-check above counts slots before the write, but another
-      // tab can take the last one in between.
+      // trigger's own sentence when that is what fired, otherwise the real error.
       setMonitorError(monitoringToggleError(error))
     } else {
       logActivity(newVal ? 'enable_monitoring' : 'disable_monitoring', 'candidate', id, {
@@ -382,7 +387,7 @@ export default function CandidateDetail() {
   // ── render ──────────────────────────────────────────────────────────────────
   if (loading) {
     return (
-      <div style={{ fontFamily: T.font }}>
+      <div>
         <LoadingBar loading />
         <Spinner pad={80} />
       </div>
@@ -391,439 +396,271 @@ export default function CandidateDetail() {
 
   if (!candidate) {
     return (
-      <div style={{ fontFamily: T.font, textAlign: 'center', padding: '80px 20px' }}>
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Candidate not found.</div>
-        <Btn kind="primary" onClick={() => nav('/candidates')}>Back to Candidates</Btn>
+      <div className="px-5 py-20 text-center">
+        <div className="mb-4 text-[16px] font-bold">Candidate not found.</div>
+        <Button variant="dark" onClick={() => nav('/candidates')}>Back to Candidates</Button>
       </div>
     )
   }
 
-  const activeGroup = GROUPS.find(g => g.id === group) || GROUPS[0]
-  const subList = activeGroup.subs || []
-  const activeSub = subList.length ? (subList.find(s => s.id === sub)?.id || subList[0].id) : null
-  const view = subList.length ? activeSub : activeGroup.id
-
   const pty = partyHex(candidate.party)
-  const stat = CANDIDATE_STATUS_HEX[candidate.status] || { c: T.ink3, bg: T.chip }
   const electionDate = safeISO(candidate.election?.election_date)
   const daysOut = electionDate ? differenceInCalendarDays(electionDate, new Date()) : null
-  const hot = daysOut != null && daysOut >= 0 && daysOut <= 30
+  const officeLine = candidate.office
+    ? [candidate.office.name, candidate.office.district_name].filter(Boolean).join(' — ')
+    : null
+  const place = candidate.office
+    ? (districtCounties?.length
+        ? `${districtCounties.slice(0, 3).join(', ')}${districtCounties.length === 1 ? ' County' : ' counties'}${districtCounties.length > 3 ? ` +${districtCounties.length - 3}` : ''}`
+        : [candidate.office.city, candidate.office.county].filter(Boolean).join(', '))
+    : null
 
-  const groupBadge = (gid) => {
-    if (gid === 'intel') {
-      return (unseen.byView.news || 0) + (unseen.byView.swot || 0)
-        + (unseen.byView.opposition || 0) + (unseen.byView.allies || 0)
-    }
-    if (gid === 'record') return unseen.newDossiers
+  const tabBadge = (tid) => {
+    if (tid === 'intel') return Object.values(unseen.byView).reduce((a, b) => a + b, 0)
+    if (tid === 'record') return unseen.newDossiers
     return 0
   }
 
-  const monitoringPill = canMonitor ? (
-    <>
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 9, minHeight: 44,
-        background: monitored ? '#F0FAF4' : '#FAFAF9',
-        border: `1px solid ${monitored ? '#CFEBDC' : T.border}`,
-        borderRadius: 99, padding: '6px 13px 6px 10px',
-      }}>
-        <span style={{
-          width: 7, height: 7, borderRadius: '50%',
-          background: monitored ? '#15803D' : '#C0BFBA',
-        }} />
-        <span style={{ fontSize: 11.5, fontWeight: 700, color: monitored ? '#15803D' : T.muted }}>
-          {monitored ? 'Active Monitoring on' : 'Active Monitoring off'}
-        </span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={monitored}
-          aria-label={monitored
-            ? `Turn off Active Monitoring for ${candidate.name}`
-            : `Turn on Active Monitoring for ${candidate.name}`}
-          disabled={monitorSaving}
-          onClick={handleMonitoringToggle}
-          style={{
-            width: 30, height: 17, borderRadius: 99, border: 0, padding: 0, position: 'relative',
-            background: monitored ? '#15803D' : '#D6D6D2',
-            cursor: monitorSaving ? 'wait' : 'pointer', flexShrink: 0,
-          }}
-        >
-          <span style={{
-            position: 'absolute', top: 2, left: monitored ? 15 : 2, width: 13, height: 13,
-            borderRadius: '50%', background: '#fff', transition: 'left .15s ease',
-          }} />
-        </button>
-      </div>
-      <div style={{ fontSize: 10.5, color: T.faint, maxWidth: 230, lineHeight: 1.4 }}>
-        {monitored
-          ? 'Refreshes every Monday — free, no quota used'
-          : 'Enable to refresh this profile weekly, free of charge'}
-      </div>
-    </>
-  ) : (
-    <div style={{ fontSize: 11, color: T.muted, maxWidth: 260, lineHeight: 1.5 }}>
-      <span style={{ fontWeight: 600 }}>Active Monitoring</span> tracks {candidate.name} week to week and writes a
-      weekly digest, free of charge. Your plan includes no monitoring slots; they start on {monitoringUnlockLabel(getUserPlanType(user))}.{' '}
-      <WebOnlyCta native={NATIVE_PLAN_NOTE}>
-        <TextLink onClick={() => nav('/plans')} style={{ color: T.red, fontWeight: 600 }}>Upgrade →</TextLink>
-      </WebOnlyCta>
-    </div>
-  )
+  const primaryLabel = dossiers.length ? 'Regenerate profile' : 'Generate profile'
 
   return (
-    <div
-      className="-m-4 md:-m-6 lg:-m-8 p-4 md:p-6 lg:p-8"
-      style={{ background: T.page, minHeight: '100%', fontFamily: T.font, color: T.ink }}
-    >
+    <div className="pb-6">
       <ProfileStyles />
       <LoadingBar loading={loading} />
 
-      <TextLink onClick={() => nav('/candidates')} style={{ fontSize: 12, marginBottom: 16, display: 'block' }}>
-        ← Back to Candidates
-      </TextLink>
+      <button
+        type="button"
+        onClick={() => nav('/candidates')}
+        className="mb-3 inline-flex items-center gap-1.5 rounded-lg py-1 text-[14px] font-semibold text-brand-mute hover:text-brand-ink"
+      >
+        <ArrowLeft className="h-4 w-4" /> Candidates
+      </button>
 
-      {/* ── header card (SPEC §1) ── */}
-      <div style={{
-        background: '#fff', border: `1px solid ${T.border}`, borderRadius: 16,
-        padding: '20px 24px', boxShadow: '0 1px 3px rgba(0,0,0,.03)', marginBottom: 14,
-      }}>
-        <div className="cp-head" style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
-          <div style={{
-            flexShrink: 0, width: 56, height: 56, borderRadius: 16,
-            background: pty.bg, color: pty.c, display: 'flex', alignItems: 'center',
-            justifyContent: 'center', fontWeight: 800, fontSize: 22,
-          }}>{(candidate.name || '?').charAt(0).toUpperCase()}</div>
-
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 23, fontWeight: 700, letterSpacing: '-.3px' }}>{candidate.name}</span>
-              {candidate.party && (
-                <span style={{
-                  fontSize: 10, fontWeight: 700, background: pty.bg, color: pty.c,
-                  borderRadius: 99, padding: '3px 9px', textTransform: 'uppercase',
-                }}>{candidate.party}</span>
-              )}
-              <span style={{
-                fontSize: 10, fontWeight: 700, background: stat.bg, color: stat.c,
-                borderRadius: 99, padding: '3px 9px', textTransform: 'uppercase',
-              }}>{candidateStatusLabel(candidate.status)}</span>
-              {candidate.is_incumbent && (
-                <span style={{
-                  fontSize: 10, fontWeight: 700, background: '#FDF3E3', color: T.warmInk,
-                  borderRadius: 99, padding: '3px 9px',
-                }}>INCUMBENT</span>
-              )}
+      {/* ── hero header ── */}
+      <Tile dark className="!overflow-visible p-5 md:p-8">
+        <div className="flex flex-col gap-6 md:flex-row md:items-center">
+          <div className="flex min-w-0 flex-1 items-center gap-4 md:gap-6">
+            <div className="relative flex-shrink-0">
+              <Avatar
+                name={candidate.name}
+                photo={candidate.photo_url || null}
+                size={88}
+                color={pty.c}
+                className="ring-4 ring-white/15 max-md:!h-[68px] max-md:!w-[68px] max-md:!text-[24px]"
+              />
             </div>
-
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 8, marginTop: 7,
-              fontSize: 12.5, color: T.ink3, flexWrap: 'wrap',
-            }}>
-              {candidate.office ? (
-                <>
-                  <span style={{ fontWeight: 600 }}>{candidate.office.name}</span>
-                  {candidate.office.district_name && (
-                    <>
-                      <span style={{ color: '#C0BFBA' }}>—</span>
-                      <span>{candidate.office.district_name}</span>
-                    </>
-                  )}
-                  {(candidate.office.county || candidate.office.city) && (
-                    <>
-                      <span style={{ color: '#C0BFBA' }}>·</span>
-                      <span>{[candidate.office.city, candidate.office.county].filter(Boolean).join(', ')}</span>
-                    </>
-                  )}
-                  {districtCounties && districtCounties.length > 0 && (
-                    <>
-                      <span style={{ color: '#C0BFBA' }}>—</span>
-                      <span style={{ color: T.muted }} title={districtCounties.join(', ')}>
-                        {districtCounties.slice(0, 3).join(', ')}
-                        {districtCounties.length === 1 ? ' County' : ' counties'}
-                        {districtCounties.length > 3 ? ` +${districtCounties.length - 3} more` : ''}
-                      </span>
-                    </>
-                  )}
-                </>
-              ) : (
-                <span style={{ color: T.faint }}>No office linked — set one under Profile Data</span>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5, fontSize: 12.5, color: T.ink3, flexWrap: 'wrap' }}>
-              {candidate.election ? (
-                <>
-                  <span>{candidate.election.name}</span>
-                  {electionDate && (
-                    <>
-                      <span style={{ color: '#C0BFBA' }}>·</span>
-                      <span style={{ fontWeight: hot ? 700 : 400, color: hot ? T.red : T.ink3 }}>
-                        {format(electionDate, 'EEEE, MMM d')}
-                        {daysOut != null && daysOut >= 0
-                          ? ` — ${daysOut === 0 ? 'today' : `${daysOut} day${daysOut === 1 ? '' : 's'} out`}`
-                          : ' — past'}
-                      </span>
-                    </>
-                  )}
-                </>
-              ) : (
-                <span style={{ color: T.faint }}>No election linked — no countdown to show</span>
-              )}
+            <div className="min-w-0">
+              <h1 className="text-[28px] font-extrabold leading-[1.05] tracking-display text-white md:text-[42px]">{candidate.name}</h1>
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                {candidate.party && (
+                  <span className="rounded-full px-2.5 py-0.5 text-[12px] font-bold uppercase tracking-[0.06em]" style={{ background: pty.bg, color: pty.c }}>{candidate.party}</span>
+                )}
+                <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-[12px] font-bold uppercase tracking-[0.06em] text-white/85">{candidateStatusLabel(candidate.status)}</span>
+                {candidate.is_incumbent && <span className="rounded-full bg-[#FDF3E3] px-2.5 py-0.5 text-[12px] font-bold uppercase tracking-[0.06em] text-[#B45309]">Incumbent</span>}
+                {perspective === 'self' && <span className="rounded-full bg-white px-2.5 py-0.5 text-[12px] font-bold uppercase tracking-[0.06em] text-brand-ink">Your candidate</span>}
+              </div>
+              <div className="mt-2 text-[15px] leading-snug text-white/75">
+                {officeLine
+                  ? <>{officeLine}{place && <span className="text-white/50"> · {place}</span>}</>
+                  : <button type="button" onClick={openEdit} className="text-white/60 underline-offset-2 hover:text-white hover:underline">No office set — add one</button>}
+              </div>
             </div>
           </div>
 
-          <div className="cp-headright" style={{
-            flexShrink: 0, display: 'flex', flexDirection: 'column',
-            alignItems: 'flex-end', gap: 9,
-          }}>
-            {monitoringPill}
-            {monitorError && (
-              <div style={{
-                display: 'flex', alignItems: 'flex-start', gap: 7, maxWidth: 260,
-                fontSize: 11, lineHeight: 1.45, color: T.redHot,
-              }}>
-                <span style={{ flex: 1 }}>{monitorError}</span>
-                <TextLink onClick={() => setMonitorError('')} style={{ color: T.redHot, fontWeight: 700 }}>✕</TextLink>
+          <div className="flex flex-col gap-4 md:items-end">
+            {electionDate && (
+              <div className="md:text-right">
+                <div className="flex items-baseline gap-2 md:justify-end">
+                  <span className="text-[44px] font-extrabold leading-none tracking-display text-white md:text-[52px]">
+                    {daysOut != null && daysOut >= 0 ? daysOut : fmtDate(candidate.election.election_date, 'MMM d')}
+                  </span>
+                  {daysOut != null && daysOut >= 0 && <span className="text-[15px] font-medium text-white/70">{daysOut === 1 ? 'day' : 'days'} to go</span>}
+                </div>
+                <div className="mt-1 text-[14px] text-white/70">
+                  {candidate.election.name} · {format(electionDate, 'EEE, MMM d, yyyy')}{daysOut != null && daysOut < 0 ? ' (past)' : ''}
+                </div>
               </div>
             )}
-            <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-              {editing ? (
-                <>
-                  <Btn onClick={() => { setEditing(false); setForm({ ...candidate }); setSaveError('') }}>Cancel</Btn>
-                  <Btn kind="primary" onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Btn>
-                </>
+            <div className="flex flex-wrap items-center gap-2">
+              {canMonitor ? (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={monitored}
+                  aria-label={monitored ? `Turn off weekly watch for ${candidate.name}` : `Turn on weekly watch for ${candidate.name}`}
+                  disabled={monitorSaving}
+                  onClick={handleMonitoringToggle}
+                  title={monitored ? 'Refreshes every Monday — free, no quota used' : 'Refresh this profile every Monday, free'}
+                  className="inline-flex items-center gap-2.5 rounded-xl border border-white/15 bg-white/10 px-3.5 py-2.5 text-[14px] font-bold text-white hover:bg-white/15 disabled:cursor-wait"
+                >
+                  <Radar className="h-4 w-4" />
+                  Weekly watch {monitored ? 'on' : 'off'}
+                  <span className={`relative h-5 w-9 rounded-full transition-colors ${monitored ? 'bg-[#22C55E]' : 'bg-white/25'}`}>
+                    <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${monitored ? 'left-[18px]' : 'left-0.5'}`} />
+                  </span>
+                </button>
               ) : (
-                <>
-                  <Btn onClick={() => { setEditing(true); setForm({ ...candidate }); goto('data') }}>Edit</Btn>
-                  <Btn kind="primary" onClick={() => nav(`/dossiers?candidate=${id}`)}>Regenerate profile</Btn>
-                  <Btn onClick={handleDelete} title={`Delete ${candidate.name}`}>Delete</Btn>
-                </>
+                <span className="text-[13px] text-white/60">
+                  Weekly watch starts on {monitoringUnlockLabel(getUserPlanType(user))}.{' '}
+                  <WebOnlyCta native={NATIVE_PLAN_NOTE}>
+                    <button type="button" onClick={() => nav('/plans')} className="font-bold text-white underline-offset-2 hover:underline">Upgrade</button>
+                  </WebOnlyCta>
+                </span>
               )}
+              <button
+                type="button"
+                onClick={() => nav(`/dossiers?candidate=${id}`)}
+                className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-[14px] font-bold text-brand-ink shadow-e2 hover:bg-white/90"
+              >
+                <Sparkles className="h-4 w-4" /> {primaryLabel}
+              </button>
+              <div className="relative" ref={menuRef}>
+                <button
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded={menuOpen}
+                  aria-label="More actions"
+                  onClick={() => setMenuOpen(o => !o)}
+                  className="inline-flex h-[42px] w-[42px] items-center justify-center rounded-xl border border-white/15 bg-white/10 text-white hover:bg-white/15"
+                >
+                  <MoreHorizontal className="h-5 w-5" />
+                </button>
+                {menuOpen && (
+                  <>
+                    <div role="menu" className="absolute right-0 top-full z-[25] mt-2 w-48 overflow-hidden rounded-xl bg-white py-1 text-brand-ink shadow-e4">
+                      <button type="button" role="menuitem" onClick={openEdit} className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-[14px] font-semibold hover:bg-black/5">
+                        <Pencil className="h-4 w-4" /> Edit details
+                      </button>
+                      <button type="button" role="menuitem" onClick={handleDelete} className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-[14px] font-semibold text-[#B42318] hover:bg-[#FBEDEB]">
+                        <Trash2 className="h-4 w-4" /> Delete candidate
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
-            {saveError && <div style={{ fontSize: 11.5, color: T.redHot }}>{saveError}</div>}
           </div>
         </div>
-      </div>
+      </Tile>
+
+      {monitorError && (
+        <div className="mt-3 flex items-start gap-3 rounded-xl bg-[#FBEDEB] px-4 py-3 text-[14px] text-[#B42318]">
+          <span className="flex-1">{monitorError}</span>
+          <button type="button" onClick={() => setMonitorError('')} className="font-bold" aria-label="Dismiss">✕</button>
+        </div>
+      )}
 
       {/* ── group pill nav (SPEC §3) ── */}
-      <div className="cp-nav" style={{
-        display: 'flex', alignItems: 'center', gap: 4, background: T.chip,
-        borderRadius: 99, padding: 4, marginBottom: 10, width: 'fit-content', maxWidth: '100%',
-      }}>
-        {GROUPS.map(g => {
-          const on = g.id === group
-          const badge = groupBadge(g.id)
-          const showAiOff = g.id === 'notes' && lock.locked
-          const showLock = g.id === 'intel' && !canIntel
-          return (
-            <button
-              key={g.id}
-              type="button"
-              onClick={() => goto(g.id)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 7, borderRadius: 99, padding: '9px 16px',
-                fontSize: 12.5, fontWeight: on ? 600 : 500, color: on ? T.ink : T.muted,
-                background: on ? '#fff' : 'transparent',
-                boxShadow: on ? '0 1px 2px rgba(0,0,0,.06)' : 'none',
-                border: 0, fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap', minHeight: 36,
-              }}
-            >
-              {g.label}
-              {showLock && <Lock size={11} color={T.faint} aria-label="Locked on your plan" />}
-              {badge > 0 && (
-                <span style={{
-                  fontSize: 9.5, fontWeight: 700, background: T.red, color: '#fff',
-                  borderRadius: 99, padding: '2px 6px',
-                }}>{badge}</span>
-              )}
-              {showAiOff && (
-                <span style={{
-                  fontSize: 9, fontWeight: 700, background: '#E4E7EC', color: '#4B5563',
-                  borderRadius: 99, padding: '2px 6px', letterSpacing: '.3px',
-                }}>AI OFF</span>
-              )}
-            </button>
-          )
-        })}
-      </div>
-
-      {/* ── sub-tab underline row ── */}
-      {subList.length > 0 && (
-        <div className="cp-nav" style={{
-          display: 'flex', alignItems: 'center', gap: 18,
-          borderBottom: `1px solid ${T.border}`, marginBottom: 18, padding: '0 2px',
-        }}>
-          {subList.map(s => {
-            const on = s.id === activeSub
-            const n = unseen.byView[s.id] || 0
-            const locked = GATED_SUBS.has(s.id) && !canIntel
+      <nav className="mt-6" aria-label="Profile sections">
+        <div className="grid grid-cols-4 gap-1 rounded-2xl bg-white p-1.5 shadow-e1 md:inline-flex md:gap-2">
+          {TABS.map(t => {
+            const on = t.id === tab
+            const badge = tabBadge(t.id)
             return (
               <button
-                key={s.id}
+                key={t.id}
                 type="button"
-                onClick={() => goto(group, s.id)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 6, padding: '12px 0', marginBottom: -1,
-                  borderBottom: `2px solid ${on ? T.red : 'transparent'}`,
-                  borderTop: 0, borderLeft: 0, borderRight: 0, background: 'none',
-                  fontSize: 12.5, fontWeight: on ? 600 : 500, color: on ? T.red : T.muted,
-                  fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap', minHeight: 44,
-                }}
+                onClick={() => goto(t.id, t.id === 'intel' ? intelView : null)}
+                aria-current={on ? 'page' : undefined}
+                className={`relative flex flex-col items-center gap-1 whitespace-nowrap rounded-xl px-1 py-2 text-[12px] md:flex-row md:gap-2 md:px-4 md:py-2.5 md:text-[15px] font-bold transition-colors ${on ? 'bg-brand-ink text-white' : 'text-brand-mute hover:bg-black/5 hover:text-brand-ink'}`}
               >
-                {s.label}
-                {locked && <Lock size={11} color={T.faint} aria-label="Locked on your plan" />}
-                {n > 0 && (
-                  <span style={{
-                    fontSize: 9, fontWeight: 700, background: '#FBEAEA', color: T.red,
-                    borderRadius: 99, padding: '2px 6px',
-                  }}>{n} new</span>
-                )}
-                {s.id === 'incumbent' && records.length > 0 && (
-                  <span style={{
-                    fontSize: 9, fontWeight: 700, background: '#FDF3E3', color: T.warmInk,
-                    borderRadius: 99, padding: '2px 6px',
-                  }}>{records.length}</span>
-                )}
+                <t.icon className="h-[18px] w-[18px]" style={{ color: on ? '#fff' : t.color }} />
+                {t.label}
+                {t.id === 'intel' && !canIntel && <Lock className="h-3.5 w-3.5 opacity-60 max-md:absolute max-md:left-1.5 max-md:top-1.5" aria-label="Locked on your plan" />}
+                {badge > 0 && <span className="max-md:absolute max-md:right-1 max-md:top-1 rounded-full bg-brand-red px-1.5 py-0.5 text-[11px] font-bold leading-none text-white">{badge}</span>}
+                {t.id === 'notes' && lock.locked && <span className={`max-md:absolute max-md:right-1 max-md:top-1 max-md:text-[8px] rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none ${on ? 'bg-white/20 text-white' : 'bg-black/5 text-brand-mute'}`}>AI OFF</span>}
               </button>
             )
           })}
         </div>
-      )}
+      </nav>
 
       {/* ── unread strip (SPEC §2) ──
-          Renders BELOW both nav rows. The unseen counts arrive a couple of
-          seconds after first paint, and while this strip sat above the tabs it
-          pushed the whole nav down ~60px the moment it appeared — often out from
-          under a finger already on its way to a tab. Below the nav it can only
-          ever move the view content, which nobody is aiming at yet. */}
+          Renders BELOW the nav: the unseen counts arrive a moment after first
+          paint, and above the tabs this strip pushed them down under a finger
+          already on its way to one. */}
       {monitored && unseen.total > 0 && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 11, background: T.warmBg,
-          border: `1px solid ${T.warmBr}`, borderRadius: 12, padding: '11px 16px',
-          marginBottom: 14, flexWrap: 'wrap',
-        }}>
-          <span style={{
-            flexShrink: 0, width: 7, height: 7, borderRadius: '50%',
-            background: T.red, animation: 'cpPulse 2s infinite',
-          }} />
-          <div style={{ fontSize: 12.5, minWidth: 0 }}>
-            <span style={{ fontWeight: 700 }}>
-              {unseen.total} new item{unseen.total === 1 ? '' : 's'}
-            </span>
-            {lastViewed ? ` since you last opened this profile on ${fmtDate(lastViewed)}` : ''}
-            {' — from the latest refresh.'}
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl bg-[#FFF8EC] px-4 py-3">
+          <span className="h-2 w-2 flex-shrink-0 animate-pulse rounded-full bg-brand-red" />
+          <div className="min-w-0 text-[14px] text-brand-ink">
+            <b>{unseen.total} new item{unseen.total === 1 ? '' : 's'}</b>
+            {lastViewed ? ` since you last opened this profile on ${fmtDate(lastViewed)}` : ''} — from the latest refresh.
           </div>
-          <button
-            type="button"
-            onClick={markAllRead}
-            style={{
-              marginLeft: 'auto', flexShrink: 0, border: '1px solid #E8D5C0', background: 'transparent',
-              borderRadius: 99, padding: '8px 13px', fontSize: 11.5, fontWeight: 600,
-              fontFamily: 'inherit', cursor: 'pointer', minHeight: 34,
-            }}
-          >Mark all read</button>
+          <Button variant="secondary" className="ml-auto !py-1.5" onClick={markAllRead}>Mark all read</Button>
         </div>
       )}
 
-      {/* ── views ── */}
-      {view === 'overview' && (
-        <Overview
-          candidate={candidate}
-          dossiers={dossiers}
-          monitored={monitored}
-          canMonitor={canMonitor}
-          unseen={unseen}
-          bioSummary={bioSummary}
-          onNavigate={goto}
-          onToggleMonitoring={handleMonitoringToggle}
-          onAcceptStatus={handleAcceptStatus}
-          incumbentRecordCount={records.length}
-          nav={nav}
-        />
-      )}
+      {/* ── tabs ── */}
+      <div className="mt-6">
+        {tab === 'overview' && (
+          <Overview
+            candidate={candidate}
+            dossiers={dossiers}
+            content={content}
+            monitored={monitored}
+            canMonitor={canMonitor}
+            canIntel={canIntel}
+            unseen={unseen}
+            xHandle={xHandle}
+            onNavigate={goto}
+            onToggleMonitoring={handleMonitoringToggle}
+            onAcceptStatus={handleAcceptStatus}
+            nav={nav}
+          />
+        )}
 
-      {view === 'news' && (
-        <NewsFeedView
-          candidate={candidate}
-          dossiers={dossiers}
-          canIntel={canIntel}
-          lastViewed={lastViewed}
-          nav={nav}
-        />
-      )}
+        {tab === 'intel' && (
+          <IntelView
+            candidate={candidate}
+            dossiers={dossiers}
+            content={content}
+            contentLoading={contentLoading && !content}
+            canIntel={canIntel}
+            view={intelView}
+            onView={(v) => goto('intel', v)}
+            perspective={perspective}
+            onPerspective={setPerspectiveChoice}
+            xHandle={xHandle}
+            lastViewed={lastViewed}
+            unseenByView={unseen.byView}
+            onRefresh={fetchAll}
+            nav={nav}
+          />
+        )}
 
-      {view === 'swot' && (
-        <SwotView
-          candidate={candidate}
-          dossiers={dossiers}
-          canIntel={canIntel}
-          swotUpdated={!!diffFlags.swot}
-          onRefresh={fetchAll}
-          nav={nav}
-        />
-      )}
+        {tab === 'record' && (
+          <RecordView
+            candidate={candidate}
+            dossiers={dossiers}
+            content={content}
+            records={records}
+            userId={user?.id}
+            timestamps={timestamps}
+            unseen={unseen}
+            onRefresh={fetchAll}
+            nav={nav}
+          />
+        )}
 
-      {view === 'opposition' && (
-        <OppositionView
-          candidate={candidate}
-          dossiers={dossiers}
-          canIntel={canIntel}
-          weaknesses={weaknesses}
-          oppositionUpdated={!!diffFlags.opposition}
-          nav={nav}
-        />
-      )}
+        {tab === 'notes' && (
+          <NotesFiles
+            candidate={candidate}
+            userId={user?.id}
+            userName={user?.user_metadata?.display_name || user?.email?.split('@')[0] || 'You'}
+            onSaved={refreshCandidate}
+            onLockChanged={refreshCandidate}
+          />
+        )}
+      </div>
 
-      {view === 'allies' && (
-        <AlliesView
-          candidate={candidate}
-          dossiers={dossiers}
-          canIntel={canIntel}
-          alliesUpdated={!!diffFlags.allies}
-          nav={nav}
-        />
-      )}
-
-      {view === 'results' && <ElectionResultsView candidate={candidate} nav={nav} />}
-
-      {view === 'incumbent' && (
-        <IncumbentRecordView
-          candidate={candidate}
-          records={records}
-          dossiers={dossiers}
-          userId={user?.id}
-          timestamps={timestamps}
-          onRefresh={fetchAll}
-        />
-      )}
-
-      {view === 'history' && (
-        <ProfileHistoryView
-          candidate={candidate}
-          dossiers={dossiers}
-          canIntel={canIntel}
-          unseen={unseen}
-          nav={nav}
-        />
-      )}
-
-      {view === 'notes' && (
-        <NotesFiles
-          candidate={candidate}
-          userId={user?.id}
-          userName={user?.user_metadata?.display_name || user?.email?.split('@')[0] || 'You'}
-          onSaved={refreshCandidate}
-          onLockChanged={refreshCandidate}
-        />
-      )}
-
-      {view === 'data' && (
-        <ProfileData
-          candidate={candidate}
-          editing={editing}
+      {editing && (
+        <EditCandidate
           form={form}
           setForm={setForm}
-          timestamps={timestamps}
+          saving={saving}
+          error={saveError}
+          onSave={handleSave}
+          onCancel={() => { setEditing(false); setSaveError('') }}
         />
       )}
     </div>

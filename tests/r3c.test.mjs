@@ -197,8 +197,10 @@ console.log('4 — wiring: the helpers are used where the audit found the drift'
   }
 
   const intel = src('src/pages/candidate/IntelViews.jsx')
+  // Nov 2026 redesign: X posts are full cards in the page flow — there is no
+  // fixed-height scroller left to clip a last row.
   t('the Social posts scroller clears its last row',
-    /maxHeight: 520, overflowY: 'auto', paddingBottom: 8/.test(intel))
+    !/maxHeight: 520/.test(intel) && /posts\.map\(p => <PostCard/.test(intel))
 
   const bs = src('public/broadside-app.html')
   t('the Session Role select is width-locked to its siblings',

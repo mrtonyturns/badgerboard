@@ -223,7 +223,9 @@ t('every option a dropdown offers survives normalizePartyForDb unchanged',
   DB_PARTIES.every(p => normalizePartyForDb(p) === p))
 
 {
-  const profile = src('src/pages/candidate/ProfileData.jsx')
+  // Nov 2026: the Profile Data tab is gone; the party picker lives in the
+  // header's Edit dialog.
+  const profile = src('src/pages/candidate/EditCandidate.jsx')
   const admin   = src('src/pages/ElectionResultsAdmin.jsx')
   const prosp   = src('src/pages/Prospecting.jsx')
   const voters  = src('src/pages/VoterLists.jsx')

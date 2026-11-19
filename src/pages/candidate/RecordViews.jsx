@@ -1,24 +1,43 @@
-// candidate/RecordViews.jsx — SPEC-candidate-profile.md §5, Record group.
+// candidate/RecordViews.jsx — the Record tab: one scrolling page.
 //
-//   Election Results · Incumbent Record · Profile History
+//   Past races       the race table the profile wrote (Section 4: year, office,
+//                    result, votes, opponent) as cards — plus live
+//                    election_results rows when the results feature is on
+//   Roles            civic & political roles (prospect profiles write Section 4
+//                    as an org/role table instead of a race table)
+//   In office        incumbent_records (manual CRUD + AI extract, unchanged) and
+//                    the committees / key votes the profile found
+//   Profile history  every generated profile, with Compare
 //
-// Election Results keeps the Realtime subscription that updates vote counts live
-// on election night. Incumbent Record keeps the full manual CRUD, the type
-// filter pills and the AI-research extract/add-all flow. Profile History lists
-// every generated profile newest-first with Auto/Manual and its item count.
+// Why older candidates showed nothing here:
+//   • Election results read only `election_results`, which the election-night
+//     poller fills for elections Badger Board tracks live. Nothing ever wrote a
+//     candidate's PAST races there, and since Nov 15 2026 the poller and the
+//     results boards are off app-wide (featureFlags.RESULTS_ENABLED=false). The
+//     race history every profile already carries (Section 4) was never read.
+//   • Incumbent record read only `incumbent_records`, filled by hand or by the
+//     "AI research" button — never automatically — and said "not an
+//     incumbent" whenever candidates.is_incumbent was false, even when the
+//     profile documented a record in office.
+//   • Profile history was behind the `campaignIntel` plan gate (Monitor-plan
+//     clients saw "Profile history is locked" for profiles they had paid for).
 
 import { ELECTIONS_ENABLED, RESULTS_ENABLED } from '../../lib/featureFlags'
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { format } from 'date-fns'
+import { Vote, Landmark, History, Building2, Sparkles, Plus } from 'lucide-react'
 import {
   supabase, logActivity,
   createIncumbentRecord, updateIncumbentRecord, deleteIncumbentRecord,
 } from '../../lib/supabase'
+import { Tile, EmptyState as UiEmpty, Button } from '../../components/ui'
 import {
-  T, Card, EmptyState, CtaButton, TextLink, Btn, ViewHead, NewBadge,
-  LockedView, Spinner, fmtDate, fmtInt, safeISO,
+  T, Card, EmptyState, CtaButton, TextLink, Btn, ViewHead,
+  Spinner, fmtDate, fmtInt, safeISO,
   fetchDossierContent, computeSectionDiff,
 } from './shared'
+import { SectionHead, Pill, ConfidencePill, SourceLine } from './kit'
+import { parseRaceHistory, parseOfficeRecord, parseCivicRoles } from './intelModel'
 
 const RECORD_TYPES = ['bill', 'act', 'regulation', 'law', 'legal', 'vote', 'other']
 const VOTE_RESULTS = ['yes', 'no', 'abstain', 'absent', 'not_applicable']
@@ -402,7 +421,7 @@ const cleanRecordForInsert = (record, candidateId, userId) => ({
   created_by:   userId || null,
 })
 
-export function IncumbentRecordView({ candidate, records, dossiers, userId, onRefresh, timestamps }) {
+export function IncumbentRecordView({ candidate, records, dossiers, userId, onRefresh, timestamps, profileRecord }) {
   const [showForm, setShowForm] = useState(false)
   const [editingRecord, setEditingRecord] = useState(null)
   const [filter, setFilter] = useState('all')
@@ -474,23 +493,49 @@ export function IncumbentRecordView({ candidate, records, dossiers, userId, onRe
 
   const filtered = filter === 'all' ? records : records.filter(r => r.record_type === filter)
 
+  const hasProfileRecord = !!(profileRecord?.committees || profileRecord?.actions?.length)
+
   return (
-    <Card style={{ padding: '20px 24px' }}>
-      <ViewHead
-        title="Incumbent record"
-        sub="votes, sponsorships & public positions"
+    <section className="flex flex-col gap-5">
+      <SectionHead
+        icon={Landmark}
+        color="blue"
+        title="In office"
+        sub={candidate.is_incumbent
+          ? `Votes, bills and actions${candidate.incumbent_since ? ` since ${fmtDate(candidate.incumbent_since, 'yyyy')}` : ''}`
+          : 'Votes, bills, sponsorships and public positions'}
         right={
-          <span style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+          <>
             {dossiers?.length > 0 && (
-              <Btn onClick={handleResearch} disabled={researching}>
+              <Button variant="secondary" icon={Sparkles} onClick={handleResearch} disabled={researching}>
                 {researching ? 'Researching…' : 'AI research'}
-              </Btn>
+              </Button>
             )}
-            <Btn kind="primary" onClick={() => { setShowForm(true); setEditingRecord(null) }}>Add record</Btn>
-          </span>
+            <Button variant="dark" icon={Plus} onClick={() => { setShowForm(true); setEditingRecord(null) }}>Add record</Button>
+          </>
         }
       />
 
+      {hasProfileRecord && (
+        <Tile className="p-5 md:p-6">
+          <div className="text-[11px] font-extrabold uppercase tracking-[0.1em] text-brand-faint">From the latest profile</div>
+          {profileRecord.committees && (
+            <p className="mt-2 text-[15px] leading-relaxed text-brand-ink"><b>Committees: </b>{profileRecord.committees}</p>
+          )}
+          {profileRecord.actions.length > 0 && (
+            <ul className="mt-3 flex flex-col gap-2.5">
+              {profileRecord.actions.map((a, i) => (
+                <li key={i} className="flex gap-3 text-[14.5px] leading-snug text-brand-ink">
+                  <span className="mt-2 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-[#2F6BFF]" />
+                  <span>{a.text}{a.url && <> · <a href={a.url} target="_blank" rel="noopener noreferrer" className="font-semibold underline-offset-2 hover:underline">source</a></>}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Tile>
+      )}
+
+      <Tile className="p-5 md:p-6">
       {stamp?.updated_at && (
         <div style={{ fontSize: 10.5, color: T.faint, marginTop: -8, marginBottom: 12 }}>
           Updated {fmtDate(stamp.updated_at, 'MMM d, yyyy')}{stamp.updated_by ? ` · ${stamp.updated_by}` : ''}
@@ -582,14 +627,15 @@ export function IncumbentRecordView({ candidate, records, dossiers, userId, onRe
       )}
 
       {filtered.length === 0 && !suggested ? (
-        <EmptyState
-          title={candidate.is_incumbent ? 'No records yet' : `${candidate.name} is not an incumbent`}
-          body={candidate.is_incumbent
-            ? (dossiers?.length
-                ? 'Run AI research to extract bills, votes and legal events from the latest profile, or add one by hand.'
-                : 'Add a record by hand, or generate a profile first and let AI research extract them.')
-            : 'There is no voting record to track for a candidate who has not held this office. If they win, records can be added here by hand or pulled out of a profile with AI research.'}
-        />
+        !showForm && (
+          <p className="text-[14px] leading-relaxed text-brand-mute">
+            {hasProfileRecord
+              ? 'No saved records yet. Use AI research to save the votes and actions above as records you can sort and edit, or add one by hand.'
+              : dossiers?.length
+                ? 'No saved records yet. AI research pulls bills, votes and legal events out of the latest profile; you can also add one by hand.'
+                : 'No saved records yet. Add one by hand, or generate a profile and let AI research pull them out.'}
+          </p>
+        )
       ) : filtered.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {filtered.map(record => (
@@ -613,7 +659,8 @@ export function IncumbentRecordView({ candidate, records, dossiers, userId, onRe
           ))}
         </div>
       ) : null}
-    </Card>
+      </Tile>
+    </section>
   )
 }
 
@@ -785,86 +832,196 @@ function CompareModal({ candidate, newer, older, onClose }) {
   )
 }
 
-export function ProfileHistoryView({ candidate, dossiers, canIntel, unseen, nav }) {
+// Not behind the campaignIntel gate: these are the user's own generated
+// profiles, on every plan that can generate one.
+export function ProfileHistoryView({ candidate, dossiers, unseen, nav }) {
   const [compare, setCompare] = useState(null) // { newer, older }
 
-  if (!canIntel) return <LockedView title="Profile history" onSeePlans={() => nav('/plans')} />
+  return (
+    <section className="flex flex-col gap-5">
+      <SectionHead
+        icon={History}
+        color="gray"
+        title="Profile history"
+        sub={dossiers.length
+          ? `${dossiers.length} profile${dossiers.length === 1 ? '' : 's'}, newest first · Compare shows what changed from the one before`
+          : 'Every generated profile, newest first'}
+      />
+      <Tile className="p-2 md:p-3">
+        {!dossiers.length ? (
+          <div className="p-4">
+            <UiEmpty
+              icon={History}
+              title="No profiles generated yet"
+              body={`Nothing has been generated for ${candidate.name}. Build the first profile from the Profiler and every refresh after it is listed here.`}
+              action={<Button icon={Sparkles} onClick={() => nav(`/dossiers?candidate=${candidate.id}`)}>Generate profile</Button>}
+            />
+          </div>
+        ) : (
+          <ul className="flex flex-col">
+            {dossiers.map((d, i) => {
+              const n = (d.weekly_digest?.items || []).length
+              const isNew = unseen.isUnseenDossier(d)
+              const predecessor = dossiers[i + 1] || null
+              return (
+                <li key={d.id} className={i ? 'border-t border-black/5' : ''}>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl px-3 py-3 hover:bg-black/[0.03]">
+                    <span className="h-2.5 w-2.5 flex-shrink-0 rounded-full" style={{ background: i === 0 ? '#C0392B' : '#16803C' }} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2 text-[15px] font-bold text-brand-ink">
+                        {fmtDate(d.generated_at, 'EEE, MMM d, yyyy')}
+                        {i === 0 && <Pill tone="dark">Latest</Pill>}
+                        {isNew && <Pill tone="red">New</Pill>}
+                        <Pill>{d.generated_by ? 'Manual' : 'Weekly refresh'}</Pill>
+                      </div>
+                      <div className="mt-0.5 text-[13px] text-brand-faint">
+                        {d.weekly_digest
+                          ? `${n} new item${n === 1 ? '' : 's'} that week`
+                          : i === dossiers.length - 1 ? 'First profile' : 'No digest written for this refresh'}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {predecessor && (
+                        <Button
+                          variant="ghost"
+                          title={`Compare with the ${fmtDate(predecessor.generated_at)} profile`}
+                          onClick={() => setCompare({ newer: d, older: predecessor })}
+                        >Compare</Button>
+                      )}
+                      <Button variant="secondary" onClick={() => nav(`/dossiers?view=${d.id}`)}>Open</Button>
+                    </div>
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </Tile>
+      {compare && (
+        <CompareModal
+          candidate={candidate}
+          newer={compare.newer}
+          older={compare.older}
+          onClose={() => setCompare(null)}
+        />
+      )}
+    </section>
+  )
+}
+
+// ═══ Past races ═══════════════════════════════════════════════════════════════
+
+const OUTCOME = {
+  won:  { label: 'Won',  color: '#16803C' },
+  lost: { label: 'Lost', color: '#E0362C' },
+  '':   { label: '',     color: '#9099A1' },
+}
+
+function RaceCard({ race }) {
+  const o = OUTCOME[race.outcome] || OUTCOME['']
+  return (
+    <Tile className="flex flex-col p-5" style={{ borderTop: `5px solid ${o.color}` }}>
+      <div className="flex items-baseline gap-3">
+        <span className="text-[30px] font-extrabold leading-none tracking-display text-brand-ink">{race.year || '—'}</span>
+        {o.label && <span className="text-[13px] font-extrabold uppercase tracking-[0.1em]" style={{ color: o.color }}>{o.label}</span>}
+      </div>
+      {race.office && <div className="mt-2 text-[16px] font-bold leading-snug text-brand-ink">{race.office}</div>}
+      {race.result && race.result.toLowerCase() !== o.label.toLowerCase() && <div className="mt-1 text-[14px] text-brand-mute">{race.result}</div>}
+      {(race.votes || race.margin) && (
+        <div className="mt-2 text-[14px] text-brand-ink">{[race.votes, race.margin && `margin ${race.margin}`].filter(Boolean).join(' · ')}</div>
+      )}
+      {race.opponent && <div className="mt-1 text-[14px] text-brand-mute">vs. {race.opponent}</div>}
+      <SourceLine source={race.source} url={race.url} className="mt-auto pt-3" />
+    </Tile>
+  )
+}
+
+/** The whole Record tab. */
+export default function RecordView({ candidate, dossiers, content, records, userId, timestamps, unseen, onRefresh, nav }) {
+  const races = useMemo(() => parseRaceHistory(content), [content])
+  const roles = useMemo(() => parseCivicRoles(content), [content])
+  const officeRecord = useMemo(() => parseOfficeRecord(content), [content])
+  const showOffice = candidate.is_incumbent || records.length > 0 || !!officeRecord.committees || officeRecord.actions.length > 0
 
   return (
-    <>
-    <Card style={{ padding: '20px 24px' }}>
-      <ViewHead
-        title="Profile history"
-        sub="every generated profile, newest first · Compare diffs a profile against the one before it"
-        right={<Btn kind="primary" onClick={() => nav(`/dossiers?candidate=${candidate.id}`)}>Regenerate profile</Btn>}
-      />
-      {!dossiers.length ? (
-        <EmptyState
-          title="No profiles generated yet"
-          body={`Nothing has been generated for ${candidate.name}. Build the first profile from the Profiler and every refresh after it is listed here.`}
-          action={<CtaButton onClick={() => nav(`/dossiers?candidate=${candidate.id}`)}>Generate profile</CtaButton>}
+    <div className="flex flex-col gap-10">
+      <section className="flex flex-col gap-5">
+        <SectionHead
+          icon={Vote}
+          color="red"
+          title="Past races"
+          sub={races.length
+            ? `${races.length} race${races.length === 1 ? '' : 's'} on record, from the latest profile`
+            : 'Every race this candidate has been on the ballot for'}
+        />
+        {races.length > 0 ? (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {races.map((r, i) => <RaceCard key={`${r.year}-${r.office}-${i}`} race={r} />)}
+          </div>
+        ) : (
+          <p className="text-[15px] leading-relaxed text-brand-mute">
+            {dossiers.length
+              ? `The latest profile found no earlier race for ${candidate.name}.`
+              : `Generate a profile and ${candidate.name}'s race history shows up here.`}
+          </p>
+        )}
+        {/* Live election-night results only while that feature is on
+            (featureFlags.RESULTS_ENABLED — off app-wide since Nov 15 2026). */}
+        {RESULTS_ENABLED && <ElectionResultsView candidate={candidate} nav={nav} />}
+      </section>
+
+      {roles.length > 0 && (
+        <section className="flex flex-col gap-5">
+          <SectionHead icon={Building2} color="teal" title="Roles & background" sub="Civic, political and organizational roles from the latest profile" />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {roles.map((r, i) => (
+              <Tile key={`${r.org}-${i}`} className="flex flex-col p-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  {r.years && <Pill tone="dark">{r.years}</Pill>}
+                  <ConfidencePill value={r.confidence} />
+                </div>
+                <div className="mt-2 text-[16px] font-bold leading-snug text-brand-ink">{r.org}</div>
+                {r.role && <div className="mt-1 text-[14px] leading-snug text-brand-mute">{r.role}</div>}
+                <SourceLine source={r.source} className="mt-auto pt-3" />
+              </Tile>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {showOffice ? (
+        <IncumbentRecordView
+          candidate={candidate}
+          records={records}
+          dossiers={dossiers}
+          userId={userId}
+          timestamps={timestamps}
+          onRefresh={onRefresh}
+          profileRecord={officeRecord}
         />
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {dossiers.map((d, i) => {
-            const n = (d.weekly_digest?.items || []).length
-            const isNew = unseen.isUnseenDossier(d)
-            const predecessor = dossiers[i + 1] || null
-            return (
-              <div
-                key={d.id}
-                className="cp-row"
-                role="button"
-                tabIndex={0}
-                onClick={() => nav(`/dossiers?view=${d.id}`)}
-                onKeyDown={e => { if (e.key === 'Enter') nav(`/dossiers?view=${d.id}`) }}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 12, padding: '11px 10px',
-                  margin: '0 -10px', borderTop: `1px solid ${T.divider}`, cursor: 'pointer', minHeight: 44,
-                }}
-              >
-                <span style={{
-                  flexShrink: 0, width: 7, height: 7, borderRadius: '50%',
-                  background: i === 0 ? T.red : '#15803D',
-                }} />
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {fmtDate(d.generated_at, 'EEE, MMM d, yyyy')}
-                    {isNew && <NewBadge />}
-                  </div>
-                  <div style={{ fontSize: 11, color: T.faint, marginTop: 1 }}>
-                    {d.weekly_digest
-                      ? `${n} item${n === 1 ? '' : 's'} in the digest`
-                      : d.title || 'No digest written for this refresh'}
-                  </div>
-                </div>
-                <span style={{ marginLeft: 'auto', flexShrink: 0, fontSize: 10.5, color: T.faint }}>
-                  {d.generated_by ? 'Manual' : 'Auto'}
-                </span>
-                {predecessor && (
-                  <span
-                    style={{ flexShrink: 0 }}
-                    title={`Compare with the ${fmtDate(predecessor.generated_at)} profile`}
-                    onClick={e => { e.stopPropagation(); setCompare({ newer: d, older: predecessor }) }}
-                  >
-                    <TextLink style={{ fontSize: 11.5, color: T.red, fontWeight: 600 }}>Compare →</TextLink>
-                  </span>
-                )}
-                <span style={{ flexShrink: 0, fontSize: 11.5, color: T.muted }}>Open profile →</span>
-              </div>
-            )
-          })}
-        </div>
+        <OfficeRecordStub candidate={candidate} records={records} dossiers={dossiers} userId={userId} timestamps={timestamps} onRefresh={onRefresh} />
       )}
-    </Card>
-    {compare && (
-      <CompareModal
-        candidate={candidate}
-        newer={compare.newer}
-        older={compare.older}
-        onClose={() => setCompare(null)}
-      />
-    )}
-    </>
+
+      <ProfileHistoryView candidate={candidate} dossiers={dossiers} unseen={unseen} nav={nav} />
+    </div>
+  )
+}
+
+/**
+ * Not in office and nothing documented: one plain line instead of an empty
+ * panel, with a way to open the full record tools if the user wants them.
+ */
+function OfficeRecordStub(props) {
+  const [open, setOpen] = useState(false)
+  if (open) return <IncumbentRecordView {...props} profileRecord={null} />
+  return (
+    <section className="flex flex-wrap items-center gap-3 rounded-tile border border-dashed border-black/10 px-5 py-4">
+      <Landmark className="h-5 w-5 text-brand-faint" />
+      <p className="min-w-0 flex-1 text-[14.5px] text-brand-mute">
+        {props.candidate.name} has not held office, so there is no voting record to track.
+      </p>
+      <Button variant="ghost" icon={Plus} onClick={() => setOpen(true)}>Add a record anyway</Button>
+    </section>
   )
 }
